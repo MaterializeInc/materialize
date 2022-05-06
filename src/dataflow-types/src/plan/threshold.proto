@@ -1,0 +1,23 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+// See https://developers.google.com/protocol-buffers for what's going on here.
+
+syntax = "proto3";
+
+import "dataflow-types/src/plan.proto";
+
+package mz_dataflow_types.plan.threshold;
+
+message ProtoThresholdPlan {
+   oneof kind {
+       mz_dataflow_types.plan.ProtoArrangement basic = 1;
+       mz_dataflow_types.plan.ProtoArrangement retractions = 2;
+   }
+}

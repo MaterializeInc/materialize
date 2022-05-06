@@ -68,7 +68,3 @@ tokio-util = { version = "0.7.1", features = ["compat"] }
 url = "2.2.2"
 uuid = "0.8.2"
 walkdir = "2.3.2"
-
-[dev-dependencies]
-assert_cmd = "2.0.4"
-predicates = "2.1.1"

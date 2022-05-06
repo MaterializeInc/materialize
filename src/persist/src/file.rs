@@ -532,7 +532,7 @@ pub struct FileBlobMulti {
 
 impl FileBlobMulti {
     /// Opens the given location for non-exclusive read-write access.
-    pub async fn open(_deadline: Instant, config: FileBlobConfig) -> Result<Self, ExternalError> {
+    pub async fn open(config: FileBlobConfig) -> Result<Self, ExternalError> {
         let base_dir = config.base_dir;
         fs::create_dir_all(&base_dir).map_err(Error::from)?;
         let core = FileBlobCore {
@@ -606,8 +606,6 @@ fn file_storage_lock(lockfile_path: &Path, new_lock: LockInfo) -> Result<File, E
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use crate::location::tests::{blob_impl_test, blob_multi_impl_test, log_impl_test};
 
     use super::*;
@@ -631,11 +629,10 @@ mod tests {
 
     #[tokio::test]
     async fn file_blob_multi() -> Result<(), ExternalError> {
-        let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
         let temp_dir = tempfile::tempdir().map_err(Error::from)?;
         blob_multi_impl_test(move |path| {
             let instance_dir = temp_dir.path().join(path);
-            FileBlobMulti::open(no_timeout, instance_dir.into())
+            FileBlobMulti::open(instance_dir.into())
         })
         .await
     }

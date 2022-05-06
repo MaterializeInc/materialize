@@ -2865,6 +2865,7 @@ dependencies = [
  "mz-secrets",
  "mz-secrets-filesystem",
  "mz-secrets-kubernetes",
+ "mz-stash",
  "native-tls",
  "nix",
  "num_cpus",
@@ -3347,7 +3348,6 @@ dependencies = [
  "mz-persist-types",
  "mz-pgrepr",
  "mz-repr",
- "mz-stash",
  "num",
  "num_enum",
  "ordered-float",
@@ -4026,7 +4026,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "criterion",
  "differential-dataflow",
  "futures",
  "mz-ore",
@@ -4120,7 +4119,6 @@ name = "mz-testdrive"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "async-compression",
  "async-trait",
  "atty",
@@ -4159,7 +4157,6 @@ dependencies = [
  "mz-sql-parser",
  "mz-stash",
  "postgres_array",
- "predicates",
  "prost",
  "prost-reflect",
  "protobuf-src",

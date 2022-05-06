@@ -28,6 +28,8 @@ pub struct FronteggConfig {
     pub now: NowFn,
     /// Number of seconds before which to attempt to renew an expiring token.
     pub refresh_before_secs: i64,
+    /// Prefix that is expected to be present on all passwords.
+    pub password_prefix: String,
 }
 
 #[derive(Clone, Derivative)]
@@ -40,6 +42,7 @@ pub struct FronteggAuthentication {
     now: NowFn,
     validation: Validation,
     refresh_before_secs: i64,
+    password_prefix: String,
 }
 
 pub const REFRESH_SUFFIX: &str = "/token/refresh";
@@ -58,6 +61,7 @@ impl FronteggAuthentication {
             now: config.now,
             validation,
             refresh_before_secs: config.refresh_before_secs,
+            password_prefix: config.password_prefix,
         }
     }
 
@@ -81,6 +85,9 @@ impl FronteggAuthentication {
         &self,
         password: &str,
     ) -> Result<ApiTokenResponse, FronteggError> {
+        let password = password
+            .strip_prefix(&self.password_prefix)
+            .ok_or(FronteggError::InvalidPasswordFormat)?;
         let (client_id, secret) = if password.len() == 43 || password.len() == 44 {
             // If it's exactly 43 or 44 bytes, assume we have base64-encoded
             // UUID bytes without or with padding, respectively.

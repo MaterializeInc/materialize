@@ -8,9 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::marker::PhantomData;
+use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 
-use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::location::SeqNo;
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
-use crate::error::{InvalidUsage, NoOp};
+use crate::error::{Determinacy, InvalidUsage};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::ShardId;
@@ -54,8 +55,8 @@ where
         seqno: SeqNo,
         writer_id: &WriterId,
         reader_id: &ReaderId,
-    ) -> (WriteCapability<T>, ReadCapability<T>) {
-        // TODO: Handle if the reader or writer already exist (probably a
+    ) -> ControlFlow<Infallible, (WriteCapability<T>, ReadCapability<T>)> {
+        // TODO: Handle if the reader or writer already exist (probably with a
         // retry).
         let write_cap = WriteCapability {
             upper: self.upper(),
@@ -66,16 +67,21 @@ where
             since: self.since.clone(),
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
-        (write_cap, read_cap)
+        Continue((write_cap, read_cap))
     }
 
-    pub fn clone_reader(&mut self, seqno: SeqNo, new_reader_id: &ReaderId) -> ReadCapability<T> {
+    pub fn clone_reader(
+        &mut self,
+        seqno: SeqNo,
+        new_reader_id: &ReaderId,
+    ) -> ControlFlow<Infallible, ReadCapability<T>> {
+        // TODO: Handle if the reader already exists (probably with a retry).
         let read_cap = ReadCapability {
             seqno,
             since: self.since.clone(),
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
-        read_cap
+        Continue(read_cap)
     }
 
     pub fn append(
@@ -83,12 +89,12 @@ where
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<(), Antichain<T>>, InvalidUsage> {
+    ) -> ControlFlow<Upper<T>, ()> {
         // Sanity check that the writer is sending appends such that the lower
         // and upper frontiers line up with previous writes.
-        let write_cap = self.writer(writer_id)?;
+        let write_cap = self.writer(writer_id);
         if &write_cap.upper != desc.lower() {
-            return Ok(Err(write_cap.upper.clone()));
+            return Break(Upper(write_cap.upper.clone()));
         }
         write_cap.upper.clone_from(desc.upper());
 
@@ -101,14 +107,15 @@ where
         let lower = self.upper();
         let desc = Description::new(lower, desc.upper().clone(), desc.since().clone());
         if PartialOrder::less_equal(desc.upper(), desc.lower()) {
-            // No-op
-            return Ok(Ok(()));
+            // No-op, but still commit the state change so that this gets
+            // linearized.
+            return Continue(());
         }
 
         self.trace.push((keys.to_vec(), desc.clone()));
         debug_assert_eq!(&self.upper(), desc.upper());
 
-        Ok(Ok(()))
+        Continue(())
     }
 
     pub fn compare_and_append(
@@ -116,53 +123,62 @@ where
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<(), Antichain<T>>, InvalidUsage> {
+    ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, ()> {
         if PartialOrder::less_than(desc.upper(), desc.lower()) {
-            return Err(InvalidUsage(anyhow!("invalid desc: {:?}", desc)));
+            return Break(Err(InvalidUsage::InvalidBounds {
+                lower: desc.lower().clone(),
+                upper: desc.upper().clone(),
+            }));
         }
 
         let shard_upper = self.upper();
-        let write_cap = self.writer(writer_id)?;
+        let write_cap = self.writer(writer_id);
         debug_assert!(PartialOrder::less_equal(&write_cap.upper, &shard_upper));
 
         if &shard_upper != desc.lower() {
-            return Ok(Err(shard_upper));
+            return Break(Ok(Upper(shard_upper)));
         }
         write_cap.upper.clone_from(desc.upper());
 
         self.trace.push((keys.to_vec(), desc.clone()));
         debug_assert_eq!(&self.upper(), desc.upper());
 
-        Ok(Ok(()))
+        Continue(())
     }
 
     pub fn downgrade_since(
         &mut self,
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
-    ) -> Result<(), InvalidUsage> {
-        let read_cap = self.reader(reader_id)?;
-        if !PartialOrder::less_than(&read_cap.since, new_since) {
-            return Err(InvalidUsage(anyhow!(
-                "reader since {:?} already in advance of new since: {:?}",
-                read_cap.since,
-                new_since
-            )));
+    ) -> ControlFlow<Infallible, Since<T>> {
+        let read_cap = self.reader(reader_id);
+        let reader_current_since = if PartialOrder::less_than(&read_cap.since, new_since) {
+            read_cap.since.clone_from(new_since);
+            self.update_since();
+            new_since.clone()
+        } else {
+            // No-op, but still commit the state change so that this gets
+            // linearized.
+            read_cap.since.clone()
+        };
+        Continue(Since(reader_current_since))
+    }
+
+    pub fn expire_writer(&mut self, writer_id: &WriterId) -> ControlFlow<Infallible, bool> {
+        let existed = self.writers.remove(writer_id).is_some();
+        // No-op if existed is false, but still commit the state change so that
+        // this gets linearized.
+        Continue(existed)
+    }
+
+    pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
+        let existed = self.readers.remove(reader_id).is_some();
+        if existed {
+            self.update_since();
         }
-        read_cap.since.clone_from(new_since);
-        self.update_since();
-        Ok(())
-    }
-
-    pub fn expire_writer(&mut self, seqno: SeqNo, writer_id: &WriterId) -> Result<(), NoOp> {
-        self.writers.remove(writer_id).ok_or(NoOp { seqno })?;
-        Ok(())
-    }
-
-    pub fn expire_reader(&mut self, seqno: SeqNo, reader_id: &ReaderId) -> Result<(), NoOp> {
-        self.readers.remove(reader_id).ok_or(NoOp { seqno })?;
-        self.update_since();
-        Ok(())
+        // No-op if existed is false, but still commit the state change so that
+        // this gets linearized.
+        Continue(existed)
     }
 
     fn upper(&self) -> Antichain<T> {
@@ -172,18 +188,24 @@ where
         )
     }
 
-    fn writer(&mut self, id: &WriterId) -> Result<&mut WriteCapability<T>, InvalidUsage> {
+    fn writer(&mut self, id: &WriterId) -> &mut WriteCapability<T> {
         self.writers
             .get_mut(id)
-            // TODO: It is more likely that the lease expired.
-            .ok_or_else(|| InvalidUsage(anyhow!("writer not registered: {}", id)))
+            // The only (tm) ways to hit this are (1) inventing a WriterId
+            // instead of getting it from Register or (2) if a lease expired.
+            // (1) is a gross mis-use and (2) isn't implemented yet, so it feels
+            // okay to leave this for followup work.
+            .expect("TODO: Implement automatic lease renewals")
     }
 
-    fn reader(&mut self, id: &ReaderId) -> Result<&mut ReadCapability<T>, InvalidUsage> {
+    fn reader(&mut self, id: &ReaderId) -> &mut ReadCapability<T> {
         self.readers
             .get_mut(id)
-            // TODO: It is more likely that the lease expired.
-            .ok_or_else(|| InvalidUsage(anyhow!("reader not registered: {}", id)))
+            // The only (tm) ways to hit this are (1) inventing a ReaderId
+            // instead of getting it from Register or (2) if a lease expired.
+            // (1) is a gross mis-use and (2) isn't implemented yet, so it feels
+            // okay to leave this for followup work.
+            .expect("TODO: Implement automatic lease renewals")
     }
 
     fn update_since(&mut self) {
@@ -247,6 +269,17 @@ where
         }
     }
 
+    pub fn decode(buf: &[u8]) -> Result<Self, InvalidUsage<T>> {
+        let state: StateRollupMeta = bincode::deserialize(buf)
+            .map_err(|err| format!("unable to decode state: {}", err))
+            // We received a State that we couldn't decode. This could happen if
+            // persist messes up backward/forward compatibility, if the durable
+            // data was corrupted, or if operations messes up deployment. In any
+            // case, fail loudly.
+            .expect("internal error: invalid encoded state");
+        Self::try_from(&state)
+    }
+
     pub fn shard_id(&self) -> ShardId {
         self.shard_id
     }
@@ -259,9 +292,9 @@ where
         self.collections.upper()
     }
 
-    pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> Result<(R, Self), E>
+    pub fn clone_apply<R, E, WorkFn>(&self, work_fn: &mut WorkFn) -> ControlFlow<E, (R, Self)>
     where
-        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,
+        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
         let mut new_state = State {
             shard_id: self.shard_id,
@@ -270,7 +303,7 @@ where
             _phantom: PhantomData,
         };
         let work_ret = work_fn(new_state.seqno, &mut new_state.collections)?;
-        Ok((work_ret, new_state))
+        Continue((work_ret, new_state))
     }
 
     /// Returns the batches that contain updates up to (and including) the given `as_of`. The
@@ -315,11 +348,21 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Since<T>(pub Antichain<T>);
 
-#[derive(Debug)]
+// When used as an error, Since is determinate.
+impl<T> Determinacy for Since<T> {
+    const DETERMINANT: bool = true;
+}
+
+#[derive(Debug, PartialEq)]
 pub struct Upper<T>(pub Antichain<T>);
+
+// When used as an error, Upper is determinate.
+impl<T> Determinacy for Upper<T> {
+    const DETERMINANT: bool = true;
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AntichainMeta(Vec<[u8; 8]>);
@@ -354,6 +397,7 @@ mod codec_impls {
     use mz_persist_types::{Codec, Codec64};
     use timely::progress::{Antichain, Timestamp};
 
+    use crate::error::InvalidUsage;
     use crate::r#impl::state::{
         AntichainMeta, DescriptionMeta, ReadCapability, State, StateCollections, StateRollupMeta,
         WriteCapability,
@@ -382,7 +426,8 @@ mod codec_impls {
         fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
             let state: StateRollupMeta = bincode::deserialize(buf)
                 .map_err(|err| format!("unable to decode state: {}", err))?;
-            State::try_from(&state)
+            // This map_err goes away when we do incremental state.
+            State::try_from(&state).map_err(|err| err.to_string())
         }
     }
 
@@ -431,37 +476,30 @@ mod codec_impls {
         T: Timestamp + Codec64,
         D: Codec64,
     {
-        type Error = String;
+        type Error = InvalidUsage<T>;
 
-        fn try_from(x: &StateRollupMeta) -> Result<Self, String> {
-            if K::codec_name() != x.key_codec {
-                return Err(format!(
-                    "key_codec {} doesn't match original: {}",
-                    K::codec_name(),
-                    x.key_codec
-                ));
+        fn try_from(x: &StateRollupMeta) -> Result<Self, Self::Error> {
+            if K::codec_name() != x.key_codec
+                || V::codec_name() != x.val_codec
+                || T::codec_name() != x.ts_codec
+                || D::codec_name() != x.diff_codec
+            {
+                return Err(InvalidUsage::CodecMismatch {
+                    requested: (
+                        K::codec_name(),
+                        V::codec_name(),
+                        T::codec_name(),
+                        D::codec_name(),
+                    ),
+                    actual: (
+                        x.key_codec.to_owned(),
+                        x.val_codec.to_owned(),
+                        x.ts_codec.to_owned(),
+                        x.diff_codec.to_owned(),
+                    ),
+                });
             }
-            if V::codec_name() != x.val_codec {
-                return Err(format!(
-                    "val_codec {} doesn't match original: {}",
-                    V::codec_name(),
-                    x.val_codec
-                ));
-            }
-            if T::codec_name() != x.ts_codec {
-                return Err(format!(
-                    "ts_codec {} doesn't match original: {}",
-                    T::codec_name(),
-                    x.ts_codec
-                ));
-            }
-            if D::codec_name() != x.diff_codec {
-                return Err(format!(
-                    "diff_codec {} doesn't match original: {}",
-                    D::codec_name(),
-                    x.diff_codec
-                ));
-            }
+
             let writers = x
                 .writers
                 .iter()

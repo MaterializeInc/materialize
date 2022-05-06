@@ -77,6 +77,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
+use mz_stash::Append;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
@@ -224,16 +225,10 @@ pub struct SinkConnectorReady {
     pub compute_instance: ComputeInstanceId,
 }
 
-#[derive(Debug)]
-pub struct TimestampedUpdate {
-    pub updates: Vec<BuiltinTableUpdate>,
-    pub timestamp_offset: u64,
-}
-
 /// Configures a coordinator.
-pub struct Config {
+pub struct Config<S> {
     pub dataflow_client: mz_dataflow_types::client::Controller,
-    pub storage: storage::Connection,
+    pub storage: storage::Connection<S>,
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
@@ -331,12 +326,12 @@ impl ConcreteComputeInstanceConfig {
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator {
+pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
     dataflow_client: mz_dataflow_types::client::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
-    catalog: Catalog,
+    catalog: Catalog<S>,
     /// An in-memory WAL that stages writes before publishing them to Storage
     // TODO: this must be backed by some durable medium, e.g a STORAGE collection
     volatile_updates: HashMap<GlobalId, Vec<Update<Timestamp>>>,
@@ -442,7 +437,7 @@ macro_rules! guard_write_critical_section {
     };
 }
 
-impl Coordinator {
+impl<S: Append + 'static> Coordinator<S> {
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
@@ -807,9 +802,21 @@ impl Coordinator {
                 appends.push((id, vec![], advance_to));
             }
         }
+
+        // Scratch vector holding all updates that happen at `t < advance_to`
+        let mut scratch = vec![];
         // Then drain all pending writes and prepare append commands
-        for (id, updates) in self.volatile_updates.drain() {
-            appends.push((id, updates, advance_to));
+        for (id, updates) in self.volatile_updates.iter_mut() {
+            // TODO(petrosagg): replace with `drain_filter` once it stabilizes
+            let mut cursor = 0;
+            while let Some(update) = updates.get(cursor) {
+                if update.timestamp < advance_to {
+                    scratch.push(updates.swap_remove(cursor));
+                } else {
+                    cursor += 1;
+                }
+            }
+            appends.push((*id, scratch.split_off(0), advance_to));
         }
         self.dataflow_client
             .storage_mut()
@@ -2982,8 +2989,8 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         // TODO: remove this function when sources are linearizable.
         // See: #11048.
-        fn check_no_unmaterialized_sources(
-            catalog: &Catalog,
+        fn check_no_unmaterialized_sources<S: Append>(
+            catalog: &Catalog<S>,
             id_bundle: &CollectionIdBundle,
             session: &Session,
         ) -> Result<(), CoordError> {
@@ -3265,7 +3272,7 @@ impl Coordinator {
             session.add_transaction_ops(TransactionOps::Tail)?;
         }
 
-        let make_sink_desc = |coord: &mut Coordinator, from, from_desc, uses| {
+        let make_sink_desc = |coord: &mut Coordinator<S>, from, from_desc, uses| {
             // Determine the frontier of updates to tail *from*.
             // Updates greater or equal to this frontier will be produced.
             let id_bundle = coord
@@ -4389,33 +4396,15 @@ impl Coordinator {
         Ok(result)
     }
 
-    async fn send_builtin_table_updates_at_offset(&mut self, updates: Vec<TimestampedUpdate>) {
-        // NB: This makes sure to send all records for the same id in the same
-        // message.
-        let timestamp_base = self.get_local_write_ts();
-        let mut updates_by_id = HashMap::<GlobalId, Vec<Update>>::new();
-        for tu in updates.into_iter() {
-            let timestamp = timestamp_base + tu.timestamp_offset;
-            for u in tu.updates {
-                updates_by_id.entry(u.id).or_default().push(Update {
-                    row: u.row,
-                    diff: u.diff,
-                    timestamp,
-                });
-            }
-        }
-        for (id, updates) in updates_by_id {
-            self.volatile_updates.entry(id).or_default().extend(updates);
-        }
-    }
-
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let timestamped = TimestampedUpdate {
-            updates,
-            timestamp_offset: 0,
-        };
-        self.send_builtin_table_updates_at_offset(vec![timestamped])
-            .await
+        let timestamp = self.get_local_write_ts();
+        for u in updates {
+            self.volatile_updates.entry(u.id).or_default().push(Update {
+                row: u.row,
+                diff: u.diff,
+                timestamp,
+            });
+        }
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -4735,7 +4724,7 @@ impl Coordinator {
 ///
 /// Returns a handle to the coordinator and a client to communicate with the
 /// coordinator.
-pub async fn serve(
+pub async fn serve<S: Append + 'static>(
     Config {
         dataflow_client,
         storage,
@@ -4751,7 +4740,7 @@ pub async fn serve(
         secrets_controller,
         replica_sizes,
         availability_zones: _,
-    }: Config,
+    }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
@@ -4911,8 +4900,8 @@ fn duration_to_timestamp_millis(d: Duration) -> Timestamp {
 /// This function is identical to sql::plan::describe except this is also
 /// supports describing FETCH statements which need access to bound portals
 /// through the session.
-pub fn describe(
-    catalog: &Catalog,
+pub fn describe<S: Append>(
+    catalog: &Catalog<S>,
     stmt: Statement<Raw>,
     param_types: &[Option<ScalarType>],
     session: &Session,
@@ -4967,6 +4956,7 @@ fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
 pub mod fast_path_peek {
 
     use mz_dataflow_types::client::ComputeInstanceId;
+    use mz_stash::Append;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
@@ -4977,7 +4967,7 @@ pub mod fast_path_peek {
 
     #[derive(Debug)]
     pub struct PeekDataflowPlan<T> {
-        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, T>,
+        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, (), T>,
         id: GlobalId,
         key: Vec<MirScalarExpr>,
         permutation: HashMap<usize, usize>,
@@ -5093,7 +5083,7 @@ pub mod fast_path_peek {
         }));
     }
 
-    impl crate::coord::Coordinator {
+    impl<S: Append + 'static> crate::coord::Coordinator<S> {
         /// Implements a peek plan produced by `create_plan` above.
         pub async fn implement_fast_path_peek(
             &mut self,
@@ -5302,7 +5292,7 @@ pub mod read_holds {
         pub(super) compute_instance: ComputeInstanceId,
     }
 
-    impl crate::coord::Coordinator {
+    impl<S> crate::coord::Coordinator<S> {
         /// Acquire read holds on the indicated collections at the indicated time.
         ///
         /// This method will panic if the holds cannot be acquired. In the future,
@@ -5426,7 +5416,7 @@ impl<T: timely::progress::Timestamp> ReadCapability<T> {
 }
 
 #[cfg(test)]
-impl Coordinator {
+impl<S: Append + 'static> Coordinator<S> {
     #[allow(dead_code)]
     async fn verify_ship_dataflow_no_error(&mut self) {
         // ship_dataflow, ship_dataflows, and finalize_dataflow are not allowed

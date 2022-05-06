@@ -564,6 +564,7 @@ impl Runner {
                 blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
                 consensus_uri: format!("sqlite://{}/persist/consensus", temp_dir.path().display()),
             },
+            catalog_postgres_stash: None,
             orchestrator: OrchestratorConfig {
                 backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),

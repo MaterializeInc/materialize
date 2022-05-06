@@ -37,7 +37,7 @@ use crate::client::replicated::ActiveReplication;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
-use crate::DataflowDescription;
+use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
 use mz_repr::{GlobalId, Row};
 
@@ -234,7 +234,7 @@ where
     /// always able to return to a state that can serve the output read capabilities.
     pub async fn create_dataflows(
         &mut self,
-        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, T>>,
+        dataflows: Vec<DataflowDescription<crate::plan::Plan<T>, (), T>>,
     ) -> Result<(), ComputeError> {
         // Validate dataflows as having inputs whose `since` is less or equal to the dataflow's `as_of`.
         // Start tracking frontiers for each dataflow, using its `as_of` for each index and sink.
@@ -327,9 +327,37 @@ where
             }
         }
 
+        // Here we augment all the imported sources with the appropriate storage metadata needed by
+        // the compute instance to read them
+        let mut augmented_dataflows = Vec::with_capacity(dataflows.len());
+        for d in dataflows {
+            let mut source_imports = BTreeMap::new();
+            for (id, si) in d.source_imports {
+                let metadata = self.storage_controller.collection_metadata(id)?;
+                let desc = SourceInstanceDesc {
+                    description: si.description,
+                    storage_metadata: metadata,
+                    arguments: si.arguments,
+                };
+                source_imports.insert(id, desc);
+            }
+
+            augmented_dataflows.push(DataflowDescription {
+                source_imports,
+                // The rest of the fields are identical
+                index_imports: d.index_imports,
+                objects_to_build: d.objects_to_build,
+                index_exports: d.index_exports,
+                sink_exports: d.sink_exports,
+                as_of: d.as_of,
+                debug_name: d.debug_name,
+                id: d.id,
+            });
+        }
+
         self.compute
             .client
-            .send(ComputeCommand::CreateDataflows(dataflows))
+            .send(ComputeCommand::CreateDataflows(augmented_dataflows))
             .await
             .expect("Compute command failed; unrecoverable");
 

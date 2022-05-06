@@ -85,7 +85,6 @@ struct Args {
     shard_id: Option<String>,
 }
 
-const NO_TIMEOUT: Duration = Duration::from_secs(1_000_000);
 const MIB: u64 = 1024 * 1024;
 
 fn main() {
@@ -115,14 +114,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
     };
-    let (blob, consensus) = location.open(NO_TIMEOUT).await?;
-    let persist = PersistClient::new(NO_TIMEOUT, blob, consensus).await?;
+    let (blob, consensus) = location.open().await?;
+    let persist = PersistClient::new(blob, consensus).await?;
 
     let num_records_total = args.records_per_second * args.runtime_seconds;
     let data_generator =
         DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
     let shard_id = match args.shard_id {
-        Some(shard_id) => ShardId::from_str(&shard_id)?,
+        Some(shard_id) => ShardId::from_str(&shard_id).map_err(anyhow::Error::msg)?,
         None => ShardId::new(),
     };
     let (writers, readers) = match args.benchmark_type {
@@ -387,8 +386,6 @@ mod api {
 }
 
 mod raw_persist_benchmark {
-    use std::time::Duration;
-
     use async_trait::async_trait;
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
@@ -397,7 +394,6 @@ mod raw_persist_benchmark {
     use timely::progress::Antichain;
 
     use crate::api::{BenchmarkReader, BenchmarkWriter};
-    use crate::NO_TIMEOUT;
 
     pub async fn setup_raw_persist(
         persist: PersistClient,
@@ -413,19 +409,18 @@ mod raw_persist_benchmark {
     > {
         let mut writers = vec![];
         for _ in 0..num_writers {
-            let (writer, _) = persist
-                .open::<Vec<u8>, Vec<u8>, u64, i64>(NO_TIMEOUT, id)
-                .await?;
+            let (writer, _) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
 
             writers.push(Box::new(writer) as Box<dyn BenchmarkWriter + Send + Sync>);
         }
 
         let mut readers = vec![];
         for _ in 0..num_readers {
-            let (_, reader) = persist
-                .open::<Vec<u8>, Vec<u8>, u64, i64>(NO_TIMEOUT, id)
-                .await?;
-            let listen = reader.listen(NO_TIMEOUT, Antichain::from_elem(0)).await??;
+            let (_, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+            let listen = reader
+                .listen(Antichain::from_elem(0))
+                .await
+                .expect("cannot serve requested as_of");
             readers.push(Box::new(listen) as Box<dyn BenchmarkReader + Send + Sync>);
         }
 
@@ -445,7 +440,7 @@ mod raw_persist_benchmark {
             let batch = batch
                 .iter()
                 .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d));
-            self.append(NO_TIMEOUT, batch, new_upper)
+            self.append(batch, new_upper)
                 .await??
                 .expect("invalid current upper");
 
@@ -460,9 +455,7 @@ mod raw_persist_benchmark {
             // record with the record count to avoid having to actually count
             // the number of records..
             let mut count = 0;
-            // TODO: setting a smaller deadline (of say 1 second), causes failures
-            // sometimes.
-            let events = self.next(Duration::from_millis(100_000)).await?;
+            let events = self.next().await;
 
             for event in events {
                 if let ListenEvent::Progress(t) = event {

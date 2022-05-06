@@ -112,6 +112,7 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::*;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::GlobalId;
@@ -132,7 +133,7 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
     storage_state: &mut StorageState,
     debug_name: &str,
     as_of: Option<Antichain<mz_repr::Timestamp>>,
-    source_imports: BTreeMap<GlobalId, SourceInstanceDesc>,
+    source_imports: BTreeMap<GlobalId, SourceInstanceDesc<CollectionMetadata>>,
     dataflow_id: uuid::Uuid,
     boundary: &mut B,
 ) {

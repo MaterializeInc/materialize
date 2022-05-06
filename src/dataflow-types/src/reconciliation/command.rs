@@ -35,6 +35,7 @@ use tracing::warn;
 
 use mz_repr::GlobalId;
 
+use crate::client::controller::storage::CollectionMetadata;
 use crate::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
 use crate::{DataflowDescription, Plan};
 
@@ -49,7 +50,7 @@ pub struct ComputeCommandReconcile<T, C> {
     /// `DropInstance` command.
     created: bool,
     /// Dataflows by ID.
-    dataflows: HashMap<GlobalId, DataflowDescription<Plan<T>, T>>,
+    dataflows: HashMap<GlobalId, DataflowDescription<Plan<T>, CollectionMetadata, T>>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashSet<uuid::Uuid>,
     /// Stash of responses to send back to the controller.

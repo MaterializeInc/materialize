@@ -9,11 +9,12 @@
 
 //! Implementation of the persist state machine.
 
+use std::convert::Infallible;
 use std::fmt::Debug;
+use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -22,7 +23,7 @@ use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, info, trace};
 
-use crate::error::{InvalidUsage, NoOp};
+use crate::error::InvalidUsage;
 use crate::r#impl::state::{
     ReadCapability, Since, State, StateCollections, Upper, WriteCapability,
 };
@@ -55,11 +56,10 @@ where
     D: Semigroup + Codec64,
 {
     pub async fn new(
-        deadline: Instant,
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
-    ) -> Result<Self, ExternalError> {
-        let state = Self::maybe_init_state(deadline, consensus.as_ref(), shard_id).await?;
+    ) -> Result<Self, InvalidUsage<T>> {
+        let state = Self::maybe_init_state(consensus.as_ref(), shard_id).await?;
         Ok(Machine { consensus, state })
     }
 
@@ -67,162 +67,100 @@ where
         self.state.shard_id()
     }
 
-    pub async fn upper(&mut self, deadline: Instant) -> Result<Antichain<T>, ExternalError> {
-        self.fetch_and_update_state(deadline).await?;
-        Ok(self.state.upper())
+    pub async fn fetch_upper(&mut self) -> Antichain<T> {
+        self.fetch_and_update_state().await;
+        self.state.upper()
     }
 
     pub async fn register(
         &mut self,
-        deadline: Instant,
         writer_id: &WriterId,
         reader_id: &ReaderId,
-    ) -> Result<(WriteCapability<T>, ReadCapability<T>), ExternalError> {
+    ) -> (WriteCapability<T>, ReadCapability<T>) {
         let (seqno, (write_cap, read_cap)) = self
-            .apply_unbatched_cmd::<_, (), _>(deadline, |seqno, state| {
-                Ok(state.register(seqno, writer_id, reader_id))
+            .apply_unbatched_idempotent_cmd(|seqno, state| {
+                state.register(seqno, writer_id, reader_id)
             })
-            .await?
-            // TODO: Once the rust (!) Never type is stabilized, use it for
-            // apply_unbatched_cmd's Err type to avoid this expect.
-            .expect("register is infallible");
+            .await;
         debug_assert_eq!(seqno, read_cap.seqno);
-        Ok((write_cap, read_cap))
+        (write_cap, read_cap)
     }
 
-    pub async fn clone_reader(
-        &mut self,
-        deadline: Instant,
-        new_reader_id: &ReaderId,
-    ) -> Result<ReadCapability<T>, ExternalError> {
+    pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
         let (seqno, read_cap) = self
-            .apply_unbatched_cmd::<_, (), _>(deadline, |seqno, state| {
-                Ok(state.clone_reader(seqno, new_reader_id))
-            })
-            .await?
-            // TODO: Once the rust (!) Never type is stabilized, use it for
-            // apply_unbatched_cmd's Err type to avoid this expect.
-            .expect("clone_reader is infallible");
+            .apply_unbatched_idempotent_cmd(|seqno, state| state.clone_reader(seqno, new_reader_id))
+            .await;
         debug_assert_eq!(seqno, read_cap.seqno);
-        Ok(read_cap)
+        read_cap
     }
 
     pub async fn append(
         &mut self,
-        deadline: Instant,
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<Result<SeqNo, Antichain<T>>, InvalidUsage>, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(deadline, |_, state| state.append(writer_id, keys, desc))
+    ) -> Result<Result<SeqNo, Upper<T>>, ExternalError> {
+        let (seqno, res) = self
+            .apply_unbatched_cmd(|_, state| state.append(writer_id, keys, desc))
             .await?;
-        let (seqno, res) = match res {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
         match res {
-            Ok(()) => (),
-            Err(current_upper) => return Ok(Ok(Err(current_upper))),
-        };
-        Ok(Ok(Ok(seqno)))
+            Ok(()) => Ok(Ok(seqno)),
+            Err(current_upper) => return Ok(Err(current_upper)),
+        }
     }
 
     pub async fn compare_and_append(
         &mut self,
-        deadline: Instant,
         writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<Result<SeqNo, Antichain<T>>, InvalidUsage>, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(deadline, |_, state| {
-                state.compare_and_append(writer_id, keys, desc)
-            })
+    ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, ExternalError> {
+        let (seqno, res) = self
+            .apply_unbatched_cmd(|_, state| state.compare_and_append(writer_id, keys, desc))
             .await?;
-        let (seqno, res) = match res {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
         match res {
-            Ok(()) => (),
-            Err(current_upper) => return Ok(Ok(Err(current_upper))),
-        };
-        Ok(Ok(Ok(seqno)))
+            Ok(()) => Ok(Ok(Ok(seqno))),
+            Err(Ok(err)) => return Ok(Ok(Err(err))),
+            Err(Err(current_upper)) => return Ok(Err(current_upper)),
+        }
     }
 
     pub async fn downgrade_since(
         &mut self,
-        deadline: Instant,
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
-    ) -> Result<Result<SeqNo, InvalidUsage>, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(deadline, |_, state| {
-                state.downgrade_since(reader_id, new_since)
-            })
-            .await?;
-        let (seqno, _) = match res {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(seqno))
+    ) -> (SeqNo, Since<T>) {
+        self.apply_unbatched_idempotent_cmd(|_, state| state.downgrade_since(reader_id, new_since))
+            .await
     }
 
-    pub async fn expire_writer(
-        &mut self,
-        deadline: Instant,
-        writer_id: &WriterId,
-    ) -> Result<SeqNo, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(deadline, |seqno, state| {
-                state.expire_writer(seqno, writer_id)
-            })
-            .await?;
-        let seqno = match res {
-            Ok((seqno, ())) => seqno,
-            Err(NoOp { seqno }) => seqno,
-        };
-        Ok(seqno)
+    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
+        let (seqno, _existed) = self
+            .apply_unbatched_idempotent_cmd(|_, state| state.expire_writer(writer_id))
+            .await;
+        seqno
     }
 
-    pub async fn expire_reader(
-        &mut self,
-        deadline: Instant,
-        reader_id: &ReaderId,
-    ) -> Result<SeqNo, ExternalError> {
-        let res = self
-            .apply_unbatched_cmd(deadline, |seqno, state| {
-                state.expire_reader(seqno, reader_id)
-            })
-            .await?;
-        let seqno = match res {
-            Ok((seqno, ())) => seqno,
-            Err(NoOp { seqno }) => seqno,
-        };
-        Ok(seqno)
+    pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
+        let (seqno, _existed) = self
+            .apply_unbatched_idempotent_cmd(|_, state| state.expire_reader(reader_id))
+            .await;
+        seqno
     }
 
     pub async fn snapshot(
         &mut self,
-        deadline: Instant,
         as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<(String, Description<T>)>, InvalidUsage>, ExternalError> {
+    ) -> Result<Vec<(String, Description<T>)>, Since<T>> {
         let mut fetches = 0;
         loop {
             let upper = match self.state.snapshot(as_of) {
-                Ok(Ok(x)) => return Ok(Ok(x)),
+                Ok(Ok(x)) => return Ok(x),
                 Ok(Err(Upper(upper))) => {
                     // The upper isn't ready yet, fall through and try again.
                     upper
                 }
-                Err(Since(since)) => {
-                    return Ok(Err(InvalidUsage(anyhow!(
-                        "snapshot with as_of {:?} cannot be served by shard with since: {:?}",
-                        as_of,
-                        since
-                    ))))
-                }
+                Err(Since(since)) => return Err(Since(since)),
             };
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
@@ -234,41 +172,34 @@ where
                 } else {
                     Duration::from_secs(1)
                 };
-                if Instant::now() + sleep > deadline {
-                    return Err(ExternalError::new_timeout(deadline));
-                }
                 info!(
                     "snapshot as of {:?} not available for upper {:?} retrying in {:?}",
                     as_of, upper, sleep
                 );
                 tokio::time::sleep(sleep).await;
             }
-            self.fetch_and_update_state(deadline).await?;
+            self.fetch_and_update_state().await;
             fetches += 1;
         }
     }
 
     pub async fn next_listen_batch(
         &mut self,
-        deadline: Instant,
         frontier: &Antichain<T>,
-    ) -> Result<(Vec<String>, Description<T>), ExternalError> {
+    ) -> (Vec<String>, Description<T>) {
         // This unconditionally fetches the latest state and uses that to
         // determine if we can serve `as_of`. TODO: We could instead check first
         // and only fetch if necessary.
         loop {
-            self.fetch_and_update_state(deadline).await?;
+            self.fetch_and_update_state().await;
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
-                return Ok((keys.to_owned(), desc.clone()));
+                return (keys.to_owned(), desc.clone());
             }
             let sleep = if cfg!(test) {
                 Duration::from_nanos(1)
             } else {
                 Duration::from_secs(1)
             };
-            if Instant::now() + sleep > deadline {
-                return Err(ExternalError::new_timeout(deadline));
-            }
             // Wait a bit and try again.
             //
             // TODO: See if we can watch for changes in Consensus to be more
@@ -277,21 +208,42 @@ where
         }
     }
 
+    async fn apply_unbatched_idempotent_cmd<
+        R,
+        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<Infallible, R>,
+    >(
+        &mut self,
+        mut work_fn: WorkFn,
+    ) -> (SeqNo, R) {
+        loop {
+            match self.apply_unbatched_cmd(&mut work_fn).await {
+                Ok((seqno, x)) => match x {
+                    Ok(x) => return (seqno, x),
+                    Err(infallible) => match infallible {},
+                },
+                Err(err @ ExternalError { .. }) => {
+                    debug!(
+                        "apply_unbatched_idempotent_cmd received an indeterminate error, retrying: {}", err);
+                    continue;
+                }
+            }
+        }
+    }
+
     async fn apply_unbatched_cmd<
         R,
         E,
-        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> Result<R, E>,
+        WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
         &mut self,
-        deadline: Instant,
         mut work_fn: WorkFn,
-    ) -> Result<Result<(SeqNo, R), E>, ExternalError> {
+    ) -> Result<(SeqNo, Result<R, E>), ExternalError> {
         let path = self.shard_id().to_string();
 
         loop {
             let (work_ret, new_state) = match self.state.clone_apply(&mut work_fn) {
-                Ok(x) => x,
-                Err(err) => return Ok(Err(err)),
+                Continue(x) => x,
+                Break(err) => return Ok((self.state.seqno(), Err(err))),
             };
             trace!(
                 "apply_unbatched_cmd attempting {}\n  new_state={:?}",
@@ -300,9 +252,19 @@ where
             );
 
             let new = VersionedData::from((new_state.seqno(), &new_state));
+            // SUBTLE! Unlike the other consensus and blob uses, we can't
+            // automatically retry here, because ExternalError is indeterminate.
+            // However, if the state change itself is _idempotent_, then we're
+            // free to retry even indeterminate errors. See
+            // [Self::apply_unbatched_idempotent_cmd].
             let cas_res = self
                 .consensus
-                .compare_and_set(deadline, &path, Some(self.state.seqno()), new)
+                .compare_and_set(
+                    Instant::now() + FOREVER,
+                    &path,
+                    Some(self.state.seqno()),
+                    new,
+                )
                 .await
                 .map_err(|err| {
                     debug!("apply_unbatched_cmd errored: {}", err);
@@ -318,16 +280,14 @@ where
                     self.state = new_state;
 
                     // Bound the number of entries in consensus.
-                    //
-                    // It's weird that this will return an error for the whole
-                    // request after we know it's successful, but this goes away
-                    // in #12223.
-                    let () = self
-                        .consensus
-                        .truncate(deadline, &path, self.state.seqno())
-                        .await?;
+                    let () = retry_external("apply_unbatched_cmd::truncate", || async {
+                        self.consensus
+                            .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
+                            .await
+                    })
+                    .await;
 
-                    return Ok(Ok((self.state.seqno(), work_ret)));
+                    return Ok((self.state.seqno(), Ok(work_ret)));
                 }
                 Err(current) => {
                     debug!(
@@ -335,13 +295,9 @@ where
                         self.state.seqno(),
                         current.as_ref().map(|x| x.seqno)
                     );
-                    self.update_state(deadline, current).await?;
+                    self.update_state(current).await;
 
                     // TODO: Some sort of exponential backoff here?
-                    let sleep = Duration::from_secs(0);
-                    if Instant::now() + sleep > deadline {
-                        return Err(ExternalError::new_timeout(deadline));
-                    }
                     continue;
                 }
             }
@@ -351,24 +307,25 @@ where
     // TODO: This is fairly duplicative of apply_unbatched_cmd. Unclear if
     // there's anything to do here...
     async fn maybe_init_state(
-        deadline: Instant,
         consensus: &(dyn Consensus + Send + Sync),
         shard_id: ShardId,
-    ) -> Result<State<K, V, T, D>, ExternalError> {
-        debug!(
-            "Machine::maybe_init_state deadline={:?} shard_id={}",
-            deadline, shard_id
-        );
+    ) -> Result<State<K, V, T, D>, InvalidUsage<T>> {
+        debug!("Machine::maybe_init_state shard_id={}", shard_id);
 
         let path = shard_id.to_string();
-        let mut current = consensus.head(deadline, &path).await?;
+        let mut current = retry_external("maybe_init_state::head", || async {
+            consensus.head(Instant::now() + FOREVER, &path).await
+        })
+        .await;
 
         loop {
             // First, check if the shard has already been initialized.
             if let Some(current) = current.as_ref() {
-                let (current_seqno, current_state) =
-                    <(SeqNo, State<K, V, T, D>)>::try_from(current)?;
-                debug_assert_eq!(current_seqno, current_state.seqno());
+                let current_state = match State::decode(&current.data) {
+                    Ok(x) => x,
+                    Err(err) => return Err(err),
+                };
+                debug_assert_eq!(current.seqno, current_state.seqno());
                 return Ok(current_state);
             }
 
@@ -380,13 +337,14 @@ where
                 new.seqno,
                 state
             );
-            let cas_res = consensus
-                .compare_and_set(deadline, &path, None, new)
-                .await
-                .map_err(|err| {
-                    debug!("maybe_init_state errored: {}", err);
-                    err
-                })?;
+            let cas_res = retry_external("maybe_init_state::cas", || async {
+                // If Consensus::compare_and_set took new as a ref, then we
+                // wouldn't have to clone here.
+                consensus
+                    .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
+                    .await
+            })
+            .await;
             match cas_res {
                 Ok(()) => {
                     trace!(
@@ -411,50 +369,71 @@ where
         }
     }
 
-    async fn fetch_and_update_state(&mut self, deadline: Instant) -> Result<(), ExternalError> {
+    async fn fetch_and_update_state(&mut self) {
         let shard_id = self.shard_id();
-        let current = self.consensus.head(deadline, &shard_id.to_string()).await?;
-        self.update_state(deadline, current).await
+        let current = retry_external("fetch_and_update_state::head", || async {
+            self.consensus
+                .head(Instant::now() + FOREVER, &shard_id.to_string())
+                .await
+        })
+        .await;
+        self.update_state(current).await;
     }
 
-    async fn update_state(
-        &mut self,
-        deadline: Instant,
-        current: Option<VersionedData>,
-    ) -> Result<(), ExternalError> {
+    async fn update_state(&mut self, current: Option<VersionedData>) {
         let current = match current {
             Some(x) => x,
             None => {
-                // This seems a little wonky...
-                self.state =
-                    Self::maybe_init_state(deadline, self.consensus.as_ref(), self.shard_id())
-                        .await?;
-                return Ok(());
+                // Machine is only constructed once, we've successfully
+                // retrieved state from durable storage, but now it's gone? In
+                // the future, maybe this means the shard was deleted or
+                // something, but for now it's entirely unexpected.
+                panic!("internal error: missing state {}", self.state.shard_id());
             }
         };
-        let (current_seqno, current_state) = <(SeqNo, State<K, V, T, D>)>::try_from(&current)?;
-        debug_assert_eq!(current_seqno, current_state.seqno());
+        let current_state = State::decode(&current.data)
+            // We received a State with different declared codecs than a
+            // previous SeqNo of the same State. Fail loudly.
+            .expect("internal error: new durable state disagreed with old durable state");
+        debug_assert_eq!(current.seqno, current_state.seqno());
         debug_assert!(self.state.seqno() <= current.seqno);
         self.state = current_state;
-        Ok(())
+    }
+}
+
+pub const FOREVER: Duration = Duration::from_secs(1_000_000_000);
+
+pub async fn retry_external<R, F, WorkFn>(name: &str, mut work_fn: WorkFn) -> R
+where
+    F: std::future::Future<Output = Result<R, ExternalError>>,
+    WorkFn: FnMut() -> F,
+{
+    loop {
+        match work_fn().await {
+            Ok(x) => return x,
+            Err(err @ ExternalError { .. }) => {
+                info!("external operation {} failed, retrying: {}", name, err)
+                // TODO: Some sort of backoff.
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::tests::new_test_client;
-    use crate::{ShardId, NO_TIMEOUT};
+    use crate::ShardId;
 
     use super::*;
 
     #[tokio::test]
-    async fn apply_unbatched_cmd_truncate() -> Result<(), Box<dyn std::error::Error>> {
+    async fn apply_unbatched_cmd_truncate() {
         mz_ore::test::init_logging();
 
         let (mut write, _) = new_test_client()
-            .await?
-            .open::<String, (), u64, i64>(NO_TIMEOUT, ShardId::new())
-            .await?;
+            .await
+            .expect_open::<String, (), u64, i64>(ShardId::new())
+            .await;
         let consensus = Arc::clone(&write.machine.consensus);
 
         // Write a bunch of batches. This should result in a bounded number of
@@ -462,19 +441,14 @@ mod tests {
         const NUM_BATCHES: u64 = 100;
         for idx in 0..NUM_BATCHES {
             write
-                .compare_and_append(
-                    NO_TIMEOUT,
-                    [((idx.to_string(), ()), idx, 1)],
-                    Antichain::from_elem(idx),
-                    Antichain::from_elem(idx + 1),
-                )
-                .await??
-                .expect("invalid current upper");
+                .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)
+                .await;
         }
         let key = write.machine.shard_id().to_string();
         let consensus_entries = consensus
-            .scan(Instant::now() + NO_TIMEOUT, &key, SeqNo::minimum())
-            .await?;
+            .scan(Instant::now() + FOREVER, &key, SeqNo::minimum())
+            .await
+            .expect("scan failed");
         // Make sure we constructed the key correctly.
         assert!(consensus_entries.len() > 0);
         // Make sure the number of entries is bounded.
@@ -488,7 +462,5 @@ mod tests {
             max_entries,
             consensus_entries.len()
         );
-
-        Ok(())
     }
 }

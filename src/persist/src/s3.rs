@@ -736,7 +736,7 @@ pub struct S3BlobMulti {
 
 impl S3BlobMulti {
     /// Opens the given location for non-exclusive read-write access.
-    pub async fn open(_deadline: Instant, config: S3BlobConfig) -> Result<Self, ExternalError> {
+    pub async fn open(config: S3BlobConfig) -> Result<Self, ExternalError> {
         let core = S3BlobCore {
             client: Some(config.client),
             bucket: config.bucket,
@@ -744,6 +744,10 @@ impl S3BlobMulti {
             max_keys: 1_000,
             multipart_config: MultipartConfig::default(),
         };
+        // Connect before returning success. We don't particularly care about
+        // what's stored in this blob (nothing writes to it, so presumably it's
+        // empty) just that we were able and allowed to fetch it.
+        let _ = core.get("HEALTH_CHECK").await?;
         Ok(S3BlobMulti { core })
     }
 }
@@ -993,7 +997,6 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn s3_blob_multi() -> Result<(), ExternalError> {
         mz_ore::test::init_logging();
-        let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
             None => {
@@ -1015,7 +1018,7 @@ mod tests {
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_multi_impl_test/{}", config.prefix, path),
                 };
-                let mut blob = S3BlobMulti::open(no_timeout, config).await?;
+                let mut blob = S3BlobMulti::open(config).await?;
                 blob.core.max_keys = 2;
                 Ok(blob)
             }

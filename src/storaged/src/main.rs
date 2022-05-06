@@ -11,19 +11,16 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-use mz_persist_client::{PersistClient, PersistLocation};
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use url::Url;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
@@ -91,13 +88,6 @@ struct Args {
     #[clap(long, requires = "linger")]
     reconcile: bool,
 
-    /// Where the persist library should store its blob data.
-    #[clap(long, env = "STORAGED_PERSIST_BLOB_URL")]
-    persist_blob_url: Url,
-    /// Where the persist library should perform consensus.
-    #[clap(long, env = "STORAGED_PERSIST_CONSENSUS_URL")]
-    persist_consensus_url: Url,
-
     /// The address of the HTTP profiling UI.
     #[clap(long, value_name = "HOST:PORT")]
     http_console_addr: Option<String>,
@@ -161,16 +151,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
     }
 
-    info!("starting persist client...");
-    let persist_client = {
-        let location = PersistLocation {
-            blob_uri: args.persist_blob_url.to_string(),
-            consensus_uri: args.persist_consensus_url.to_string(),
-        };
-        let (blob, consensus) = location.open(Duration::from_secs(30)).await?;
-        PersistClient::new(Duration::from_secs(30), blob, consensus).await?
-    };
-
     let config = mz_storage::Config {
         workers: args.workers,
         timely_config,
@@ -181,7 +161,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
-        persist_client,
     };
 
     let serve_config = ServeConfig {

@@ -36,6 +36,7 @@ use mz_persist_client::PersistLocation;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio_postgres::{self, NoTls};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::{AnyOr, Origin};
 
@@ -93,6 +94,9 @@ pub struct Config {
     pub data_directory: PathBuf,
     /// Where the persist library should store its data.
     pub persist_location: PersistLocation,
+    /// Optional Postgres connection string which will use Postgres as the metadata
+    /// stash instead of sqlite from the `data_directory`.
+    pub catalog_postgres_stash: Option<String>,
 
     // === Platform options. ===
     /// Configuration of service orchestration.
@@ -194,6 +198,28 @@ pub enum SecretsControllerConfig {
 
 /// Start a `materialized` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
+    match &config.catalog_postgres_stash {
+        Some(s) => {
+            let (client, connection) = tokio_postgres::connect(s, NoTls).await?;
+            mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+                if let Err(e) = connection.await {
+                    panic!("postgres stash connection error: {}", e);
+                }
+            });
+            let stash = mz_stash::Postgres::open(client).await?;
+            serve_stash(config, stash).await
+        }
+        None => {
+            let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
+            serve_stash(config, stash).await
+        }
+    }
+}
+
+async fn serve_stash<S: mz_stash::Append + 'static>(
+    config: Config,
+    stash: S,
+) -> Result<Server, anyhow::Error> {
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
         None => (None, None),
@@ -252,11 +278,8 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let local_addr = listener.local_addr()?;
 
     // Load the coordinator catalog from disk.
-    let coord_storage = mz_coord::catalog::storage::Connection::open(
-        &config.data_directory,
-        Some(config.experimental_mode),
-    )
-    .await?;
+    let coord_storage =
+        mz_coord::catalog::storage::Connection::open(stash, Some(config.experimental_mode)).await?;
 
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
@@ -284,11 +307,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                         format!(
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
-                        ),
-                        format!("--persist-blob-url={}", config.persist_location.blob_uri),
-                        format!(
-                            "--persist-consensus-url={}",
-                            config.persist_location.consensus_uri
                         ),
                     ];
                     if config.orchestrator.linger {
@@ -350,6 +368,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
         storage_client,
         config.data_directory,
+        config.persist_location,
     );
     let dataflow_controller =
         mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);

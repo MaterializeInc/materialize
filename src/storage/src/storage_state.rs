@@ -221,20 +221,16 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                                 consensus_uri: persist_connector.consensus_uri.clone(),
                             };
 
-                            let timeout = Duration::from_secs(60);
-
                             // TODO: Make these parts async aware?
                             let (blob, consensus) =
-                                futures_executor::block_on(location.open(timeout)).unwrap();
+                                futures_executor::block_on(location.open()).unwrap();
 
-                            let persist_client = futures_executor::block_on(PersistClient::new(
-                                timeout, blob, consensus,
-                            ))
-                            .unwrap();
+                            let persist_client =
+                                futures_executor::block_on(PersistClient::new(blob, consensus))
+                                    .unwrap();
 
                             let (write, _read) = futures_executor::block_on(
                                 persist_client.open::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(
-                                    timeout,
                                     persist_connector.shard_id,
                                 ),
                             )
@@ -478,10 +474,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 .expect("Reported frontier missing!");
 
             // TODO: Make these parts of the code async?
-            let observed_frontier = futures_executor::block_on(
-                write_handle.fetch_recent_upper(Duration::from_secs(60)),
-            )
-            .unwrap();
+            let observed_frontier = futures_executor::block_on(write_handle.fetch_recent_upper());
 
             // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
             // This is protection against `frontier` lagging behind what we have conditionally reported.

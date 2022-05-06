@@ -17,6 +17,8 @@
 #     $ ci/test/lint-allocator.sh
 #
 # To rewrite the stored files, pass the --rewrite option.
+#
+# See the [README](lint-allocator/README.md) for more details.
 
 set -euo pipefail
 

@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::iter::once;
-use std::path::Path;
 
 use bytes::BufMut;
 use futures::future::BoxFuture;
@@ -183,19 +182,17 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
 }
 
 #[derive(Debug)]
-pub struct Connection<S = mz_stash::Sqlite> {
+pub struct Connection<S> {
     stash: S,
     experimental_mode: bool,
     cluster_id: Uuid,
 }
 
-impl Connection {
+impl<S: Append> Connection<S> {
     pub async fn open(
-        data_dir_path: &Path,
+        mut stash: S,
         experimental_mode: Option<bool>,
-    ) -> Result<Connection<mz_stash::Sqlite>, Error> {
-        let mut stash = mz_stash::Sqlite::open(&data_dir_path.join("stash"))?;
-
+    ) -> Result<Connection<S>, Error> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.

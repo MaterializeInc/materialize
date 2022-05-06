@@ -24,18 +24,18 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
-use mz_persist_client::read::ReadHandle;
+use mz_persist_client::{read::ReadHandle, PersistLocation};
 use mz_persist_types::Codec64;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
@@ -62,6 +62,9 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
+
+    /// Returns the necessary metadata to read a collection
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError>;
 
     /// Create the sources described in the individual CreateSourceCommand commands.
     ///
@@ -133,6 +136,12 @@ pub trait StorageController: Debug + Send {
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
 }
 
+/// Metadata required by a storage instance to read a storage collection
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionMetadata {
+    pub persist_location: PersistLocation,
+}
+
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
@@ -149,6 +158,8 @@ pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
 #[derive(Debug)]
 pub struct Controller<T> {
     state: StorageControllerState<T>,
+    /// The persist location where all storage collections are being written to
+    persist_location: PersistLocation,
 }
 
 #[derive(Debug)]
@@ -158,6 +169,8 @@ pub enum StorageError {
     SourceIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
+    /// The update contained in the appended batch was at a timestamp beyond the batche's upper
+    UpdateBeyondUpper(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
@@ -169,6 +182,7 @@ impl Error for StorageError {
         match self {
             Self::SourceIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
+            Self::UpdateBeyondUpper(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
         }
@@ -184,6 +198,9 @@ impl fmt::Display for StorageError {
                 "source identifier was re-created after having been dropped: {id}"
             ),
             Self::IdentifierMissing(id) => write!(f, "source identifier is not present: {id}"),
+            Self::UpdateBeyondUpper(id) => {
+                write!(f, "append batch for {id} contained update beyond its upper")
+            }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
         }
@@ -235,6 +252,12 @@ where
             .collections
             .get_mut(&id)
             .ok_or(StorageError::IdentifierMissing(id))
+    }
+
+    fn collection_metadata(&self, _id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+        Ok(CollectionMetadata {
+            persist_location: self.persist_location.clone(),
+        })
     }
 
     async fn create_sources(
@@ -309,11 +332,14 @@ where
                 CollectionState::new(desc.clone(), since.clone(), read_handle, last_bindings);
             self.state.collections.insert(id, collection_state);
 
+            let storage_metadata = self.collection_metadata(id)?;
+
             let command = CreateSourceCommand {
                 id,
                 desc,
                 since,
                 ts_bindings,
+                storage_metadata,
             };
 
             dataflow_commands.push(command);
@@ -342,6 +368,13 @@ where
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
+        for (id, updates, upper) in commands.iter() {
+            for update in updates {
+                if !update.timestamp.less_than(upper) {
+                    return Err(StorageError::UpdateBeyondUpper(*id));
+                }
+            }
+        }
         self.state
             .client
             .send(StorageCommand::Append(commands))
@@ -625,9 +658,14 @@ where
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
     /// Create a new storage controller from a client it should wrap.
-    pub fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
+    pub fn new(
+        client: Box<dyn StorageClient<T>>,
+        state_dir: PathBuf,
+        persist_location: PersistLocation,
+    ) -> Self {
         Self {
             state: StorageControllerState::new(client, state_dir),
+            persist_location,
         }
     }
 
@@ -713,12 +751,7 @@ struct ReadHandleWrapper<T: Timestamp + Lattice + Codec64> {
 #[async_trait]
 impl<T: Timestamp + Lattice + Codec64> CollectionReadHandle<T> for ReadHandleWrapper<T> {
     async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError> {
-        self.read_handle
-            .downgrade_since(Duration::from_secs(60), since)
-            .await
-            .map_err(|e| StorageError::ClientError(anyhow!("external persist error: {:?}", e)))?
-            .expect("invalid usage");
-
+        self.read_handle.downgrade_since(since).await;
         Ok(())
     }
 }

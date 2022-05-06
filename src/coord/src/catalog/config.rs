@@ -17,9 +17,9 @@ use crate::catalog::storage;
 
 /// Configures a catalog.
 #[derive(Debug)]
-pub struct Config<'a> {
-    /// The connection to the SQLite database.
-    pub storage: storage::Connection,
+pub struct Config<'a, S> {
+    /// The connection to the stash.
+    pub storage: storage::Connection<S>,
     /// Whether to enable experimental mode.
     pub experimental_mode: Option<bool>,
     /// Whether to enable safe mode.

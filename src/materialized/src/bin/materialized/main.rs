@@ -333,6 +333,14 @@ pub struct Args {
         hide = true
     )]
     frontegg_api_token_url: Option<String>,
+    /// A common string prefix that is expected to be present at the beginning of passwords.
+    #[clap(
+        long,
+        env = "MZ_FRONTEGG_PASSWORD_PREFIX",
+        requires = "frontegg-tenant",
+        hide = true
+    )]
+    frontegg_password_prefix: Option<String>,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
     #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN", hide = true)]
@@ -359,6 +367,9 @@ pub struct Args {
     /// directory.
     #[clap(long, env = "MZ_PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Option<Url>,
+    /// Postgres catalog stash connection string.
+    #[clap(long, env = "MZ_CATALOG_POSTGRES_STASH", value_name = "POSTGRES_URL")]
+    catalog_postgres_stash: Option<String>,
 
     // === AWS options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -555,6 +566,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 tenant_id,
                 now: mz_ore::now::SYSTEM_TIME.clone(),
                 refresh_before_secs: 60,
+                password_prefix: args.frontegg_password_prefix.unwrap_or_default(),
             }))
         }
         _ => unreachable!("clap enforced"),
@@ -654,6 +666,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             Some(consensus_url) => consensus_url.to_string(),
         },
     };
+    let catalog_postgres_stash = args.catalog_postgres_stash;
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
@@ -751,6 +764,7 @@ max log level: {max_log_level}",
         cors_allowed_origin,
         data_directory,
         persist_location,
+        catalog_postgres_stash,
         orchestrator,
         secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,

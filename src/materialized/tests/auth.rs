@@ -248,7 +248,10 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                 configure,
                 assert,
             } => {
-                println!("pgwire user={} ssl_mode={:?}", user, ssl_mode);
+                println!(
+                    "pgwire user={} password={:?} ssl_mode={:?}",
+                    user, password, ssl_mode
+                );
 
                 let pg_client = server
                     .pg_config()
@@ -505,9 +508,10 @@ fn test_auth_expiry() -> Result<(), Box<dyn Error>> {
         tenant_id,
         now: SYSTEM_TIME.clone(),
         refresh_before_secs: REFRESH_BEFORE_SECS as i64,
+        password_prefix: "mzauth_".to_string(),
     });
     let frontegg_user = "user@_.com";
-    let frontegg_password = &format!("{client_id}{secret}");
+    let frontegg_password = &format!("mzauth_{client_id}{secret}");
 
     let wait_for_refresh = || {
         let expected = *frontegg_server.refreshes.lock().unwrap() + 1;
@@ -644,9 +648,10 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
         tenant_id,
         now,
         refresh_before_secs: 0,
+        password_prefix: "mzauth_".to_string(),
     });
     let frontegg_user = "user@_.com";
-    let frontegg_password = &format!("{client_id}{secret}");
+    let frontegg_password = &format!("mzauth_{client_id}{secret}");
     let frontegg_basic = Authorization::basic(frontegg_user, frontegg_password);
     let frontegg_header_basic = make_header(frontegg_basic);
 
@@ -754,7 +759,10 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&base64::encode_config(buf, base64::URL_SAFE))
+                    Some(&format!(
+                        "mzauth_{}",
+                        base64::encode_config(buf, base64::URL_SAFE)
+                    ))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -767,7 +775,10 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                     let mut buf = vec![];
                     buf.extend(client_id.as_bytes());
                     buf.extend(secret.as_bytes());
-                    Some(&base64::encode_config(buf, base64::URL_SAFE_NO_PAD))
+                    Some(&format!(
+                        "mzauth_{}",
+                        base64::encode_config(buf, base64::URL_SAFE_NO_PAD)
+                    ))
                 },
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
@@ -778,8 +789,8 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 user: frontegg_user,
                 password: {
                     let mut password = frontegg_password.clone();
-                    password.insert(3, '-');
-                    password.insert_str(12, "@#!");
+                    password.insert(10, '-');
+                    password.insert_str(15, "@#!");
                     Some(&password.clone())
                 },
                 ssl_mode: SslMode::Require,
@@ -857,6 +868,31 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 user: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::basic(frontegg_user, "bad password")),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "unauthorized");
+                })),
+            },
+            // Bad password prefix.
+            TestCase::Pgwire {
+                user: frontegg_user,
+                password: Some(&format!("mznope_{client_id}{secret}")),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|err| {
+                    let err = err.unwrap_db_error();
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            TestCase::Http {
+                user: frontegg_user,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::basic(
+                    frontegg_user,
+                    &format!("mznope_{client_id}{secret}"),
+                )),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));

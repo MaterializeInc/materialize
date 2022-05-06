@@ -22,6 +22,8 @@ use mz_expr::MirScalarExpr;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
+use proptest::prelude::*;
+use proptest::result::Probability;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +35,7 @@ use super::ProtoMirScalarVec;
 ///
 /// A linear join is a sequence of stages, each of which introduces
 /// a new collection. Each stage is represented by a [LinearStagePlan].
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct LinearJoinPlan {
     /// The source relation from which we start the join.
     pub source_relation: usize,
@@ -49,6 +51,33 @@ pub struct LinearJoinPlan {
     ///
     /// Values of `None` indicate the identity closure.
     pub final_closure: Option<JoinClosure>,
+}
+
+impl Arbitrary for LinearJoinPlan {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<usize>(),
+            any_with::<Option<Vec<MirScalarExpr>>>((Probability::default(), ((0..3).into(), ()))),
+            any::<Option<JoinClosure>>(),
+            prop::collection::vec(any::<LinearStagePlan>(), 0..3),
+            any::<Option<JoinClosure>>(),
+        )
+            .prop_map(
+                |(source_relation, source_key, initial_closure, stage_plans, final_closure)| {
+                    LinearJoinPlan {
+                        source_relation,
+                        source_key,
+                        initial_closure,
+                        stage_plans,
+                        final_closure,
+                    }
+                },
+            )
+            .boxed()
+    }
 }
 
 impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
