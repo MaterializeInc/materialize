@@ -16,4 +16,4 @@ RUN ldconfig
 
 COPY materialized computed storaged /usr/local/bin/
 
-ENTRYPOINT ["materialized", "--log-file=stderr"]
+ENTRYPOINT ["materialized"]

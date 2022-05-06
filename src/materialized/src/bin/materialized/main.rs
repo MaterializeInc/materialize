@@ -194,12 +194,6 @@ pub struct Args {
     timestamp_frequency: Duration,
 
     // === Logging options. ===
-    /// Where to emit log messages.
-    ///
-    /// The special value "stderr" will emit messages to the standard error
-    /// stream. All other values are taken as file paths.
-    #[clap(long, env = "MZ_LOG_FILE", value_name = "PATH")]
-    log_file: Option<String>,
     /// Which log messages to emit.
     ///
     /// This value is a comma-separated list of filter directives. Each filter
@@ -497,10 +491,8 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut tracing_stream = runtime.block_on(mz_ore::tracing::configure(
         mz_ore::tracing::TracingConfig {
             log_filter: &args.log_filter,
-            log_file: args.log_file.as_deref(),
             opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
             opentelemetry_headers: args.opentelemetry_headers.as_deref(),
-            data_directory: &args.data_directory,
             #[cfg(feature = "tokio-console")]
             tokio_console: args.tokio_console,
         },
