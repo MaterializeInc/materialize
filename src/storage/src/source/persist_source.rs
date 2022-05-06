@@ -22,10 +22,9 @@ use timely::progress::Antichain;
 use tracing::trace;
 
 use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
-use mz_expr::SourceInstanceId;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{PersistLocation, ShardId};
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::source::SourceStatus;
 use crate::source::YIELD_INTERVAL;
@@ -38,7 +37,7 @@ use crate::source::YIELD_INTERVAL;
 // upper frontier from all shards.
 pub fn persist_source<G>(
     scope: &G,
-    instance_id: SourceInstanceId,
+    source_id: GlobalId,
     consensus_uri: String,
     blob_uri: String,
     shard_id: ShardId,
@@ -179,7 +178,7 @@ where
     let persist_err_stream = persist_err_stream.map(move |(err, ts, diff)| {
         (
             DataflowError::from(SourceError::new(
-                instance_id.clone(),
+                source_id,
                 SourceErrorDetails::Persistence(err),
             )),
             ts,

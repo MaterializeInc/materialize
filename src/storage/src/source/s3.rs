@@ -45,15 +45,16 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
+use tracing::{debug, error, trace, warn};
 
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, AwsConfig, AwsExternalId, Compression, ExternalSourceConnector,
     MzOffset, S3KeySource,
 };
-use mz_expr::{PartitionId, SourceInstanceId};
+use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
-use tracing::{debug, error, trace, warn};
+use mz_repr::GlobalId;
 
 use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
@@ -77,8 +78,8 @@ pub struct S3SourceReader {
     source_name: String,
 
     // differential control
-    /// Unique source ID
-    id: SourceInstanceId,
+    /// Global source ID
+    id: GlobalId,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<S3Result<InternalMessage>>,
     dataflow_status: tokio::sync::watch::Sender<DataflowStatus>,
@@ -772,7 +773,7 @@ impl SourceReader for S3SourceReader {
 
     fn new(
         source_name: String,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         worker_id: usize,
         _worker_count: usize,
         consumer_activator: SyncActivator,

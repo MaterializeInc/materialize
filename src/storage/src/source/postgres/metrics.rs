@@ -9,8 +9,8 @@
 
 use prometheus::core::AtomicU64;
 
-use mz_expr::SourceInstanceId;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
+use mz_repr::GlobalId;
 
 use crate::source::metrics::SourceBaseMetrics;
 
@@ -26,7 +26,7 @@ pub(super) struct PgSourceMetrics {
 }
 
 impl PgSourceMetrics {
-    pub(super) fn new(base_metrics: &SourceBaseMetrics, source_id: SourceInstanceId) -> Self {
+    pub(super) fn new(base_metrics: &SourceBaseMetrics, source_id: GlobalId) -> Self {
         let labels = &[source_id.to_string()];
         let pg_metrics = &base_metrics.postgres_source_specific;
         Self {

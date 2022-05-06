@@ -31,8 +31,7 @@ use tracing::{error, info, warn};
 use crate::source::{SimpleSource, SourceError, SourceTransaction, Timestamper};
 use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_dataflow_types::{sources::PostgresSourceConnector, SourceErrorDetails};
-use mz_expr::SourceInstanceId;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
 use super::metrics::SourceBaseMetrics;
@@ -46,7 +45,7 @@ lazy_static! {
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
-    source_id: SourceInstanceId,
+    source_id: GlobalId,
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
@@ -134,7 +133,7 @@ macro_rules! try_recoverable {
 impl PostgresSourceReader {
     /// Constructs a new instance
     pub fn new(
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         connector: PostgresSourceConnector,
         metrics: &SourceBaseMetrics,
     ) -> Self {

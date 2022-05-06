@@ -114,7 +114,6 @@ use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::*;
-use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::GlobalId;
 
 use crate::boundary::StorageCapture;
@@ -147,7 +146,6 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
             let as_of = as_of.clone().unwrap();
-            let source_dataflow_id = scope.addr().into_element();
             let debug_name = format!("{debug_name}-sources");
 
             // Import declared sources into the rendering context.
@@ -158,7 +156,6 @@ pub fn build_storage_dataflow<A: Allocate, B: StorageCapture>(
                 let ((ok, err), token) = if valid {
                     let ((ok, err), token) = crate::render::sources::render_source(
                         &debug_name,
-                        source_dataflow_id,
                         &as_of,
                         source.clone(),
                         storage_state,

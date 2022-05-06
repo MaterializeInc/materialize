@@ -25,7 +25,8 @@ use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, Compression, ExternalSourceConnector, MzOffset,
 };
 use mz_dataflow_types::SourceErrorDetails;
-use mz_expr::{PartitionId, SourceInstanceId};
+use mz_expr::PartitionId;
+use mz_repr::GlobalId;
 
 use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
@@ -33,8 +34,8 @@ use super::metrics::SourceBaseMetrics;
 
 /// Contains all information necessary to ingest data from file sources
 pub struct FileSourceReader {
-    /// Unique source ID
-    id: SourceInstanceId,
+    /// Global source ID
+    id: GlobalId,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<Result<Option<Vec<u8>>, Error>>,
     /// Current File Offset. This corresponds to the offset of last processed message
@@ -63,7 +64,7 @@ impl SourceReader for FileSourceReader {
 
     fn new(
         _name: String,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         worker_id: usize,
         _worker_count: usize,
         consumer_activator: SyncActivator,
