@@ -110,7 +110,10 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
         let timely_worker_index = timely_worker.index();
         let timely_worker_peers = timely_worker.peers();
         let storage_boundary = create_boundary(timely_worker_index);
+
+        // ensure tokio primitives are available on timely workers
         let _tokio_guard = tokio_executor.enter();
+
         let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
             .take()
             .unwrap();
