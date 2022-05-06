@@ -36,7 +36,6 @@ use mz_persist_client::PersistLocation;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio_postgres::{self, NoTls};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::{AnyOr, Origin};
 
@@ -200,13 +199,7 @@ pub enum SecretsControllerConfig {
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     match &config.catalog_postgres_stash {
         Some(s) => {
-            let (client, connection) = tokio_postgres::connect(s, NoTls).await?;
-            mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
-                if let Err(e) = connection.await {
-                    panic!("postgres stash connection error: {}", e);
-                }
-            });
-            let stash = mz_stash::Postgres::open(client).await?;
+            let stash = mz_stash::Postgres::new(s.to_string()).await?;
             serve_stash(config, stash).await
         }
         None => {

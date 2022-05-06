@@ -4007,11 +4007,13 @@ dependencies = [
  "mz-ore",
  "mz-persist-types",
  "num",
+ "rand",
  "rusqlite",
  "tempfile",
  "timely",
  "tokio",
  "tokio-postgres",
+ "tracing",
 ]
 
 [[package]]
