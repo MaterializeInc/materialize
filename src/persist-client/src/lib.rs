@@ -35,6 +35,7 @@ use crate::read::{ReadHandle, ReaderId};
 use crate::write::{WriteHandle, WriterId};
 
 pub mod error;
+mod examples;
 pub mod read;
 pub mod write;
 

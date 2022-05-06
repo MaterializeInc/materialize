@@ -3698,6 +3698,7 @@ dependencies = [
  "bytes",
  "clap",
  "differential-dataflow",
+ "futures",
  "futures-executor",
  "futures-task",
  "mz-ore",
