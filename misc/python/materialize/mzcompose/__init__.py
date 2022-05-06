@@ -829,20 +829,25 @@ class Composition:
         )
 
     def testdrive(
-        self, input: str, service: str = "testdrive", persistent: bool = True
+        self,
+        input: str,
+        service: str = "testdrive",
+        persistent: bool = True,
+        args: List[str] = [],
     ) -> None:
         """Run a string as a testdrive script.
 
         Args:
+            args: Additional arguments to pass to testdrive
             service: Optional name of the testdrive service to use.
             input: The string to execute.
             persistent: Whether a persistent testdrive container will be used.
         """
 
         if persistent:
-            self.exec(service, stdin=input)
+            self.exec(service, *args, stdin=input)
         else:
-            self.run(service, stdin=input)
+            self.run(service, *args, stdin=input)
 
 
 class ServiceConfig(TypedDict, total=False):
