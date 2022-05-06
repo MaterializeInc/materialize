@@ -3698,6 +3698,7 @@ dependencies = [
  "mz-persist",
  "mz-persist-types",
  "num_cpus",
+ "rand",
  "serde",
  "tempfile",
  "timely",

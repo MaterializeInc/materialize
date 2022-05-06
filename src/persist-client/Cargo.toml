@@ -34,6 +34,7 @@ futures = "0.3"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist = { path = "../persist" }
+rand = { version = "0.8.5", features = ["small_rng"] }
 serde = { version = "1.0.137", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
