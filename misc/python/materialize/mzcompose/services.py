@@ -249,7 +249,7 @@ class Redpanda(Service):
     def __init__(
         self,
         name: str = "redpanda",
-        version: str = "v21.11.13",
+        version: str = "v22.1.3",
         image: Optional[str] = None,
         aliases: Optional[List[str]] = None,
         ports: Optional[List[int]] = None,
@@ -280,7 +280,6 @@ class Redpanda(Service):
             "--node-id=0",
             "--check=false",
             '--set "redpanda.enable_transactions=true"',
-            '--set "redpanda.enable_idempotence=true"',
             '--set "redpanda.auto_create_topics_enabled=false"',
             f"--advertise-kafka-addr kafka:{ports[0]}",
         ]
