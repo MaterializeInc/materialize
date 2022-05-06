@@ -24,6 +24,7 @@ use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
 
+use super::persist::persist_roundtrip;
 use super::{DifferentialLog, LogVariant};
 use crate::logging::ConsolidateBuffer;
 use mz_dataflow_types::KeysValsHandle;
@@ -171,7 +172,7 @@ pub fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let trace = collection
+                let rows = collection
                     .map({
                         let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
@@ -183,7 +184,9 @@ pub fn construct<A: Allocate>(
                             let row_val = row_buf.clone();
                             (row_key, row_val)
                         }
-                    })
+                    });
+                let rows = persist_roundtrip(rows);
+                let trace = rows
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 result.insert(variant, (trace, Rc::clone(&token)));

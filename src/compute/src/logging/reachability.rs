@@ -28,6 +28,7 @@ use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use super::{LogVariant, TimelyLog};
 use crate::logging::ConsolidateBuffer;
+use crate::logging::persist::persist_roundtrip;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
@@ -157,7 +158,9 @@ pub fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let trace = construct_reachability(key.clone(), value)
+                let updates = construct_reachability(key.clone(), value);
+                let updates = persist_roundtrip(updates);
+                let trace = updates
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;
                 result.insert(variant, (trace, Rc::clone(&token)));

@@ -31,6 +31,8 @@ use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
+use crate::logging::persist::persist_roundtrip;
+
 use super::{LogVariant, MaterializedLog};
 
 /// Type alias for logging of materialized events.
@@ -307,7 +309,7 @@ pub fn construct<A: Allocate>(
                         .collect::<Vec<_>>(),
                     variant.desc().arity(),
                 );
-                let trace = collection
+                let rows = collection
                     .map({
                         let mut row_buf = Row::default();
                         let mut datums = DatumVec::new();
@@ -319,7 +321,9 @@ pub fn construct<A: Allocate>(
                             let row_val = row_buf.clone();
                             (row_key, row_val)
                         }
-                    })
+                    });
+                let rows = persist_roundtrip(rows);
+                let trace = rows
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;
                 result.insert(variant, (trace, Rc::clone(&token)));
