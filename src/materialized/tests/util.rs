@@ -150,6 +150,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             consensus_uri: format!("sqlite://{}/persist/consensus", data_directory.display()),
         },
         data_directory: data_directory.clone(),
+        catalog_postgres_stash: None,
         orchestrator: OrchestratorConfig {
             backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?

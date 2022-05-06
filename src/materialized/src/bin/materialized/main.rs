@@ -367,6 +367,9 @@ pub struct Args {
     /// directory.
     #[clap(long, env = "MZ_PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Option<Url>,
+    /// Postgres catalog stash connection string.
+    #[clap(long, env = "MZ_CATALOG_POSTGRES_STASH", value_name = "POSTGRES_URL")]
+    catalog_postgres_stash: Option<String>,
 
     // === AWS options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -663,6 +666,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             Some(consensus_url) => consensus_url.to_string(),
         },
     };
+    let catalog_postgres_stash = args.catalog_postgres_stash;
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
@@ -760,6 +764,7 @@ max log level: {max_log_level}",
         cors_allowed_origin,
         data_directory,
         persist_location,
+        catalog_postgres_stash,
         orchestrator,
         secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
