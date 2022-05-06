@@ -5355,9 +5355,11 @@ pub mod read_holds {
             // Update STORAGE read policies.
             let mut policy_changes = Vec::new();
             for id in storage_ids.iter() {
-                let read_needs = self.read_capability.get_mut(id).unwrap();
-                read_needs.holds.update_iter(Some((time, -1)));
-                policy_changes.push((*id, read_needs.policy()));
+                // It's possible that a concurrent DDL statement has already dropped this GlobalId
+                if let Some(read_needs) = self.read_capability.get_mut(id) {
+                    read_needs.holds.update_iter(Some((time, -1)));
+                    policy_changes.push((*id, read_needs.policy()));
+                }
             }
             self.dataflow_client
                 .storage_mut()
@@ -5367,9 +5369,11 @@ pub mod read_holds {
             // Update COMPUTE read policies
             let mut policy_changes = Vec::new();
             for id in compute_ids.iter() {
-                let read_needs = self.read_capability.get_mut(id).unwrap();
-                read_needs.holds.update_iter(Some((time, -1)));
-                policy_changes.push((*id, read_needs.policy()));
+                // It's possible that a concurrent DDL statement has already dropped this GlobalId
+                if let Some(read_needs) = self.read_capability.get_mut(id) {
+                    read_needs.holds.update_iter(Some((time, -1)));
+                    policy_changes.push((*id, read_needs.policy()));
+                }
             }
             self.dataflow_client
                 .compute_mut(compute_instance)
