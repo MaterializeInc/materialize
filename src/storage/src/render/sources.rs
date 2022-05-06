@@ -44,11 +44,15 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 ///
 /// This enum puts no restrictions to the generic parameters of the variants since it only serves
 /// as a type-level enum.
-enum SourceType<Delimited, ByteStream> {
+enum SourceType<Delimited, ByteStream, RowSource> {
     /// A delimited source
     Delimited(Delimited),
     /// A bytestream source
     ByteStream(ByteStream),
+    /// A source that produces Row's natively,
+    /// and skips any `render_decode` stream
+    /// adapters
+    Row(RowSource),
 }
 
 /// A description of a table imported by [`render_table`].
@@ -276,23 +280,10 @@ where
 
             // Pubnub and Postgres are `SimpleSource`s, so they produce _raw_ sources
             // that are usable as final _differential_ `Collection`s
-            let (mut collection, capability) = if let ExternalSourceConnector::PubNub(
-                pubnub_connector,
+            let (mut collection, capability) = if let ExternalSourceConnector::Postgres(
+                pg_connector,
             ) = connector
             {
-                let source = PubNubSourceReader::new(src_id, pubnub_connector);
-                let ((ok_stream, err_stream), capability) =
-                    source::create_raw_source_simple(base_source_config, source);
-
-                error_collections.push(
-                    err_stream
-                        .map(DataflowError::SourceError)
-                        .pass_through("source-errors", 1)
-                        .as_collection(),
-                );
-
-                (ok_stream.as_collection(), capability)
-            } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
                 let source = PostgresSourceReader::new(
                     src_id,
                     pg_connector,
@@ -352,7 +343,14 @@ where
                         ((SourceType::ByteStream(ok), err), cap)
                     }
                     ExternalSourceConnector::Postgres(_) => unreachable!(),
-                    ExternalSourceConnector::PubNub(_) => unreachable!(),
+                    ExternalSourceConnector::PubNub(_) => {
+                        let ((ok, err), cap) = source::create_raw_source::<_, PubNubSourceReader>(
+                            base_source_config,
+                            &connector,
+                            storage_state.aws_external_id.clone(),
+                        );
+                        ((SourceType::Row(ok), err), cap)
+                    }
                     ExternalSourceConnector::Persist(_) => unreachable!(),
                 };
 
@@ -419,6 +417,17 @@ where
                                 metadata_columns,
                                 &mut linear_operators,
                                 storage_state.decode_metrics.clone(),
+                            ),
+                            SourceType::Row(source) => (
+                                source.map(|r| DecodeResult {
+                                    key: None,
+                                    value: Some(Ok(r.value)),
+                                    position: r.position,
+                                    upstream_time_millis: r.upstream_time_millis,
+                                    partition: r.partition,
+                                    metadata: Row::default(),
+                                }),
+                                None,
                             ),
                         };
                         if let Some(tok) = extra_token {
