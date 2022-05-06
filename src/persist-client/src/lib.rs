@@ -214,12 +214,14 @@ impl PersistClient {
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
+            explicitly_expired: false,
         };
         let reader = ReadHandle {
             reader_id,
             machine,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
+            explicitly_expired: false,
         };
 
         Ok((writer, reader))

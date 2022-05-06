@@ -181,6 +181,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             || format!("data-generator-{}", idx),
             move || {
                 trace!("data generator {} waiting for barrier", idx);
+                // TODO: Remove this futures_executor::block_on, it doesn't play
+                // well with tokio Runtime (see #12231). It's an easy mechanical
+                // transformation to make this an await and use
+                // mz_ore::task::spawn above, but this task busy-waits and so
+                // messes up the benchmark. Fixme.
                 futures_executor::block_on(b.wait());
                 info!("starting data generator {}", idx);
 

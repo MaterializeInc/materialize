@@ -23,11 +23,11 @@ use mz_persist::retry::Retry;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{info, trace};
+use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{BlobMulti, SeqNo};
+use mz_persist::location::BlobMulti;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
@@ -329,6 +329,10 @@ where
 /// A "capability" granting the ability to read the state of some shard at times
 /// greater or equal to `self.since()`.
 ///
+/// Production users should call [Self::expire] before dropping a ReadHandle so
+/// that it can expire its leases. If/when rust gets AsyncDrop, this will be
+/// done automatically.
+///
 /// All async methods on ReadHandle retry for as long as they are able, but the
 /// returned [std::future::Future]s implement "cancel on drop" semantics. This
 /// means that callers can add a timeout using [tokio::time::timeout] or
@@ -346,17 +350,13 @@ where
 pub struct ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
-    // TODO: Only the T bound should exist, the rest are a temporary artifact of
-    // the current implementation (the ones on Machine infect everything).
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64,
 {
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
+    pub(crate) explicitly_expired: bool,
 }
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>
@@ -559,8 +559,16 @@ where
             machine,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
+            explicitly_expired: false,
         };
         new_reader
+    }
+
+    /// Politely expires this reader, releasing its lease.
+    pub async fn expire(mut self) {
+        trace!("ReadHandle::expire");
+        self.machine.expire_reader(&self.reader_id).await;
+        self.explicitly_expired = true;
     }
 
     /// Test helper for an [Self::snapshot] call that is expected to succeed.
@@ -585,14 +593,20 @@ where
 impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
-    // TODO: Only the T bound should exist, the rest are a temporary artifact of
-    // the current implementation (the ones on Machine infect everything).
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
-        // TODO: Use tokio instead of futures_executor.
-        let _: SeqNo = futures_executor::block_on(self.machine.expire_reader(&self.reader_id));
+        if self.explicitly_expired {
+            return;
+        }
+        // Adding explicit expiration everywhere in tests would either make the
+        // code noisy or the logs spammy, so downgrade this message.
+        if cfg!(test) {
+            debug!(
+                "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
+                self.reader_id
+            );
+        } else {
+            info!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+        }
     }
 }
