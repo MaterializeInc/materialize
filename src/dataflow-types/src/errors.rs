@@ -10,37 +10,58 @@
 use std::fmt::Display;
 
 use bytes::BufMut;
+use prost::Message;
+use serde::{Deserialize, Serialize};
+
 use mz_expr::EvalError;
 use mz_persist_types::Codec;
+use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
 use mz_repr::GlobalId;
 
-use serde::{Deserialize, Serialize};
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.errors.rs"));
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DecodeError {
     Text(String),
 }
 
-// We only want to support persisting DecodeError for now, and not the full DataflowError, which is
-// a bit more complex.
+impl From<&DecodeError> for ProtoDecodeError {
+    fn from(error: &DecodeError) -> Self {
+        ProtoDecodeError {
+            kind: Some(match error {
+                DecodeError::Text(v) => proto_decode_error::Kind::Text(v.clone()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoDecodeError> for DecodeError {
+    type Error = TryFromProtoError;
+
+    fn try_from(error: ProtoDecodeError) -> Result<Self, Self::Error> {
+        match error.kind {
+            Some(kind) => match kind {
+                proto_decode_error::Kind::Text(v) => Ok(DecodeError::Text(v)),
+            },
+            None => Err(TryFromProtoError::missing_field("ProtoDecodeError::kind")),
+        }
+    }
+}
+
 impl Codec for DecodeError {
     fn codec_name() -> String {
-        "DecodeError".into()
+        "protobuf[DecodeError]".into()
     }
 
-    fn encode<B: BufMut>(&self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        match serde_json::to_writer(buf.writer(), self) {
-            Ok(ok) => ok,
-            Err(e) => panic!("Encoding error, trying to encode {}: {}", self, e),
-        };
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        ProtoDecodeError::from(self)
+            .encode(buf)
+            .expect("no required fields means no initialization errors");
     }
 
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let decoded = serde_json::from_slice(buf).map_err(|e| format!("Decoding error: {}", e))?;
-        Ok(decoded)
+    fn decode(buf: &[u8]) -> Result<Self, String> {
+        let proto = ProtoDecodeError::decode(buf).map_err(|err| err.to_string())?;
+        Self::try_from(proto).map_err(|err| err.to_string())
     }
 }
 
@@ -64,6 +85,28 @@ impl SourceError {
     }
 }
 
+impl From<&SourceError> for ProtoSourceError {
+    fn from(error: &SourceError) -> Self {
+        ProtoSourceError {
+            source_id: Some((&error.source_id).into()),
+            error: Some((&error.error).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoSourceError> for SourceError {
+    type Error = TryFromProtoError;
+
+    fn try_from(error: ProtoSourceError) -> Result<Self, Self::Error> {
+        Ok(SourceError {
+            source_id: error
+                .source_id
+                .try_into_if_some("ProtoSourceError::source_id")?,
+            error: error.error.try_into_if_some("ProtoSourceError::error")?,
+        })
+    }
+}
+
 impl Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: ", self.source_id)?;
@@ -77,6 +120,39 @@ pub enum SourceErrorDetails {
     FileIO(String),
     Persistence(String),
     Other(String),
+}
+
+impl From<&SourceErrorDetails> for ProtoSourceErrorDetails {
+    fn from(details: &SourceErrorDetails) -> Self {
+        use proto_source_error_details::Kind;
+        ProtoSourceErrorDetails {
+            kind: Some(match details {
+                SourceErrorDetails::Initialization(s) => Kind::Initialization(s.clone()),
+                SourceErrorDetails::FileIO(s) => Kind::FileIo(s.clone()),
+                SourceErrorDetails::Persistence(s) => Kind::Persistence(s.clone()),
+                SourceErrorDetails::Other(s) => Kind::Other(s.clone()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoSourceErrorDetails> for SourceErrorDetails {
+    type Error = TryFromProtoError;
+
+    fn try_from(details: ProtoSourceErrorDetails) -> Result<Self, Self::Error> {
+        use proto_source_error_details::Kind;
+        match details.kind {
+            Some(kind) => match kind {
+                Kind::Initialization(s) => Ok(SourceErrorDetails::Initialization(s)),
+                Kind::FileIo(s) => Ok(SourceErrorDetails::FileIO(s)),
+                Kind::Persistence(s) => Ok(SourceErrorDetails::Persistence(s)),
+                Kind::Other(s) => Ok(SourceErrorDetails::Other(s)),
+            },
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoSourceErrorDetails::kind",
+            )),
+        }
+    }
 }
 
 impl Display for SourceErrorDetails {
@@ -101,6 +177,52 @@ pub enum DataflowError {
     DecodeError(DecodeError),
     EvalError(EvalError),
     SourceError(SourceError),
+}
+
+impl From<&DataflowError> for ProtoDataflowError {
+    fn from(error: &DataflowError) -> Self {
+        use proto_dataflow_error::Kind;
+        ProtoDataflowError {
+            kind: Some(match error {
+                DataflowError::DecodeError(err) => Kind::DecodeError(err.into()),
+                DataflowError::EvalError(err) => Kind::EvalError(err.into()),
+                DataflowError::SourceError(err) => Kind::SourceError(err.into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoDataflowError> for DataflowError {
+    type Error = TryFromProtoError;
+
+    fn try_from(error: ProtoDataflowError) -> Result<Self, Self::Error> {
+        use proto_dataflow_error::Kind;
+        match error.kind {
+            Some(kind) => match kind {
+                Kind::DecodeError(err) => Ok(DataflowError::DecodeError(err.try_into()?)),
+                Kind::EvalError(err) => Ok(DataflowError::EvalError(err.try_into()?)),
+                Kind::SourceError(err) => Ok(DataflowError::SourceError(err.try_into()?)),
+            },
+            None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),
+        }
+    }
+}
+
+impl Codec for DataflowError {
+    fn codec_name() -> String {
+        "protobuf[DataflowError]".into()
+    }
+
+    fn encode<B: BufMut>(&self, buf: &mut B) {
+        ProtoDataflowError::from(self)
+            .encode(buf)
+            .expect("no required fields means no initialization errors");
+    }
+
+    fn decode(buf: &[u8]) -> Result<Self, String> {
+        let proto = ProtoDataflowError::decode(buf).map_err(|err| err.to_string())?;
+        Self::try_from(proto).map_err(|err| err.to_string())
+    }
 }
 
 impl Display for DataflowError {

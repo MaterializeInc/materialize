@@ -23,6 +23,7 @@ fn main() {
         .compile_protos(
             &[
                 "dataflow-types/src/client.proto",
+                "dataflow-types/src/errors.proto",
                 "dataflow-types/src/logging.proto",
                 "dataflow-types/src/postgres_source.proto",
                 "dataflow-types/src/plan.proto",
