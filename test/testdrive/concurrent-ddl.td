@@ -24,3 +24,17 @@ DROP TABLE foo
 contains:unknown catalog item 'foo'
 
 > ROLLBACK
+
+
+> CREATE TABLE foo (a INT)
+> INSERT INTO foo VALUES (42)
+> BEGIN
+> SELECT * FROM foo
+42
+
+$ postgres-connect name=ddl url=postgres://materialize:materialize@${testdrive.materialized-addr}
+
+$ postgres-execute connection=ddl
+DROP TABLE foo
+
+> COMMIT
