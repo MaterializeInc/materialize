@@ -27,7 +27,7 @@
 use std::error::Error;
 use std::time::Duration;
 
-use futures::future::BoxFuture;
+use futures_util::future::BoxFuture;
 use tracing::error;
 
 use mz_ore::now::SYSTEM_TIME;

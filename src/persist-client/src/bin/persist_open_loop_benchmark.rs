@@ -18,6 +18,7 @@ use tokio::sync::Barrier;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace};
 
+use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::{PersistLocation, ShardId};
 
@@ -158,57 +159,68 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // The batch interarrival time. We'll use this quantity to rate limit the
     // data generation.
-    let millis_per_batch = {
+    let time_per_batch = {
         let records_per_second_f64 = args.records_per_second as f64;
         let batch_size_f64 = args.batch_size as f64;
 
         let batches_per_second = records_per_second_f64 / batch_size_f64;
-        let seconds_per_batch = 1.0 / batches_per_second;
-        let millis_per_batch = seconds_per_batch * 1000.0;
-
-        millis_per_batch as u128
+        Duration::from_secs(1).div_f64(batches_per_second)
     };
 
     let logging_granularity = Duration::from_secs(args.logging_granularity_seconds);
 
     for (idx, mut writer) in writers.into_iter().enumerate() {
         let b = Arc::clone(&barrier);
-        let mut data_generator_batches = data_generator.clone().batches();
+        let data_generator = data_generator.clone();
         let start = start.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let data_generator_handle = mz_ore::task::spawn_blocking(
-            || format!("data-generator-{}", idx),
-            move || {
+        let data_generator_handle =
+            mz_ore::task::spawn(|| format!("data-generator-{}", idx), async move {
                 trace!("data generator {} waiting for barrier", idx);
-                // TODO: Remove this futures_executor::block_on, it doesn't play
-                // well with tokio Runtime (see #12231). It's an easy mechanical
-                // transformation to make this an await and use
-                // mz_ore::task::spawn above, but this task busy-waits and so
-                // messes up the benchmark. Fixme.
-                futures_executor::block_on(b.wait());
+                b.wait().await;
                 info!("starting data generator {}", idx);
 
                 // The number of batches this data generator has sent over to the
                 // corresponding writer task.
-                let mut batches_sent = 0;
+                let mut batch_idx = 0;
                 // The last time we emitted progress information to stdout, expressed
                 // as a relative duration from start.
                 let mut prev_log = Duration::from_millis(0);
                 loop {
+                    // Sleep so this doesn't busy wait if it's ahead of
+                    // schedule.
                     let elapsed = start.elapsed();
-                    let elapsed_millis = elapsed.as_millis();
+                    let next_batch_time = time_per_batch * (batch_idx + 1);
+                    let sleep = next_batch_time.saturating_sub(start.elapsed());
+                    if sleep > Duration::ZERO {
+                        trace!("Data generator ahead of schedule, sleeping for {:?}", sleep);
+                        tokio::time::sleep(sleep).await;
+                    }
 
                     // Write down any batches we were supposed to have already sent
                     // according to the desired batch writing rate.
-                    while elapsed_millis > batches_sent * millis_per_batch {
-                        let batch = match data_generator_batches.next() {
+                    while start.elapsed() > time_per_batch * batch_idx {
+                        // Data generation can be CPU expensive, so generate it
+                        // in a spawn_blocking to play nicely with the rest of
+                        // the async code.
+                        let mut data_generator = data_generator.clone();
+                        let batch = mz_ore::task::spawn_blocking(
+                            || "data_generator-batch",
+                            move || data_generator.gen_batch(usize::cast_from(batch_idx)),
+                        )
+                        .await
+                        .expect("task failed");
+                        batch_idx += 1;
+
+                        let batch = match batch {
                             Some(batch) => batch,
                             None => {
-                                let records_sent = (batches_sent as usize) * args.batch_size;
-                                let finished = format!(
+                                let records_sent = usize::cast_from(batch_idx) * args.batch_size;
+                                let finished =
+                                    format!(
                                     "Data generator {} finished after {} ms and sent {} records",
-                                    idx, elapsed_millis, records_sent
+                                    idx, start.elapsed().as_millis(), records_sent
                                 );
                                 return Ok(finished);
                             }
@@ -219,20 +231,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         if let Err(SendError(_)) = tx.send(batch) {
                             bail!("receiver unexpectedly dropped");
                         }
-                        batches_sent += 1;
                     }
 
                     if elapsed - prev_log > logging_granularity {
-                        let records_sent = (batches_sent as usize) * args.batch_size;
+                        let records_sent = usize::cast_from(batch_idx) * args.batch_size;
                         debug!(
                             "After {} ms data generator {} has sent {} records.",
-                            elapsed_millis, idx, records_sent
+                            start.elapsed().as_millis(),
+                            idx,
+                            records_sent
                         );
                         prev_log = elapsed;
                     }
                 }
-            },
-        );
+            });
 
         generator_handles.push(data_generator_handle);
         let b = Arc::clone(&barrier);
@@ -310,8 +322,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             let mut prev_log = Duration::from_millis(0);
             loop {
                 let elapsed = start.elapsed();
-                let expected_sent =
-                    elapsed.as_millis() as usize / (millis_per_batch as usize) * args.batch_size;
+                let expected_sent = elapsed.as_millis() as usize
+                    / (time_per_batch.as_millis() as usize)
+                    * args.batch_size;
                 let read_start = Instant::now();
                 let num_records_read = reader.num_records().await?;
                 let read_latency = read_start.elapsed();
@@ -413,14 +426,17 @@ mod raw_persist_benchmark {
     > {
         let mut writers = vec![];
         for _ in 0..num_writers {
-            let (writer, _) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+            let (writer, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+            reader.expire().await;
 
             writers.push(Box::new(writer) as Box<dyn BenchmarkWriter + Send + Sync>);
         }
 
         let mut readers = vec![];
         for _ in 0..num_readers {
-            let (_, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+            let (writer, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+            writer.expire().await;
+
             let listen = reader
                 .listen(Antichain::from_elem(0))
                 .await
