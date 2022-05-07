@@ -79,6 +79,8 @@ pub enum CoordError {
     InvalidTableMutationSelection,
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// Target cluster has no replicas to service query.
+    NoReplicasAvailable(String),
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
@@ -279,6 +281,9 @@ impl CoordError {
             CoordError::InvalidReplicaSize { expected, size: _ } => {
                 Some(format!("Valid cluster sizes are: {}", expected.join(", ")))
             }
+            CoordError::NoReplicasAvailable(_) => {
+                Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
+            }
             _ => None,
         }
     }
@@ -347,6 +352,13 @@ impl fmt::Display for CoordError {
             }
             CoordError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
+            }
+            CoordError::NoReplicasAvailable(cluster) => {
+                write!(
+                    f,
+                    "CLUSTER {} has no replicas available to service request",
+                    cluster.quoted()
+                )
             }
             CoordError::OperationProhibitsTransaction(op) => {
                 write!(f, "{} cannot be run inside a transaction block", op)

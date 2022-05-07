@@ -49,24 +49,27 @@ pub mod replicated;
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
 
-/// An abstraction allowing us to name difference compute instances.
+/// An abstraction allowing us to name different compute instances.
 // TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
 // support natively storing `u64`. Revisit this before shipping Platform, as we
 // might not like to bake in this decision based on a SQLite limitation.
 // See #11123.
 pub type ComputeInstanceId = i64;
 
-/// Instance configuration
+/// An abstraction allowing us to name different replicas.
+pub type ReplicaId = i64;
+
+/// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum InstanceConfig {
-    /// Out-of-process named instance
+pub enum ConcreteComputeInstanceReplicaConfig {
+    /// Out-of-process replica
     Remote {
         /// A map from replica name to hostnames.
-        replicas: BTreeMap<String, BTreeSet<String>>,
+        replicas: BTreeSet<String>,
     },
-    /// A remote but managed instance.
+    /// A remote but managed replica
     Managed {
-        /// The size of the cluster.
+        /// The size of the replica
         size_config: ClusterReplicaSizeConfig,
     },
 }

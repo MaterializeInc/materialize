@@ -94,7 +94,8 @@ use mz_dataflow_types::client::controller::{
     ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ReadPolicy,
 };
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ControllerResponse, InstanceConfig, LinearizedTimestampBindingFeedback,
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
+    LinearizedTimestampBindingFeedback,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -131,16 +132,16 @@ use mz_sql::names::{
     FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan, ComputeInstanceConfig,
-    ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan, CreateConnectorPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
-    DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr, IndexOption,
-    IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
-    RaisePlan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc,
-    TailFrom, TailPlan, View,
+    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr,
+    IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
+    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -265,64 +266,34 @@ pub struct CatalogTxn<'a, T> {
     catalog: &'a CatalogState,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ConcreteComputeInstanceConfig {
-    Remote {
-        /// A map from replica name to hostnames.
-        replicas: BTreeMap<String, BTreeSet<String>>,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-    Managed {
-        size_config: ClusterReplicaSizeConfig,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-}
-
-impl ConcreteComputeInstanceConfig {
-    pub fn from_plan(
-        plan: ComputeInstanceConfig,
-        replica_sizes: &ClusterReplicaSizeMap,
-    ) -> Result<Self, CoordError> {
-        let config = match plan {
-            mz_sql::plan::ComputeInstanceConfig::Remote {
-                replicas,
-                introspection,
-            } => ConcreteComputeInstanceConfig::Remote {
-                replicas,
-                introspection,
-            },
-            mz_sql::plan::ComputeInstanceConfig::Managed {
-                size,
-                introspection,
-            } => {
-                let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
-                    let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
-                    entries.sort_by_key(
-                        |(
-                            _name,
-                            ClusterReplicaSizeConfig {
-                                scale, cpu_limit, ..
-                            },
-                        )| (*scale, *cpu_limit),
-                    );
-                    let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                    CoordError::InvalidReplicaSize { size, expected }
-                })?;
-                ConcreteComputeInstanceConfig::Managed {
-                    size_config: *size_config,
-                    introspection,
-                }
-            }
-        };
-        Ok(config)
-    }
-
-    pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
-        match self {
-            Self::Remote { introspection, .. } => introspection,
-            Self::Managed { introspection, .. } => introspection,
+fn concretize_replica_config(
+    config: ReplicaConfig,
+    replica_sizes: &ClusterReplicaSizeMap,
+) -> Result<ConcreteComputeInstanceReplicaConfig, CoordError> {
+    let config = match config {
+        ReplicaConfig::Remote { replicas } => {
+            ConcreteComputeInstanceReplicaConfig::Remote { replicas }
         }
-    }
+        ReplicaConfig::Managed { size } => {
+            let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
+                let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
+                entries.sort_by_key(
+                    |(
+                        _name,
+                        ClusterReplicaSizeConfig {
+                            scale, cpu_limit, ..
+                        },
+                    )| (*scale, *cpu_limit),
+                );
+                let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
+                CoordError::InvalidReplicaSize { size, expected }
+            })?;
+            ConcreteComputeInstanceReplicaConfig::Managed {
+                size_config: *size_config,
+            }
+        }
+    };
+    Ok(config)
 }
 
 /// Glues the external world to the Timely workers.
@@ -523,13 +494,15 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
-                .create_instance(
-                    instance.id,
-                    instance.config.clone(),
-                    instance.logging.clone(),
-                )
+                .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
+            for (replica_id, config) in instance.replicas_by_id.clone() {
+                self.dataflow_client
+                    .add_replica_to_instance(instance.id, replica_id, config)
+                    .await
+                    .unwrap();
+            }
         }
 
         let entries: Vec<_> = self.catalog.entries().cloned().collect();
@@ -1381,13 +1354,13 @@ impl<S: Append + 'static> Coordinator<S> {
                     // Statements below must by run singly (in Started).
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
-                    | Statement::AlterCluster(_)
                     | Statement::AlterObjectRename(_)
                     | Statement::CreateConnector(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
                     | Statement::CreateRole(_)
                     | Statement::CreateCluster(_)
+                    | Statement::CreateClusterReplica(_)
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
@@ -1402,6 +1375,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::DropObjects(_)
                     | Statement::DropRoles(_)
                     | Statement::DropClusters(_)
+                    | Statement::DropClusterReplicas(_)
                     | Statement::Insert(_)
                     | Statement::Update(_) => {
                         return tx.send(
@@ -1639,6 +1613,12 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::CreateComputeInstance(plan) => {
                 tx.send(self.sequence_create_compute_instance(plan).await, session);
             }
+            Plan::CreateComputeInstanceReplica(plan) => {
+                tx.send(
+                    self.sequence_create_compute_instance_replica(plan).await,
+                    session,
+                );
+            }
             Plan::CreateTable(plan) => {
                 tx.send(self.sequence_create_table(&session, plan).await, session);
             }
@@ -1675,6 +1655,12 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::DropComputeInstances(plan) => {
                 tx.send(self.sequence_drop_compute_instances(plan).await, session);
+            }
+            Plan::DropComputeInstanceReplica(plan) => {
+                tx.send(
+                    self.sequence_drop_compute_instance_replica(plan).await,
+                    session,
+                );
             }
             Plan::DropItems(plan) => {
                 tx.send(self.sequence_drop_items(plan).await, session);
@@ -1746,9 +1732,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     Ok(ExecuteResponse::AlteredObject(plan.object_type)),
                     session,
                 );
-            }
-            Plan::AlterComputeInstance(plan) => {
-                tx.send(self.sequence_alter_compute_instance(plan).await, session);
             }
             Plan::AlterItemRename(plan) => {
                 tx.send(self.sequence_alter_item_rename(plan).await, session);
@@ -1971,113 +1954,73 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_compute_instance(
         &mut self,
-        plan: CreateComputeInstancePlan,
+        CreateComputeInstancePlan {
+            name,
+            config,
+            replicas,
+        }: CreateComputeInstancePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let introspection_sources = if plan.config.introspection().is_some() {
+        let introspection_sources = if config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
             Vec::new()
         };
-        let config =
-            ConcreteComputeInstanceConfig::from_plan(plan.config.clone(), &self.replica_sizes)?;
-        let op = catalog::Op::CreateComputeInstance {
-            name: plan.name.clone(),
-            config,
+        let mut ops = vec![catalog::Op::CreateComputeInstance {
+            name: name.clone(),
+            config: config.clone(),
             introspection_sources,
-        };
-        let r = self.catalog_transact(vec![op], |_| Ok(())).await;
-        match r {
-            Ok(()) => {
-                let instance = self
-                    .catalog
-                    .resolve_compute_instance(&plan.name)
-                    .expect("compute instance must exist after creation");
-                self.dataflow_client
-                    .create_instance(
-                        instance.id,
-                        instance.config.clone(),
-                        instance.logging.clone(),
-                    )
-                    .await
-                    .unwrap();
-                Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
-            }
-            Err(err) => Err(err),
+        }];
+
+        for (replica_name, config) in replicas {
+            let config = concretize_replica_config(config, &self.replica_sizes)?;
+            ops.push(catalog::Op::CreateComputeInstanceReplica {
+                name: replica_name,
+                config,
+                on_cluster_name: name.clone(),
+            });
         }
+        self.catalog_transact(ops, |_| Ok(())).await?;
+        let instance = self
+            .catalog
+            .resolve_compute_instance(&name)
+            .expect("compute instance must exist after creation");
+        self.dataflow_client
+            .create_instance(instance.id, instance.logging.clone())
+            .await
+            .unwrap();
+        for (replica_id, config) in instance.replicas_by_id.clone() {
+            self.dataflow_client
+                .add_replica_to_instance(instance.id, replica_id, config)
+                .await
+                .unwrap();
+        }
+        Ok(ExecuteResponse::CreatedComputeInstance { existed: false })
     }
 
-    async fn sequence_alter_compute_instance(
+    async fn sequence_create_compute_instance_replica(
         &mut self,
-        plan: AlterComputeInstancePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
-        let instance = self.catalog.state().get_compute_instance(plan.id);
-        let old_config = instance.config.clone();
-
-        let config =
-            ConcreteComputeInstanceConfig::from_plan(plan.config.clone(), &self.replica_sizes)?;
-        let ops = vec![catalog::Op::UpdateComputeInstanceConfig {
-            id: plan.id,
+        CreateComputeInstanceReplicaPlan {
+            name,
+            of_cluster,
             config,
-        }];
-        let mut replicas_to_remove = vec![];
-        let mut replicas_to_add = vec![];
-        self.catalog_transact(ops, |tx| {
-            let new_config = &tx.catalog.get_compute_instance(plan.id).config;
-            match (old_config, new_config) {
-                (
-                    InstanceConfig::Remote {
-                        replicas: old_replicas,
-                    },
-                    InstanceConfig::Remote {
-                        replicas: new_replicas,
-                    },
-                ) => {
-                    for (name, old_hosts) in &old_replicas {
-                        match new_replicas.get(name) {
-                            None => replicas_to_remove.push(name.clone()),
-                            Some(new_hosts) => {
-                                if old_hosts != new_hosts {
-                                    coord_bail!("cannot change definition of existing replica");
-                                }
-                            }
-                        }
-                    }
-                    for (name, new_hosts) in new_replicas {
-                        if !old_replicas.contains_key(name) {
-                            replicas_to_add.push((name.clone(), new_hosts.clone()));
-                        }
-                    }
-                    Ok(())
-                }
-                (
-                    InstanceConfig::Managed {
-                        size_config: old_size,
-                    },
-                    InstanceConfig::Managed {
-                        size_config: new_size,
-                    },
-                ) => {
-                    if old_size != *new_size {
-                        coord_bail!("cannot yet change size of cluster");
-                    }
-                    Ok(())
-                }
-                _ => coord_bail!("cannot change type of existing cluster"),
-            }
-        })
-        .await?;
-        // TODO(benesch,mcsherry): move this logic into the controller.
-        let mut compute_instance = self.dataflow_client.compute_mut(plan.id).unwrap();
-        for name in replicas_to_remove {
-            compute_instance.remove_replica(&name);
-        }
-        for (name, hosts) in replicas_to_add {
-            use mz_dataflow_types::client::{ComputeClient, RemoteClient};
-            let client = RemoteClient::new(&hosts.into_iter().collect::<Vec<_>>());
-            let client: Box<dyn ComputeClient<_>> = Box::new(client);
-            compute_instance.add_replica(name, client).await;
-        }
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster))
+        }: CreateComputeInstanceReplicaPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let config = concretize_replica_config(config, &self.replica_sizes)?;
+        let op = catalog::Op::CreateComputeInstanceReplica {
+            name: name.clone(),
+            config: config.clone(),
+            on_cluster_name: of_cluster.clone(),
+        };
+
+        self.catalog_transact(vec![op], |_| Ok(())).await?;
+
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let replica_id = instance.replica_id_by_name[&name];
+        self.dataflow_client
+            .add_replica_to_instance(instance.id, replica_id, config)
+            .await
+            .unwrap();
+        Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
     }
 
     async fn sequence_create_secret(
@@ -2713,20 +2656,72 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = Vec::new();
-        let mut instance_ids = Vec::new();
+        let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for name in plan.names {
             let instance = self.catalog.resolve_compute_instance(&name)?;
-            instance_ids.push(instance.id);
+            instance_replica_drop_sets.push((instance.id, instance.replicas_by_id.clone()));
+            for replica_name in instance.replica_id_by_name.keys() {
+                ops.push(catalog::Op::DropComputeInstanceReplica {
+                    name: replica_name.to_string(),
+                    compute_id: instance.id,
+                });
+            }
             let ids_to_drop: Vec<GlobalId> = instance.indexes().iter().cloned().collect();
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
 
         self.catalog_transact(ops, |_| Ok(())).await?;
-        for id in instance_ids {
-            self.dataflow_client.drop_instance(id).await.unwrap();
+        for (instance_id, replicas) in instance_replica_drop_sets {
+            for (replica_id, config) in replicas {
+                self.dataflow_client
+                    .drop_replica(instance_id, replica_id, config)
+                    .await
+                    .unwrap();
+            }
+            self.dataflow_client
+                .drop_instance(instance_id)
+                .await
+                .unwrap();
         }
+
         Ok(ExecuteResponse::DroppedComputeInstance)
+    }
+
+    async fn sequence_drop_compute_instance_replica(
+        &mut self,
+        DropComputeInstanceReplicaPlan { names }: DropComputeInstanceReplicaPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        if names.is_empty() {
+            return Ok(ExecuteResponse::DroppedComputeInstanceReplicas);
+        }
+        let mut ops = Vec::with_capacity(names.len());
+        let mut replicas_to_drop = Vec::with_capacity(names.len());
+        for (instance_name, replica_name) in names {
+            let instance = self.catalog.resolve_compute_instance(&instance_name)?;
+            ops.push(catalog::Op::DropComputeInstanceReplica {
+                name: replica_name.clone(),
+                compute_id: instance.id,
+            });
+            let replica_id = instance.replica_id_by_name[&replica_name];
+
+            replicas_to_drop.push((
+                instance.id,
+                replica_id,
+                instance.replicas_by_id[&replica_id].clone(),
+            ));
+        }
+
+        self.catalog_transact(ops, |_| Ok(())).await?;
+
+        for (compute_id, replica_id, config) in replicas_to_drop {
+            self.dataflow_client
+                .drop_replica(compute_id, replica_id, config)
+                .await
+                .unwrap();
+        }
+
+        Ok(ExecuteResponse::DroppedComputeInstanceReplicas)
     }
 
     async fn sequence_drop_items(
@@ -2744,8 +2739,9 @@ impl<S: Append + 'static> Coordinator<S> {
             ObjectType::Type => ExecuteResponse::DroppedType,
             ObjectType::Secret => ExecuteResponse::DroppedSecret,
             ObjectType::Connector => ExecuteResponse::DroppedConnector,
-            ObjectType::Role => unreachable!("DROP ROLE is handled elsewhere"),
-            ObjectType::Cluster => unreachable!("DROP CLUSTER is handled elsewhere"),
+            ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
+                unreachable!("handled through their respective sequence_drop functions")
+            }
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         })
     }
@@ -3045,8 +3041,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let compute_instance = self
             .catalog
-            .resolve_compute_instance(session.vars().cluster())?
-            .id;
+            .resolve_compute_instance(session.vars().cluster())?;
+
+        if compute_instance.replicas_by_id.is_empty() {
+            return Err(CoordError::NoReplicasAvailable(
+                compute_instance.name.clone(),
+            ));
+        }
+
+        let compute_instance = compute_instance.id;
 
         let source_ids = source.depends_on();
 

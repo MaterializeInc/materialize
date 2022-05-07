@@ -119,16 +119,21 @@ pub fn describe(
         Statement::CreateType(stmt) => Some(ddl::describe_create_type(&scx, stmt)?),
         Statement::CreateRole(stmt) => Some(ddl::describe_create_role(&scx, stmt)?),
         Statement::CreateCluster(stmt) => Some(ddl::describe_create_cluster(&scx, stmt)?),
+        Statement::CreateClusterReplica(stmt) => {
+            Some(ddl::describe_create_cluster_replica(&scx, stmt)?)
+        }
         Statement::CreateSecret(stmt) => Some(ddl::describe_create_secret(&scx, stmt)?),
         Statement::DropDatabase(stmt) => Some(ddl::describe_drop_database(&scx, stmt)?),
         Statement::DropSchema(stmt) => Some(ddl::describe_drop_schema(&scx, stmt)?),
         Statement::DropObjects(stmt) => Some(ddl::describe_drop_objects(&scx, stmt)?),
         Statement::DropRoles(stmt) => Some(ddl::describe_drop_role(&scx, stmt)?),
         Statement::DropClusters(stmt) => Some(ddl::describe_drop_cluster(&scx, stmt)?),
+        Statement::DropClusterReplicas(stmt) => {
+            Some(ddl::describe_drop_cluster_replica(&scx, stmt)?)
+        }
         Statement::AlterObjectRename(stmt) => Some(ddl::describe_alter_object_rename(&scx, stmt)?),
         Statement::AlterIndex(stmt) => Some(ddl::describe_alter_index_options(&scx, stmt)?),
         Statement::AlterSecret(stmt) => Some(ddl::describe_alter_secret_options(&scx, stmt)?),
-        Statement::AlterCluster(stmt) => Some(ddl::describe_alter_cluster(&scx, stmt)?),
 
         // `SHOW` statements.
         Statement::ShowCreateTable(stmt) => Some(show::describe_show_create_table(&scx, stmt)?),
@@ -316,6 +321,10 @@ pub fn plan(
             let (stmt, _) = resolve_stmt!(Statement::CreateCluster, scx, stmt);
             ddl::plan_create_cluster(scx, stmt)
         }
+        stmt @ Statement::CreateClusterReplica(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::CreateClusterReplica, scx, stmt);
+            ddl::plan_create_cluster_replica(scx, stmt)
+        }
         stmt @ Statement::CreateSecret(_) => {
             let (stmt, _) = resolve_stmt!(Statement::CreateSecret, scx, stmt);
             ddl::plan_create_secret(scx, stmt)
@@ -335,6 +344,10 @@ pub fn plan(
             let (stmt, _) = resolve_stmt!(Statement::DropClusters, scx, stmt);
             ddl::plan_drop_cluster(scx, stmt)
         }
+        stmt @ Statement::DropClusterReplicas(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::DropClusterReplicas, scx, stmt);
+            ddl::plan_drop_cluster_replica(scx, stmt)
+        }
         stmt @ Statement::AlterIndex(_) => {
             let (stmt, _) = resolve_stmt!(Statement::AlterIndex, scx, stmt);
             ddl::plan_alter_index_options(scx, stmt)
@@ -344,10 +357,6 @@ pub fn plan(
         stmt @ Statement::AlterSecret(_) => {
             let (stmt, _) = resolve_stmt!(Statement::AlterSecret, scx, stmt);
             ddl::plan_alter_secret(scx, stmt)
-        }
-        stmt @ Statement::AlterCluster(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::AlterCluster, scx, stmt);
-            ddl::plan_alter_cluster(scx, stmt)
         }
 
         // DML statements.

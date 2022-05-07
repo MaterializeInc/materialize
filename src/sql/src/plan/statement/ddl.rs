@@ -22,10 +22,6 @@ use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_postgres_util::TableInfo;
-use mz_repr::adt::interval::Interval;
-use mz_sql_parser::ast::{CreateConnector, CreateConnectorStatement};
-use mz_sql_parser::ast::{CsrConnector, WithOptionValue};
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -52,19 +48,26 @@ use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_repr::{strconv, ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_postgres_util::TableInfo;
+use mz_repr::adt::interval::Interval;
+use mz_repr::strconv;
+use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_sql_parser::ast::{
+    CreateClusterReplicaStatement, CreateConnector, CreateConnectorStatement, CsrConnector,
+    QualifiedReplica, ReplicaDefinition, ReplicaOption, WithOptionValue,
+};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
 use crate::ast::{
-    AlterClusterStatement, AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement,
-    AlterSecretStatement, AvroSchema, ClusterOption, ColumnOption, Compression,
-    CreateClusterStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
-    CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro,
-    CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
+    AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
+    AvroSchema, ClusterOption, ColumnOption, Compression, CreateClusterStatement,
+    CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector, CreateSinkStatement,
+    CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
+    CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto,
+    CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, DropClusterReplicasStatement,
     DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
     DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr,
@@ -86,14 +89,14 @@ use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    plan_utils, query, AlterComputeInstancePlan, AlterIndexEnablePlan, AlterIndexResetOptionsPlan,
-    AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan,
-    ComputeInstanceConfig, ComputeInstanceIntrospectionConfig, Connector,
-    CreateComputeInstancePlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption,
-    IndexOptionName, Params, Plan, Secret, Sink, Source, Table, Type, View,
+    plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
+    Connector, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption, IndexOptionName, Params,
+    Plan, ReplicaConfig, Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2813,11 +2816,23 @@ pub fn describe_create_cluster(
 
 pub fn plan_create_cluster(
     _: &StatementContext,
-    CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
+    CreateClusterStatement {
+        name,
+        options,
+        replicas,
+    }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
+    let mut replicas_out = Vec::with_capacity(replicas.len());
+    for definition in replicas {
+        replicas_out.push((
+            normalize::ident(definition.name),
+            plan_replica_config(definition.options)?,
+        ));
+    }
     Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
         name: normalize::ident(name),
         config: plan_cluster_options(options)?,
+        replicas: replicas_out,
     }))
 }
 
@@ -2829,24 +2844,12 @@ const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
 
 fn plan_cluster_options(
     options: Vec<ClusterOption<Aug>>,
-) -> Result<ComputeInstanceConfig, anyhow::Error> {
-    let mut remote_replicas = BTreeMap::new();
-    let mut size = None;
+) -> Result<Option<ComputeInstanceIntrospectionConfig>, anyhow::Error> {
     let mut introspection_debugging = None;
     let mut introspection_granularity = None;
 
     for option in options {
         match option {
-            ClusterOption::Remote { name, hosts } => {
-                let name = normalize::ident(name);
-                let mut hosts_out = BTreeSet::new();
-                for host in hosts {
-                    hosts_out.insert(with_option_type!(Some(host), String));
-                }
-                if remote_replicas.insert(name, hosts_out).is_some() {
-                    bail!("REMOTE replicas must have unique names");
-                }
-            }
             ClusterOption::IntrospectionDebugging(enabled) => {
                 if introspection_debugging.is_some() {
                     bail!("INTROSPECTION DEBUGGING specified more than once");
@@ -2860,19 +2863,13 @@ fn plan_cluster_options(
                 introspection_granularity =
                     Some(with_option_type!(Some(interval), OptionalInterval));
             }
-            ClusterOption::Size(s) => {
-                if size.is_some() {
-                    bail!("SIZE specified more than once");
-                }
-                size = Some(with_option_type!(Some(s), String));
-            }
         }
     }
 
     let introspection_granularity =
         introspection_granularity.unwrap_or(Some(DEFAULT_INTROSPECTION_GRANULARITY));
 
-    let introspection = match (introspection_debugging, introspection_granularity) {
+    Ok(match (introspection_debugging, introspection_granularity) {
         (None | Some(false), None) => None,
         (debugging, Some(granularity)) => Some(ComputeInstanceIntrospectionConfig {
             debugging: debugging.unwrap_or(false),
@@ -2881,17 +2878,34 @@ fn plan_cluster_options(
         (Some(true), None) => {
             bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION GRANULARITY")
         }
-    };
+    })
+}
+
+fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig, anyhow::Error> {
+    let mut remote_replicas = BTreeSet::new();
+    let mut size = None;
+
+    for option in options {
+        match option {
+            ReplicaOption::Remote { hosts } => {
+                for host in hosts {
+                    remote_replicas.insert(with_option_type!(Some(host), String));
+                }
+            }
+            ReplicaOption::Size(s) => {
+                if size.is_some() {
+                    bail!("SIZE specified more than once");
+                }
+                size = Some(with_option_type!(Some(s), String));
+            }
+        }
+    }
 
     match (remote_replicas.len() > 0, size) {
-        (true, None) => Ok(ComputeInstanceConfig::Remote {
+        (true, None) => Ok(ReplicaConfig::Remote {
             replicas: remote_replicas,
-            introspection,
         }),
-        (false, Some(size)) => Ok(ComputeInstanceConfig::Managed {
-            size,
-            introspection,
-        }),
+        (false, Some(size)) => Ok(ReplicaConfig::Managed { size }),
         (false, None) => {
             bail!("one of REMOTE or SIZE must be specified")
         }
@@ -2899,6 +2913,32 @@ fn plan_cluster_options(
             bail!("only one of REMOTE or SIZE may be specified")
         }
     }
+}
+
+pub fn describe_create_cluster_replica(
+    _: &StatementContext,
+    _: &CreateClusterReplicaStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_cluster_replica(
+    scx: &StatementContext,
+    CreateClusterReplicaStatement {
+        definition: ReplicaDefinition { name, options },
+        of_cluster,
+    }: CreateClusterReplicaStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    let _ = scx
+        .catalog
+        .resolve_compute_instance(Some(&of_cluster.to_string()))?;
+    Ok(Plan::CreateComputeInstanceReplica(
+        CreateComputeInstanceReplicaPlan {
+            name: normalize::ident(name),
+            of_cluster: of_cluster.to_string(),
+            config: plan_replica_config(options)?,
+        },
+    ))
 }
 
 pub fn describe_create_secret(
@@ -3077,8 +3117,9 @@ pub fn plan_drop_objects(
         | ObjectType::Type
         | ObjectType::Secret
         | ObjectType::Connector => plan_drop_items(scx, object_type, names, cascade),
-        ObjectType::Role => unreachable!("DROP ROLE handled separately"),
-        ObjectType::Cluster => unreachable!("DROP CLUSTER handled separately"),
+        ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
+            unreachable!("handled through their respective plan_drop functions")
+        }
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
@@ -3201,8 +3242,10 @@ pub fn plan_drop_cluster(
         };
         match scx.catalog.resolve_compute_instance(Some(name.as_str())) {
             Ok(instance) => {
-                if !instance.indexes().is_empty() && !cascade {
-                    bail!("cannot drop cluster with active indexes or sinks");
+                if !(instance.indexes().is_empty() || instance.replica_names().is_empty())
+                    && !cascade
+                {
+                    bail!("cannot drop cluster with active indexes, sinks, or replicas");
                 }
                 out.push(name.into_string());
             }
@@ -3216,6 +3259,48 @@ pub fn plan_drop_cluster(
     Ok(Plan::DropComputeInstances(DropComputeInstancesPlan {
         names: out,
     }))
+}
+
+pub fn describe_drop_cluster_replica(
+    _: &StatementContext,
+    _: &DropClusterReplicasStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_drop_cluster_replica(
+    scx: &StatementContext,
+    DropClusterReplicasStatement { if_exists, names }: DropClusterReplicasStatement,
+) -> Result<Plan, anyhow::Error> {
+    let mut names_out = Vec::with_capacity(names.len());
+    for QualifiedReplica { cluster, replica } in names {
+        let instance = match scx.catalog.resolve_compute_instance(Some(cluster.as_str())) {
+            Ok(instance) => instance,
+            Err(_) if if_exists => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let replica_name = replica.to_string();
+        // Check to see if name exists
+        if instance.replica_names().contains(&replica_name) {
+            names_out.push((instance.name().to_string(), replica_name))
+        } else {
+            // If "IF EXISTS" supplied, names allowed to be missing,
+            // otherwise error.
+            if !if_exists {
+                // TODO(benesch): generate a notice indicating that the
+                // replica does not exist.
+                bail!(
+                    "CLUSTER {} has no CLUSTER REPLICA named {}",
+                    instance.name(),
+                    replica.to_string()
+                )
+            }
+        }
+    }
+
+    Ok(Plan::DropComputeInstanceReplica(
+        DropComputeInstanceReplicaPlan { names: names_out },
+    ))
 }
 
 pub fn plan_drop_items(
@@ -3467,38 +3552,6 @@ pub fn plan_alter_secret(
     let secret_as = query::plan_secret_as(scx, value.clone())?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
-}
-
-pub fn describe_alter_cluster(
-    _: &StatementContext,
-    _: &AlterClusterStatement<Raw>,
-) -> Result<StatementDesc, anyhow::Error> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn plan_alter_cluster(
-    scx: &StatementContext,
-    AlterClusterStatement {
-        name,
-        if_exists,
-        options,
-    }: AlterClusterStatement<Aug>,
-) -> Result<Plan, anyhow::Error> {
-    let id = match scx.resolve_compute_instance(Some(&name)) {
-        Ok(instance) => instance.id(),
-        Err(_) if if_exists => {
-            // TODO(benesch): generate a notice indicating this
-            // item does not exist.
-            return Ok(Plan::AlterNoop(AlterNoopPlan {
-                object_type: ObjectType::Cluster,
-            }));
-        }
-        Err(err) => return Err(err.into()),
-    };
-    Ok(Plan::AlterComputeInstance(AlterComputeInstancePlan {
-        id,
-        config: plan_cluster_options(options)?,
-    }))
 }
 
 struct DependsOnCollector {

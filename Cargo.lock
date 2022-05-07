@@ -3291,12 +3291,14 @@ dependencies = [
  "globset",
  "http",
  "http-serde",
+ "itertools",
  "maplit",
  "mz-ccsr",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
  "mz-orchestrator",
+ "mz-orchestrator-kubernetes",
  "mz-ore",
  "mz-persist",
  "mz-persist-client",
@@ -3569,6 +3571,8 @@ dependencies = [
  "kube",
  "mz-orchestrator",
  "mz-secrets-kubernetes",
+ "punycode",
+ "regex",
  "serde_json",
  "sha2",
 ]
@@ -5204,6 +5208,12 @@ dependencies = [
  "sha2",
  "uritemplate-next",
 ]
+
+[[package]]
+name = "punycode"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
 
 [[package]]
 name = "quick-error"

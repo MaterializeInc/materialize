@@ -220,6 +220,11 @@ where
     pub async fn add_replica(&mut self, id: String, client: Box<dyn ComputeClient<T>>) {
         self.compute.client.add_replica(id, client).await;
     }
+
+    pub fn get_replica_ids(&self) -> impl Iterator<Item = &String> {
+        self.compute.client.get_replica_identifiers()
+    }
+
     /// Removes an existing instance replica, by name.
     pub fn remove_replica(&mut self, id: &str) {
         self.compute.client.remove_replica(id);

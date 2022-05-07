@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::iter;
 use std::iter::once;

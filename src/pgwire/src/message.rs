@@ -388,6 +388,7 @@ impl ErrorResponse {
             CoordError::InvalidReplicaSize { .. } => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            CoordError::NoReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,

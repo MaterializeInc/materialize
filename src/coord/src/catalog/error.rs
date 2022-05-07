@@ -37,6 +37,8 @@ pub enum ErrorKind {
     RoleAlreadyExists(String),
     #[error("cluster '{0}' already exists")]
     ClusterAlreadyExists(String),
+    #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
+    DuplicateReplica(String, String),
     #[error("catalog item '{0}' already exists")]
     ItemAlreadyExists(String),
     #[error("unacceptable schema name '{0}'")]
@@ -45,6 +47,8 @@ pub enum ErrorKind {
     ReservedRoleName(String),
     #[error("cluster name {} is reserved", .0.quoted())]
     ReservedClusterName(String),
+    #[error("replica name {} is reserved", .0.quoted())]
+    ReservedReplicaName(String),
     #[error("system schema '{0}' cannot be modified")]
     ReadOnlySystemSchema(String),
     #[error("system item '{0}' cannot be modified")]

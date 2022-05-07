@@ -25,7 +25,9 @@ use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::client::{ComputeInstanceId, InstanceConfig};
+use mz_dataflow_types::client::{
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
+};
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
@@ -50,8 +52,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
+    ComputeInstanceIntrospectionConfig, CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
+    Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_transform::Optimizer;
@@ -61,7 +64,6 @@ use crate::catalog::builtin::{
     Builtin, BuiltinLog, BuiltinTable, BuiltinType, Fingerprint, BUILTINS, BUILTIN_ROLES,
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::coord::ConcreteComputeInstanceConfig;
 use crate::session::{PreparedStatement, Session, DEFAULT_DATABASE_NAME};
 use crate::CoordError;
 
@@ -317,10 +319,6 @@ impl CatalogState {
             })
     }
 
-    pub fn get_compute_instance(&self, id: ComputeInstanceId) -> &ComputeInstance {
-        &self.compute_instances_by_id[&id]
-    }
-
     #[tracing::instrument(level = "trace", skip(self))]
     fn insert_item(
         &mut self,
@@ -389,19 +387,9 @@ impl CatalogState {
         &mut self,
         id: ComputeInstanceId,
         name: String,
-        config: ConcreteComputeInstanceConfig,
+        introspection: Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
     ) {
-        let (config, introspection) = match config {
-            ConcreteComputeInstanceConfig::Remote {
-                replicas,
-                introspection,
-            } => (InstanceConfig::Remote { replicas }, introspection),
-            ConcreteComputeInstanceConfig::Managed {
-                size_config,
-                introspection,
-            } => (InstanceConfig::Managed { size_config }, introspection),
-        };
         let logging = match introspection {
             None => None,
             Some(introspection) => {
@@ -466,17 +454,37 @@ impl CatalogState {
                 })
             }
         };
+
         self.compute_instances_by_id.insert(
             id,
             ComputeInstance {
                 name: name.clone(),
-                config,
                 id,
                 indexes: HashSet::new(),
                 logging,
+                replica_id_by_name: HashMap::new(),
+                replicas_by_id: HashMap::new(),
             },
         );
-        self.compute_instances_by_name.insert(name, id);
+        assert!(self.compute_instances_by_name.insert(name, id).is_none());
+    }
+
+    fn insert_compute_instance_replica(
+        &mut self,
+        on_instance: ComputeInstanceId,
+        replica_name: String,
+        replica_id: ReplicaId,
+        config: ConcreteComputeInstanceReplicaConfig,
+    ) {
+        let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
+        assert!(compute_instance
+            .replica_id_by_name
+            .insert(replica_name, replica_id)
+            .is_none());
+        assert!(compute_instance
+            .replicas_by_id
+            .insert(replica_id, config)
+            .is_none());
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -722,10 +730,11 @@ pub struct Role {
 pub struct ComputeInstance {
     pub name: String,
     pub id: ComputeInstanceId,
-    pub config: InstanceConfig,
     pub logging: Option<DataflowLoggingConfig>,
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
+    pub replica_id_by_name: HashMap<String, ReplicaId>,
+    pub replicas_by_id: HashMap<ReplicaId, ConcreteComputeInstanceReplicaConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -1421,8 +1430,8 @@ impl<S: Append> Catalog<S> {
             .await?;
 
         let compute_instances = catalog.storage().await.load_compute_instances().await?;
-        for (id, name, conf) in compute_instances {
-            let introspection_sources = if conf.introspection().is_some() {
+        for (id, name, introspection) in compute_instances {
+            let introspection_sources = if introspection.is_some() {
                 let introspection_source_index_gids = catalog
                     .storage()
                     .await
@@ -1460,8 +1469,19 @@ impl<S: Append> Catalog<S> {
             };
             catalog
                 .state
-                .insert_compute_instance(id, name, conf, introspection_sources)
+                .insert_compute_instance(id, name, introspection, introspection_sources)
                 .await;
+        }
+
+        let replicas = catalog
+            .storage()
+            .await
+            .load_compute_instance_replicas()
+            .await?;
+        for (instance_id, replica_id, name, config) in replicas {
+            catalog
+                .state
+                .insert_compute_instance_replica(instance_id, name, replica_id, config);
         }
 
         if !config.skip_migrations {
@@ -1519,8 +1539,16 @@ impl<S: Append> Catalog<S> {
         for (role_name, _role) in &catalog.state.roles {
             builtin_table_updates.push(catalog.state.pack_role_update(role_name, 1));
         }
-        for (name, _id) in &catalog.state.compute_instances_by_name {
+        for (name, id) in &catalog.state.compute_instances_by_name {
             builtin_table_updates.push(catalog.state.pack_compute_instance_update(name, 1));
+            let instance = &catalog.state.compute_instances_by_id[id];
+            for (replica_name, _replica_id) in &instance.replica_id_by_name {
+                builtin_table_updates.push(catalog.state.pack_compute_instance_replica_update(
+                    *id,
+                    &replica_name,
+                    1,
+                ));
+            }
         }
 
         Ok((catalog, builtin_table_updates))
@@ -2236,8 +2264,14 @@ impl<S: Append> Catalog<S> {
             CreateComputeInstance {
                 id: ComputeInstanceId,
                 name: String,
-                config: ConcreteComputeInstanceConfig,
+                config: Option<ComputeInstanceIntrospectionConfig>,
                 introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+            },
+            CreateComputeInstanceReplica {
+                id: ReplicaId,
+                name: String,
+                on_cluster_name: String,
+                config: ConcreteComputeInstanceReplicaConfig,
             },
             CreateItem {
                 id: GlobalId,
@@ -2259,15 +2293,15 @@ impl<S: Append> Catalog<S> {
             DropComputeInstance {
                 name: String,
             },
+            DropComputeInstanceReplica {
+                name: String,
+                compute_id: ComputeInstanceId,
+            },
             DropItem(GlobalId),
             UpdateItem {
                 id: GlobalId,
                 to_name: QualifiedObjectName,
                 to_item: CatalogItem,
-            },
-            UpdateComputeInstanceConfig {
-                id: ComputeInstanceId,
-                config: InstanceConfig,
             },
         }
 
@@ -2369,6 +2403,23 @@ impl<S: Append> Catalog<S> {
                         introspection_sources,
                     }]
                 }
+                Op::CreateComputeInstanceReplica {
+                    name,
+                    on_cluster_name,
+                    config,
+                } => {
+                    if is_reserved_name(&name) {
+                        return Err(CoordError::Catalog(Error::new(
+                            ErrorKind::ReservedReplicaName(name),
+                        )));
+                    }
+                    vec![Action::CreateComputeInstanceReplica {
+                        id: tx.insert_compute_instance_replica(&on_cluster_name, &name, &config)?,
+                        name,
+                        on_cluster_name,
+                        config,
+                    }]
+                }
                 Op::CreateItem {
                     id,
                     oid,
@@ -2446,6 +2497,14 @@ impl<S: Append> Catalog<S> {
                         builtin_table_updates.extend(self.state.pack_item_update(id, -1));
                     }
                     vec![Action::DropComputeInstance { name }]
+                }
+                Op::DropComputeInstanceReplica { name, compute_id } => {
+                    tx.remove_compute_instance_replica(&name, compute_id)?;
+                    builtin_table_updates.push(
+                        self.state
+                            .pack_compute_instance_replica_update(compute_id, &name, -1),
+                    );
+                    vec![Action::DropComputeInstanceReplica { name, compute_id }]
                 }
                 Op::DropItem(id) => {
                     if !self.get_entry(&id).item().is_temporary() {
@@ -2558,20 +2617,6 @@ impl<S: Append> Catalog<S> {
                         to_item,
                     }]
                 }
-                Op::UpdateComputeInstanceConfig { id, config } => {
-                    tx.update_compute_instance_config(id, &config)?;
-                    let config = match config {
-                        ConcreteComputeInstanceConfig::Remote {
-                            replicas,
-                            introspection: _,
-                        } => InstanceConfig::Remote { replicas },
-                        ConcreteComputeInstanceConfig::Managed {
-                            size_config,
-                            introspection: _,
-                        } => InstanceConfig::Managed { size_config },
-                    };
-                    vec![Action::UpdateComputeInstanceConfig { id, config }]
-                }
             });
         }
 
@@ -2656,6 +2701,27 @@ impl<S: Append> Catalog<S> {
                     }
                 }
 
+                Action::CreateComputeInstanceReplica {
+                    id,
+                    name,
+                    on_cluster_name,
+                    config,
+                } => {
+                    info!("create replica {} of instance {}", name, on_cluster_name);
+                    let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
+                    state.insert_compute_instance_replica(
+                        compute_instance_id,
+                        name.clone(),
+                        id,
+                        config,
+                    );
+                    builtin_table_updates.push(state.pack_compute_instance_replica_update(
+                        compute_instance_id,
+                        &name,
+                        1,
+                    ));
+                }
+
                 Action::CreateItem {
                     id,
                     oid,
@@ -2700,9 +2766,19 @@ impl<S: Append> Catalog<S> {
                         .expect("can only drop known instances");
 
                     assert!(
-                        instance.indexes.is_empty(),
+                        instance.indexes.is_empty() && instance.replicas_by_id.is_empty(),
                         "not all items dropped before compute instance"
                     );
+                }
+
+                Action::DropComputeInstanceReplica { name, compute_id } => {
+                    let instance = state
+                        .compute_instances_by_id
+                        .get_mut(&compute_id)
+                        .expect("can only drop replicas from known instances");
+                    let replica_id = instance.replica_id_by_name.remove(&name).unwrap();
+                    assert!(instance.replicas_by_id.remove(&replica_id).is_some());
+                    assert!(instance.replica_id_by_name.len() == instance.replicas_by_id.len());
                 }
 
                 Action::DropItem(id) => {
@@ -2777,10 +2853,6 @@ impl<S: Append> Catalog<S> {
                     schema.items.insert(new_entry.name().item.clone(), id);
                     state.entry_by_id.insert(id, new_entry.clone());
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
-                }
-
-                Action::UpdateComputeInstanceConfig { id, config } => {
-                    state.compute_instances_by_id.get_mut(&id).unwrap().config = config;
                 }
             }
         }
@@ -3008,8 +3080,13 @@ pub enum Op {
     },
     CreateComputeInstance {
         name: String,
-        config: ConcreteComputeInstanceConfig,
+        config: Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
+    },
+    CreateComputeInstanceReplica {
+        name: String,
+        config: ConcreteComputeInstanceReplicaConfig,
+        on_cluster_name: String,
     },
     CreateItem {
         id: GlobalId,
@@ -3030,6 +3107,10 @@ pub enum Op {
     DropComputeInstance {
         name: String,
     },
+    DropComputeInstanceReplica {
+        name: String,
+        compute_id: ComputeInstanceId,
+    },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
     /// may be violated.
@@ -3042,10 +3123,6 @@ pub enum Op {
     UpdateItem {
         id: GlobalId,
         to_item: CatalogItem,
-    },
-    UpdateComputeInstanceConfig {
-        id: ComputeInstanceId,
-        config: ConcreteComputeInstanceConfig,
     },
 }
 
@@ -3400,7 +3477,7 @@ impl mz_sql::catalog::CatalogRole for Role {
     }
 }
 
-impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
+impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
     fn name(&self) -> &str {
         &self.name
     }
@@ -3411,6 +3488,10 @@ impl mz_sql::catalog::CatalogComputeInstance for ComputeInstance {
 
     fn indexes(&self) -> &HashSet<GlobalId> {
         &self.indexes
+    }
+
+    fn replica_names(&self) -> HashSet<&String> {
+        self.replica_id_by_name.keys().collect::<HashSet<_>>()
     }
 }
 

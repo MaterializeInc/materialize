@@ -195,6 +195,10 @@ pub enum ExecuteResponse {
     CreatedComputeInstance {
         existed: bool,
     },
+    /// The requested compute instance replica was created.
+    CreatedComputeInstanceReplica {
+        existed: bool,
+    },
     /// The requested index was created.
     CreatedIndex {
         existed: bool,
@@ -239,6 +243,8 @@ pub enum ExecuteResponse {
     DroppedConnector,
     /// The requested compute instance was dropped.
     DroppedComputeInstance,
+    /// The requested compute instance replicas were dropped.
+    DroppedComputeInstanceReplicas,
     /// The requested database was dropped.
     DroppedDatabase,
     /// The requested role was dropped.

@@ -474,6 +474,7 @@ impl SessionClient {
                 | ExecuteResponse::CreatedSchema { existed: _ }
                 | ExecuteResponse::CreatedRole
                 | ExecuteResponse::CreatedComputeInstance { existed: _ }
+                | ExecuteResponse::CreatedComputeInstanceReplica { existed: _ }
                 | ExecuteResponse::CreatedTable { existed: _ }
                 | ExecuteResponse::CreatedIndex { existed: _ }
                 | ExecuteResponse::CreatedSecret { existed: _ }
@@ -489,6 +490,7 @@ impl SessionClient {
                 | ExecuteResponse::DroppedSchema
                 | ExecuteResponse::DroppedRole
                 | ExecuteResponse::DroppedComputeInstance
+                | ExecuteResponse::DroppedComputeInstanceReplicas
                 | ExecuteResponse::DroppedSource
                 | ExecuteResponse::DroppedIndex
                 | ExecuteResponse::DroppedSink

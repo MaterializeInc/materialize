@@ -26,7 +26,7 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -77,6 +77,7 @@ pub enum Plan {
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
     CreateComputeInstance(CreateComputeInstancePlan),
+    CreateComputeInstanceReplica(CreateComputeInstanceReplicaPlan),
     CreateSource(CreateSourcePlan),
     CreateSecret(CreateSecretPlan),
     CreateSink(CreateSinkPlan),
@@ -91,6 +92,7 @@ pub enum Plan {
     DropSchema(DropSchemaPlan),
     DropRoles(DropRolesPlan),
     DropComputeInstances(DropComputeInstancesPlan),
+    DropComputeInstanceReplica(DropComputeInstanceReplicaPlan),
     DropItems(DropItemsPlan),
     EmptyQuery,
     ShowAllVariables,
@@ -107,7 +109,6 @@ pub enum Plan {
     SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
     AlterNoop(AlterNoopPlan),
-    AlterComputeInstance(AlterComputeInstancePlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
     AlterIndexEnable(AlterIndexEnablePlan),
@@ -149,29 +150,15 @@ pub struct CreateRolePlan {
 #[derive(Debug)]
 pub struct CreateComputeInstancePlan {
     pub name: String,
-    pub config: ComputeInstanceConfig,
+    pub config: Option<ComputeInstanceIntrospectionConfig>,
+    pub replicas: Vec<(String, ReplicaConfig)>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ComputeInstanceConfig {
-    Remote {
-        /// A map from replica name to hostnames.
-        replicas: BTreeMap<String, BTreeSet<String>>,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-    Managed {
-        size: String,
-        introspection: Option<ComputeInstanceIntrospectionConfig>,
-    },
-}
-
-impl ComputeInstanceConfig {
-    pub fn introspection(&self) -> &Option<ComputeInstanceIntrospectionConfig> {
-        match self {
-            Self::Remote { introspection, .. } => introspection,
-            Self::Managed { introspection, .. } => introspection,
-        }
-    }
+#[derive(Debug)]
+pub struct CreateComputeInstanceReplicaPlan {
+    pub name: String,
+    pub of_cluster: String,
+    pub config: ReplicaConfig,
 }
 
 /// Configuration of introspection for a compute instance.
@@ -181,6 +168,12 @@ pub struct ComputeInstanceIntrospectionConfig {
     pub debugging: bool,
     /// The interval at which to introspect.
     pub granularity: Duration,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ReplicaConfig {
+    Remote { replicas: BTreeSet<String> },
+    Managed { size: String },
 }
 
 #[derive(Debug)]
@@ -274,6 +267,11 @@ pub struct DropComputeInstancesPlan {
 }
 
 #[derive(Debug)]
+pub struct DropComputeInstanceReplicaPlan {
+    pub names: Vec<(String, String)>,
+}
+
+#[derive(Debug)]
 pub struct DropItemsPlan {
     pub items: Vec<GlobalId>,
     pub ty: ObjectType,
@@ -364,12 +362,6 @@ pub struct ReadThenWritePlan {
 #[derive(Debug)]
 pub struct AlterNoopPlan {
     pub object_type: ObjectType,
-}
-
-#[derive(Debug)]
-pub struct AlterComputeInstancePlan {
-    pub id: ComputeInstanceId,
-    pub config: ComputeInstanceConfig,
 }
 
 #[derive(Debug)]
