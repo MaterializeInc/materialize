@@ -54,7 +54,7 @@ uuid = { version = "0.8.2", features = ["serde", "v4"] }
 tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
 
 [build-dependencies]
-prost-build = { version = "0.10.1", features = ["vendored"] }
+prost-build = { version = "0.10.3", features = ["vendored"] }
 
 [features]
 default = ["jemalloc"]
