@@ -6,7 +6,7 @@
 
 black==22.3.0
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.21.46
-boto3==1.21.46
+boto3==1.22.9
 click==8.1.2
 cryptography==36.0.2
 colored==1.4.3
