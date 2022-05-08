@@ -152,7 +152,7 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can get Materialize to read data from Kafka and define the views we want
 Materialize to maintain for us.
 
-1. Launch the `mzcli` SQL shell against Materialize by running:
+1. Launch the `psql` shell against Materialize by running:
 
     ```shell
     docker-compose run cli
@@ -266,19 +266,7 @@ Materialize to maintain for us.
 
 ### Set up Metabase
 
-1. Start Metabase:
-
-    ```shell
-    ./mzcompose up -d metabase
-    ```
-
-1. Open Metabase:
-
-   ```shell
-    ./mzcompose web metabase
-   ```
-
-   It may take a minute or two for Metabase to start up.
+1. In a browser, navigate to `localhost:3030`.
 
 1. Click **Let's get started**.
 
