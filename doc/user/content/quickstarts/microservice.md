@@ -405,10 +405,10 @@ In a future iteration, we'll make this demo more interactive.
 1. [Set up Docker and Docker compose](/integrations/docker), if you haven't
    already.
 
-1. Clone the Materialize repository:
+1. Clone the Materialize demos repository:
 
     ```shell
-    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/demos.git
     ```
 
     You can also view the demo's code on
@@ -417,8 +417,8 @@ In a future iteration, we'll make this demo more interactive.
 1. Download and start all of the components we've listed above by running:
 
     ```shell
-    cd materialize/demo/billing
-    ./mzcompose run default
+    cd demos/billing
+    docker-compose up -d
     ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -435,7 +435,7 @@ can see that Materialize is ingesting the `protobuf` data and normalizing it.
 1. Launch a `psql` shell connected to `materialized`:
 
     ```shell
-    ./mzcompose sql materialized
+    docker-compose run cli
     ```
 
 1. Show the source we've created:

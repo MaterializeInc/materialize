@@ -1,5 +1,5 @@
 ---
-title: "Install Materialize Locally"
+title: "Install Materialize"
 description: "Install the Materialize development environment"
 menu:
   main:
@@ -13,7 +13,7 @@ aliases:
 Want to connect with Materialize? Join our growing community on Slack! →
 {{< /cta >}}
 
-You can install the Materialize devellopment environment on macOS and Linux, or
+You can install the Materialize development environment on macOS and Linux, or
 [build](#build-from-source) on most OSes (e.g. FreeBSD).
 
 {{< warning >}}
@@ -25,7 +25,7 @@ recommended.
 ## Docker
 
 We provide the `materialize/materialized` image in Docker Hub. If you already have
-[Docker][docker-start] installed, you can run materialized with your tools in the usual
+[Docker][docker-start] installed, you can run `materialized` with your tools in the usual
 way. For example:
 
 ```shell
@@ -74,7 +74,7 @@ cargo build --release --bin storaged --bin computed --bin materialized
 
 ### Run the binary
 
-You can start the `materialized` process by simply running the binary, e.g.
+You can start the `materialized` process by running the binary, e.g.
 
 ```nofmt
 ./target/release/materialized
@@ -89,33 +89,59 @@ Detail | Info
 
 ## CLI Connections
 
-To connect to a running instance, you can use any [Materialize-compatible CLI](/integrations/psql/),
-like `psql` or `mzcli`. To install the `psql` client:
+To connect to a running instance, you can use any Materialize-compatible CLI,
+like `psql`. For an overview of compatible SQL clients and their current level of support, check out [Tools and Integrations](/integrations/#sql-clients).
 
 {{< tabs >}}
+{{< tab "Docker">}}
+
+For Docker environments, we provide the [`materialize/cli` image](https://hub.docker.com/r/materialize/cli), which bundles `psql` and can be used to spin up a minimal `docker-compose` setup:
+
+```yaml
+services:
+  materialized:
+    image: materialize/materialized:{{< version >}}
+    ports:
+      - "6875:6875"
+  cli:
+    image: materialize/cli:{{< version >}}
+```
+
+{{< /tab >}}
+
 {{< tab "macOS">}}
+
+To install the `psql` client:
 
 ```shell
 brew install postgresql
+```
+
+Once `psql` is installed, connect using:
+
+```shell
+psql -U materialize -h localhost -p 6875 materialize
 ```
 
 {{< /tab >}}
 
 {{< tab "Linux">}}
 
+To install the `psql` client:
+
 ```shell
 apt install postgresql-client
+```
+
+Once `psql` is installed, connect using:
+
+```shell
+psql -U materialize -h localhost -p 6875 materialize
 ```
 
 {{< /tab >}}
 
 {{< /tabs >}}
-
-Once you have `psql` installed, connect using:
-
-```shell
-psql -U materialize -h localhost -p 6875 materialize
-```
 
 <p>
 

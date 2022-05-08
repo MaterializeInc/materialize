@@ -38,9 +38,7 @@ _Below: Zooming in on Materialize's internal structure in the above deployment._
 
 Right now, Materialize provides its interactive interface through `psql` running
 locally on a client machine; this uses the PostgreSQL wire protocol (`pgwire`)
-to communicate with `materialized`. We have a client called
-[`mzcli`](https://github.com/MaterializeInc/mzcli) that we recommend using, but
-it's just a modified wrapper around `pgcli`.
+to communicate with `materialized`.
 
 Because this is a SQL shell, Materialize lets you interact with your server
 through SQL statements sent over `pgwire` to an internal `queue`, where they are
@@ -48,7 +46,7 @@ dequeued by a `sql` thread that parses the statement.
 
 Broadly, there are three classes of statements in Materialize:
 
-- **Creating sources** to ingest data from a Kafka topic, which is how data gets
+- **Creating sources** to ingest data from an external system, which is how data gets
   inserted into Materialize
 - **Reading data** from sources
 - **Creating views** to maintain the output of some query
@@ -56,7 +54,7 @@ Broadly, there are three classes of statements in Materialize:
 ### Creating sources
 
 When Materialize receives a `CREATE SOURCE...` statement, it connects to some
-destination to read data. You can find more information about how that works in the
+external system to read data. You can find more information about how that works in the
 [Sources](#sources-ingesting-data) section.
 
 ### Reading data

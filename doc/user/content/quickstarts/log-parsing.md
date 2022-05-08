@@ -72,14 +72,13 @@ In this demo, Materialize...
   expression, using named capture groups to create columns
 - Provides a SQL interface to query the structured version of the log files.
 
-We will connect to Materialize through `mzcli`, which is our forked version of
-`pgcli`.
+We will connect to Materialize through `psql`.
 
 ### Diagram
 
 {{<
     figure src="/images/demos/log_parsing_architecture_diagram.png"
-    alt="Load generator <-HTTP-> Web server -> logs -> materialized <-SQL-> mzcli"
+    alt="Load generator <-HTTP-> Web server -> logs -> materialized <-SQL-> psql"
     width="300"
 >}}
 
@@ -253,13 +252,13 @@ In a future iteration, we'll make this demo more interactive.
 1. Clone the Materialize repo at the latest release:
 
     ```shell
-    git clone --depth=1 --branch {{< version >}} https://github.com/MaterializeInc/materialize.git
+    git clone https://github.com/MaterializeInc/demos.git
     ```
 
-1. Move to the `demo/http_logs` dir:
+1. Move to the `demos/http-logs` directory:
 
     ```shell
-    cd materialize/demo/http_logs
+    cd demos/http-logs
     ```
 
     You can also find the demo's code on
@@ -268,7 +267,7 @@ In a future iteration, we'll make this demo more interactive.
 1. Download and start all of the components we've listed above by running:
 
    ```shell
-   ./mzcompose up
+   docker-compose up -d
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite
@@ -282,13 +281,13 @@ get a chance to see how Materialize can handle queries on our data.
 
 1. Launch a new terminal window and `cd materialize/demo/http_logs`.
 
-1. Launch the Materialize CLI (`mzcli`) by running:
+1. Launch `psql` by running:
 
     ```shell
-    ./mzcompose run cli
+    docker-compose run cli
     ```
 
-1. Within `mzcli`, ensure you have all of the necessary sources, which represent
+1. Within `psql`, ensure you have all of the necessary sources, which represent
    all of the tables from MySQL:
 
     ```sql
