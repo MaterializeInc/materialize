@@ -47,4 +47,4 @@ criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 rand = "0.8.5"
 
 [build-dependencies]
-prost-build = { version = "0.10.1", features = ["vendored"] }
+prost-build = { version = "0.10.3", features = ["vendored"] }

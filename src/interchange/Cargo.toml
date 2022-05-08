@@ -37,4 +37,4 @@ uuid = { version = "0.8.2", features = ["serde"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }
 
 [build-dependencies]
-prost-build = { version = "0.10.1", features = ["vendored"] }
+prost-build = { version = "0.10.3", features = ["vendored"] }

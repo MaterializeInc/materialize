@@ -53,4 +53,4 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 
 [build-dependencies]
-prost-build = { version = "0.10.1", features = ["vendored"] }
+prost-build = { version = "0.10.3", features = ["vendored"] }
