@@ -26,7 +26,7 @@ harness = false
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
 anyhow = { version = "1.0.57", features = ["backtrace"] }
-arrow2 = { version = "0.11.1", features = ["io_ipc", "io_parquet"] }
+arrow2 = { version = "0.11.2", features = ["io_ipc", "io_parquet"] }
 async-trait = "0.1.53"
 aws-config = { version = "0.10.1", default-features = false, features = ["native-tls"] }
 aws-sdk-s3 = { version = "0.10.1", default-features = false }
