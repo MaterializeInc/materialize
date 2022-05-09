@@ -14,7 +14,7 @@ from pathlib import Path
 
 import boto3
 
-from materialize import cargo, ci_util, deb, mzbuild, spawn
+from materialize import cargo, ci_util, deb, git, mzbuild, spawn
 from materialize.xcompile import Arch
 
 from ..deploy.deploy_util import APT_BUCKET, apt_materialized_path
@@ -29,7 +29,9 @@ def main() -> None:
     print("--- Acquiring mzbuild images")
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
     deps.ensure()
-    annotate_buildkite_with_tags(repo.rd.arch, deps)
+
+    mzbuild.publish_multiarch_images(f'devel-{git.rev_parse("HEAD")}', deps)
+    annotate_buildkite_with_tags(repo.rd.arch, [deps])
 
     print("--- Staging Debian package")
     if os.environ["BUILDKITE_BRANCH"] == "main":
