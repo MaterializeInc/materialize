@@ -88,7 +88,7 @@ pub fn construct<A: Allocate>(
                         match datum {
                             DifferentialEvent::Batch(event) => {
                                 arrangement_batches_session
-                                    .give(&cap, ((event.operator, worker), time_ms, Diff::from(1)));
+                                    .give(&cap, ((event.operator, worker), time_ms, 1));
                                 arrangement_records_session.give(
                                     &cap,
                                     (
@@ -100,10 +100,8 @@ pub fn construct<A: Allocate>(
                             }
                             DifferentialEvent::Merge(event) => {
                                 if let Some(done) = event.complete {
-                                    arrangement_batches_session.give(
-                                        &cap,
-                                        ((event.operator, worker), time_ms, Diff::from(-1)),
-                                    );
+                                    arrangement_batches_session
+                                        .give(&cap, ((event.operator, worker), time_ms, -1));
                                     let diff = Diff::try_from(done).unwrap()
                                         - Diff::try_from(event.length1 + event.length2).unwrap();
                                     arrangement_records_session
@@ -111,10 +109,8 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             DifferentialEvent::Drop(event) => {
-                                arrangement_batches_session.give(
-                                    &cap,
-                                    ((event.operator, worker), time_ms, Diff::from(-1)),
-                                );
+                                arrangement_batches_session
+                                    .give(&cap, ((event.operator, worker), time_ms, -1));
                                 arrangement_records_session.give(
                                     &cap,
                                     (
