@@ -79,7 +79,7 @@ Additional examples can be found here:
 
 Given the declarative nature of `docker-compose`, participating services need to be declared at the top of the `mzcompose.py` file, outside of a particular workflow. A service definition can not be created inside a workflow, but a declared service can be started, stopped and otherwise manipulated within a workflow.
 
-The `mzcompose` library contains definitions for the most common services used when composing workflows. The definitive list is available [from the class documentation of `mzcompose`](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.PythonService).
+The `mzcompose` library contains definitions for the most common services used when composing workflows. The definitive list is available [from the class documentation of `mzcompose`](https://dev.materialize.com/api/python/materialize/mzcompose/index.html#materialize.mzcompose.Service).
 
 ## Declaring the required services
 
@@ -98,7 +98,7 @@ SERVICES = [
 
 ## Services available from the library
 
-[The class documentation of `mzcompose`](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.PythonService) lists all available services.
+[The class documentation of `mzcompose`](https://dev.materialize.com/api/python/materialize/mzcompose/index.html#materialize.mzcompose.Service) lists all available services.
 
 ## Defining new services
 
@@ -140,7 +140,7 @@ The Python functions that start with `workflow_` are considered workflows. This 
 
 A Python workflow can interact with the services in the composition.
 
-The [definitive reference](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.Composition) lists all the individual methods that are available.
+The [definitive reference](https://dev.materialize.com/api/python/materialize/mzcompose/index.html#materialize.mzcompose.Composition) lists all the individual methods that are available.
 
 For example, here is how to bring up the `materialized` service:
 
@@ -149,7 +149,7 @@ def workflow_test(c: Composition):
     w.up("materialized")
 ```
 
-In the example above, we are calling the [`run`](https://dev.materialize.com/api/python/materialize/mzcompose.html#materialize.mzcompose.run) method, which maps directly to a call to `docker-compose run`.
+In the example above, we are calling the [`up`](https://dev.materialize.com/api/python/materialize/mzcompose/index.html#materialize.mzcompose.Composition.up) method, which maps directly to a call to `docker-compose up`.
 
 ## Starting services
 
