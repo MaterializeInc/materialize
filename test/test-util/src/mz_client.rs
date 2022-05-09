@@ -106,10 +106,12 @@ pub async fn drop_source(mz_client: &Client, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Run PostgreSQL's `execute` function
-pub async fn execute(mz_client: &Client, query: &str) -> Result<u64> {
-    debug!("exec=> {}", query);
-    Ok(mz_client.execute(query, &[]).await?)
+/// Delete a table and all dependent views, if the table exists
+pub async fn drop_table(mz_client: &Client, name: &str) -> Result<()> {
+    let q = format!("DROP TABLE IF EXISTS {} CASCADE", name);
+    debug!("deleting table=> {}", q);
+    mz_client.execute(&*q, &[]).await?;
+    Ok(())
 }
 
 /// Delete an index
@@ -118,4 +120,10 @@ pub async fn drop_index(mz_client: &Client, name: &str) -> Result<()> {
     debug!("deleting index=> {}", q);
     mz_client.execute(&*q, &[]).await?;
     Ok(())
+}
+
+/// Run PostgreSQL's `execute` function
+pub async fn execute(mz_client: &Client, query: &str) -> Result<u64> {
+    debug!("exec=> {}", query);
+    Ok(mz_client.execute(query, &[]).await?)
 }

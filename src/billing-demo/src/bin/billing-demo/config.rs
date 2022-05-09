@@ -13,7 +13,7 @@ use chrono::DateTime;
 use tracing_subscriber::filter::EnvFilter;
 
 pub static KAFKA_SOURCE_NAME: &str = "billing_source";
-pub static CSV_SOURCE_NAME: &str = "price_source";
+pub static PRICE_TABLE_NAME: &str = "price_table";
 pub static KAFKA_SINK_NAME: &str = "billing_sink";
 pub static KAFKA_SINK_TOPIC_NAME: &str = "billing_monthly_statements";
 pub static REINGESTED_SINK_SOURCE_NAME: &str = "reingested_sink";
@@ -56,9 +56,6 @@ pub struct Args {
 
     #[clap(long, default_value = "billing")]
     pub kafka_topic: String,
-
-    #[clap(long, default_value = "prices.csv")]
-    pub csv_file_name: String,
 
     /// The schema-registry URL
     #[clap(long, default_value = "http://localhost:8081")]
@@ -154,7 +151,6 @@ impl Args {
             kafka_url: self.kafka_url(),
             schema_registry_url: self.schema_registry_url.clone(),
             kafka_topic: self.kafka_topic.clone(),
-            csv_file_name: self.csv_file_name.clone(),
             preserve_source: self.preserve_source,
             low_memory: self.low_memory,
             seed: self.seed,
@@ -193,7 +189,6 @@ pub struct MzConfig {
     pub kafka_url: String,
     pub schema_registry_url: String,
     pub kafka_topic: String,
-    pub csv_file_name: String,
     pub preserve_source: bool,
     pub low_memory: bool,
     pub seed: u64,
