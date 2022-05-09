@@ -878,11 +878,15 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
 
     // Keep trying until you either panic or are able to verify the expected behavior.
     loop {
+        client_interactive.execute("BEGIN", &[])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+        client_interactive.execute("COMMIT", &[])?;
         let _ = client_interactive.query("SELECT * FROM T1", &[])?;
+        client_interactive.execute("BEGIN", &[])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+        client_interactive.execute("COMMIT", &[])?;
 
         let first_rows = client_tail.query("FETCH ALL c1", &[])?;
         let first_rows_verified = verify_rw_pair(&first_rows, "first");
@@ -1070,14 +1074,14 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(
         explain,
-        "     timestamp:          1000
-         since:[         1000]
+        "     timestamp:          1061
+         since:[         1061]
          upper:[            0]
      has table: true
- table read ts:          1000
+ table read ts:          1061
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         1000]
+ read frontier:[         1061]
 write frontier:[            0]\n",
     );
 
