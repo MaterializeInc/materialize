@@ -430,7 +430,7 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(2))]
+        #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
