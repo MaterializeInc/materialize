@@ -5492,8 +5492,12 @@ mod timeline {
         /// `self.read_ts()`.
         pub fn write_ts(&mut self) -> T {
             match &self.state {
-                TimestampOracleState::Writing(ts) => ts.clone(),
-                TimestampOracleState::Reading(ts) => {
+                /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and
+                 * and be made durable via an APPEND command to STORAGE. If we add an ADAPTER side
+                 * durable WAL, then consecutive writes could all happen at the same timestamp as
+                 * long as they're written to the WAL.
+                 */
+                TimestampOracleState::Writing(ts) | TimestampOracleState::Reading(ts) => {
                     let mut next = (self.next)();
                     if next.less_equal(&ts) {
                         next = ts.step_forward();
