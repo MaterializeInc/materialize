@@ -3905,6 +3905,7 @@ dependencies = [
  "kube",
  "mz-ore",
  "mz-secrets",
+ "rand",
  "tokio",
  "tracing",
 ]

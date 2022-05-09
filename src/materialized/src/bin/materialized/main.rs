@@ -141,11 +141,19 @@ pub struct Args {
     /// production cluster that happens to be the active Kubernetes context.)
     #[structopt(long, hide = true, default_value = "minikube")]
     kubernetes_context: String,
+    /// The name of this pod
+    #[clap(
+        long,
+        hide = true,
+        env = "POD_NAME",
+        required_if_eq("orchestrator", "kubernetes")
+    )]
+    pod_name: String,
     /// The name of the Kubernetes secret object to use for storing user secrets
-    #[structopt(long, hide = true, default_value = "user-managed-secrets")]
+    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
     user_defined_secret: String,
     /// The mount location of the Kubernetes secret object to use for storing user secrets
-    #[structopt(long, hide = true, default_value = "/secrets")]
+    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
     user_defined_secret_mount_path: String,
     /// The storaged image reference to use.
     #[structopt(
@@ -752,6 +760,7 @@ max log level: {max_log_level}",
             context: args.kubernetes_context,
             user_defined_secret: args.user_defined_secret,
             user_defined_secret_mount_path: args.user_defined_secret_mount_path,
+            coordd_pod_name: args.pod_name,
         },
         Orchestrator::Process => SecretsControllerConfig::LocalFileSystem,
     };

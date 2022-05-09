@@ -9,33 +9,39 @@
 
 use anyhow::{anyhow, bail, Error};
 use async_trait::async_trait;
-use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{Pod, Secret};
 use k8s_openapi::ByteString;
 use kube::api::{Patch, PatchParams};
 use kube::config::KubeConfigOptions;
-use kube::{Api, Client, Config};
+use kube::{Api, Client, Config, ResourceExt};
 use mz_ore::retry::Retry;
 use mz_secrets::{SecretOp, SecretsController};
+use rand::random;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::info;
 
 const FIELD_MANAGER: &str = "materialized";
-
+const POD_ANNOTATION: &str = "secret-refresh";
 const POLL_TIMEOUT: u64 = 120;
+
+pub struct KubernetesSecretsControllerConfig {
+    pub user_defined_secret: String,
+    pub user_defined_secret_mount_path: String,
+    pub coordd_pod_name: String,
+}
 
 pub struct KubernetesSecretsController {
     secret_api: Api<Secret>,
-    user_defined_secret: String,
-    user_defined_secret_mount_path: String,
+    pod_api: Api<Pod>,
+    config: KubernetesSecretsControllerConfig,
 }
 
 impl KubernetesSecretsController {
     pub async fn new(
         context: String,
-        user_defined_secret: String,
-        user_defined_secret_mount_path: String,
+        config: KubernetesSecretsControllerConfig,
     ) -> Result<KubernetesSecretsController, anyhow::Error> {
         let kubeconfig_options = KubeConfigOptions {
             context: Some(context),
@@ -52,30 +58,56 @@ impl KubernetesSecretsController {
             },
         };
         let client = Client::try_from(kubeconfig)?;
-        let secret_api: Api<Secret> = Api::default_namespaced(client);
+        let secret_api: Api<Secret> = Api::default_namespaced(client.clone());
+        let pod_api: Api<Pod> = Api::default_namespaced(client);
 
         // ensure that the secret has been created in this environment
-        secret_api.get(&*user_defined_secret).await?;
+        secret_api.get(&*config.user_defined_secret).await?;
 
-        if !Path::new(&user_defined_secret_mount_path).is_dir() {
+        if !Path::new(&config.user_defined_secret_mount_path).is_dir() {
             bail!(
                 "Configured secrets location could not be found on filesystem: ({})",
-                user_defined_secret_mount_path
+                config.user_defined_secret_mount_path
             );
         }
 
         Ok(KubernetesSecretsController {
             secret_api,
-            user_defined_secret,
-            user_defined_secret_mount_path,
+            pod_api,
+            config,
         })
+    }
+
+    async fn trigger_resync(&mut self) -> Result<(), Error> {
+        let mut coordd: Pod = self.pod_api.get(&*self.config.coordd_pod_name).await?;
+        coordd.annotations_mut().insert(
+            String::from(POD_ANNOTATION),
+            format!("{:x}", random::<u64>()),
+        );
+
+        // Managed_fields can not be present in the object that is being patched.
+        // if present, they lead to an 'metadata.managedFields must be nil' error
+        coordd.metadata.managed_fields = None;
+
+        self.pod_api
+            .patch(
+                &self.config.coordd_pod_name,
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(coordd),
+            )
+            .await?;
+
+        return Ok(());
     }
 }
 
 #[async_trait]
 impl SecretsController for KubernetesSecretsController {
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
-        let mut secret: Secret = self.secret_api.get(&*self.user_defined_secret).await?;
+        let mut secret: Secret = self
+            .secret_api
+            .get(&*self.config.user_defined_secret)
+            .await?;
 
         let mut data = secret.data.map_or_else(BTreeMap::new, |m| m);
 
@@ -100,14 +132,17 @@ impl SecretsController for KubernetesSecretsController {
 
         self.secret_api
             .patch(
-                &self.user_defined_secret,
+                &self.config.user_defined_secret,
                 &PatchParams::apply(FIELD_MANAGER).force(),
                 &Patch::Apply(secret),
             )
             .await?;
 
+        self.trigger_resync().await?;
+
         // guarantee that all new secrets are reflected on our local filesystem
-        let secrets_storage_path = PathBuf::from(self.user_defined_secret_mount_path.clone());
+        let secrets_storage_path =
+            PathBuf::from(self.config.user_defined_secret_mount_path.clone());
         for op in ops.iter() {
             match op {
                 SecretOp::Ensure { id, .. } => {
