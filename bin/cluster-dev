@@ -98,7 +98,7 @@ spec:
       volumes:
       - name: secrets-mount
         secret:
-          defaultMode: 420
+          defaultMode: 400
           secretName: user-managed-secrets
   volumeClaimTemplates:
   - metadata:
