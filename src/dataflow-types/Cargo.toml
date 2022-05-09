@@ -36,6 +36,7 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets" }
 mz-stash = { path = "../stash" }
 prost = "0.10.3"
 regex = "1.5.4"

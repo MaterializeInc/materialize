@@ -7,7 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use mz_repr::GlobalId;
+use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
     CsrConnector, CsrConnectorAvro, CsrConnectorProto, Format, KafkaConnector,
@@ -75,6 +78,75 @@ pub fn populate_connectors<T: AstInfo>(
     Ok(stmt)
 }
 
+/// Same as populate_connectors, except also reads secret values instead of leaving secret GlobalIds in place
+pub fn populate_connectors_with_secrets<T: AstInfo>(
+    mut stmt: CreateSourceStatement<T>,
+    catalog: &dyn SessionCatalog,
+    depends_on: &mut Vec<GlobalId>,
+    secrets_reader: Arc<Box<dyn SecretsReader>>,
+) -> Result<CreateSourceStatement<T>, anyhow::Error> {
+    if let CreateSourceStatement {
+        connector:
+            CreateSourceConnector::Kafka(
+                KafkaSourceConnector {
+                    connector: kafka_connector @ KafkaConnector::Reference { .. },
+                    ..
+                },
+                ..,
+            ),
+        ..
+    } = &mut stmt
+    {
+        let name = match kafka_connector {
+            KafkaConnector::Reference { connector, .. } => connector,
+            _ => unreachable!(),
+        };
+        let p_o_name = normalize::unresolved_object_name(name.clone())?;
+        let conn = catalog.resolve_item(&p_o_name)?;
+        let resolved_source_connector = conn.catalog_connector()?;
+        depends_on.push(conn.id());
+        *kafka_connector = KafkaConnector::Reference {
+            connector: name.to_owned(),
+            broker: Some(resolved_source_connector.uri()),
+            with_options: Some(
+                resolved_source_connector.options_with_secrets(secrets_reader.clone())?,
+            ),
+        };
+    };
+
+    if let CreateSourceStatement {
+        format: CreateSourceFormat::Bare(ref mut format),
+        ..
+    } = stmt
+    {
+        populate_connector_for_format_with_secrets(format, catalog, depends_on, secrets_reader)?;
+        return Ok(stmt);
+    };
+    if let CreateSourceStatement {
+        format:
+            CreateSourceFormat::KeyValue {
+                ref mut key,
+                ref mut value,
+            },
+        ..
+    } = stmt
+    {
+        populate_connector_for_format_with_secrets(
+            key,
+            catalog,
+            depends_on,
+            secrets_reader.clone(),
+        )?;
+        populate_connector_for_format_with_secrets(
+            value,
+            catalog,
+            depends_on,
+            secrets_reader.clone(),
+        )?;
+    };
+    Ok(stmt)
+}
+
 /// Helper function which reifies any connectors in a single [`Format`]
 fn populate_connector_for_format<T: AstInfo>(
     format: &mut Format<T>,
@@ -117,6 +189,51 @@ fn populate_connector_for_format<T: AstInfo>(
         _ => {}
     })
 }
+/// Helper function which reifies any connectors in a single [`Format`]
+fn populate_connector_for_format_with_secrets<T: AstInfo>(
+    format: &mut Format<T>,
+    catalog: &dyn SessionCatalog,
+    depends_on: &mut Vec<GlobalId>,
+    secrets_reader: Arc<Box<dyn SecretsReader>>,
+) -> Result<(), anyhow::Error> {
+    Ok(match format {
+        Format::Avro(avro_schema) => match avro_schema {
+            AvroSchema::Csr {
+                csr_connector:
+                    CsrConnectorAvro {
+                        connector: csr_connector @ CsrConnector::Reference { .. },
+                        ..
+                    },
+            } => {
+                let name = match csr_connector {
+                    CsrConnector::Reference { connector, .. } => connector,
+                    _ => unreachable!(),
+                };
+                *csr_connector =
+                    populate_csr_connector_with_secrets(name, catalog, depends_on, secrets_reader)?;
+            }
+            _ => {}
+        },
+        Format::Protobuf(proto_schema) => match proto_schema {
+            ProtobufSchema::Csr {
+                csr_connector:
+                    CsrConnectorProto {
+                        connector: csr_connector @ CsrConnector::Reference { .. },
+                        ..
+                    },
+            } => {
+                let name = match csr_connector {
+                    CsrConnector::Reference { connector, .. } => connector,
+                    _ => unreachable!(),
+                };
+                *csr_connector =
+                    populate_csr_connector_with_secrets(name, catalog, depends_on, secrets_reader)?;
+            }
+            _ => {}
+        },
+        _ => {}
+    })
+}
 
 /// Helper function which reifies individual [`CsrConnector::Reference`] instances
 fn populate_csr_connector(
@@ -132,6 +249,24 @@ fn populate_csr_connector(
         connector: name.to_owned(),
         url: Some(resolved_csr_connector.uri()),
         with_options: Some(resolved_csr_connector.options()),
+    })
+}
+
+/// Helper function which reifies individual [`CsrConnector::Reference`] instances
+fn populate_csr_connector_with_secrets(
+    name: &UnresolvedObjectName,
+    catalog: &dyn SessionCatalog,
+    depends_on: &mut Vec<GlobalId>,
+    secrets_reader: Arc<Box<dyn SecretsReader>>,
+) -> Result<CsrConnector, anyhow::Error> {
+    let p_o_name = normalize::unresolved_object_name(name.clone())?;
+    let conn = catalog.resolve_item(&p_o_name)?;
+    let resolved_csr_connector = conn.catalog_connector()?;
+    depends_on.push(conn.id());
+    Ok(CsrConnector::Reference {
+        connector: name.to_owned(),
+        url: Some(resolved_csr_connector.uri()),
+        with_options: Some(resolved_csr_connector.options_with_secrets(secrets_reader.clone())?),
     })
 }
 

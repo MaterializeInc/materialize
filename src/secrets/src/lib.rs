@@ -24,6 +24,10 @@ pub trait SecretsController: Send + Sync {
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), anyhow::Error>;
 }
 
+pub trait SecretsReader: Send + Sync {
+    fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error>;
+}
+
 /// An operation on a [`SecretsController`].
 pub enum SecretOp {
     /// Create or update the contents of a secret.

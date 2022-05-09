@@ -368,6 +368,7 @@ pub fn plan_create_source(
                     broker,
                     with_options,
                     connector,
+                    ..
                 } => {
                     let broker_addr = broker.to_owned().expect("connector should be populated");
                     let options = with_options
@@ -3003,35 +3004,40 @@ pub fn plan_create_connector(
                     certificate,
                     passphrase,
                 } => {
-                    if let Some(key) = key.as_ref() {
-                        depends_on.push(
-                            scx.catalog
-                                .resolve_item(&normalize::unresolved_object_name(key.clone())?)?
-                                .id(),
-                        );
-                    }
-                    if let Some(certificate) = certificate.as_ref() {
-                        depends_on.push(
-                            scx.catalog
-                                .resolve_item(&normalize::unresolved_object_name(
-                                    certificate.clone(),
-                                )?)?
-                                .id(),
-                        );
-                    }
-                    if let Some(passphrase) = passphrase.as_ref() {
-                        depends_on.push(
-                            scx.catalog
-                                .resolve_item(&normalize::unresolved_object_name(
-                                    passphrase.clone(),
-                                )?)?
-                                .id(),
-                        );
-                    }
+                    let key_id = if let Some(key) = key.as_ref() {
+                        let key_id = scx
+                            .catalog
+                            .resolve_item(&normalize::unresolved_object_name(key.clone())?)?
+                            .id();
+                        depends_on.push(key_id);
+                        Some(key_id)
+                    } else {
+                        None
+                    };
+                    let certificate_id = if let Some(certificate) = certificate.as_ref() {
+                        let certificate_id = scx
+                            .catalog
+                            .resolve_item(&normalize::unresolved_object_name(certificate.clone())?)?
+                            .id();
+                        depends_on.push(certificate_id);
+                        Some(certificate_id)
+                    } else {
+                        None
+                    };
+                    let passphrase_id = if let Some(passphrase) = passphrase.as_ref() {
+                        let passphrase_id = scx
+                            .catalog
+                            .resolve_item(&normalize::unresolved_object_name(passphrase.clone())?)?
+                            .id();
+                        depends_on.push(passphrase_id);
+                        Some(passphrase_id)
+                    } else {
+                        None
+                    };
                     KafkaSecurityOptions::SSL {
-                        key: key.map_or_else(|| None, |f| Some(f.to_string())),
-                        certificate: certificate.map_or_else(|| None, |f| Some(f.to_string())),
-                        passphrase: passphrase.map_or_else(|| None, |f| Some(f.to_string())),
+                        key: key_id.map_or_else(|| None, |f| Some(f.to_string())),
+                        certificate: certificate_id.map_or_else(|| None, |f| Some(f.to_string())),
+                        passphrase: passphrase_id.map_or_else(|| None, |f| Some(f.to_string())),
                     }
                 }
                 mz_sql_parser::ast::KafkaSecurityOptions::SASL {
@@ -3040,16 +3046,16 @@ pub fn plan_create_connector(
                     username,
                     password,
                 } => {
-                    depends_on.push(
-                        scx.catalog
-                            .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
-                            .id(),
-                    );
+                    let password_id = scx
+                        .catalog
+                        .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
+                        .id();
+                    depends_on.push(password_id);
                     KafkaSecurityOptions::SASL {
                         mechanism,
                         ssl,
                         username,
-                        password: password.to_string(),
+                        password: password_id.to_string(),
                     }
                 }
             },
@@ -3059,17 +3065,20 @@ pub fn plan_create_connector(
             username,
             password,
         } => {
-            if let Some(password) = password.as_ref() {
-                depends_on.push(
-                    scx.catalog
-                        .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
-                        .id(),
-                );
-            }
+            let password_id = if let Some(password) = password.as_ref() {
+                let password_id = scx
+                    .catalog
+                    .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
+                    .id();
+                depends_on.push(password_id);
+                Some(password_id)
+            } else {
+                None
+            };
             ConnectorInner::CSR {
                 registry,
                 username,
-                password: password.map_or_else(|| None, |p| Some(p.to_string())),
+                password: password_id.map_or_else(|| None, |p| Some(p.to_string())),
             }
         }
     };

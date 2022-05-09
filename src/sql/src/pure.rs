@@ -23,7 +23,7 @@ use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use tokio::task;
-use tracing::info;
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};

@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::fs::OpenOptions;
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -110,6 +112,7 @@ impl SourceReader for KafkaSourceReader {
             &config_options,
             connector_context.librdkafka_log_level,
         );
+
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
             .create_with_context(GlueConsumerContext {
@@ -555,7 +558,20 @@ fn create_kafka_config(
     // arbitrary, other layers of the system tightly control which configuration
     // options are allowable.
     for (k, v) in config_options {
-        kafka_config.set(k, v);
+        let mut val = v.clone();
+        let mut buf = String::new();
+        if k == "sasl.password" || k == "password" {
+            info!("replacing password path {} with value", v);
+            let mut f = OpenOptions::new()
+                .read(true)
+                .open(v.clone())
+                .expect("secrets paths exist");
+
+            f.read_to_string(&mut buf)
+                .expect("secrets files are readable");
+            val = buf;
+        }
+        kafka_config.set(k, val);
     }
 
     kafka_config
