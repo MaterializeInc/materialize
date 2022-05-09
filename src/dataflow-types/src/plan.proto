@@ -47,16 +47,16 @@ message ProtoPlan {
    message ProtoRowDiff {
         mz_repr.row.ProtoRow row = 1;
         uint64 timestamp = 2;
-        int64 diff = 3; 
+        int64 diff = 3;
    }
 
    message ProtoRowDiffVec {
-        repeated ProtoRowDiff rows = 1; 
+        repeated ProtoRowDiff rows = 1;
    }
 
    message ProtoPlanConstant {
         oneof result {
-            ProtoRowDiffVec rows = 1; 
+            ProtoRowDiffVec rows = 1;
             mz_expr.scalar.ProtoEvalError err = 2;
         }
    }
@@ -69,7 +69,7 @@ message ProtoPlan {
 
    message ProtoPlanLet {
         mz_expr.id.ProtoLocalId id = 1;
-        ProtoPlan value = 2; 
+        ProtoPlan value = 2;
         ProtoPlan body  = 3;
    }
 
@@ -135,7 +135,7 @@ message ProtoPlan {
         ProtoPlanLet let = 3;
         ProtoPlanMfp mfp = 4;
         ProtoPlanFlatMap flat_map = 5;
-        ProtoPlanJoin join = 6; 
+        ProtoPlanJoin join = 6;
         ProtoPlanReduce reduce = 7;
         ProtoPlanTopK top_k = 8;
         ProtoPlan negate = 9;

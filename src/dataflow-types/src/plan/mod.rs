@@ -446,7 +446,7 @@ impl Arbitrary for Plan {
                 prop::collection::vec(inner.clone(), 0..2).prop_map(|x| Plan::Union { inputs: x }),
                 //Plan::ArrangeBy
                 (
-                    inner.clone(),
+                    inner,
                     any::<AvailableCollections>(),
                     any::<Option<Vec<MirScalarExpr>>>(),
                     any::<MapFilterProject>()
@@ -714,8 +714,7 @@ impl TryFrom<ProtoPlan> for Plan {
                 id: proto.id.try_into_if_some("ProtoPlanLet::id")?,
                 value: proto.value.try_into_if_some("ProtoPlanLet::value")?,
                 body: proto.body.try_into_if_some("ProtoPlanLet::body")?,
-            }
-            .into(),
+            },
             Mfp(proto) => Plan::Mfp {
                 input: proto.input.try_into_if_some("ProtoPlanMfp::input")?,
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
