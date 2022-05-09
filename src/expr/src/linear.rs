@@ -1316,6 +1316,7 @@ pub mod plan {
 
     use std::collections::HashMap;
 
+    use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
@@ -1454,8 +1455,10 @@ pub mod plan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
         mfp: SafeMfpPlan,
         /// Expressions that when evaluated lower-bound `MzLogicalTimestamp`.
+        #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
         lower_bounds: Vec<MirScalarExpr>,
         /// Expressions that when evaluated upper-bound `MzLogicalTimestamp`.
+        #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
         upper_bounds: Vec<MirScalarExpr>,
     }
 
