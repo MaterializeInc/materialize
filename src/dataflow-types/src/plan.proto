@@ -11,24 +11,136 @@
 
 syntax = "proto3";
 
+import "dataflow-types/src/plan/join.proto";
+import "dataflow-types/src/plan/reduce.proto";
+import "dataflow-types/src/plan/threshold.proto";
+import "dataflow-types/src/plan/top_k.proto";
+import "expr/src/id.proto";
+import "expr/src/linear.proto";
+import "expr/src/relation.proto";
 import "expr/src/scalar.proto";
+import "repr/src/row.proto";
 import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.plan;
 
-message ProtoArrangement {
-    message ProtoArrangementPermutation {
-        uint64 key = 1;
-        uint64 val = 2;
-    };
-
-    repeated mz_expr.scalar.ProtoMirScalarExpr all_columns = 1;
-    repeated ProtoArrangementPermutation  permutation = 2;
-    repeated uint64 thinning = 3;
-
-};
-
 message ProtoAvailableCollections {
     bool raw = 1;
-    repeated ProtoArrangement arranged = 2;
+    repeated mz_dataflow_types.plan.threshold.ProtoArrangement arranged = 2;
+}
+
+message ProtoGetPlan {
+    message ProtoGetPlanArrangement {
+        repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
+        mz_repr.row.ProtoRow seek = 2;
+        mz_expr.linear.ProtoMapFilterProject mfp = 3;
+    };
+
+    oneof kind {
+        google.protobuf.Empty pass_arrangements = 1;
+        ProtoGetPlanArrangement arrangement = 2;
+        mz_expr.linear.ProtoMapFilterProject collection = 3;
+    }
+}
+
+message ProtoPlan {
+   message ProtoRowDiff {
+        mz_repr.row.ProtoRow row = 1;
+        uint64 timestamp = 2;
+        int64 diff = 3;
+   }
+
+   message ProtoRowDiffVec {
+        repeated ProtoRowDiff rows = 1;
+   }
+
+   message ProtoPlanConstant {
+        oneof result {
+            ProtoRowDiffVec rows = 1;
+            mz_expr.scalar.ProtoEvalError err = 2;
+        }
+   }
+
+   message ProtoPlanGet {
+        mz_expr.id.ProtoId id = 1;
+        ProtoAvailableCollections keys = 2;
+        ProtoGetPlan plan = 3;
+   }
+
+   message ProtoPlanLet {
+        mz_expr.id.ProtoLocalId id = 1;
+        ProtoPlan value = 2;
+        ProtoPlan body  = 3;
+   }
+
+   message ProtoPlanInputKeyVal {
+        repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
+        mz_repr.row.ProtoRow val = 2;
+   }
+
+   message ProtoPlanMfp {
+        ProtoPlan input = 1;
+        mz_expr.linear.ProtoMapFilterProject mfp = 2;
+        ProtoPlanInputKeyVal input_key_val = 3;
+   }
+
+   message ProtoPlanInputKey {
+        repeated mz_expr.scalar.ProtoMirScalarExpr key = 1;
+   }
+
+   message ProtoPlanFlatMap {
+        ProtoPlan input = 1;
+        mz_expr.relation.ProtoTableFunc func = 2;
+        repeated mz_expr.scalar.ProtoMirScalarExpr exprs = 3;
+        mz_expr.linear.ProtoMapFilterProject mfp = 4;
+        ProtoPlanInputKey input_key = 5;
+   }
+
+   message ProtoPlanJoin {
+        repeated ProtoPlan inputs = 1;
+        mz_dataflow_types.plan.join.ProtoJoinPlan plan = 2;
+   }
+
+   message ProtoPlanReduce {
+        ProtoPlan input = 1;
+        mz_dataflow_types.plan.reduce.ProtoKeyValPlan key_val_plan = 2;
+        mz_dataflow_types.plan.reduce.ProtoReducePlan plan = 3;
+        ProtoPlanInputKey input_key = 4;
+   }
+
+   message ProtoPlanTopK {
+        ProtoPlan input = 1;
+        mz_dataflow_types.plan.top_k.ProtoTopKPlan top_k_plan = 2;
+   }
+
+   message ProtoPlanThreshold {
+        ProtoPlan input = 1;
+        mz_dataflow_types.plan.threshold.ProtoThresholdPlan threshold_plan = 2;
+   }
+
+   message ProtoPlanUnion {
+        repeated ProtoPlan inputs = 1;
+   }
+
+   message ProtoPlanArrangeBy {
+        ProtoPlan input = 1;
+        ProtoAvailableCollections forms = 2;
+        ProtoPlanInputKey input_key = 3;
+        mz_expr.linear.ProtoMapFilterProject input_mfp = 4;
+   }
+
+   oneof kind {
+        ProtoPlanConstant constant = 1;
+        ProtoPlanGet get = 2;
+        ProtoPlanLet let = 3;
+        ProtoPlanMfp mfp = 4;
+        ProtoPlanFlatMap flat_map = 5;
+        ProtoPlanJoin join = 6;
+        ProtoPlanReduce reduce = 7;
+        ProtoPlanTopK top_k = 8;
+        ProtoPlan negate = 9;
+        ProtoPlanThreshold threshold = 10;
+        ProtoPlanUnion union = 11;
+        ProtoPlanArrangeBy arrange_by = 12;
+   }
 }
