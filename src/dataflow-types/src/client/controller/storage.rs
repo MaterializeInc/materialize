@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use mz_repr::proto::TryFromProtoError;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -49,6 +50,11 @@ use crate::client::{
 };
 use crate::sources::SourceDesc;
 use crate::Update;
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_dataflow_types.client.controller.storage.rs"
+));
 
 #[async_trait]
 pub trait StorageController: Debug + Send {
@@ -140,6 +146,27 @@ pub trait StorageController: Debug + Send {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
+}
+
+impl From<&CollectionMetadata> for ProtoCollectionMetadata {
+    // TODO: This is just a stub.
+    fn from(_: &CollectionMetadata) -> Self {
+        ProtoCollectionMetadata {}
+    }
+}
+
+impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
+    // TODO: This is just a stub.
+    type Error = TryFromProtoError;
+
+    fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
+        Ok(CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: "".to_string(),
+                consensus_uri: "".to_string(),
+            },
+        })
+    }
 }
 
 /// Controller state maintained for each storage instance.

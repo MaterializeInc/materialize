@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 
-use crate::proto::{TryFromProtoError, TryIntoIfSome};
+use crate::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use crate::{Datum, ScalarType};
 
-pub use crate::relation_and_scalar::{ProtoColumnName, ProtoColumnType};
+pub use crate::relation_and_scalar::{ProtoColumnName, ProtoColumnType, ProtoRelationType};
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -136,7 +136,7 @@ impl TryFrom<ProtoColumnType> for ColumnType {
 }
 
 /// The type of a relation.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,
@@ -202,6 +202,47 @@ impl RelationType {
         } else {
             (0..self.column_types.len()).collect()
         }
+    }
+}
+
+impl From<&RelationType> for ProtoRelationType {
+    fn from(x: &RelationType) -> Self {
+        use crate::relation_and_scalar::proto_relation_type::ProtoKey;
+        ProtoRelationType {
+            column_types: x.column_types.iter().map(Into::into).collect(),
+            keys: x
+                .keys
+                .iter()
+                .map(|key_set| ProtoKey {
+                    keys: key_set.iter().map(|k| k.into_proto()).collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoRelationType> for RelationType {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoRelationType) -> Result<Self, Self::Error> {
+        Ok(RelationType {
+            column_types: x
+                .column_types
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            keys: x
+                .keys
+                .into_iter()
+                .map(|key_set| {
+                    key_set
+                        .keys
+                        .into_iter()
+                        .map(usize::from_proto)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        })
     }
 }
 

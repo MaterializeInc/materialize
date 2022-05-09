@@ -30,6 +30,7 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::{PartitionId, RowSetFinishing};
+use mz_repr::proto::any_uuid;
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -103,10 +104,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
-}
-
-fn any_uuid() -> impl Strategy<Value = Uuid> {
-    (0..u128::MAX).prop_map(Uuid::from_u128)
 }
 
 impl From<&Peek> for ProtoPeek {
