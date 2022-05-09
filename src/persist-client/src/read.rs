@@ -12,6 +12,7 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
@@ -19,7 +20,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::retry::Retry;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -28,6 +29,7 @@ use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::BlobMulti;
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
@@ -222,6 +224,9 @@ pub enum ListenEvent<K, V, T, D> {
     Updates(Vec<((Result<K, String>, Result<V, String>), T, D)>),
 }
 
+/// Convencient type for Stream constructed from Listen.
+pub type ListenStream<K, V, T, D> = Pin<Box<dyn Stream<Item = ListenEvent<K, V, T, D>>>>;
+
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
 pub struct Listen<K, V, T, D> {
@@ -238,6 +243,18 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
+    /// Convert listener into futures::Stream
+    pub fn into_stream(mut self) -> ListenStream<K, V, T, D> {
+        Box::pin(async_stream::stream! {
+            loop{
+                let msgs = self.next().await;
+                for msg in msgs {
+                    yield msg;
+                }
+            }
+        })
+    }
+
     /// Attempt to pull out the next values of this subscription.
     ///
     /// The returned updates might or might not be consolidated. If you have a

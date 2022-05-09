@@ -3643,12 +3643,14 @@ name = "mz-persist-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "bincode",
  "bytes",
  "clap",
  "criterion",
  "differential-dataflow",
+ "futures",
  "futures-task",
  "futures-util",
  "mz-ore",
