@@ -370,49 +370,50 @@ impl Arbitrary for Plan {
         let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
 
         leaf.prop_recursive(2, 4, 5, |inner| {
-            prop_oneof![
+            prop::strategy::Union::new(vec![
                 //Plan::Let
-                (any::<LocalId>(), inner.clone(), inner.clone()).prop_map(|(id, value, body)| {
-                    Plan::Let {
+                (any::<LocalId>(), inner.clone(), inner.clone())
+                    .prop_map(|(id, value, body)| Plan::Let {
                         id,
                         value: value.into(),
                         body: body.into(),
-                    }
-                }),
+                    })
+                    .boxed(),
                 //Plan::Mfp
                 (
                     inner.clone(),
                     any::<MapFilterProject>(),
-                    any::<Option<(Vec<MirScalarExpr>, Option<Row>)>>()
+                    any::<Option<(Vec<MirScalarExpr>, Option<Row>)>>(),
                 )
                     .prop_map(|(input, mfp, input_key_val)| Plan::Mfp {
                         input: input.into(),
                         mfp,
-                        input_key_val
-                    }),
+                        input_key_val,
+                    })
+                    .boxed(),
                 //Plan::FlatMap
                 (
                     inner.clone(),
                     any::<TableFunc>(),
                     any::<Vec<MirScalarExpr>>(),
                     any::<MapFilterProject>(),
-                    any::<Option<Vec<MirScalarExpr>>>()
+                    any::<Option<Vec<MirScalarExpr>>>(),
                 )
-                    .prop_map(|(input, func, exprs, mfp, input_key)| {
-                        Plan::FlatMap {
-                            input: input.into(),
-                            func,
-                            exprs,
-                            mfp,
-                            input_key,
-                        }
-                    }),
+                    .prop_map(|(input, func, exprs, mfp, input_key)| Plan::FlatMap {
+                        input: input.into(),
+                        func,
+                        exprs,
+                        mfp,
+                        input_key,
+                    })
+                    .boxed(),
                 //Plan::Join
                 (
                     prop::collection::vec(inner.clone(), 0..2),
-                    any::<JoinPlan>()
+                    any::<JoinPlan>(),
                 )
-                    .prop_map(|(inputs, plan)| Plan::Join { inputs, plan }),
+                    .prop_map(|(inputs, plan)| Plan::Join { inputs, plan })
+                    .boxed(),
                 //Plan::Reduce
                 (
                     inner.clone(),
@@ -420,46 +421,51 @@ impl Arbitrary for Plan {
                     any::<ReducePlan>(),
                     any::<Option<Vec<MirScalarExpr>>>(),
                 )
-                    .prop_map(|(input, key_val_plan, plan, input_key)| {
-                        Plan::Reduce {
-                            input: input.into(),
-                            key_val_plan,
-                            plan,
-                            input_key,
-                        }
-                    }),
+                    .prop_map(|(input, key_val_plan, plan, input_key)| Plan::Reduce {
+                        input: input.into(),
+                        key_val_plan,
+                        plan,
+                        input_key,
+                    })
+                    .boxed(),
                 //Plan::TopK
-                (inner.clone(), any::<TopKPlan>()).prop_map(|(input, top_k_plan)| Plan::TopK {
-                    input: input.into(),
-                    top_k_plan
-                }),
+                (inner.clone(), any::<TopKPlan>())
+                    .prop_map(|(input, top_k_plan)| Plan::TopK {
+                        input: input.into(),
+                        top_k_plan,
+                    })
+                    .boxed(),
                 //Plan::Negate
-                inner.clone().prop_map(|x| Plan::Negate { input: x.into() }),
+                inner
+                    .clone()
+                    .prop_map(|x| Plan::Negate { input: x.into() })
+                    .boxed(),
                 //Plan::Threshold
-                (inner.clone(), any::<ThresholdPlan>()).prop_map(|(input, threshold_plan)| {
-                    Plan::Threshold {
+                (inner.clone(), any::<ThresholdPlan>())
+                    .prop_map(|(input, threshold_plan)| Plan::Threshold {
                         input: input.into(),
                         threshold_plan,
-                    }
-                }),
+                    })
+                    .boxed(),
                 // Plan::Union
-                prop::collection::vec(inner.clone(), 0..2).prop_map(|x| Plan::Union { inputs: x }),
+                prop::collection::vec(inner.clone(), 0..2)
+                    .prop_map(|x| Plan::Union { inputs: x })
+                    .boxed(),
                 //Plan::ArrangeBy
                 (
                     inner,
                     any::<AvailableCollections>(),
                     any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<MapFilterProject>()
+                    any::<MapFilterProject>(),
                 )
-                    .prop_map(|(input, forms, input_key, input_mfp)| {
-                        Plan::ArrangeBy {
-                            input: input.into(),
-                            forms,
-                            input_key,
-                            input_mfp,
-                        }
+                    .prop_map(|(input, forms, input_key, input_mfp)| Plan::ArrangeBy {
+                        input: input.into(),
+                        forms,
+                        input_key,
+                        input_mfp,
                     })
-            ]
+                    .boxed(),
+            ])
         })
         .boxed()
     }
