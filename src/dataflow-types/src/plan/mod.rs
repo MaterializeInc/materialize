@@ -355,11 +355,143 @@ pub enum Plan<T = mz_repr::Timestamp> {
     },
 }
 
+impl Arbitrary for Plan {
+    type Strategy = BoxedStrategy<Plan>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        let row_diff = prop::collection::vec(<(Row, mz_repr::Timestamp, Diff)>::arbitrary(), 0..2);
+        let constant = prop::result::maybe_ok(row_diff, EvalError::arbitrary())
+            .prop_map(|rows| Plan::Constant { rows });
+
+        let get = (any::<Id>(), any::<AvailableCollections>(), any::<GetPlan>())
+            .prop_map(|(id, keys, plan)| Plan::<mz_repr::Timestamp>::Get { id, keys, plan });
+
+        let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
+
+        leaf.prop_recursive(2, 4, 5, |inner| {
+            prop_oneof![
+                //Plan::Let
+                (any::<LocalId>(), inner.clone(), inner.clone()).prop_map(|(id, value, body)| {
+                    Plan::Let {
+                        id,
+                        value: value.into(),
+                        body: body.into(),
+                    }
+                }),
+                //Plan::Mfp
+                (
+                    inner.clone(),
+                    any::<MapFilterProject>(),
+                    any::<Option<(Vec<MirScalarExpr>, Option<Row>)>>()
+                )
+                    .prop_map(|(input, mfp, input_key_val)| Plan::Mfp {
+                        input: input.into(),
+                        mfp,
+                        input_key_val
+                    }),
+                //Plan::FlatMap
+                (
+                    inner.clone(),
+                    any::<TableFunc>(),
+                    any::<Vec<MirScalarExpr>>(),
+                    any::<MapFilterProject>(),
+                    any::<Option<Vec<MirScalarExpr>>>()
+                )
+                    .prop_map(|(input, func, exprs, mfp, input_key)| {
+                        Plan::FlatMap {
+                            input: input.into(),
+                            func,
+                            exprs,
+                            mfp,
+                            input_key,
+                        }
+                    }),
+                //Plan::Join
+                (
+                    prop::collection::vec(inner.clone(), 0..2),
+                    any::<JoinPlan>()
+                )
+                    .prop_map(|(inputs, plan)| Plan::Join { inputs, plan }),
+                //Plan::Reduce
+                (
+                    inner.clone(),
+                    any::<KeyValPlan>(),
+                    any::<ReducePlan>(),
+                    any::<Option<Vec<MirScalarExpr>>>(),
+                )
+                    .prop_map(|(input, key_val_plan, plan, input_key)| {
+                        Plan::Reduce {
+                            input: input.into(),
+                            key_val_plan,
+                            plan,
+                            input_key,
+                        }
+                    }),
+                //Plan::TopK
+                (inner.clone(), any::<TopKPlan>()).prop_map(|(input, top_k_plan)| Plan::TopK {
+                    input: input.into(),
+                    top_k_plan
+                }),
+                //Plan::Negate
+                inner.clone().prop_map(|x| Plan::Negate { input: x.into() }),
+                //Plan::Threshold
+                (inner.clone(), any::<ThresholdPlan>()).prop_map(|(input, threshold_plan)| {
+                    Plan::Threshold {
+                        input: input.into(),
+                        threshold_plan,
+                    }
+                }),
+                // Plan::Union
+                prop::collection::vec(inner.clone(), 0..2).prop_map(|x| Plan::Union { inputs: x }),
+                //Plan::ArrangeBy
+                (
+                    inner.clone(),
+                    any::<AvailableCollections>(),
+                    any::<Option<Vec<MirScalarExpr>>>(),
+                    any::<MapFilterProject>()
+                )
+                    .prop_map(|(input, forms, input_key, input_mfp)| {
+                        Plan::ArrangeBy {
+                            input: input.into(),
+                            forms,
+                            input_key,
+                            input_mfp,
+                        }
+                    })
+            ]
+        })
+        .boxed()
+    }
+}
+impl From<&(Row, u64, i64)> for proto_plan::ProtoRowDiff {
+    fn from(x: &(Row, u64, i64)) -> Self {
+        proto_plan::ProtoRowDiff {
+            row: Some((&x.0).into()),
+            timestamp: x.1,
+            diff: x.2,
+        }
+    }
+}
+
+impl From<&Vec<(Row, u64, i64)>> for proto_plan::ProtoRowDiffVec {
+    fn from(x: &Vec<(Row, u64, i64)>) -> Self {
+        Self {
+            rows: x.iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl From<&Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>>
     for proto_plan::ProtoPlanConstant
 {
-    fn from(_: &Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>) -> Self {
-        todo!()
+    fn from(x: &Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>) -> Self {
+        proto_plan::ProtoPlanConstant {
+            result: Some(match x {
+                Ok(rows) => proto_plan::proto_plan_constant::Result::Rows(rows.into()),
+                Err(err) => proto_plan::proto_plan_constant::Result::Err(err.into()),
+            }),
+        }
     }
 }
 
@@ -1672,6 +1804,17 @@ mod tests {
        #[test]
        fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+    }
+
+    proptest! {
+       #![proptest_config(ProptestConfig::with_cases(1))]
+       #[test]
+       fn plan_protobuf_roundtrip(expect in any::<Plan>()) {
+            let actual = protobuf_roundtrip::<_, ProtoPlan>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
