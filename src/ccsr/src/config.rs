@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::client::Client;
 use crate::tls::{Certificate, Identity};
