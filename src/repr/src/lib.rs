@@ -45,7 +45,10 @@ pub use row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,
     RowArena, RowPacker, RowRef,
 };
-pub use scalar::{AsColumnType, Datum, DatumType, ProtoScalarType, ScalarBaseType, ScalarType};
+pub use scalar::{
+    arb_datum, AsColumnType, Datum, DatumType, PropertizedArray, PropertizedDatum, PropertizedDict,
+    PropertizedList, ProtoScalarType, ScalarBaseType, ScalarType,
+};
 
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.
 /// System-wide timestamp type.
