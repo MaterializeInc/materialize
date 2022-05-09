@@ -558,11 +558,11 @@ class Testdrive(Service):
             if shard_count:
                 entrypoint += [f"--shard-count={shard_count}"]
 
-        if seed and consistent_seed:
+        if seed is not None and consistent_seed:
             raise RuntimeError("Can't pass `seed` and `consistent_seed` at same time")
         elif consistent_seed:
             entrypoint.append(f"--seed={random.getrandbits(32)}")
-        elif seed:
+        elif seed is not None:
             entrypoint.append(f"--seed={seed}")
 
         entrypoint.extend(entrypoint_extra)

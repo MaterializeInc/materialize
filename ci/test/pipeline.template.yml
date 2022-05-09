@@ -168,6 +168,17 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: replica-isolation
+    label: Replica isolation
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/replica-isolation]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: replica-isolation
+    agents:
+      queue: linux-x86_64
+
   - id: kafka-ssl
     label: Kafka SSL smoke test
     depends_on: build-x86_64
