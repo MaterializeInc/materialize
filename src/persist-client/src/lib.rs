@@ -207,12 +207,12 @@ impl PersistClient {
         trace!("Client::open shard_id={:?}", shard_id);
         let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
         let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
-        let (write_cap, read_cap) = machine.register(&writer_id, &reader_id).await;
+        let (shard_upper, read_cap) = machine.register(&writer_id, &reader_id).await;
         let writer = WriteHandle {
             writer_id,
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
-            upper: write_cap.upper,
+            upper: shard_upper.0,
         };
         let reader = ReadHandle {
             reader_id,
@@ -422,8 +422,12 @@ mod tests {
 
         write.expect_append(&data[..], 3).await;
 
-        write.upper = Antichain::from_elem(0);
-        let res = write.append(data.iter(), Antichain::from_elem(3)).await;
+        let data = vec![
+            (("5".to_owned(), "fünf".to_owned()), 5, 1),
+            (("6".to_owned(), "sechs".to_owned()), 6, 1),
+        ];
+        write.upper = Antichain::from_elem(5);
+        let res = write.append(data.iter(), Antichain::from_elem(7)).await;
         assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
@@ -549,6 +553,86 @@ mod tests {
             ListenEvent::Progress(Antichain::from_elem(6)),
         ];
         assert_eq!(listen.read_until(&6).await, expected_events);
+    }
+
+    // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
+    // be in advance of the current shard upper.
+    #[tokio::test]
+    async fn contiguous_append() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch.
+        write.expect_append(&data[..2], 3).await;
+        assert_eq!(write.upper(), &Antichain::from_elem(3));
+
+        // Appending a non-contiguous batch should fail.
+        write.upper = Antichain::from_elem(5);
+        // Write a [5,6) batch with the second writer.
+        let result = write
+            .append(&data[4..5], Antichain::from_elem(6))
+            .await
+            .expect("external error");
+        assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
+
+        // Fixing the upper to make the write contiguous should make the append succeed.
+        write.upper = Antichain::from_elem(3);
+        write.expect_append(&data[2..5], 6).await;
+        assert_eq!(write.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
+    }
+
+    // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
+    // combined are contiguous.
+    #[tokio::test]
+    async fn noncontiguous_append_per_writer() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write1, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch with writer 1.
+        write1.expect_append(&data[..2], 3).await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(3));
+
+        // Write a [3,5) batch with writer 2.
+        write2.upper = Antichain::from_elem(3);
+        write2.expect_append(&data[2..4], 5).await;
+        assert_eq!(write2.upper(), &Antichain::from_elem(5));
+
+        // Write a [5,6) batch with writer 1.
+        write1.upper = Antichain::from_elem(5);
+        write1.expect_append(&data[4..5], 6).await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
     }
 
     #[test]

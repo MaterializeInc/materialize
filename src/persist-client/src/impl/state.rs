@@ -33,12 +33,14 @@ pub struct ReadCapability<T> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WriteCapability<T> {
-    pub upper: Antichain<T>,
+    _phantom: PhantomData<T>,
 }
 
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {
+    // TODO(aljoscha): Do we want to get rid of this field right now? The WriteCapability doesn't
+    // store a writer-local upper anymore.
     writers: HashMap<WriterId, WriteCapability<T>>,
     readers: HashMap<ReaderId, ReadCapability<T>>,
 
@@ -55,19 +57,19 @@ where
         seqno: SeqNo,
         writer_id: &WriterId,
         reader_id: &ReaderId,
-    ) -> ControlFlow<Infallible, (WriteCapability<T>, ReadCapability<T>)> {
+    ) -> ControlFlow<Infallible, (Upper<T>, ReadCapability<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
         // retry).
         let write_cap = WriteCapability {
-            upper: self.upper(),
+            _phantom: PhantomData,
         };
-        self.writers.insert(writer_id.clone(), write_cap.clone());
+        self.writers.insert(writer_id.clone(), write_cap);
         let read_cap = ReadCapability {
             seqno,
             since: self.since.clone(),
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
-        Continue((write_cap, read_cap))
+        Continue((Upper(self.upper()), read_cap))
     }
 
     pub fn clone_reader(
@@ -84,19 +86,13 @@ where
         Continue(read_cap)
     }
 
-    pub fn append(
-        &mut self,
-        writer_id: &WriterId,
-        keys: &[String],
-        desc: &Description<T>,
-    ) -> ControlFlow<Upper<T>, ()> {
-        // Sanity check that the writer is sending appends such that the lower
-        // and upper frontiers line up with previous writes.
-        let write_cap = self.writer(writer_id);
-        if &write_cap.upper != desc.lower() {
-            return Break(Upper(write_cap.upper.clone()));
+    pub fn append(&mut self, keys: &[String], desc: &Description<T>) -> ControlFlow<Upper<T>, ()> {
+        // Sanity check that the writer is sending appends that allow us to construct a contiguous
+        // history of batches.
+        let shard_upper = self.upper();
+        if PartialOrder::less_than(&shard_upper, desc.lower()) {
+            return Break(Upper(shard_upper));
         }
-        write_cap.upper.clone_from(desc.upper());
 
         // Construct a new desc for the part of this append that the shard
         // didn't already know about: i.e. a lower of the *shard upper* to an
@@ -120,7 +116,6 @@ where
 
     pub fn compare_and_append(
         &mut self,
-        writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
     ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, ()> {
@@ -132,13 +127,9 @@ where
         }
 
         let shard_upper = self.upper();
-        let write_cap = self.writer(writer_id);
-        debug_assert!(PartialOrder::less_equal(&write_cap.upper, &shard_upper));
-
         if &shard_upper != desc.lower() {
             return Break(Ok(Upper(shard_upper)));
         }
-        write_cap.upper.clone_from(desc.upper());
 
         self.push_batch(keys, desc);
         debug_assert_eq!(&self.upper(), desc.upper());
@@ -188,6 +179,7 @@ where
         )
     }
 
+    #[allow(dead_code)]
     fn writer(&mut self, id: &WriterId) -> &mut WriteCapability<T> {
         self.writers
             .get_mut(id)
@@ -407,7 +399,7 @@ struct StateRollupMeta {
     diff_codec: String,
 
     seqno: SeqNo,
-    writers: Vec<(WriterId, AntichainMeta)>,
+    writers: Vec<WriterId>,
     readers: Vec<(ReaderId, AntichainMeta, SeqNo)>,
     since: AntichainMeta,
     trace: Vec<(Vec<String>, DescriptionMeta)>,
@@ -474,7 +466,7 @@ mod codec_impls {
                     .collections
                     .writers
                     .iter()
-                    .map(|(id, cap)| (id.clone(), (&cap.upper).into()))
+                    .map(|(id, _cap)| (id.clone()))
                     .collect(),
                 readers: x
                     .collections
@@ -527,9 +519,9 @@ mod codec_impls {
             let writers = x
                 .writers
                 .iter()
-                .map(|(id, upper)| {
+                .map(|id| {
                     let cap = WriteCapability {
-                        upper: upper.into(),
+                        _phantom: PhantomData,
                     };
                     (id.clone(), cap)
                 })
@@ -616,63 +608,38 @@ mod tests {
         state.register(SeqNo(0), &writer_id, &ReaderId::new());
 
         // Initial empty batch should result in a padding batch.
-        assert_eq!(
-            state.compare_and_append(&writer_id, &[], &desc(0, 1)),
-            Continue(())
-        );
+        assert_eq!(state.compare_and_append(&[], &desc(0, 1)), Continue(()));
         assert_eq!(state.trace.len(), 1);
 
         // Writing data should create a new batch, so now there's two.
         assert_eq!(
-            state.compare_and_append(&writer_id, &["key1".to_owned()], &desc(1, 2)),
+            state.compare_and_append(&["key1".to_owned()], &desc(1, 2)),
             Continue(())
         );
         assert_eq!(state.trace.len(), 2);
 
         // The first empty batch after one with data doesn't get squished in,
         // instead becoming a padding batch.
-        assert_eq!(
-            state.compare_and_append(&writer_id, &[], &desc(2, 3)),
-            Continue(())
-        );
+        assert_eq!(state.compare_and_append(&[], &desc(2, 3)), Continue(()));
         assert_eq!(state.trace.len(), 3);
 
         // More empty batches should all get squished into the existing padding
         // batch.
-        assert_eq!(
-            state.compare_and_append(&writer_id, &[], &desc(3, 4)),
-            Continue(())
-        );
-        assert_eq!(
-            state.compare_and_append(&writer_id, &[], &desc(4, 5)),
-            Continue(())
-        );
+        assert_eq!(state.compare_and_append(&[], &desc(3, 4)), Continue(()));
+        assert_eq!(state.compare_and_append(&[], &desc(4, 5)), Continue(()));
         assert_eq!(state.trace.len(), 3);
 
         // Try it all again with a second non-empty batch, this one with 2 keys,
         // and then some more empty batches.
         assert_eq!(
-            state.compare_and_append(
-                &writer_id,
-                &["key2".to_owned(), "key3".to_owned()],
-                &desc(5, 6)
-            ),
+            state.compare_and_append(&["key2".to_owned(), "key3".to_owned()], &desc(5, 6)),
             Continue(())
         );
         assert_eq!(state.trace.len(), 4);
-        assert_eq!(
-            state.compare_and_append(&writer_id, &[], &desc(6, 7)),
-            Continue(())
-        );
+        assert_eq!(state.compare_and_append(&[], &desc(6, 7)), Continue(()));
         assert_eq!(state.trace.len(), 5);
-        assert_eq!(
-            state.compare_and_append(&writer_id, &[], &desc(7, 8)),
-            Continue(())
-        );
-        assert_eq!(
-            state.compare_and_append(&writer_id, &[], &desc(8, 9)),
-            Continue(())
-        );
+        assert_eq!(state.compare_and_append(&[], &desc(7, 8)), Continue(()));
+        assert_eq!(state.compare_and_append(&[], &desc(8, 9)), Continue(()));
         assert_eq!(state.trace.len(), 5);
 
         // Confirm that we still have all the keys.

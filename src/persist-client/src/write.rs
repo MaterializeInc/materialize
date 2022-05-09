@@ -23,6 +23,7 @@ use mz_persist::location::{Atomicity, BlobMulti, ExternalError, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
@@ -196,15 +197,32 @@ where
             vec![]
         };
 
-        let res = self.machine.append(&self.writer_id, &keys, &desc).await?;
-        match res {
-            Ok(_seqno) => {
-                self.upper = desc.upper().clone();
-                Ok(Ok(Ok(())))
-            }
-            Err(current_upper) => {
-                self.upper = current_upper.0.clone();
-                return Ok(Ok(Err(current_upper)));
+        loop {
+            let res = self.machine.append(&keys, &desc).await?;
+            match res {
+                Ok(_seqno) => {
+                    self.upper = desc.upper().clone();
+                    return Ok(Ok(Ok(())));
+                }
+                // TODO(aljoscha): This seems useless now because we have to read from consensus to
+                // get an up-to-date version of the upper.
+                Err(_current_upper) => {
+                    // If the state machine thinks that the shard upper is not far enough along, it
+                    // could be because the caller of this method has found out that it advanced
+                    // via some some side-channel that didn't update our local cache of the machine
+                    // state. So, fetch the latest state and try again if we indeed get something
+                    // different.
+                    self.machine.fetch_and_update_state().await;
+                    let current_upper = self.machine.upper();
+
+                    // We tried to to a non-contiguous append, that won't work.
+                    if PartialOrder::less_than(&current_upper, &self.upper) {
+                        self.upper = current_upper.clone();
+                        return Ok(Ok(Err(Upper(current_upper))));
+                    } else {
+                        // The upper stored in state was outdated. Retry after updating.
+                    }
+                }
             }
         }
     }
@@ -291,10 +309,7 @@ where
             vec![]
         };
 
-        let res = self
-            .machine
-            .compare_and_append(&self.writer_id, &keys, &desc)
-            .await?;
+        let res = self.machine.compare_and_append(&keys, &desc).await?;
         match res {
             Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
             Ok(Err(current_upper)) => return Ok(Ok(Err(current_upper))),
@@ -401,7 +416,7 @@ where
         .await
         .expect("external durability failed")
         .expect("invalid usage")
-        .expect("unexpected writer-local upper");
+        .expect("unexpected upper");
     }
 
     /// Test helper for a [Self::compare_and_append] call that is expected to
