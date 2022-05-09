@@ -108,6 +108,11 @@ def publish_multiarch_images(tag: str, dependency_sets: List[DependencySet]) -> 
             ["docker", "manifest", "create", name, *(image.spec() for image in images)]
         )
         spawn.runv(["docker", "manifest", "push", name])
+    markdown = f"""Pushed tag `{tag}`"""
+    spawn.runv(
+        ["buildkite-agent", "annotate", "--style=info", f"--context=build-tags-{tag}"],
+        stdin=markdown.encode(),
+    )
 
 
 if __name__ == "__main__":
