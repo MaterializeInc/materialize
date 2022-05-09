@@ -27,7 +27,7 @@ use uuid::Uuid;
 use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
@@ -213,7 +213,7 @@ pub fn construct<A: Allocate>(
                                         peek_duration_session.give((
                                             (key.0, elapsed_ns.next_power_of_two()),
                                             time_ms,
-                                            Diff::from(1),
+                                            1,
                                         ));
                                     } else {
                                         error!(
