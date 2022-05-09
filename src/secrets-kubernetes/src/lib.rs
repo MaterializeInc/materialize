@@ -26,6 +26,8 @@ const FIELD_MANAGER: &str = "materialized";
 // It also has to match the name of the secret defined in the developer tooling
 pub const SECRET_NAME: &str = "user-managed-secrets";
 
+const POLL_TIMEOUT: i32 = 120;
+
 pub struct KubernetesSecretsController {
     secret_api: Api<Secret>,
 }
@@ -96,14 +98,14 @@ impl SecretsController for KubernetesSecretsController {
             match op {
                 SecretOp::Ensure { id, .. } => {
                     let file_path = secrets_storage_path.join(format!("{}", id));
-                    if !poll_until_success(|| Path::exists(&*file_path), 10).await {
+                    if !poll_until_success(|| Path::exists(&*file_path), POLL_TIMEOUT).await {
                         error!("Secret write operation has timed out. Secret with id {} could not be written", id);
                         return Err(anyhow!("Secret write operation has timed out. Secret with id {} could not be written", id));
                     }
                 }
                 SecretOp::Delete { id } => {
                     let file_path = secrets_storage_path.join(format!("{}", id));
-                    if !poll_until_success(|| !Path::exists(&*file_path), 10).await {
+                    if !poll_until_success(|| !Path::exists(&*file_path), POLL_TIMEOUT).await {
                         error!("Secret delete operation has timed out. Secret with id {} could not be written", id);
                         return Err(anyhow!("Secret delete operation has timed out. Secret with id {} could not be written", id));
                     }

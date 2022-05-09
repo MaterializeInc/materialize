@@ -7,8 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:kinetic-20220428
-USER root
-
-RUN sed -i -e 's/^APT/# APT/' -e 's/^DPkg/# DPkg/' \
-      /etc/apt/apt.conf.d/docker-clean
+FROM ubuntu:jammy-20220421
