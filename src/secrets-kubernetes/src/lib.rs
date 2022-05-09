@@ -14,11 +14,12 @@ use k8s_openapi::ByteString;
 use kube::api::{Patch, PatchParams};
 use kube::config::KubeConfigOptions;
 use kube::{Api, Client, Config};
+use mz_ore::retry::Retry;
 use mz_secrets::{SecretOp, SecretsController};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tokio::time::{self, Duration};
-use tracing::{error, info};
+use std::time::Duration;
+use tracing::info;
 
 const FIELD_MANAGER: &str = "materialized";
 
@@ -26,7 +27,7 @@ const FIELD_MANAGER: &str = "materialized";
 // It also has to match the name of the secret defined in the developer tooling
 pub const SECRET_NAME: &str = "user-managed-secrets";
 
-const POLL_TIMEOUT: i32 = 120;
+const POLL_TIMEOUT: u64 = 5;
 
 pub struct KubernetesSecretsController {
     secret_api: Api<Secret>,
@@ -98,39 +99,20 @@ impl SecretsController for KubernetesSecretsController {
             match op {
                 SecretOp::Ensure { id, .. } => {
                     let file_path = secrets_storage_path.join(format!("{}", id));
-                    if !poll_until_success(|| Path::exists(&*file_path), POLL_TIMEOUT).await {
-                        error!("Secret write operation has timed out. Secret with id {} could not be written", id);
-                        return Err(anyhow!("Secret write operation has timed out. Secret with id {} could not be written", id));
-                    }
+                    Retry::default()
+                        .max_duration(Duration::from_secs(POLL_TIMEOUT))
+                        .retry(|_| {
+                            if Path::exists(&*file_path) {
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow!("Secret write operation has timed out. Secret with id {} could not be written", id))
+                                    }
+                        })?
                 }
-                SecretOp::Delete { id } => {
-                    let file_path = secrets_storage_path.join(format!("{}", id));
-                    if !poll_until_success(|| !Path::exists(&*file_path), POLL_TIMEOUT).await {
-                        error!("Secret delete operation has timed out. Secret with id {} could not be written", id);
-                        return Err(anyhow!("Secret delete operation has timed out. Secret with id {} could not be written", id));
-                    }
-                }
+                _ => {}
             }
         }
 
         return Ok(());
     }
-}
-
-async fn poll_until_success<T>(func: T, timeout_seconds: i32) -> bool
-where
-    T: Fn() -> bool,
-{
-    let mut interval = time::interval(Duration::from_millis(100));
-
-    let nr_ticks = timeout_seconds * 10;
-
-    for _i in 0..nr_ticks {
-        if func() {
-            return true;
-        }
-        interval.tick().await;
-    }
-
-    return false;
 }

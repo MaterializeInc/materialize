@@ -3903,6 +3903,7 @@ dependencies = [
  "async-trait",
  "k8s-openapi",
  "kube",
+ "mz-ore",
  "mz-secrets",
  "tokio",
  "tracing",
