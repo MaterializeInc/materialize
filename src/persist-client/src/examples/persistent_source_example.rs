@@ -1297,7 +1297,7 @@ mod render {
                     .filter(move |(_update, ts)| initial_upper1.less_equal(ts))
                     .map(|(update, ts)| ((update, ()), ts, 1));
 
-                let fut = write.append(updates, target_upper.clone());
+                let fut = write.append(updates, write.upper().clone(), target_upper.clone());
 
                 Box::pin(fut)
             })

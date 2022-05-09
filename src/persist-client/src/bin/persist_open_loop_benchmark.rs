@@ -439,7 +439,7 @@ mod raw_persist_benchmark {
             let batch = batch
                 .iter()
                 .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d));
-            self.append(batch, new_upper)
+            self.append(batch, self.upper().clone(), new_upper)
                 .await??
                 .expect("invalid current upper");
 

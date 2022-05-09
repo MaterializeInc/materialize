@@ -154,7 +154,8 @@ where
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
-        new_upper: Antichain<T>,
+        lower: Antichain<T>,
+        upper: Antichain<T>,
     ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
@@ -164,12 +165,11 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::append new_upper={:?}", new_upper);
+        trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
 
-        let lower = self.upper.clone();
-        let upper = new_upper;
+        let upper = upper;
         let since = Antichain::from_elem(T::minimum());
-        let desc = Description::new(lower, upper, since);
+        let desc = Description::new(lower.clone(), upper, since);
 
         // TODO: Instead construct a Vec of batches here so it can be bounded
         // memory usage (if updates is large).
@@ -216,7 +216,7 @@ where
                     let current_upper = self.machine.upper();
 
                     // We tried to to a non-contiguous append, that won't work.
-                    if PartialOrder::less_than(&current_upper, &self.upper) {
+                    if PartialOrder::less_than(&current_upper, &lower) {
                         self.upper = current_upper.clone();
                         return Ok(Ok(Err(Upper(current_upper))));
                     } else {
@@ -431,10 +431,15 @@ where
     /// Test helper for an [Self::append] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_append(&mut self, updates: &[((K, V), T, D)], new_upper: T) {
+    pub async fn expect_append<L, U>(&mut self, updates: &[((K, V), T, D)], lower: L, new_upper: U)
+    where
+        L: Into<Antichain<T>>,
+        U: Into<Antichain<T>>,
+    {
         self.append(
             updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
-            Antichain::from_elem(new_upper),
+            lower.into(),
+            new_upper.into(),
         )
         .await
         .expect("external durability failed")
@@ -504,7 +509,7 @@ mod tests {
 
         // Write an initial batch.
         let mut upper = 3;
-        write.expect_append(&data[..2], upper).await;
+        write.expect_append(&data[..2], vec![0], vec![upper]).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
         let blob_count_before = blob

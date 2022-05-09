@@ -163,7 +163,7 @@ where
                     // also advances the frontier.
                     // TODO(aljoscha): Figure out how errors from this should be reported.
                     write
-                        .append(updates, frontier.clone())
+                        .append(updates, write.upper().clone(), frontier.clone())
                         .await
                         .expect("cannot append updates")
                         .expect("cannot append updates")
