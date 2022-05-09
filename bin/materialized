@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-RUSTFLAGS=$rustflags cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed --bin "$bin"
+${rustflags:+"RUSTFLAGS=$rustflags"} cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed --bin "$bin"
 if $release; then
     target/release/"$bin" "${positional_args[@]}"
 else
