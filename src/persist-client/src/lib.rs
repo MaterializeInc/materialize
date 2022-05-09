@@ -93,8 +93,22 @@ pub struct PersistLocation {
 }
 
 impl PersistLocation {
+    /// Returns a new client for interfacing with persist shards made durable to
+    /// the given `location`.
+    ///
+    /// The same `location` may be used concurrently from multiple processes.
+    /// Concurrent usage is subject to the constraints documented on individual
+    /// methods (mostly [WriteHandle::append]).
+    pub async fn open(&self) -> Result<PersistClient, ExternalError> {
+        let (blob, consensus) = self.open_locations().await?;
+        PersistClient::new(blob, consensus).await
+    }
+
     /// Opens the associated implementations of [BlobMulti] and [Consensus].
-    pub async fn open(
+    ///
+    /// This is exposed mostly for testing. Persist users likely want
+    /// [Self::open].
+    pub async fn open_locations(
         &self,
     ) -> Result<
         (
@@ -184,11 +198,10 @@ pub struct PersistClient {
 
 impl PersistClient {
     /// Returns a new client for interfacing with persist shards made durable to
-    /// the given `location`.
+    /// the given [BlobMulti] and [Consensus].
     ///
-    /// The same `location` may be used concurrently from multiple processes.
-    /// Concurrent usage is subject to the constraints documented on individual
-    /// methods (mostly [WriteHandle::append]).
+    /// This is exposed mostly for testing. Persist users likely want
+    /// [PersistLocation::open].
     pub async fn new(
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,

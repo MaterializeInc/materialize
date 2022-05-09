@@ -182,7 +182,7 @@ async fn persist_client(
         blob_uri: blob_uri.to_string(),
         consensus_uri: consensus_uri.to_string(),
     };
-    let (blob, consensus) = location.open().await?;
+    let (blob, consensus) = location.open_locations().await?;
     // TODO(aljoscha): Add the option to create unreliable wrappers of blob and persist.
     PersistClient::new(blob, consensus).await
 }
