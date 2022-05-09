@@ -25,7 +25,7 @@ mz-avro-derive = { path = "../avro-derive" }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-ordered-float = { version = "2.10.0", features = ["serde"] }
+ordered-float = { version = "3.0.0", features = ["serde"] }
 prost = "0.10.1"
 prost-reflect = "0.7.0"
 serde_json = "1.0.80"

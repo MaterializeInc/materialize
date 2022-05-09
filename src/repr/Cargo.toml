@@ -30,7 +30,7 @@ mz-ore = { path = "../ore", features = ["bytes", "smallvec"] }
 mz-persist-types = { path = "../persist-types" }
 num-traits = "0.2.14"
 num_enum = "0.5.7"
-ordered-float = { version = "2.10.0", features = ["serde"] }
+ordered-float = { version = "3.0.0", features = ["serde"] }
 prost = "0.10.1"
 regex = "1.5.4"
 ryu = "1.0.9"
