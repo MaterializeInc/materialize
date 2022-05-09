@@ -484,7 +484,7 @@ mod tests {
         let mut snap = read.expect_snapshot(2).await;
         assert_eq!(snap.read_all().await, all_ok(&data[..2], 2));
 
-        // Try and write with the expected upper.
+        // Try and write with a wrong expected upper.
         let res = write2
             .compare_and_append(
                 &data[..2],
@@ -494,9 +494,8 @@ mod tests {
             .await;
         assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
 
-        // TODO(aljoscha): Should a writer forward its upper to the global upper on a failed
-        // compare_and_append?
-        assert_eq!(write2.upper(), &Antichain::from_elem(0));
+        // A failed write updates our local cache of the shard upper.
+        assert_eq!(write2.upper(), &Antichain::from_elem(3));
 
         // Try again with a good expected upper.
         write2.expect_compare_and_append(&data[2..], 3, 4).await;
@@ -629,6 +628,87 @@ mod tests {
         // Write a [5,6) batch with writer 1.
         write1.upper = Antichain::from_elem(5);
         write1.expect_append(&data[4..5], 6).await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
+    }
+
+    // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
+    // batch needs to match the current shard upper.
+    #[tokio::test]
+    async fn contiguous_compare_and_append() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch.
+        write.expect_compare_and_append(&data[..2], 0, 3).await;
+        assert_eq!(write.upper(), &Antichain::from_elem(3));
+
+        // Appending a non-contiguous batch should fail.
+        // Write a [5,6) batch with the second writer.
+        let result = write
+            .compare_and_append(
+                &data[4..5],
+                Antichain::from_elem(5),
+                Antichain::from_elem(6),
+            )
+            .await
+            .expect("external error");
+        assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
+
+        // Writing with the correct expected upper to make the write contiguous should make the
+        // append succeed.
+        write.expect_compare_and_append(&data[2..5], 3, 6).await;
+        assert_eq!(write.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
+    }
+
+    // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
+    // all writers combined are contiguous.
+    #[tokio::test]
+    async fn noncontiguous_compare_and_append_per_writer() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write1, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch with writer 1.
+        write1.expect_compare_and_append(&data[..2], 0, 3).await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(3));
+
+        // Write a [3,5) batch with writer 2.
+        write2.expect_compare_and_append(&data[2..4], 3, 5).await;
+        assert_eq!(write2.upper(), &Antichain::from_elem(5));
+
+        // Write a [5,6) batch with writer 1.
+        write1.expect_compare_and_append(&data[4..5], 5, 6).await;
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
         let mut snap = read.expect_snapshot(5).await;

@@ -278,7 +278,7 @@ where
     {
         trace!("WriteHandle::write_batch new_upper={:?}", new_upper);
 
-        let lower = expected_upper;
+        let lower = expected_upper.clone();
         let upper = new_upper;
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
@@ -309,13 +309,36 @@ where
             vec![]
         };
 
-        let res = self.machine.compare_and_append(&keys, &desc).await?;
-        match res {
-            Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
-            Ok(Err(current_upper)) => return Ok(Ok(Err(current_upper))),
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(Ok(())))
+        loop {
+            let res = self.machine.compare_and_append(&keys, &desc).await?;
+            match res {
+                Ok(Ok(_seqno)) => {
+                    self.upper = desc.upper().clone();
+                    return Ok(Ok(Ok(())));
+                }
+                // TODO(aljoscha): This seems useless now because we have to read from consensus to
+                // get an up-to-date version of the upper.
+                Ok(Err(_current_upper)) => {
+                    // If the state machine thinks that the shard upper is not far enough along, it
+                    // could be because the caller of this method has found out that it advanced
+                    // via some some side-channel that didn't update our local cache of the machine
+                    // state. So, fetch the latest state and try again if we indeed get something
+                    // different.
+                    self.machine.fetch_and_update_state().await;
+                    let current_upper = self.machine.upper();
+
+                    // We tried to to a compare_and_append with the wrong expected upper, that
+                    // won't work.
+                    if current_upper != expected_upper {
+                        self.upper = current_upper.clone();
+                        return Ok(Ok(Err(Upper(current_upper))));
+                    } else {
+                        // The upper stored in state was outdated. Retry after updating.
+                    }
+                }
+                Err(err) => return Ok(Err(err)),
+            }
+        }
     }
 
     fn encode_batch<SB, KB, VB, TB, DB, I>(
