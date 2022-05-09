@@ -2847,7 +2847,6 @@ dependencies = [
  "mz-coord",
  "mz-dataflow-types",
  "mz-frontegg-auth",
- "mz-http-proxy",
  "mz-http-util",
  "mz-kafka-util",
  "mz-npm",
@@ -3113,7 +3112,6 @@ dependencies = [
  "aws-smithy-client",
  "aws-types",
  "hyper-tls",
- "mz-http-proxy",
 ]
 
 [[package]]
@@ -3154,7 +3152,6 @@ dependencies = [
  "anyhow",
  "hyper",
  "lazy_static",
- "mz-http-proxy",
  "mz-ore",
  "native-tls",
  "openssl",
@@ -3403,18 +3400,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-http-proxy"
-version = "0.1.0"
-dependencies = [
- "http",
- "hyper-proxy",
- "ipnet",
- "lazy_static",
- "reqwest",
- "tracing",
-]
-
-[[package]]
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
@@ -3613,7 +3598,6 @@ dependencies = [
  "hyper-proxy",
  "hyper-tls",
  "lazy_static",
- "mz-http-proxy",
  "native-tls",
  "openssl",
  "opentelemetry",

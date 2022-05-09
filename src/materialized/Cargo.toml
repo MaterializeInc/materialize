@@ -56,7 +56,6 @@ mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }

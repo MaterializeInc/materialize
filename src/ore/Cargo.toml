@@ -51,7 +51,6 @@ native-tls = { version = "0.2.10", features = ["alpn"], optional = true }
 hyper = { version = "0.14.18", features = ["http1", "server"], optional = true }
 hyper-proxy = { version = "0.9.1", optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
-mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"], optional = true }
 opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"], optional = true }
 opentelemetry-otlp = { version = "0.10.0", optional = true }
 console-subscriber = { version = "0.1.5", optional = true }
@@ -78,7 +77,6 @@ tracing_ = [
   "opentelemetry",
   "opentelemetry-otlp",
   "tonic",
-  "mz-http-proxy",
 ]
 tokio-console = ["console-subscriber", "tokio", "tokio/tracing"]
 cli = ["clap"]

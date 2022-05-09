@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use hyper::client::HttpConnector;
-use hyper_proxy::ProxyConnector;
 use hyper_tls::HttpsConnector;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
@@ -33,13 +32,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 use crate::metric;
 use crate::metrics::MetricsRegistry;
 
-fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnector>> {
+fn create_h2_alpn_https_connector() -> HttpsConnector<HttpConnector> {
     // This accomplishes the same thing as the default
     // + adding a `request_alpn`
     let mut http = HttpConnector::new();
     http.enforce_http(false);
 
-    mz_http_proxy::hyper::connector(HttpsConnector::from((
+    HttpsConnector::from((
         http,
         tokio_native_tls::TlsConnector::from(
             native_tls::TlsConnector::builder()
@@ -47,7 +46,7 @@ fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnect
                 .build()
                 .unwrap(),
         ),
-    )))
+    ))
 }
 
 /// Setting up opentel in the background requires we are in a tokio-runtime

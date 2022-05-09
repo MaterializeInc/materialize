@@ -305,21 +305,6 @@ boot the server and then drop the offending view.
 
 {{% troubleshooting/disable-user-indexes %}}
 
-## Special environment variables
-
-Materialize respects several environment variables that have conventional
-meanings in Unix systems.
-
-### HTTP proxies
-
-The `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` environment
-variables specify a proxy to use for outgoing HTTP and HTTPS traffic. There is
-no precise specification of how these variables behave, but Materialize's
-behavior generally matches the behavior of other HTTP clients.
-
-For precise details of Materialize's behavior, consult the documentation of
-the [`mz_http_proxy`](https://docs.rs/mz_http_proxy) crate.
-
 [api-indexes]: /overview/key-concepts/#indexes
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view
