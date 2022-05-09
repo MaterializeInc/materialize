@@ -1075,13 +1075,13 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(
         explain,
         "     timestamp:          1061
-         since:[         1061]
+         since:[         1060]
          upper:[            0]
      has table: true
  table read ts:          1061
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         1061]
+ read frontier:[         1060]
 write frontier:[            0]\n",
     );
 
