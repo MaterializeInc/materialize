@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use differential_dataflow::operators::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use mz_persist_client::read::ListenEvent;
 use timely::dataflow::channels::pact::Exchange;
@@ -43,11 +42,6 @@ where
     } else {
         (None, None)
     };
-
-    // Ensure the collection contains no 0 diffs, as persist chokes on those.
-    // Aside from that, it seems to be a good idea to reduce the data as much
-    // as possible before sending it over the network.
-    let collection = collection.consolidate();
 
     let mut sink = OperatorBuilder::new("Logging Persist Sink".into(), scope.clone());
     let mut input = sink.new_input(
@@ -144,3 +138,4 @@ where
         .to_stream(&scope)
         .as_collection()
         .map(|(key, value)| (key.expect("key error"), value.expect("value error")))
+}

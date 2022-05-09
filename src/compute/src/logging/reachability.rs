@@ -27,8 +27,8 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use super::{LogVariant, TimelyLog};
-use crate::logging::ConsolidateBuffer;
 use crate::logging::persist::persist_roundtrip;
+use crate::logging::ConsolidateBuffer;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
