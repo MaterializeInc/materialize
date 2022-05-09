@@ -193,6 +193,8 @@ pub enum SecretsControllerConfig {
         /// The name of a Kubernetes context to use, if the Kubernetes configuration
         /// is loaded from the local kubeconfig.
         context: String,
+        user_defined_secret: String,
+        user_defined_secret_mount_path: String,
     },
 }
 
@@ -352,10 +354,18 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             fs::set_permissions(secrets_storage.clone(), permissions)?;
             Box::new(FilesystemSecretsController::new(secrets_storage))
         }
-        Some(SecretsControllerConfig::Kubernetes { context }) => Box::new(
-            KubernetesSecretsController::new(context)
-                .await
-                .context("connecting to kubernetes")?,
+        Some(SecretsControllerConfig::Kubernetes {
+            context,
+            user_defined_secret,
+            user_defined_secret_mount_path,
+        }) => Box::new(
+            KubernetesSecretsController::new(
+                context,
+                user_defined_secret,
+                user_defined_secret_mount_path,
+            )
+            .await
+            .context("connecting to kubernetes")?,
         ),
     };
 

@@ -29,7 +29,6 @@ use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
-use mz_secrets_kubernetes::SECRET_NAME;
 
 const FIELD_MANAGER: &str = "materialized";
 
@@ -47,6 +46,8 @@ pub struct KubernetesOrchestratorConfig {
     pub service_account: Option<String>,
     /// The image pull policy to set for services created by the orchestrator.
     pub image_pull_policy: KubernetesImagePullPolicy,
+    /// The name of the secret used to store user defined secrets.
+    pub user_defined_secret: String,
 }
 
 /// Specifies whether Kubernetes should pull Docker images when creating pods.
@@ -229,7 +230,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let secrets_volume = Volume {
             name: volume_name.clone(),
             secret: Some(SecretVolumeSource {
-                secret_name: Some(SECRET_NAME.to_string()),
+                secret_name: Some(self.config.user_defined_secret.clone()),
                 ..Default::default()
             }),
             ..Default::default()

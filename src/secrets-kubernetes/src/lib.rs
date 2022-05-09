@@ -23,18 +23,20 @@ use tracing::info;
 
 const FIELD_MANAGER: &str = "materialized";
 
-// This name has to match the secret name defined in the cluster Environment Controller
-// It also has to match the name of the secret defined in the developer tooling
-pub const SECRET_NAME: &str = "user-managed-secrets";
-
-const POLL_TIMEOUT: u64 = 5;
+const POLL_TIMEOUT: u64 = 120;
 
 pub struct KubernetesSecretsController {
     secret_api: Api<Secret>,
+    user_defined_secret: String,
+    user_defined_secret_mount_path: String,
 }
 
 impl KubernetesSecretsController {
-    pub async fn new(context: String) -> Result<KubernetesSecretsController, anyhow::Error> {
+    pub async fn new(
+        context: String,
+        user_defined_secret: String,
+        user_defined_secret_mount_path: String,
+    ) -> Result<KubernetesSecretsController, anyhow::Error> {
         let kubeconfig_options = KubeConfigOptions {
             context: Some(context),
             ..Default::default()
@@ -53,16 +55,27 @@ impl KubernetesSecretsController {
         let secret_api: Api<Secret> = Api::default_namespaced(client);
 
         // ensure that the secret has been created in this environment
-        secret_api.get(&*SECRET_NAME.to_string()).await?;
+        secret_api.get(&*user_defined_secret).await?;
 
-        Ok(KubernetesSecretsController { secret_api })
+        if !Path::new(&user_defined_secret_mount_path).is_dir() {
+            bail!(
+                "Configured secrets location could not be found on filesystem: ({})",
+                user_defined_secret_mount_path
+            );
+        }
+
+        Ok(KubernetesSecretsController {
+            secret_api,
+            user_defined_secret,
+            user_defined_secret_mount_path,
+        })
     }
 }
 
 #[async_trait]
 impl SecretsController for KubernetesSecretsController {
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
-        let mut secret: Secret = self.secret_api.get(&*SECRET_NAME.to_string()).await?;
+        let mut secret: Secret = self.secret_api.get(&*self.user_defined_secret).await?;
 
         let mut data = secret.data.map_or_else(BTreeMap::new, |m| m);
 
@@ -87,14 +100,14 @@ impl SecretsController for KubernetesSecretsController {
 
         self.secret_api
             .patch(
-                &SECRET_NAME,
+                &self.user_defined_secret,
                 &PatchParams::apply(FIELD_MANAGER).force(),
                 &Patch::Apply(secret),
             )
             .await?;
 
         // guarantee that all new secrets are reflected on our local filesystem
-        let secrets_storage_path = PathBuf::from("/secrets");
+        let secrets_storage_path = PathBuf::from(self.user_defined_secret_mount_path.clone());
         for op in ops.iter() {
             match op {
                 SecretOp::Ensure { id, .. } => {
