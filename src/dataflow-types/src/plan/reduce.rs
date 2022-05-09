@@ -73,6 +73,7 @@ use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -828,7 +829,7 @@ impl ReducePlan {
 }
 
 /// Plan for extracting keys and values in preparation for a reduction.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
     pub key_plan: mz_expr::SafeMfpPlan,
@@ -840,7 +841,7 @@ impl From<&KeyValPlan> for ProtoKeyValPlan {
     fn from(x: &KeyValPlan) -> Self {
         Self {
             key_plan: Some((&x.key_plan).into()),
-            val_plan: Some((&x.key_plan).into()),
+            val_plan: Some((&x.val_plan).into()),
         }
     }
 }
