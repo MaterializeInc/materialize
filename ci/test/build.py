@@ -29,9 +29,7 @@ def main() -> None:
     print("--- Acquiring mzbuild images")
     deps = repo.resolve_dependencies(image for image in repo if image.publish)
     deps.ensure()
-
-    mzbuild.publish_multiarch_images(f'devel-{git.rev_parse("HEAD")}', deps)
-    annotate_buildkite_with_tags(repo.rd.arch, [deps])
+    annotate_buildkite_with_tags(repo.rd.arch, deps)
 
     print("--- Staging Debian package")
     if os.environ["BUILDKITE_BRANCH"] == "main":

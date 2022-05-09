@@ -38,6 +38,18 @@ steps:
     agents:
       queue: builder-linux-aarch64
 
+  - id: devel-docker-tags
+    label: Tag development docker images
+    command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
+    inputs:
+      - "*"
+    depends_on:
+      - build-x86_64
+      - build-aarch64
+    timeout_in_minutes: 10
+    agents:
+      queue: linux-x86_64
+
   - id: lint-fast
     label: Lint and rustfmt
     command: bin/ci-builder run stable ci/test/lint-fast.sh
