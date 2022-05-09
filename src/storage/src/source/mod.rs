@@ -31,30 +31,29 @@ use std::fmt::{self, Debug};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context as _};
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
-use futures::task::Waker;
 use futures::Stream;
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_persist_types::Codec;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
-use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
+use timely::communication::Pull;
+use timely::dataflow::channels::pact::{Exchange, LogPuller, ParallelizationContract};
 use timely::dataflow::channels::pushers::TeeCore;
+use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::generic::{InputHandle, OutputHandle};
 use timely::dataflow::operators::{Capability, Event};
 use timely::dataflow::Scope;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
-use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
-use tokio::time::error::Elapsed;
-use tracing::{error, info};
+use tracing::error;
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
@@ -71,11 +70,13 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
+use crate::source::ingestor::CreateSourceIngestor;
 use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::timestamper::CreateSourceTimestamper;
 use crate::source::util::source;
 
+mod ingestor;
 mod kafka;
 mod kinesis;
 pub mod metrics;
@@ -471,7 +472,12 @@ pub trait SourceReader {
     }
 }
 
-pub enum NextMessage<Key, Value> {
+#[derive(Clone)]
+pub enum NextMessage<Key, Value>
+where
+    Key: Data,
+    Value: Data,
+{
     Ready(SourceMessage<Key, Value>),
     Pending,
     TransientDelay,
@@ -480,7 +486,12 @@ pub enum NextMessage<Key, Value> {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage<Key, Value> {
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SourceMessage<Key, Value>
+where
+    Key: Data,
+    Value: Data,
+{
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -837,7 +848,7 @@ pub fn create_raw_source_simple<G, C>(
         timely::dataflow::Stream<G, (Row, Timestamp, Diff)>,
         timely::dataflow::Stream<G, SourceError>,
     ),
-    Option<SourceToken>,
+    Vec<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -930,20 +941,50 @@ where
 
     (
         stream.map_fallible("SimpleSourceErrorDemux", |r| r),
-        Some(capability),
+        vec![capability],
     )
 }
 
+type SourceMessageInputHandle<S> = InputHandle<
+    Timestamp,
+    Option<
+        Result<SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>, SourceError>,
+    >,
+    LogPuller<
+        Timestamp,
+        Vec<
+            Option<
+                Result<
+                    SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>,
+                    SourceError,
+                >,
+            >,
+        >,
+        Box<
+            dyn Pull<
+                Bundle<
+                    Timestamp,
+                    Option<
+                        Result<
+                            SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>,
+                            SourceError,
+                        >,
+                    >,
+                >,
+            >,
+        >,
+    >,
+>;
+
 enum SourceMessageProcessingState<S: SourceReader> {
-    Ready(SourceReaderStream<S>),
+    Ready(SourceMessageInputHandle<S>),
     Draining,
     Finished,
 }
 struct CreateSourceRunner<S: SourceReader> {
     name: String,
-    processing_state: SourceMessageProcessingState<S>,
+    msg_input: SourceMessageProcessingState<S>,
     activator: Activator,
-    waker: Waker,
     messages_by_part: BTreeMap<
         PartitionId,
         VecDeque<SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>>,
@@ -954,23 +995,18 @@ struct CreateSourceRunner<S: SourceReader> {
     read_cursors: HashMap<PartitionId, MzOffset>,
     timestamp_bindings_listener: Listen<(), PartitionId, Timestamp, Diff>,
     timestamp_frequency: Duration,
-    source_id: SourceInstanceId,
-    bindings_channel: Sender<(PartitionId, MzOffset)>,
 }
 
 impl<S: SourceReader> CreateSourceRunner<S> {
     async fn initialize(
         name: String,
-        processing_state: SourceMessageProcessingState<S>,
+        msg_input: SourceMessageInputHandle<S>,
         activator: Activator,
-        waker: Waker,
         CollectionMetadata {
             persist_location,
             timestamp_shard_id,
         }: CollectionMetadata,
         timestamp_frequency: Duration,
-        source_id: SourceInstanceId,
-        bindings_channel: Sender<(PartitionId, MzOffset)>,
     ) -> anyhow::Result<Option<Self>> {
         let persist_client = persist_location
             .open()
@@ -1054,9 +1090,8 @@ impl<S: SourceReader> CreateSourceRunner<S> {
 
         Ok(Some(Self {
             name,
-            processing_state,
+            msg_input: SourceMessageProcessingState::Ready(msg_input),
             activator,
-            waker,
             messages_by_part,
             read_progress,
             persisted_timestamp_bindings,
@@ -1064,8 +1099,6 @@ impl<S: SourceReader> CreateSourceRunner<S> {
             read_cursors,
             timestamp_bindings_listener,
             timestamp_frequency,
-            source_id,
-            bindings_channel,
         }))
     }
 
@@ -1087,95 +1120,71 @@ impl<S: SourceReader> CreateSourceRunner<S> {
         >,
         cap: &mut Capability<Timestamp>,
     ) -> anyhow::Result<SourceStatus> {
-        // Bound execution of operator to prevent a single operator from hogging
-        // the CPU if there are many messages to process
-        let timer = Instant::now();
-
-        let mut context = Context::from_waker(&self.waker);
-        match self.processing_state {
-            SourceMessageProcessingState::Ready(ref mut reader) => {
-                while let Poll::Ready(item) = reader.as_mut().poll_next(&mut context) {
-                    match item {
-                        Some(Ok(message)) => {
-                            // N.B. Messages must arrive in increasing offset order
-                            if let Some(old_offset) = self
-                                .partition_cursors
-                                .insert(message.partition.clone(), message.offset.clone())
-                            {
-                                assert!(
-                                    message.offset >= old_offset,
-                                    "Offsets must arrive in increasing order: {:?} -> {:?}",
-                                    old_offset,
-                                    message.offset
+        eprintln!("{:?} MER INVOKED MERGER WITH {:?}", self.name, cap);
+        let mut scratch_vec = Vec::new();
+        let (mut error_flag, mut draining_flag) = (false, false);
+        match self.msg_input {
+            SourceMessageProcessingState::Ready(ref mut msg_input) => {
+                msg_input.for_each(|cap, data| {
+                    data.swap(&mut scratch_vec);
+                    eprintln!("{:?} MER READ INPUT {:?}", self.name, scratch_vec.len());
+                    for message in scratch_vec.drain(..) {
+                        match message {
+                            Some(Ok(message)) => {
+                                eprintln!(
+                                    "{:?} MERGING MESSAGE {:?} {:?}",
+                                    self.name, message.partition, message.offset
                                 );
+                                // N.B. Messages must arrive in increasing offset order
+                                if let Some(old_offset) = self
+                                    .partition_cursors
+                                    .insert(message.partition.clone(), message.offset.clone())
+                                {
+                                    assert!(
+                                        message.offset >= old_offset,
+                                        "Offsets must arrive in increasing order: {:?} -> {:?}",
+                                        old_offset,
+                                        message.offset
+                                    );
+                                }
+                                self.messages_by_part
+                                    .entry(message.partition.clone())
+                                    .or_insert_with(VecDeque::new)
+                                    .push_back(message);
                             }
-                            self.messages_by_part
-                                .entry(message.partition.clone())
-                                .or_insert_with(VecDeque::new)
-                                .push_back(message);
-                        }
-                        Some(Err(e)) => {
-                            output.session(&cap).give(Err(SourceError {
-                                source_id: self.source_id,
-                                error: e.inner,
-                            }));
-                            self.processing_state = SourceMessageProcessingState::Finished;
-                            break;
-                        }
-                        None => {
-                            self.processing_state = SourceMessageProcessingState::Draining;
-                            break;
+                            None => {
+                                draining_flag = true;
+                            }
+                            Some(Err(e)) => {
+                                output.session(&cap).give(Err(e));
+                                error_flag = true;
+                                break;
+                            }
                         }
                     }
-                    if timer.elapsed() > YIELD_INTERVAL {
-                        // We didn't drain the entire queue, so indicate that we
-                        // should run again but yield the CPU to other operators.
-                        self.activator.activate();
-                        break;
-                    }
-                }
+                });
             }
             SourceMessageProcessingState::Draining => (),
             SourceMessageProcessingState::Finished => return Ok(SourceStatus::Done),
         }
 
-        if self.bindings_channel.is_closed() {
-            info!("{:?} RECEIVER CLOSED; MARKING AS DONE", self.name);
-            return Ok(SourceStatus::Done);
-        }
-
-        // Let the timestamper know about the new max bindings
-        for (partition, offset) in self.partition_cursors.drain() {
-            // If receiver drops, just shut down
-            if let Err(_) = self.bindings_channel.send((partition, offset)).await {
-                return Ok(SourceStatus::Done);
+        match (error_flag, draining_flag) {
+            (true, _) => {
+                self.msg_input = SourceMessageProcessingState::Finished;
             }
+            (false, true) => {
+                self.msg_input = SourceMessageProcessingState::Draining;
+            }
+            (false, false) => (),
         }
 
         // Read in any new bindings.  We use these events are the sole indication of whether a
         // timestamp can be emitted.  Unless we read it back out of the persistent collection,
         // assume it can be changed.
-        //
-        // XXX(chae): we'll need to change this unless we can have a nb poll (like we do for
-        // reading snapshots).  I think we'll need a nb poll _anyway_ because we'll need to
-        // be able to read in bindings when we lose a CAS write -- this will require a quick
-        // listen OR the ability to read from a range.
-        let listen_events = match tokio::time::timeout(
-            Duration::from_secs(2),
-            self.timestamp_bindings_listener.next(),
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                // `Elapsed` has a private constructor so can't just match above
-                let _: Elapsed = e;
-                vec![]
-            }
-        };
-        for event in listen_events {
+        for event in self.timestamp_bindings_listener.next().await {
             match event {
                 ListenEvent::Progress(progress) => {
+                    eprintln!("{:?} MERGER READING PROGRESS {:?}", self.name, progress);
                     assert!(
                         timely::PartialOrder::less_equal(&self.read_progress, &progress),
                         "PARTIAL ORDER: {:?} {:?}",
@@ -1185,8 +1194,13 @@ impl<S: SourceReader> CreateSourceRunner<S> {
                     self.read_progress = progress;
                 }
                 ListenEvent::Updates(updates) => {
+                    eprintln!("{:?} MERGER READING UPDATES {:?}", self.name, updates.len());
                     for ((_, value), timestamp, diff) in updates {
                         let partition = value.expect("Unable to decode partition id");
+                        eprintln!(
+                            "{:?} MERGER READING UPDATE {:?} {:?}",
+                            self.name, partition, diff
+                        );
                         self.persisted_timestamp_bindings
                             .entry(partition)
                             .or_insert_with(VecDeque::new)
@@ -1236,11 +1250,17 @@ impl<S: SourceReader> CreateSourceRunner<S> {
             }
         }
 
+        eprintln!("{:?} MERGER TO WRITE {:?}", self.name, to_write.len());
+
         // Transmit the data for each durable timestamp.
         for ((timestamp, _partition), messages) in to_write {
             let mut msg_output = vec![];
             for message in messages {
                 // Form and enqueue the output.
+                eprintln!(
+                    "{:?} MERGER GOING TO OUTPUT MSG {:?} {:?} {:?}",
+                    self.name, message.partition, message.offset, timestamp,
+                );
                 msg_output.push(Ok(SourceOutput::new(
                     message.key,
                     message.value,
@@ -1286,6 +1306,10 @@ impl<S: SourceReader> CreateSourceRunner<S> {
             ))
             .min()
             .unwrap_or_else(Timestamp::minimum);
+        eprintln!(
+            "{:?} MERGER TRY DOWNGRADE CAP {:?} -> {:?}",
+            self.name, cap, new_cap
+        );
         let _ = cap.try_downgrade(&new_cap);
 
         let pending_messages = self.messages_by_part.values().any(|m| !m.is_empty())
@@ -1294,14 +1318,16 @@ impl<S: SourceReader> CreateSourceRunner<S> {
                 .values()
                 .any(|m| m.len() > 1);
 
-        let source_status = match (pending_messages, &self.processing_state) {
+        eprintln!("{:?} MERGER PENDING MSGS {:?}", self.name, pending_messages);
+
+        let source_status = match (pending_messages, &self.msg_input) {
             (_, SourceMessageProcessingState::Finished) => SourceStatus::Done,
 
             // No pending messages, Draining -> draining is complete
             (false, SourceMessageProcessingState::Draining) => {
                 // TODO(#12267): Properly downgrade `since` of the timestamp collection based on the source data collection.
 
-                self.processing_state = SourceMessageProcessingState::Finished;
+                self.msg_input = SourceMessageProcessingState::Finished;
                 SourceStatus::Done
             }
 
@@ -1341,13 +1367,13 @@ pub fn create_raw_source<G, S: 'static>(
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
-    Option<SourceToken>,
+    Vec<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceReader,
-    S::Key: Debug + Codec,
-    S::Value: Debug + Codec,
+    S::Key: Serialize + for<'a> Deserialize<'a> + Send + Sync + Debug + Codec,
+    S::Value: Serialize + for<'a> Deserialize<'a> + Send + Sync + Debug + Codec,
 {
     let RawSourceCreationConfig {
         name,
@@ -1364,51 +1390,11 @@ where
         ..
     } = config;
 
-    let scope = scope.clone();
-
-    let mut token = None;
-
-    let mut builder = OperatorBuilder::new(name.clone(), scope.clone());
-    let operator_info = builder.operator_info();
-
-    let (mut data_output, data_stream) = builder.new_output();
-    builder.set_notify(false);
-
-    // Pre-existing reclocking information.
-    let restored_offsets = timestamp_histories
-        .as_mut()
-        .map(|ts| ts.partitions())
-        .unwrap_or_default();
-
-    let source_reader = if !active {
-        SourceMessageProcessingState::<S>::Finished
-    } else {
-        match S::new(
-            name.clone(),
-            source_id,
-            worker_id,
-            worker_count,
-            scope.sync_activator_for(&operator_info.address[..]),
-            source_connector.clone(),
-            aws_external_id,
-            restored_offsets,
-            encoding,
-            base_metrics.clone(),
-        ) {
-            Ok(source_reader) => {
-                SourceMessageProcessingState::Ready(source_reader.into_stream(timestamp_frequency))
-            }
-            Err(e) => {
-                error!("Failed to create source: {}", e);
-                SourceMessageProcessingState::Finished
-            }
-        }
-    };
-
     // Arbitrary size channel
     let (tx, rx) = tokio::sync::mpsc::channel(128);
 
     // TODO make only one of these not one per worker
+    let now_clone = now.clone();
     let _timestamper_task = mz_ore::task::spawn(|| format!("timestamper_{}", name), {
         let collection_metadata = collection_metadata.clone();
         let name = name.clone();
@@ -1416,7 +1402,7 @@ where
             let mut runner = match CreateSourceTimestamper::initialize(
                 name.clone(),
                 collection_metadata,
-                now,
+                now_clone,
                 timestamp_frequency,
                 rx,
             )
@@ -1433,38 +1419,154 @@ where
         }
     });
 
-    builder.build_async(scope.clone(), |mut capabilities, frontiers, scheduler| {
+    let scope = scope.clone();
+
+    let mut ingestor_token = None;
+    let mut ingestor_builder = OperatorBuilder::new(name.clone(), scope.clone());
+    let ingestor_operator_info = ingestor_builder.operator_info();
+    let (mut ingestor_data_output, ingestor_data_stream) = ingestor_builder.new_output();
+    ingestor_builder.set_notify(false);
+
+    // Pre-existing reclocking information.
+    let restored_offsets = timestamp_histories
+        .as_mut()
+        .map(|ts| ts.partitions())
+        .unwrap_or_default();
+
+    let source_reader = if !active {
+        None
+    } else {
+        match S::new(
+            name.clone(),
+            source_id,
+            worker_id,
+            worker_count,
+            scope.sync_activator_for(&ingestor_operator_info.address[..]),
+            source_connector.clone(),
+            aws_external_id,
+            restored_offsets,
+            encoding,
+            base_metrics.clone(),
+        ) {
+            Ok(source_reader) => Some(source_reader.into_stream(timestamp_frequency)),
+            Err(e) => {
+                error!("Failed to create source: {}", e);
+                None
+            }
+        }
+    };
+
+    ingestor_builder.build_async(scope.clone(), |mut capabilities, frontiers, scheduler| {
         // Must be one to begin
         let mut capabilities = Some(capabilities.pop().unwrap());
 
-        let activator = scope.activator_for(&operator_info.address[..]);
+        let activator = scope.activator_for(&ingestor_operator_info.address[..]);
 
-        let waker_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
+        let waker_activator =
+            Arc::new(scope.sync_activator_for(&ingestor_operator_info.address[..]));
         let waker = futures::task::waker(waker_activator);
 
-        let drop_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
+        let drop_activator =
+            Arc::new(scope.sync_activator_for(&ingestor_operator_info.address[..]));
         let drop_activator_weak = Arc::downgrade(&drop_activator);
 
         // Export a token to the outside word that will keep this source alive.
-        token = Some(SourceToken {
+        ingestor_token = Some(SourceToken {
             activator: drop_activator,
         });
 
         let name_clone = name.clone();
+        let tx_clone = tx.clone();
         async move {
-            if let SourceMessageProcessingState::Finished = source_reader {
+            if let None = source_reader {
                 return;
             }
 
-            let mut runner = match CreateSourceRunner::initialize(
+            let mut ingestor = match CreateSourceIngestor::<S>::initialize(
                 name_clone.clone(),
                 source_reader,
                 activator,
                 waker,
-                collection_metadata,
                 timestamp_frequency,
                 source_id,
-                tx.clone(),
+                tx_clone,
+                now,
+            )
+            .expect("initializing CreateSourceRunner")
+            {
+                Some(runner) => runner,
+                None => return,
+            };
+
+            loop {
+                scheduler.notified().await;
+                let iteration_frontiers = (*frontiers.borrow()).clone();
+
+                // Drop all capabilities if the thread-safe `SourceToken` is dropped.
+                if drop_activator_weak.upgrade().is_none() {
+                    capabilities = None;
+                }
+
+                if let Some(data_cap) = &mut capabilities {
+                    // We still have our capability, so the source is still alive.
+                    // Delegate to the inner source.
+                    eprintln!(
+                        "{:?} ING PRE-INVOKE CAP {:?}, FRONTIERS: {:?}",
+                        name_clone.clone(),
+                        data_cap,
+                        iteration_frontiers
+                    );
+                    if let SourceStatus::Done = {
+                        ingestor
+                            .invoke(ingestor_data_output.activate(), data_cap)
+                            .await
+                            .unwrap()
+                    } {
+                        eprintln!("{:?} ING DROPPING CAP", name_clone.clone());
+                        // The inner source is finished. Drop our capability.
+                        capabilities = None;
+                    }
+                }
+
+                if capabilities.is_none() && iteration_frontiers.iter().all(|f| f.is_empty()) {
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut merger_token = None;
+    let mut merger_builder = OperatorBuilder::new(name.clone(), scope.clone());
+    let merger_operator_info = merger_builder.operator_info();
+    let (mut merger_data_output, merger_data_stream) = merger_builder.new_output();
+    // Move all data to one worker
+    let merger_input =
+        merger_builder.new_input(&ingestor_data_stream, Exchange::new(move |_| 1738));
+    merger_builder.set_notify(false);
+
+    merger_builder.build_async(scope.clone(), |mut capabilities, frontiers, scheduler| {
+        // Must be one to begin
+        let mut capabilities = Some(capabilities.pop().unwrap());
+
+        let activator = scope.activator_for(&merger_operator_info.address[..]);
+
+        let drop_activator = Arc::new(scope.sync_activator_for(&merger_operator_info.address[..]));
+        let drop_activator_weak = Arc::downgrade(&drop_activator);
+
+        // Export a token to the outside word that will keep this source alive.
+        merger_token = Some(SourceToken {
+            activator: drop_activator,
+        });
+
+        let name_clone = name.clone();
+        let collection_metadata_clone = collection_metadata.clone();
+        async move {
+            let mut runner = match CreateSourceRunner::<S>::initialize(
+                name_clone.clone(),
+                merger_input,
+                activator,
+                collection_metadata_clone,
+                timestamp_frequency,
             )
             .await
             .expect("initializing CreateSourceRunner")
@@ -1485,12 +1587,17 @@ where
                 if let Some(data_cap) = &mut capabilities {
                     // We still have our capability, so the source is still alive.
                     // Delegate to the inner source.
+                    eprintln!(
+                        "{:?} MERG PRE-INVOKE CAP {:?}, FRONTIERS: {:?}",
+                        runner.name, data_cap, iteration_frontiers
+                    );
                     if let SourceStatus::Done = {
                         runner
-                            .invoke(data_output.activate(), data_cap)
+                            .invoke(merger_data_output.activate(), data_cap)
                             .await
                             .unwrap()
                     } {
+                        eprintln!("{:?} MERG DROPPING CAP", runner.name);
                         // The inner source is finished. Drop our capability.
                         capabilities = None;
                     }
@@ -1505,13 +1612,17 @@ where
 
     // `build()` promises to call the provided closure before returning,
     // so we are guaranteed that `token` is non-None.
-    let token = token.unwrap();
+    let ingestor_token = ingestor_token.unwrap();
+    let merger_token = merger_token.unwrap();
 
-    let (ok_stream, err_stream) = data_stream.map_fallible("SourceErrorDemux", |r| r);
+    let (ok_stream, err_stream) = merger_data_stream.map_fallible("SourceErrorDemux", |r| {
+        eprintln!("MERGER DATA STREAM OUTPUT: {:?}", r.is_ok());
+        r
+    });
     if active {
-        ((ok_stream, err_stream), Some(token))
+        ((ok_stream, err_stream), vec![ingestor_token, merger_token])
     } else {
         // Immediately drop the capability if worker is not an active reader for source
-        ((ok_stream, err_stream), None)
+        ((ok_stream, err_stream), vec![])
     }
 }

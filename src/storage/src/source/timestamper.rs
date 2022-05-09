@@ -16,7 +16,6 @@ use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 use tokio::sync::mpsc::Receiver;
-use tokio::time::error::Elapsed;
 
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::PartitionId;
@@ -37,7 +36,7 @@ pub struct CreateSourceTimestamper {
     timestamp_bindings_listener: Listen<(), PartitionId, Timestamp, Diff>,
     now: NowFn,
     timestamp_frequency: Duration,
-    bindings_channel: Receiver<(PartitionId, MzOffset)>,
+    bindings_channel: Option<Receiver<(PartitionId, MzOffset)>>,
 }
 
 impl CreateSourceTimestamper {
@@ -102,8 +101,7 @@ impl CreateSourceTimestamper {
             .unwrap_or_else(|e| panic!("{:?} Read snapshot at handle.since ts {:?}", name, e));
 
         loop {
-            let r = snap_iter.next().await;
-            match r {
+            match snap_iter.next().await {
                 None => break,
                 Some(v) => {
                     for ((key, value), _timestamp, diff) in v {
@@ -134,14 +132,22 @@ impl CreateSourceTimestamper {
             timestamp_bindings_listener,
             now,
             timestamp_frequency,
-            bindings_channel,
+            bindings_channel: Some(bindings_channel),
         }))
     }
 
     // return value: whether to continue
     pub async fn invoke<'a>(&mut self) -> anyhow::Result<bool> {
         if self.write_upper.is_empty() || self.read_handle.since().is_empty() {
-            self.bindings_channel.close();
+            eprintln!(
+                "{:?} TS CLOSING {:?} {:?}",
+                self.name,
+                self.write_upper,
+                self.read_handle.since()
+            );
+            if let Some(ref mut channel) = self.bindings_channel {
+                channel.close();
+            }
 
             if !self.write_upper.is_empty() {
                 self.write_upper = Antichain::new();
@@ -152,20 +158,7 @@ impl CreateSourceTimestamper {
             return Ok(false);
         }
 
-        let listen_events = match tokio::time::timeout(
-            Duration::from_secs(2),
-            self.timestamp_bindings_listener.next(),
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                // `Elapsed` has a private constructor so can't just match above
-                let _: Elapsed = e;
-                vec![]
-            }
-        };
-        for event in listen_events {
+        for event in self.timestamp_bindings_listener.next().await {
             match event {
                 ListenEvent::Progress(progress) => {
                     assert!(
@@ -178,8 +171,17 @@ impl CreateSourceTimestamper {
                     self.read_progress = progress;
                 }
                 ListenEvent::Updates(updates) => {
+                    eprintln!(
+                        "{:?} TIMESTAMPER READING UPDATES {:?}",
+                        self.name,
+                        updates.len()
+                    );
                     for ((_, value), _timestamp, diff) in updates {
                         let partition = value.expect("Unable to decode partition id");
+                        eprintln!(
+                            "{:?} TIMESTAMPER READING UPDATE {:?} {:?}",
+                            self.name, partition, diff
+                        );
                         let cursor_offset = self
                             .partition_cursors
                             .entry(partition)
@@ -198,40 +200,55 @@ impl CreateSourceTimestamper {
             }
         });
 
+        eprintln!(
+            "{:?} TS PROPOSED OFFSETS PRE {:?}",
+            self.name, self.proposed_offsets
+        );
+
         // TODO(#12267): Properly downgrade `since` of the timestamp collection based on the source data collection.
 
         // XXX: should clamp to round timestamp_frequency??
         let recv_deadline = tokio::time::Instant::now() + self.timestamp_frequency;
-        loop {
-            match tokio::time::timeout_at(recv_deadline, self.bindings_channel.recv()).await {
-                Ok(Some((incoming_partition, incoming_offset))) => {
-                    if let Some(proposed_offset) = self.proposed_offsets.get(&incoming_partition) {
-                        if *proposed_offset >= incoming_offset {
-                            continue;
+        if let Some(ref mut bindings_channel) = self.bindings_channel {
+            loop {
+                match tokio::time::timeout_at(recv_deadline, bindings_channel.recv()).await {
+                    Ok(Some((incoming_partition, incoming_offset))) => {
+                        if let Some(proposed_offset) =
+                            self.proposed_offsets.get(&incoming_partition)
+                        {
+                            if *proposed_offset >= incoming_offset {
+                                continue;
+                            }
+                        };
+                        if let Some(partition_offset) =
+                            self.partition_cursors.get(&incoming_partition)
+                        {
+                            if *partition_offset >= incoming_offset {
+                                continue;
+                            }
                         }
-                    };
-                    if let Some(partition_offset) = self.partition_cursors.get(&incoming_partition)
-                    {
-                        if *partition_offset >= incoming_offset {
-                            continue;
-                        }
+                        self.proposed_offsets
+                            .insert(incoming_partition.clone(), incoming_offset);
                     }
-                    self.proposed_offsets
-                        .insert(incoming_partition.clone(), incoming_offset);
-                }
-                Ok(None) => {
-                    // All senders dropped means we don't need to write anymore
-                    self.write_upper = Antichain::new();
-                    return Ok(true);
-                }
-                Err(_) => {
-                    break;
+                    Ok(None) => {
+                        // All senders dropped means we should start shutting down
+                        self.bindings_channel = None;
+                        break;
+                    }
+                    Err(_) => {
+                        break;
+                    }
                 }
             }
         }
+        eprintln!(
+            "{:?} TS PROPOSED OFFSETS POST {:?}; UPPER: {:?}; PROGRESS: {:?}",
+            self.name, self.proposed_offsets, self.write_upper, self.read_progress,
+        );
 
         // Decide if we're up to date enough to drain!
         if !PartialOrder::less_equal(&self.write_upper, &self.read_progress) {
+            eprintln!("{:?} TS NOT READ UP TO DATE", self.name);
             // Use intentionally wrong value of `expected_upper` in order to update the upper for next iteration.
             let empty: [(((), PartitionId), Timestamp, Diff); 0] = [];
             self.write_upper = self
@@ -271,6 +288,17 @@ impl CreateSourceTimestamper {
                 (partition, diff)
             })
             .collect();
+
+        eprintln!(
+            "{:?} TS NEW BINDINGS {:?} AT {:?}",
+            self.name, new_bindings, new_ts
+        );
+
+        // If we've drained all bindings and all senders have dropped, we should begin shutting down.
+        if new_bindings.is_empty() && self.bindings_channel.is_none() {
+            self.write_upper = Antichain::new();
+            return Ok(true);
+        }
 
         let compare_and_append_result = self
             .write_handle

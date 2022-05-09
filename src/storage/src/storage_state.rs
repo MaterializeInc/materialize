@@ -67,7 +67,7 @@ pub struct StorageState {
         HashMap<GlobalId, WriteHandle<Row, Row, mz_repr::Timestamp, mz_repr::Diff>>,
     /// Handles to external sources, keyed by ID.
     // TODO(guswynn): determine if this field is needed
-    pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
+    pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<SourceToken>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
     /// Decoding metrics reported by all dataflows.
