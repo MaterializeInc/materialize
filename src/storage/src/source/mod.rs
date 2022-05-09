@@ -55,7 +55,7 @@ use mz_avro::types::Value;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{AwsExternalId, ExternalSourceConnector, MzOffset};
 use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
-use mz_expr::{PartitionId, SourceInstanceId};
+use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::now::NowFn;
@@ -103,7 +103,7 @@ pub struct RawSourceCreationConfig<'a, G> {
     /// (For example, a Kafka topic)
     pub upstream_name: Option<String>,
     /// The ID of this instantiation of this source.
-    pub id: SourceInstanceId,
+    pub id: GlobalId,
     /// The timely scope in which to build the source.
     pub scope: &'a G,
     /// The ID of the worker on which this operator is executing
@@ -166,7 +166,7 @@ where
 
     fn new(
         source_name: String,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
@@ -397,7 +397,7 @@ pub trait SourceReader {
     /// that either don't truly have partitions or have a fixed number of partitions.
     fn new(
         source_name: String,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
@@ -560,7 +560,7 @@ pub struct SourceMetrics {
     /// Per-partition Prometheus metrics.
     pub partition_metrics: HashMap<PartitionId, PartitionMetrics>,
     source_name: String,
-    source_id: SourceInstanceId,
+    source_id: GlobalId,
     base_metrics: SourceBaseMetrics,
 }
 
@@ -569,7 +569,7 @@ impl SourceMetrics {
     pub fn new(
         base: &SourceBaseMetrics,
         source_name: &str,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         worker_id: &str,
     ) -> SourceMetrics {
         let labels = &[
@@ -643,7 +643,7 @@ impl PartitionMetrics {
     fn record_offset(
         &mut self,
         _source_name: &str,
-        _source_id: SourceInstanceId,
+        _source_id: GlobalId,
         _partition_id: &PartitionId,
         offset: i64,
         timestamp: i64,
@@ -658,13 +658,12 @@ impl PartitionMetrics {
     pub fn new(
         base_metrics: &SourceBaseMetrics,
         source_name: &str,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         partition_id: &PartitionId,
     ) -> PartitionMetrics {
         let labels = &[
             source_name.to_string(),
-            source_id.source_id.to_string(),
-            source_id.dataflow_id.to_string(),
+            source_id.to_string(),
             partition_id.to_string(),
         ];
         let base = &base_metrics.partition_specific;
@@ -858,30 +857,27 @@ where
     let (tx, mut rx) = mpsc::channel(64);
 
     if active {
-        task::spawn(
-            || format!("source_simple_timestamper:{}", id.source_id),
-            async move {
-                let timestamper = Timestamper::new(tx, timestamp_frequency, now);
-                let source = connector.start(&timestamper);
-                tokio::pin!(source);
+        task::spawn(|| format!("source_simple_timestamper:{}", id), async move {
+            let timestamper = Timestamper::new(tx, timestamp_frequency, now);
+            let source = connector.start(&timestamper);
+            tokio::pin!(source);
 
-                loop {
-                    tokio::select! {
-                        res = timestamper.tick() => {
-                            if res.is_err() {
-                                break;
-                            }
-                        }
-                        res = &mut source => {
-                            if let Err(err) = res {
-                                let _ = timestamper.error(err).await;
-                            }
+            loop {
+                tokio::select! {
+                    res = timestamper.tick() => {
+                        if res.is_err() {
                             break;
                         }
                     }
+                    res = &mut source => {
+                        if let Err(err) = res {
+                            let _ = timestamper.error(err).await;
+                        }
+                        break;
+                    }
                 }
-            },
-        );
+            }
+        });
     }
 
     let (stream, capability) = source(scope, name.clone(), move |info| {

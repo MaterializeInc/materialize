@@ -27,8 +27,9 @@ use mz_dataflow_types::sources::{
     MzOffset,
 };
 use mz_dataflow_types::SourceErrorDetails;
-use mz_expr::{PartitionId, SourceInstanceId};
+use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
+use mz_repr::GlobalId;
 
 use crate::source::metrics::{KinesisMetrics, SourceBaseMetrics};
 use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
@@ -119,7 +120,7 @@ impl SourceReader for KinesisSourceReader {
 
     fn new(
         _source_name: String,
-        _source_id: SourceInstanceId,
+        _source_id: GlobalId,
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,

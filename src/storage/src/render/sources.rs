@@ -28,7 +28,7 @@ use timely::dataflow::Scope;
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::{encoding::*, *};
 use mz_dataflow_types::*;
-use mz_expr::{PartitionId, SourceInstanceId};
+use mz_expr::PartitionId;
 use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
@@ -142,7 +142,6 @@ where
 // TODO(guswynn): Link to merged document
 pub fn render_source<G>(
     dataflow_debug_name: &String,
-    dataflow_id: usize,
     as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
     SourceInstanceDesc {
         description: src,
@@ -170,12 +169,6 @@ where
 
     // Tokens that we should return from the method.
     let mut needed_tokens: Vec<Arc<dyn std::any::Any + Send + Sync>> = Vec::new();
-
-    // This uid must be unique across all different instantiations of a source
-    let uid = SourceInstanceId {
-        source_id: src_id,
-        dataflow_id,
-    };
 
     // Before proceeding, we may need to remediate sources with non-trivial relational
     // expressions that post-process the bare source. If the expression is trivial, a
@@ -263,11 +256,11 @@ where
                 .ts_histories
                 .get(&src_id)
                 .map(|history| history.clone());
-            let source_name = format!("{}-{}", connector.name(), uid);
+            let source_name = format!("{}-{}", connector.name(), src_id);
             let base_source_config = RawSourceCreationConfig {
                 name: source_name,
                 upstream_name: connector.upstream_name().map(ToOwned::to_owned),
-                id: uid,
+                id: src_id,
                 scope,
                 // Distribute read responsibility among workers.
                 active: active_read_worker,
@@ -287,7 +280,7 @@ where
                 pubnub_connector,
             ) = connector
             {
-                let source = PubNubSourceReader::new(uid, pubnub_connector);
+                let source = PubNubSourceReader::new(src_id, pubnub_connector);
                 let ((ok_stream, err_stream), capability) =
                     source::create_raw_source_simple(base_source_config, source);
 
@@ -300,8 +293,11 @@ where
 
                 (ok_stream.as_collection(), capability)
             } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
-                let source =
-                    PostgresSourceReader::new(uid, pg_connector, base_source_config.base_metrics);
+                let source = PostgresSourceReader::new(
+                    src_id,
+                    pg_connector,
+                    base_source_config.base_metrics,
+                );
 
                 let ((ok_stream, err_stream), capability) =
                     source::create_raw_source_simple(base_source_config, source);
@@ -449,7 +445,6 @@ where
                                         let ((tx_source_ok, tx_source_err), tx_token) =
                                             render_source(
                                                 dataflow_debug_name,
-                                                dataflow_id,
                                                 as_of_frontier,
                                                 SourceInstanceDesc {
                                                     description: tx_src_desc,

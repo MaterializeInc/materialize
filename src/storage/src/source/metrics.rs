@@ -119,27 +119,27 @@ impl PartitionSpecificMetrics {
                 name: "mz_partition_offset_ingested",
                 help: "The most recent offset that we have ingested into a dataflow. This correspond to \
                  data that we have 1)ingested 2) assigned a timestamp",
-                var_labels: ["topic", "source_id", "source_instance", "partition_id"],
+                var_labels: ["topic", "source_id", "partition_id"],
             )),
             offset_received: registry.register(metric!(
                 name: "mz_partition_offset_received",
                 help: "The most recent offset that we have been received by this source.",
-                var_labels: ["topic", "source_id", "source_instance", "partition_id"],
+                var_labels: ["topic", "source_id", "partition_id"],
             )),
             closed_ts: registry.register(metric!(
                 name: "mz_partition_closed_ts",
                 help: "The highest closed timestamp for each partition in this dataflow",
-                var_labels: ["topic", "source_id", "source_instance", "partition_id"],
+                var_labels: ["topic", "source_id", "partition_id"],
             )),
             messages_ingested: registry.register(metric!(
                 name: "mz_messages_ingested",
                 help: "The number of messages ingested per partition.",
-                var_labels: ["topic", "source_id", "source_instance", "partition_id"],
+                var_labels: ["topic", "source_id", "partition_id"],
             )),
             partition_offset_max: registry.register(metric!(
                 name: "mz_kafka_partition_offset_max",
                 help: "High watermark offset on broker for partition",
-                var_labels: ["topic", "source_id", "source_instance", "partition_id"],
+                var_labels: ["topic", "source_id", "partition_id"],
             )),
         }
     }

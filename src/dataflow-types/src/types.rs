@@ -394,13 +394,13 @@ impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P,
 
 /// Types and traits related to the introduction of changing collections into `dataflow`.
 pub mod sources {
-
     use std::collections::{BTreeMap, HashMap};
-    use std::ops::Add;
+    use std::ops::{Add, Deref, DerefMut};
     use std::path::PathBuf;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
+    use bytes::BufMut;
     use chrono::NaiveDateTime;
     use differential_dataflow::lattice::Lattice;
     use globset::Glob;
@@ -408,13 +408,23 @@ pub mod sources {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
+    use prost::Message;
     use serde::{Deserialize, Serialize};
     use timely::progress::Timestamp;
     use uuid::Uuid;
 
-    use crate::postgres_source::PostgresSourceDetails;
     use mz_kafka_util::KafkaAddrs;
+    use mz_persist_types::Codec;
+    use mz_repr::proto::TryFromProtoError;
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+
+    use crate::postgres_source::PostgresSourceDetails;
+    use crate::DataflowError;
+
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/mz_dataflow_types.types.sources.rs"
+    ));
 
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
@@ -1694,6 +1704,67 @@ pub mod sources {
                 loader = loader.endpoint_resolver(Endpoint::immutable(endpoint.0.clone()));
             }
             loader.load().await
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct SourceData(pub Result<Row, DataflowError>);
+
+    impl Deref for SourceData {
+        type Target = Result<Row, DataflowError>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl DerefMut for SourceData {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    impl From<&SourceData> for ProtoSourceData {
+        fn from(x: &SourceData) -> Self {
+            use proto_source_data::Kind;
+            ProtoSourceData {
+                kind: Some(match &**x {
+                    Ok(row) => Kind::Ok(row.into()),
+                    Err(err) => Kind::Err(err.into()),
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoSourceData> for SourceData {
+        type Error = TryFromProtoError;
+
+        fn try_from(data: ProtoSourceData) -> Result<Self, Self::Error> {
+            use proto_source_data::Kind;
+            match data.kind {
+                Some(kind) => match kind {
+                    Kind::Ok(row) => Ok(SourceData(Ok(row.try_into()?))),
+                    Kind::Err(err) => Ok(SourceData(Err(err.try_into()?))),
+                },
+                None => Result::Err(TryFromProtoError::missing_field("ProtoSourceData::kind")),
+            }
+        }
+    }
+
+    impl Codec for SourceData {
+        fn codec_name() -> String {
+            "protobuf[SourceData]".into()
+        }
+
+        fn encode<B: BufMut>(&self, buf: &mut B) {
+            ProtoSourceData::from(self)
+                .encode(buf)
+                .expect("no required fields means no initialization errors");
+        }
+
+        fn decode(buf: &[u8]) -> Result<Self, String> {
+            let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
+            Self::try_from(proto).map_err(|err| err.to_string())
         }
     }
 }
