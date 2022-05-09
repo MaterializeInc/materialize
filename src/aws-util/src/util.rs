@@ -12,6 +12,6 @@ use aws_smithy_client::hyper_ext::Adapter;
 use hyper_tls::HttpsConnector;
 
 pub fn connector() -> DynConnector {
-    let connector = mz_http_proxy::hyper::connector(HttpsConnector::new());
+    let connector = HttpsConnector::new();
     DynConnector::new(Adapter::builder().build(connector))
 }
