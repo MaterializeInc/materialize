@@ -1,5 +1,13 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
 use std::collections::HashMap;
-use std::time::Duration;
 
 use differential_dataflow::{AsCollection, Collection};
 use mz_persist_client::read::ListenEvent;
@@ -20,7 +28,6 @@ where
 {
     let scope = collection.scope();
     let active_worker_index = 0;
-    let timeout = Duration::from_secs(5);
 
     let (write, read) = if active_worker_index == scope.index() {
         let persist_location = PersistLocation {
@@ -29,15 +36,13 @@ where
         };
         let shard_id = ShardId::new();
 
-        let (blob, consensus) = futures_executor::block_on(persist_location.open(timeout))
+        let (blob, consensus) = futures_executor::block_on(persist_location.open())
             .expect("cannot open persist location");
-        let persist_client =
-            futures_executor::block_on(PersistClient::new(timeout, blob, consensus))
-                .expect("cannot open client");
-        let (write, read) = futures_executor::block_on(
-            persist_client.open::<Row, Row, Timestamp, Diff>(timeout, shard_id),
-        )
-        .expect("could not open persist shard");
+        let persist_client = futures_executor::block_on(PersistClient::new(blob, consensus))
+            .expect("cannot open client");
+        let (write, read) =
+            futures_executor::block_on(persist_client.open::<Row, Row, Timestamp, Diff>(shard_id))
+                .expect("could not open persist shard");
         (Some(write), Some(read))
     } else {
         (None, None)
@@ -77,7 +82,7 @@ where
                     .flat_map(|(_ts, updates)| updates.iter());
 
                 write
-                    .append(timeout, updates, frontier.clone())
+                    .append(updates, frontier.clone())
                     .await
                     .expect("cannot append updates")
                     .expect("cannot append updates")
@@ -96,29 +101,23 @@ where
 
         let as_of = read.since();
         let mut snapshot = read
-            .snapshot(timeout, as_of.clone())
+            .snapshot(as_of.clone())
             .await
-            .expect("cannot create snapshot")
-            .expect("invalid usage");
+            .expect("cannot serve requested as_of");
 
-        loop {
-            let next = snapshot.next(timeout).await.expect("cannot read snapshot");
-            if next.is_empty() {
-                break;
-            }
+        while let Some(next) = snapshot.next().await {
             for update in next {
                 yield Event::Message(update.1, update);
             }
         }
 
         let mut listen = read
-            .listen(timeout, as_of.clone())
+            .listen(as_of.clone())
             .await
-            .expect("cannot create listen")
-            .expect("invalid usage");
+            .expect("cannot serve requested as_of");
 
         loop {
-            let next = listen.next(timeout).await.expect("cannot read listen");
+            let next = listen.next().await;
             for event in next {
                 match event {
                     ListenEvent::Progress(upper) => {
