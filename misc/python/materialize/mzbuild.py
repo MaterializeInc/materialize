@@ -852,7 +852,7 @@ def publish_multiarch_images(tag: str, dependency_sets: List[DependencySet]) -> 
         )
         spawn.runv(["docker", "manifest", "push", name])
     print(f"--- Nofifying for tag {tag}")
-    markdown = f"""Pushed tag `{tag}`"""
+    markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(
         [
             "buildkite-agent",
