@@ -72,14 +72,13 @@ In this demo, Materialize...
   expression, using named capture groups to create columns
 - Provides a SQL interface to query the structured version of the log files.
 
-We will connect to Materialize through `mzcli`, which is our forked version of
-`pgcli`.
+We will connect to Materialize through `psql`.
 
 ### Diagram
 
 {{<
     figure src="/images/demos/log_parsing_architecture_diagram.png"
-    alt="Load generator <-HTTP-> Web server -> logs -> materialized <-SQL-> mzcli"
+    alt="Load generator <-HTTP-> Web server -> logs -> materialized <-SQL-> psql"
     width="300"
 >}}
 
@@ -282,13 +281,13 @@ get a chance to see how Materialize can handle queries on our data.
 
 1. Launch a new terminal window and `cd demos/http_logs`.
 
-1. Launch the Materialize CLI (`mzcli`) by running:
+1. Launch `psql` by running:
 
     ```shell
     docker-compose run cli
     ```
 
-1. Within `mzcli`, ensure you have all of the necessary sources, which represent
+1. Within `psql`, ensure you have all of the necessary sources, which represent
    all of the tables from MySQL:
 
     ```sql

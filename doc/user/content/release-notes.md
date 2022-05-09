@@ -122,7 +122,7 @@ necessary to address severe bugs and security vulnerabilities.
     [`arrangement`](/overview/arrangements) as the only valid method.
 
   Together these changes enable support for [Apache Superset] and the
-  `\d <object>` command in the  [psql terminal](/integrations/psql).
+  `\d <object>` command in the  [psql terminal](/integrations/sql-clients).
 
 - Support calling [`date_trunc`](/sql/functions/#date_trunc) with
   [`interval`](/sql/types/interval) values {{% gh 9871 %}}.
@@ -685,7 +685,7 @@ Improve PostgreSQL compatibility:
     {{% gh 9366 %}}.
 
   These changes enable the `\dt <pattern>` command in the
-  [psql terminal](/integrations/psql) and PgJDBC's `getPrimaryKeys()` API.
+  [psql terminal](/integrations/sql-clients) and PgJDBC's `getPrimaryKeys()` API.
 
 - Fix a query optimization that could produce wrong results when a condition in
   a `CASE` expression returned `NULL` rather than `FALSE` {{% gh 9287 %}}.
@@ -1241,7 +1241,7 @@ a problem with PostgreSQL JDBC 42.3.0.
   It will be restored in the next release.
 
 - **Breaking change.** Require a valid user name when [connecting to
-  Materialize](/integrations/psql#connection-details). Previously, Materialize did not
+  Materialize](/integrations/sql-clients#connection-details). Previously, Materialize did not
   support the concept of [roles](/sql/create-role), so it accepted all user
   names.
 
@@ -1601,7 +1601,7 @@ a problem with PostgreSQL JDBC 42.3.0.
     `pg_encoding_to_char` [compatibility functions](/sql/functions#postgresql-compatibility-func).
 
   Together these changes enable the `\l`, `\d`, `\dv`, `\dt`, `\di` commands
-  in the [psql terminal](/integrations/psql).
+  in the [psql terminal](/integrations/sql-clients).
 
 - Correct a query optimization that could misplan queries that referenced the
   same relation multiple times with varying filters {{% gh 4361 %}}.

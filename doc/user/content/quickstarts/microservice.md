@@ -432,7 +432,7 @@ In a future iteration, we'll make this demo more interactive.
 Now that our deployment is running (and looks like the diagram shown above), we
 can see that Materialize is ingesting the `protobuf` data and normalizing it.
 
-1. Launch the `mzcli` SQL shell connected to `materialized`:
+1. Launch a `psql` shell connected to `materialized`:
 
     ```shell
     docker-compose run cli
