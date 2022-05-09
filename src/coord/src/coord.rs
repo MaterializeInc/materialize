@@ -414,10 +414,17 @@ impl<S: Append + 'static> Coordinator<S> {
         self.global_timeline.read_ts()
     }
 
-    /// Assign a timestamp for a write to a local input. Writes following reads
+    /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
-    fn get_local_write_ts(&mut self) -> (Timestamp, Timestamp) {
+    fn get_local_write_ts(&mut self) -> Timestamp {
+        self.global_timeline.write_ts()
+    }
+
+    /// Assign a timestamp for a write to a local input and increase the local ts.
+    /// Writes following reads must ensure that they are assigned a strictly larger
+    /// timestamp to ensure they are not visible to any real-time earlier reads.
+    fn get_and_step_local_write_ts(&mut self) -> (Timestamp, Timestamp) {
         let ts = self.global_timeline.write_ts();
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE.
@@ -554,7 +561,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await;
                 }
                 CatalogItem::Table(_) => {
-                    let (since_ts, _) = self.get_local_write_ts();
+                    let since_ts = self.get_local_write_ts();
 
                     // Re-announce the source description.
                     let source_description = self
@@ -2108,7 +2115,7 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(ops, |_| Ok(())).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
-                let (since_ts, _) = self.get_local_write_ts();
+                let since_ts = self.get_local_write_ts();
 
                 // Announce the creation of the table source.
                 let source_description = self
@@ -2856,7 +2863,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         // Although the transaction has a wall_time in its pcx, we use a new
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
-                        let (timestamp, advance_to) = self.get_local_write_ts();
+                        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
                         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
 
                         for WriteOp { id, rows } in inserts {
@@ -4400,7 +4407,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let (timestamp, advance_to) = self.get_local_write_ts();
+        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         for u in updates {
             appends.entry(u.id).or_default().push(Update {

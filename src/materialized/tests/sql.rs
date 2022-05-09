@@ -281,7 +281,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         // Skip by the things we won't be able to see.
         for (_, expected) in events.iter().skip_while(|(inner_ts, _)| inner_ts < ts) {
             let actual = client_reads.query_one("FETCH c", &[])?;
-            assert_eq!(actual.get::<_, String>("data"), *expected);
+            let actual = actual.get::<_, String>("data");
+            let expected = expected.clone();
+            assert_eq!(actual, expected);
         }
     }
 
@@ -1074,14 +1076,14 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(
         explain,
-        "     timestamp:          1061
-         since:[         1060]
+        "     timestamp:          1036
+         since:[         1036]
          upper:[            0]
      has table: true
- table read ts:          1061
+ table read ts:          1036
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         1060]
+ read frontier:[         1036]
 write frontier:[            0]\n",
     );
 
