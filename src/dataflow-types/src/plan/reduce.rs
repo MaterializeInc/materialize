@@ -841,7 +841,7 @@ impl From<&KeyValPlan> for ProtoKeyValPlan {
     fn from(x: &KeyValPlan) -> Self {
         Self {
             key_plan: Some((&x.key_plan).into()),
-            val_plan: Some((&x.key_plan).into()),
+            val_plan: Some((&x.val_plan).into()),
         }
     }
 }
