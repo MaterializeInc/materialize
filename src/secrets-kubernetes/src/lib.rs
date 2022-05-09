@@ -7,20 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Error};
+use anyhow::{anyhow, bail, Error};
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
 use kube::api::{Patch, PatchParams};
 use kube::config::KubeConfigOptions;
 use kube::{Api, Client, Config};
 use mz_secrets::{SecretOp, SecretsController};
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use tokio::time::{self, Duration};
-use tracing::info;
+use tracing::{error, info};
 
 const FIELD_MANAGER: &str = "materialized";
 
@@ -95,26 +93,42 @@ impl SecretsController for KubernetesSecretsController {
         // guarantee that all new secrets are reflected on our local filesystem
         let secrets_storage_path = PathBuf::from("/secrets");
         for op in ops.iter() {
-            let mut interval = time::interval(Duration::from_millis(100));
-            for _i in 0..90 {
-                match op {
-                    SecretOp::Ensure { id, contents } => {
-                        let file_path = secrets_storage_path.join(format!("{}", id));
-                        if Path::exists(&*file_path) {
-                            break;
-                        }
-                    }
-                    SecretOp::Delete { id } => {
-                        let file_path = secrets_storage_path.join(format!("{}", id));
-                        if !Path::exists(&*file_path) {
-                            break;
-                        }
+            match op {
+                SecretOp::Ensure { id, .. } => {
+                    let file_path = secrets_storage_path.join(format!("{}", id));
+                    if !poll_until_success(|| Path::exists(&*file_path), 10).await {
+                        error!("Secret write operation has timed out. Secret with id {} could not be written", id);
+                        return Err(anyhow!("Secret write operation has timed out. Secret with id {} could not be written", id));
                     }
                 }
-                interval.tick().await;
+                SecretOp::Delete { id } => {
+                    let file_path = secrets_storage_path.join(format!("{}", id));
+                    if !poll_until_success(|| !Path::exists(&*file_path), 10).await {
+                        error!("Secret delete operation has timed out. Secret with id {} could not be written", id);
+                        return Err(anyhow!("Secret delete operation has timed out. Secret with id {} could not be written", id));
+                    }
+                }
             }
         }
 
         return Ok(());
     }
+}
+
+async fn poll_until_success<T>(func: T, timeout_seconds: i32) -> bool
+where
+    T: Fn() -> bool,
+{
+    let mut interval = time::interval(Duration::from_millis(100));
+
+    let nr_ticks = timeout_seconds * 10;
+
+    for _i in 0..nr_ticks {
+        if func() {
+            return true;
+        }
+        interval.tick().await;
+    }
+
+    return false;
 }
