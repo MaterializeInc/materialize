@@ -24,7 +24,7 @@ use tracing::trace;
 use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::SourceInstanceId;
 use mz_persist_client::read::ListenEvent;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_client::{PersistLocation, ShardId};
 use mz_repr::{Diff, Row, Timestamp};
 
 use crate::source::SourceStatus;
@@ -77,11 +77,7 @@ where
             blob_uri: blob_uri,
         };
 
-        let (blob, consensus) = persist_location.open().await?;
-
-        let persist_client =
-            PersistClient::new(blob, consensus).await?;
-
+        let persist_client = persist_location.open().await?;
 
         let (_write, read) =
             persist_client.open::<Row, Row, Timestamp, Diff>(shard_id).await?;

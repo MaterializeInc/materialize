@@ -21,7 +21,7 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
 use mz_dataflow_types::sinks::{PersistSinkConnector, SinkDesc};
-use mz_persist_client::{PersistClient, PersistLocation};
+use mz_persist_client::PersistLocation;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -82,11 +82,8 @@ where
         // "real" async context (such as our nice operator implementation below) because we need to
         // create the write handle before creating the operator because we want to share the handle
         // between the drop guard (which acts as the sink token) and the operator implementation.
-        let (blob, consensus) = futures_executor::block_on(persist_location.open())
-            .expect("cannot open persist location");
-
-        let persist_client = futures_executor::block_on(PersistClient::new(blob, consensus))
-            .expect("cannot open client");
+        let persist_client = futures_executor::block_on(persist_location.open())
+            .expect("cannot open persist client");
 
         let (write, _read) = futures_executor::block_on(
             persist_client.open::<Row, Row, Timestamp, Diff>(self.shard_id),
