@@ -52,6 +52,13 @@ spec:
   selector:
     app: materialized
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: user-managed-secrets
+  labels:
+    app: materialized
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -86,6 +93,13 @@ spec:
         volumeMounts:
         - name: data
           mountPath: /data
+        - mountPath: /secrets
+          name: secrets-mount
+      volumes:
+      - name: secrets-mount
+        secret:
+          defaultMode: 420
+          secretName: user-managed-secrets
   volumeClaimTemplates:
   - metadata:
       name: data

@@ -3904,6 +3904,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-secrets",
+ "tokio",
  "tracing",
 ]
 

@@ -12,14 +12,20 @@ use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
-use kube::api::{Patch, PatchParams, PostParams};
+use kube::api::{Patch, PatchParams};
 use kube::config::KubeConfigOptions;
 use kube::{Api, Client, Config};
 use mz_secrets::{SecretOp, SecretsController};
 use std::collections::BTreeMap;
-use tracing::{error, info};
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
+use tokio::time::{self, Duration};
+use tracing::info;
 
 const FIELD_MANAGER: &str = "materialized";
+
+// This name has to match the secret name defined in the cluster Environment Controller
+// It also has to match the name of the secret defined in the developer tooling
 pub const SECRET_NAME: &str = "user-managed-secrets";
 
 pub struct KubernetesSecretsController {
@@ -27,16 +33,6 @@ pub struct KubernetesSecretsController {
 }
 
 impl KubernetesSecretsController {
-    fn make_secret_with_name(name: String) -> Secret {
-        Secret {
-            metadata: ObjectMeta {
-                name: Some(name),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
     pub async fn new(context: String) -> Result<KubernetesSecretsController, anyhow::Error> {
         let kubeconfig_options = KubeConfigOptions {
             context: Some(context),
@@ -55,18 +51,8 @@ impl KubernetesSecretsController {
         let client = Client::try_from(kubeconfig)?;
         let secret_api: Api<Secret> = Api::default_namespaced(client);
 
-        let secret = KubernetesSecretsController::make_secret_with_name(SECRET_NAME.to_string());
-        match secret_api.create(&PostParams::default(), &secret).await {
-            Ok(_) => Ok(()),
-            Err(kube::Error::Api(e)) if e.code == 409 => {
-                info!("Secret {} already exists", SECRET_NAME.to_string());
-                Ok(())
-            }
-            Err(e) => {
-                error!("creating secret failed: {}", e);
-                Err(e)
-            }
-        }?;
+        // ensure that the secret has been created in this environment
+        secret_api.get(&*SECRET_NAME.to_string()).await?;
 
         Ok(KubernetesSecretsController { secret_api })
     }
@@ -105,6 +91,29 @@ impl SecretsController for KubernetesSecretsController {
                 &Patch::Apply(secret),
             )
             .await?;
+
+        // guarantee that all new secrets are reflected on our local filesystem
+        let secrets_storage_path = PathBuf::from("/secrets");
+        for op in ops.iter() {
+            let mut interval = time::interval(Duration::from_millis(100));
+            for _i in 0..90 {
+                match op {
+                    SecretOp::Ensure { id, contents } => {
+                        let file_path = secrets_storage_path.join(format!("{}", id));
+                        if Path::exists(&*file_path) {
+                            break;
+                        }
+                    }
+                    SecretOp::Delete { id } => {
+                        let file_path = secrets_storage_path.join(format!("{}", id));
+                        if !Path::exists(&*file_path) {
+                            break;
+                        }
+                    }
+                }
+                interval.tick().await;
+            }
+        }
 
         return Ok(());
     }
