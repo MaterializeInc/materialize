@@ -119,7 +119,7 @@ use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };
-use mz_secrets::{SecretOp, SecretsController};
+use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident, InsertSource,
@@ -237,6 +237,7 @@ pub struct Config<S> {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
+    pub secrets_reader: Arc<Box<dyn SecretsReader>>,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
 }
@@ -359,6 +360,8 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
+    // Handle to secrets reader, wrapped in an arc so it can be used in async code like purification
+    secrets_reader: Arc<Box<dyn SecretsReader>>,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -1405,15 +1408,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
                 let catalog = self.catalog.for_session(&session);
-                let purify_fut =
-                    match mz_sql::connectors::populate_connectors(stmt, &catalog, &mut vec![]) {
-                        Ok(stmt) => mz_sql::pure::purify_create_source(
-                            self.now(),
-                            self.catalog.config().aws_external_id.clone(),
-                            stmt,
-                        ),
-                        Err(e) => return tx.send(Err(e.into()), session),
-                    };
+                let purify_fut = match mz_sql::connectors::populate_connectors_with_secrets(
+                    stmt,
+                    &catalog,
+                    &mut vec![],
+                    self.secrets_reader.clone(),
+                ) {
+                    Ok(stmt) => mz_sql::pure::purify_create_source(
+                        self.now(),
+                        self.catalog.config().aws_external_id.clone(),
+                        stmt,
+                    ),
+                    Err(e) => return tx.send(Err(e.into()), session),
+                };
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx
@@ -4715,6 +4722,7 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry,
         now,
         secrets_controller,
+        secrets_reader,
         replica_sizes,
         availability_zones,
     }: Config<S>,
@@ -4764,6 +4772,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 secrets_controller,
+                secrets_reader,
                 replica_sizes,
                 availability_zones,
             };

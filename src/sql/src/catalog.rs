@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
@@ -26,6 +27,8 @@ use mz_dataflow_types::client::ComputeInstanceId;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
+
+use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
@@ -272,8 +275,14 @@ pub trait CatalogConnector {
     /// Returns the connection URI for this connector regardless of type
     fn uri(&self) -> String;
 
-    /// Returns the options associated with this connector as a Vec, if the type does not support options or none were specified this will be empty
+    /// Returns the options associated with this connector, if the type does not support options or none were specified this will be empty
     fn options(&self) -> std::collections::BTreeMap<String, String>;
+
+    /// Returns the options associated with this connector with secret GlobalIds replaced with values
+    fn options_with_secrets(
+        &self,
+        secret_reader: Arc<Box<dyn SecretsReader>>,
+    ) -> Result<std::collections::BTreeMap<String, String>, anyhow::Error>;
 }
 
 /// An item in a [`SessionCatalog`].

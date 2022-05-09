@@ -121,4 +121,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "materialized",
         ]
     )
+    # For convenience we create the secrets containing certificates and keys here for use in queries run by testdrive
+    ca_cert = c.exec("materialized", "cat", "/share/secrets/ca.crt", capture=True)
+    client_cert = c.exec("materialized", "cat", "/share/secrets/materialized.crt", capture=True)
+    client_key = c.exec("materialized", "cat", "/share/secrets/materialized.key", capture=True)
+    c.sql(f"CREATE SECRET ca_cert AS '{ca_cert.stdout}';")
+    c.sql(f"CREATE SECRET client_key AS '{client_key.stdout}';")
+    c.sql(f"CREATE SECRET client_cert AS '{client_cert.stdout}';")
     c.run("testdrive", *args.files)

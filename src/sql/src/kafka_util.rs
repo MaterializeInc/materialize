@@ -237,6 +237,8 @@ pub fn extract_config(
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 1_000_000_000),
             ),
+            Config::string("ssl_key"),
+            Config::string("ssl_certificate"),
         ],
     )
 }

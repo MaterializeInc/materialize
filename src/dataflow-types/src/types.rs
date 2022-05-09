@@ -665,6 +665,9 @@ impl TryFrom<ProtoDataflowDescription>
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, Deref, DerefMut};
+    use std::path::PathBuf;
+    use std::str::FromStr;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -685,6 +688,7 @@ pub mod sources {
     use mz_persist_types::Codec;
     use mz_repr::proto::TryFromProtoError;
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
+    use mz_secrets::SecretsReader;
 
     use crate::postgres_source::PostgresSourceDetails;
     use crate::DataflowError;
@@ -1470,7 +1474,7 @@ pub mod sources {
         }
 
         pub fn options(&self) -> BTreeMap<String, String> {
-            const SECURITY_PROTOCOL: &str = "security_protocol";
+            const SECURITY_PROTOCOL: &str = "security.protocol";
             match self {
                 ConnectorInner::CSR {
                     username, password, ..
@@ -1497,23 +1501,129 @@ pub mod sources {
                         passphrase,
                     } => {
                         let mut with_options = BTreeMap::new();
-                        with_options.insert(SECURITY_PROTOCOL.to_string(), "ssl".to_string());
+                        with_options.insert(SECURITY_PROTOCOL.to_string(), "SSL".to_string());
                         if let Some(uuid) = key {
-                            with_options.insert("ssl.key.location".to_string(), uuid.to_owned());
+                            with_options.insert(
+                                "ssl.key.location".to_string(),
+                                format!("secrets/{}", uuid),
+                            );
                         }
                         if let Some(uuid) = certificate {
-                            with_options
-                                .insert("ssl.certificate.location".to_string(), uuid.to_owned());
+                            with_options.insert(
+                                "ssl.certificate.location".to_string(),
+                                format!("secrets/{}", uuid),
+                            );
                         }
                         if let Some(uuid) = passphrase {
-                            with_options.insert("key_password".to_string(), uuid.to_owned());
+                            with_options.insert(
+                                "ssl.key.password".to_string(),
+                                format!("secrets/{}", uuid),
+                            );
                         }
                         with_options
                     }
-                    // TODO FIXME fill in this arm accordingly
-                    KafkaSecurityOptions::SASL { .. } => BTreeMap::new(),
+                    KafkaSecurityOptions::SASL {
+                        mechanism,
+                        ssl,
+                        username,
+                        password,
+                    } => {
+                        let mut with_options = BTreeMap::new();
+                        with_options.insert(
+                            SECURITY_PROTOCOL.to_string(),
+                            if *ssl {
+                                "SASL_SSL".to_string()
+                            } else {
+                                "SASL_PLAINTEXT".to_string()
+                            },
+                        );
+                        with_options.insert("sasl.mechanism".to_string(), mechanism.to_owned());
+                        with_options.insert("sasl.username".to_string(), username.to_owned());
+                        with_options.insert(
+                            "sasl.password".to_string(),
+                            format!("mzdata/secrets/{}", password),
+                        );
+                        with_options
+                    }
                 },
             }
+        }
+
+        pub fn options_with_secret_contents(
+            &self,
+            secrets_reader: Arc<Box<dyn SecretsReader>>,
+        ) -> Result<BTreeMap<String, String>, anyhow::Error> {
+            const SECURITY_PROTOCOL: &str = "security.protocol";
+            let mut with_options = BTreeMap::new();
+            match self {
+                ConnectorInner::Kafka { security, .. } => match security {
+                    KafkaSecurityOptions::PLAINTEXT => {
+                        with_options.insert(SECURITY_PROTOCOL.to_string(), "PLAINTEXT".to_string());
+                    }
+                    KafkaSecurityOptions::SSL {
+                        key,
+                        certificate,
+                        passphrase,
+                    } => {
+                        with_options.insert(SECURITY_PROTOCOL.to_string(), "SSL".to_string());
+                        if let Some(secret_id) = key {
+                            with_options.insert(
+                                "ssl.key.location".to_string(),
+                                format!("secrets/{}", secret_id),
+                            );
+                        };
+                        if let Some(secret_id) = certificate {
+                            with_options.insert(
+                                "ssl.certificate.location".to_string(),
+                                format!("mzdata/secrets/{}", secret_id),
+                            );
+                        }
+                        if let Some(secret_id) = passphrase {
+                            with_options.insert(
+                                "ssl.key.password".to_string(),
+                                String::from_utf8(
+                                    secrets_reader.read(GlobalId::from_str(secret_id)?)?,
+                                )?,
+                            );
+                        }
+                    }
+                    KafkaSecurityOptions::SASL {
+                        mechanism,
+                        ssl,
+                        username,
+                        password,
+                    } => {
+                        with_options.insert(
+                            SECURITY_PROTOCOL.to_string(),
+                            if *ssl {
+                                "SASL_SSL".to_string()
+                            } else {
+                                "SASL_PLAINTEXT".to_string()
+                            },
+                        );
+                        with_options.insert("sasl.mechanism".to_string(), mechanism.to_owned());
+                        with_options.insert("sasl.username".to_string(), username.to_owned());
+                        with_options.insert(
+                            "sasl.password".to_string(),
+                            String::from_utf8(secrets_reader.read(GlobalId::from_str(password)?)?)?,
+                        );
+                    }
+                },
+                ConnectorInner::CSR {
+                    username, password, ..
+                } => {
+                    if let Some(username) = username {
+                        with_options.insert("username".to_string(), username.to_owned());
+                    }
+                    if let Some(password) = password {
+                        with_options.insert(
+                            "password".to_string(),
+                            String::from_utf8(secrets_reader.read(GlobalId::from_str(password)?)?)?,
+                        );
+                    }
+                }
+            }
+            Ok(with_options)
         }
     }
 

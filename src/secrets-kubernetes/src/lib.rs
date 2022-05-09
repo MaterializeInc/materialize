@@ -15,7 +15,7 @@ use kube::api::{Patch, PatchParams};
 use kube::config::KubeConfigOptions;
 use kube::{Api, Client, Config, ResourceExt};
 use mz_ore::retry::Retry;
-use mz_secrets::{SecretOp, SecretsController};
+use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 use rand::random;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -172,5 +172,11 @@ impl SecretsController for KubernetesSecretsController {
         }
 
         return Ok(());
+    }
+}
+
+impl SecretsReader for KubernetesSecretsController {
+    fn read(&self, _id: mz_repr::GlobalId) -> Result<Vec<u8>, Error> {
+        unreachable!()
     }
 }

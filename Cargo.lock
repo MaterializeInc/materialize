@@ -3280,6 +3280,7 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-util",
  "mz-repr",
+ "mz-secrets",
  "mz-stash",
  "proptest",
  "proptest-derive",
@@ -3888,6 +3889,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "mz-repr",
  "mz-secrets",
 ]
 
@@ -3900,6 +3902,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-ore",
+ "mz-repr",
  "mz-secrets",
  "rand",
  "tokio",
@@ -3935,6 +3938,7 @@ dependencies = [
  "mz-pgrepr",
  "mz-postgres-util",
  "mz-repr",
+ "mz-secrets",
  "mz-sql-parser",
  "prost",
  "protobuf-native",
