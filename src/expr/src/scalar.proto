@@ -477,6 +477,7 @@ message ProtoBinaryFunc {
         google.protobuf.Empty log_numeric = 137;
         google.protobuf.Empty power = 138;
         google.protobuf.Empty power_numeric = 139;
+        google.protobuf.Empty get_byte = 140;
     }
 }
 
@@ -557,6 +558,10 @@ message ProtoEvalError {
         }
         ProtoDims dims = 1;
     }
+    message ProtoIndexOutOfRange {
+        int32 provided = 1;
+        int32 valid_end = 2;
+    }
     oneof kind {
         int32 character_not_valid_for_encoding = 1;
         int32 character_too_large_for_encoding = 2;
@@ -611,5 +616,6 @@ message ProtoEvalError {
         google.protobuf.Empty multidimensional_array_removal_not_supported = 51;
         ProtoIncompatibleArrayDimensions incompatible_array_dimensions = 52;
         string type_from_oid = 53;
+        ProtoIndexOutOfRange index_out_of_range = 54;
     }
 }

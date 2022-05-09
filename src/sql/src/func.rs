@@ -1912,6 +1912,9 @@ lazy_static! {
                     END"
                 ) => String, 1081;
             },
+            "get_byte" => Scalar {
+                params!(Bytes, Int32) => BinaryFunc::GetByte, 721;
+            },
             "hmac" => Scalar {
                 params!(String, String, String) => VariadicFunc::HmacString, 44156;
                 params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157;
