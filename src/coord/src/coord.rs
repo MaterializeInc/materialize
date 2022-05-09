@@ -2889,12 +2889,14 @@ impl<S: Append + 'static> Coordinator<S> {
                         // This should have been caught earlier, immediately when the second table
                         // was added to the txn.
                         assert!(appends.len() <= 1);
-                        let (id, updates) = appends.into_element();
-                        self.dataflow_client
-                            .storage_mut()
-                            .append(vec![(id, updates, advance_to)])
-                            .await
-                            .unwrap();
+                        if appends.len() == 1 {
+                            let (id, updates) = appends.into_element();
+                            self.dataflow_client
+                                .storage_mut()
+                                .append(vec![(id, updates, advance_to)])
+                                .await
+                                .unwrap();
+                        }
                     }
                     _ => {}
                 }
