@@ -140,12 +140,13 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
-    let (mut tracing_stream, librdkafka_debug) = mz_ore::tracing::configure(
+    let (mut tracing_stream, tracing_target_levels) = mz_ore::tracing::configure(
         mz_ore::tracing::TracingConfig {
             log_filter: &args.log_filter,
             opentelemetry_endpoint: None,
             opentelemetry_headers: None,
             prefix: args.log_process_name.then(|| "storaged"),
+            targets_to_level: vec!["librdkafka"],
             #[cfg(feature = "tokio-console")]
             tokio_console: false,
         },
@@ -161,9 +162,10 @@ invoked as: {invocation}
 max log level: {max_log_level}
 rdkafka log level: {librdkafka_debug}",
         mz_version = BUILD_INFO.human_version(),
-        invocation = mz_ore::process::invocation(),
+        invocation = mz_ore::process::invocation("STORAGED_"),
         max_log_level = ::tracing::level_filters::LevelFilter::current(),
-        librdkafka_debug = ::tracing::level_filters::LevelFilter::from_level(librdkafka_debug),
+        librdkafka_debug =
+            ::tracing::level_filters::LevelFilter::from_level(tracing_target_levels[0]),
     )?;
 
     if args.workers == 0 {
@@ -198,7 +200,7 @@ rdkafka log level: {librdkafka_debug}",
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
             .unwrap_or(AwsExternalId::NotProvided),
-        librdkafka_debug,
+        librdkafka_debug: tracing_target_levels[0],
     };
 
     let serve_config = ServeConfig {

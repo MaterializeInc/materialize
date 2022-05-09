@@ -132,6 +132,8 @@ pub struct TracingConfig<'a> {
     pub opentelemetry_headers: Option<&'a str>,
     /// Optional prefix for log lines
     pub prefix: Option<&'a str>,
+    /// `tracing` targets whose level the caller is interested in
+    pub targets_to_level: Vec<&'a str>,
     /// When enabled, optionally turn on the
     /// tokio console.
     #[cfg(feature = "tokio-console")]
@@ -140,11 +142,12 @@ pub struct TracingConfig<'a> {
 
 /// Configures tracing according to the provided command-line arguments.
 /// Returns a `Write` stream that represents the main place `tracing` will
-/// log to, and a `tracing::Level` that is the `librdkafka` debug level.
+/// log to, and a `Vec` of `tracing::Level`s that correspond to the
+/// enabled levels of the passed `targets_to_level` in the `config`.
 pub async fn configure(
     config: TracingConfig<'_>,
     metrics_registry: &MetricsRegistry,
-) -> Result<(Box<dyn Write>, tracing::Level), anyhow::Error> {
+) -> Result<(Box<dyn Write>, Vec<tracing::Level>), anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
     // before our custom panic hook is installed (because the panic hook needs
     // tracing configured to execute), so a panic here will not direct the
@@ -188,19 +191,25 @@ pub async fn configure(
     )
     .await?;
 
-    let librdkafka_debug = if filter.would_enable("librdkafka", &Level::TRACE) {
-        Level::TRACE
-    } else if filter.would_enable("librdkafka", &Level::DEBUG) {
-        Level::DEBUG
-    } else if filter.would_enable("librdkafka", &Level::INFO) {
-        Level::INFO
-    } else if filter.would_enable("librdkafka", &Level::WARN) {
-        Level::WARN
-    } else {
-        Level::ERROR
-    };
+    let targets = config
+        .targets_to_level
+        .iter()
+        .map(|target| {
+            if filter.would_enable(target, &Level::TRACE) {
+                Level::TRACE
+            } else if filter.would_enable(target, &Level::DEBUG) {
+                Level::DEBUG
+            } else if filter.would_enable(target, &Level::INFO) {
+                Level::INFO
+            } else if filter.would_enable(target, &Level::WARN) {
+                Level::WARN
+            } else {
+                Level::ERROR
+            }
+        })
+        .collect();
 
-    Ok((Box::new(io::stderr()), librdkafka_debug))
+    Ok((Box::new(io::stderr()), targets))
 }
 
 /// A tracing [`Layer`] that allows hooking into the reporting/filtering chain

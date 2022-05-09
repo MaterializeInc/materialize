@@ -15,7 +15,9 @@ use itertools::Itertools;
 use shell_words::quote as escape;
 
 /// Returns a human-readable version of how the current process was invoked.
-pub fn invocation() -> String {
+///
+/// Only env vars that start with `env_prefix` are included.
+pub fn invocation(env_prefix: &str) -> String {
     env::vars_os()
         .map(|(name, value)| {
             (
@@ -23,7 +25,7 @@ pub fn invocation() -> String {
                 value.to_string_lossy().into_owned(),
             )
         })
-        .filter(|(name, _value)| name.starts_with("MZ_"))
+        .filter(|(name, _value)| name.starts_with(env_prefix))
         .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
         .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
         .join(" ")

@@ -488,17 +488,19 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    let (mut tracing_stream, librdkafka_debug) = runtime.block_on(mz_ore::tracing::configure(
-        mz_ore::tracing::TracingConfig {
-            log_filter: &args.log_filter,
-            opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
-            opentelemetry_headers: args.opentelemetry_headers.as_deref(),
-            prefix: None,
-            #[cfg(feature = "tokio-console")]
-            tokio_console: args.tokio_console,
-        },
-        &metrics_registry,
-    ))?;
+    let (mut tracing_stream, tracing_target_levels) =
+        runtime.block_on(mz_ore::tracing::configure(
+            mz_ore::tracing::TracingConfig {
+                log_filter: &args.log_filter,
+                opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
+                opentelemetry_headers: args.opentelemetry_headers.as_deref(),
+                prefix: None,
+                targets_to_level: vec!["librdkafka"],
+                #[cfg(feature = "tokio-console")]
+                tokio_console: args.tokio_console,
+            },
+            &metrics_registry,
+        ))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
@@ -697,7 +699,7 @@ max log level: {max_log_level}
 rdkafka log level: {librdkafka_debug}",
         mz_version = materialized::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
-        invocation = mz_ore::process::invocation(),
+        invocation = mz_ore::process::invocation("MZ_"),
         os = os_info::get(),
         ncpus_logical = num_cpus::get(),
         ncpus_physical = num_cpus::get_physical(),
@@ -715,7 +717,8 @@ rdkafka log level: {librdkafka_debug}",
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
         max_log_level = ::tracing::level_filters::LevelFilter::current(),
-        librdkafka_debug = ::tracing::level_filters::LevelFilter::from_level(librdkafka_debug),
+        librdkafka_debug =
+            ::tracing::level_filters::LevelFilter::from_level(tracing_target_levels[0]),
     )?;
 
     sys::adjust_rlimits();
@@ -760,7 +763,7 @@ rdkafka log level: {librdkafka_debug}",
         now: SYSTEM_TIME.clone(),
         replica_sizes,
         availability_zones: args.availability_zone,
-        librdkafka_debug,
+        librdkafka_debug: tracing_target_levels[0],
     }))?;
 
     eprintln!(

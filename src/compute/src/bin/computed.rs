@@ -222,6 +222,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             opentelemetry_endpoint: None,
             opentelemetry_headers: None,
             prefix: args.log_process_name.then(|| "computed"),
+            targets_to_level: vec![],
             #[cfg(feature = "tokio-console")]
             tokio_console: false,
         },
@@ -236,7 +237,7 @@ computed {mz_version}
 invoked as: {invocation}
 max log level: {max_log_level}",
         mz_version = BUILD_INFO.human_version(),
-        invocation = mz_ore::process::invocation(),
+        invocation = mz_ore::process::invocation("COMPUTED_"),
         max_log_level = ::tracing::level_filters::LevelFilter::current(),
     )?;
 
