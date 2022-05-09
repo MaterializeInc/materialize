@@ -1796,6 +1796,7 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
+       #![proptest_config(ProptestConfig::with_cases(10))]
        #[test]
        fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
@@ -1805,7 +1806,7 @@ mod tests {
     }
 
     proptest! {
-       #![proptest_config(ProptestConfig::with_cases(100))]
+       #![proptest_config(ProptestConfig::with_cases(10))]
        #[test]
        fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
@@ -1816,7 +1817,7 @@ mod tests {
     }
 
     proptest! {
-       #![proptest_config(ProptestConfig::with_cases(1))]
+       #![proptest_config(ProptestConfig::with_cases(32))]
        #[test]
        fn plan_protobuf_roundtrip(expect in any::<Plan>()) {
             let actual = protobuf_roundtrip::<_, ProtoPlan>(&expect);
