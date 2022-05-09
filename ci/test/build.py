@@ -14,7 +14,7 @@ from pathlib import Path
 
 import boto3
 
-from materialize import cargo, ci_util, deb, git, mzbuild, spawn
+from materialize import cargo, ci_util, deb, mzbuild, spawn
 from materialize.xcompile import Arch
 
 from ..deploy.deploy_util import APT_BUCKET, apt_materialized_path

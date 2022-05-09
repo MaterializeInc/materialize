@@ -9,13 +9,11 @@
 
 import os
 from pathlib import Path
-from typing import List
 
 import boto3
 import semver
 
 from materialize import cargo, ci_util, deb, git, mzbuild, spawn
-from materialize.mzbuild import DependencySet
 from materialize.xcompile import Arch
 
 from . import deploy_util
