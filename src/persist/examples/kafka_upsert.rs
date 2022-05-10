@@ -23,8 +23,8 @@ use tracing::info;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_persist::client::{MultiWriteHandle, RuntimeClient, StreamReadHandle};
-use mz_persist::error::Error as PersistError;
-use mz_persist::file::{FileBlob, FileLog};
+use mz_persist::error::{Error as PersistError, ErrorLog};
+use mz_persist::file::FileBlob;
 use mz_persist::location::{Blob, LockInfo};
 use mz_persist::operators::stream::{AwaitFrontier, Seal};
 use mz_persist::operators::upsert::{PersistentUpsert, PersistentUpsertConfig};
@@ -55,7 +55,7 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
 
     let persist = {
         let lock_info = LockInfo::new("kafka_upsert".into(), "nonce".into())?;
-        let log = FileLog::new(base_dir.join("log"), lock_info.clone())?;
+        let log = ErrorLog;
         let blob = FileBlob::open_exclusive(base_dir.join("blob").into(), lock_info)?;
         runtime::start(
             RuntimeConfig::default(),
