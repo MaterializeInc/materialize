@@ -47,37 +47,6 @@ pub(crate) mod r#impl {
     pub mod state;
 }
 
-// Notes
-// - Pretend that everything marked with Serialize and Deserialize instead has
-//   some sort of encode/decode API that uses byte slices, Buf+BufMut, or proto,
-//   depending on what we decide.
-
-// TODOs
-// - Decide if the inner and outer error of the two-level errors should be
-//   swapped.
-// - Split errors into definitely failed vs maybe failed variants. More
-//   generally, possibly we just overhaul our errors.
-// - Figure out how to communicate that a lease expired.
-// - Add a cache around location usage.
-// - Crate mz_persist_client shouldn't depend on mz_persist. Pull common code
-//   out into mz_persist_types or a new crate.
-// - Hook up timeouts into various location impls.
-// - Incremental state
-// - After incremental state, state roll-ups and truncation
-// - Permanent storage format for State
-// - Non-polling listener
-// - Impls and tests for setting upper to empty antichain (no more writes)
-// - Impls and tests for setting since to empty antichain (no more reads)
-// - Idempotence and retries + tests
-// - Leasing
-// - Physical and logical compaction
-// - Garbage collection of blob and consensus data
-// - Nemesis
-// - Benchmarks
-// - Logging
-// - Tests, tests, tests
-// - Test coverage of every `PartialOrder::less_*` call
-
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
 ///
