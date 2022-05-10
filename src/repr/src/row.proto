@@ -46,7 +46,7 @@ message ProtoDatum {
         // Of these, I'd guess Timestamp and UUID are probably the first ones
         // we'd bless followed by Date and Time.
         mz_repr.chrono.ProtoNaiveDate date = 16;
-        ProtoTime time = 17;
+        mz_repr.chrono.ProtoNaiveTime time = 17;
         ProtoTimestamp timestamp = 18;
         ProtoInterval interval = 19;
         ProtoArray array = 20;
@@ -76,14 +76,6 @@ enum ProtoDatumOther {
     NUMERIC_POS_INF = 6;
     NUMERIC_NEG_INF = 7;
     NUMERIC_NA_N = 8;
-}
-
-message ProtoTime {
-    // The number of seconds since midnight
-    uint32 secs = 1;
-    // Additional fractional seconds since midnight in nanosecond granularity.
-    // This can can exceed 1,000,000,000 in order to represent the leap second.
-    uint32 nanos = 2;
 }
 
 message ProtoTimestamp {
