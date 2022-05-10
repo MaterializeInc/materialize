@@ -15,3 +15,7 @@
 export MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete"
 export AWS_DEFAULT_REGION="us-east-2"
 export AWS_PROFILE="mz-scratch-admin"
+
+if [[ "$MZDEV_POSTGRES" ]]; then
+  export MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL="$MZDEV_POSTGRES"
+fi
