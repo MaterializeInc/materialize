@@ -33,6 +33,7 @@ Array
 As
 Asc
 At
+Availability
 Avro
 Begin
 Between

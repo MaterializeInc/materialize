@@ -1339,6 +1339,27 @@ CREATE CLUSTER REPLICA default.replica SIZE 'small'
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [Size(Value(String("small")))] } })
 
 parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
+----
+CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [Size(Value(String("small"))), AvailabilityZone(Value(String("a")))] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+----
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [AvailabilityZone(Value(String("a"))), AvailabilityZone(Value(String("b")))] } })
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+----
+CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [Remote { hosts: [Value(String("host1"))] }, AvailabilityZone(Value(String("a")))] } })
+
+parse-statement
 DROP CLUSTER cluster
 ----
 DROP CLUSTER cluster

@@ -978,6 +978,8 @@ pub enum ReplicaOption<T: AstInfo> {
     },
     /// The `SIZE [[=] <size>]` option.
     Size(WithOptionValue<T>),
+    /// The `AVAILABILITY ZONE [[=] <size>]` option.
+    AvailabilityZone(WithOptionValue<T>),
 }
 
 impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
@@ -991,6 +993,10 @@ impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
             ReplicaOption::Size(size) => {
                 f.write_str("SIZE ");
                 f.write_node(size);
+            }
+            ReplicaOption::AvailabilityZone(az) => {
+                f.write_str("AVAILABILITY ZONE ");
+                f.write_node(az);
             }
         }
     }

@@ -71,7 +71,12 @@ pub enum CoordError {
         reason: String,
     },
     /// No such cluster replica size has been configured.
-    InvalidReplicaSize {
+    InvalidClusterReplicaAz {
+        az: String,
+        expected: Vec<String>,
+    },
+    /// No such cluster replica size has been configured.
+    InvalidClusterReplicaSize {
         size: String,
         expected: Vec<String>,
     },
@@ -80,7 +85,7 @@ pub enum CoordError {
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
     /// Target cluster has no replicas to service query.
-    NoReplicasAvailable(String),
+    NoClusterReplicasAvailable(String),
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
@@ -278,10 +283,18 @@ impl CoordError {
                     doc_page
                 ))
             }
-            CoordError::InvalidReplicaSize { expected, size: _ } => {
-                Some(format!("Valid cluster sizes are: {}", expected.join(", ")))
+            CoordError::InvalidClusterReplicaAz { expected, az: _ } => {
+                Some(if expected.is_empty() {
+                    "No availability zones configured; do not specify AVAILABILITY ZONE".into()
+                } else {
+                    format!("Valid availability zones are: {}", expected.join(", "))
+                })
             }
-            CoordError::NoReplicasAvailable(_) => {
+            CoordError::InvalidClusterReplicaSize { expected, size: _ } => Some(format!(
+                "Valid cluster replica sizes are: {}",
+                expected.join(", ")
+            )),
+            CoordError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
             _ => None,
@@ -344,8 +357,11 @@ impl fmt::Display for CoordError {
                 value.quoted(),
                 reason,
             ),
-            CoordError::InvalidReplicaSize { size, expected: _ } => {
-                write!(f, "unknown cluster size {size}",)
+            CoordError::InvalidClusterReplicaAz { az, expected: _ } => {
+                write!(f, "unknown cluster replica availability zone {az}",)
+            }
+            CoordError::InvalidClusterReplicaSize { size, expected: _ } => {
+                write!(f, "unknown cluster replica size {size}",)
             }
             CoordError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
@@ -353,7 +369,7 @@ impl fmt::Display for CoordError {
             CoordError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
-            CoordError::NoReplicasAvailable(cluster) => {
+            CoordError::NoClusterReplicasAvailable(cluster) => {
                 write!(
                     f,
                     "CLUSTER {} has no replicas available to service request",

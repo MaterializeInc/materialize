@@ -2884,6 +2884,7 @@ fn plan_cluster_options(
 fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig, anyhow::Error> {
     let mut remote_replicas = BTreeSet::new();
     let mut size = None;
+    let mut availability_zone = None;
 
     for option in options {
         match option {
@@ -2898,14 +2899,28 @@ fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig
                 }
                 size = Some(with_option_type!(Some(s), String));
             }
+            ReplicaOption::AvailabilityZone(s) => {
+                if availability_zone.is_some() {
+                    bail!("AVAILABILITY ZONE specified more than once");
+                }
+                availability_zone = Some(with_option_type!(Some(s), String));
+            }
         }
     }
 
     match (remote_replicas.len() > 0, size) {
-        (true, None) => Ok(ReplicaConfig::Remote {
-            replicas: remote_replicas,
+        (true, None) => {
+            if availability_zone.is_some() {
+                bail!("cannot specify AVAILABILITY ZONE and REMOTE");
+            }
+            Ok(ReplicaConfig::Remote {
+                replicas: remote_replicas,
+            })
+        }
+        (false, Some(size)) => Ok(ReplicaConfig::Managed {
+            size,
+            availability_zone,
         }),
-        (false, Some(size)) => Ok(ReplicaConfig::Managed { size }),
         (false, None) => {
             bail!("one of REMOTE or SIZE must be specified")
         }

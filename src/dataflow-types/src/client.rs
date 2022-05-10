@@ -72,6 +72,8 @@ pub enum ConcreteComputeInstanceReplicaConfig {
     Managed {
         /// The size of the replica
         size_config: ClusterReplicaSizeConfig,
+        /// The replica's availability zone, if `Some`.
+        availability_zone: Option<String>,
     },
 }
 

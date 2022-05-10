@@ -1140,7 +1140,8 @@ lazy_static! {
             .with_column("cluster_id", ScalarType::Int64.nullable(false))
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("size", ScalarType::String.nullable(true)),
+            .with_column("size", ScalarType::String.nullable(true))
+            .with_column("availability_zone", ScalarType::String.nullable(true)),
     };
 }
 

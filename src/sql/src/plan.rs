@@ -172,8 +172,13 @@ pub struct ComputeInstanceIntrospectionConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaConfig {
-    Remote { replicas: BTreeSet<String> },
-    Managed { size: String },
+    Remote {
+        replicas: BTreeSet<String>,
+    },
+    Managed {
+        size: String,
+        availability_zone: Option<String>,
+    },
 }
 
 #[derive(Debug)]

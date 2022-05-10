@@ -202,7 +202,7 @@ DROP CLUSTER foo
 
 # Test that bad cluster sizes don't cause a crash
 
-statement error unknown cluster size
+statement error unknown cluster replica size
 CREATE CLUSTER foo REPLICA a (SIZE 'lol')
 
 statement ok
@@ -327,16 +327,16 @@ CREATE CLUSTER REPLICA no_such_cluster.size_1 SIZE '1';
 statement error expected String or bare identifier
 CREATE CLUSTER foo REPLICA size_2 (SIZE NULL);
 
-statement error unknown cluster size
+statement error unknown cluster replica size
 CREATE CLUSTER foo REPLICA size_2 (SIZE '');
 
-statement error unknown cluster size
+statement error unknown cluster replica size
 CREATE CLUSTER foo REPLICA size_2 (SIZE 'no_such_size');
 
 statement error expected String or bare identifier
 CREATE CLUSTER foo REPLICA size_2 (SIZE 1);
 
-statement error unknown cluster size
+statement error unknown cluster replica size
 CREATE CLUSTER foo REPLICA size_2 (SIZE a);
 
 statement ok
@@ -361,3 +361,22 @@ SELECT * FROM t1;
 
 statement error unknown cluster
 DROP CLUSTER REPLICA no_such_cluster.bar
+
+# Availability zones
+# Note that we don't support availability zones configured with slt, so they
+# can't be meaningfully specified
+
+statement error unknown cluster replica availability zone a
+CREATE CLUSTER REPLICA default.replica SIZE '1', AVAILABILITY ZONE 'a'
+
+statement error AVAILABILITY ZONE specified more than once
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+
+statement error cannot specify AVAILABILITY ZONE and REMOTE
+CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+
+statement error cannot specify AVAILABILITY ZONE and REMOTE
+CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+
+statement error cannot specify AVAILABILITY ZONE and REMOTE
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ('host1')
