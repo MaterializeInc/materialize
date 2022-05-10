@@ -25,6 +25,7 @@ steps:
           - { value: upgrade }
           - { value: limits }
           - { value: cluster-limits }
+          - { value: limits-instance-size }
           - { value: cluster-testdrive }
           - { value: proxy }
           - { value: testdrive-workers-1 }
@@ -141,6 +142,17 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: limits
           run: cluster
+    timeout_in_minutes: 50
+
+  - id: limits-instance-size
+    label: "Instance size limits"
+    depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: limits
+          run: instance-size
     timeout_in_minutes: 50
 
   - id: cluster-testdrive
