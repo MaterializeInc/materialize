@@ -28,8 +28,8 @@ use timely::progress::Antichain;
 use tokio::runtime::Runtime as AsyncRuntime;
 
 use mz_persist::client::WriteReqBuilder;
-use mz_persist::error::Error;
-use mz_persist::file::{FileBlob, FileLog};
+use mz_persist::error::{Error, ErrorLog};
+use mz_persist::file::FileBlob;
 use mz_persist::gen::persist::ProtoBatchFormat;
 use mz_persist::indexed::background::{CompactTraceReq, Maintainer};
 use mz_persist::indexed::cache::BlobCache;
@@ -40,12 +40,6 @@ use mz_persist::location::{Atomicity, Blob, BlobRead, LockInfo, Log, SeqNo};
 use mz_persist::mem::MemRegistry;
 use mz_persist::pfuture::{PFuture, PFutureHandle};
 use mz_persist::workload::{self, DataGenerator};
-
-fn new_file_log(name: &str, parent: &Path) -> FileLog {
-    let file_log_dir = parent.join(name);
-    FileLog::new(file_log_dir, LockInfo::new_no_reentrance(name.to_owned()))
-        .expect("creating a FileLog cannot fail")
-}
 
 fn new_file_blob(name: &str, parent: &Path) -> FileBlob {
     let file_blob_dir = parent.join(name);
@@ -91,13 +85,6 @@ pub fn bench_log(g: &mut BenchmarkGroup<'_, WallTime>) {
         bench_write_sync(&mut mem_log, data.clone(), b)
     });
     mem_log.close().expect("failed to close mem_log");
-
-    // Create a directory that will automatically be dropped after the test finishes.
-    let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let mut file_log = new_file_log("file_log_write_sync", temp_dir.path());
-    g.bench_function("file_sync", |b| {
-        bench_write_sync(&mut file_log, data.clone(), b)
-    });
 }
 
 pub fn bench_blob_set(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
@@ -123,11 +110,16 @@ pub fn bench_blob_set(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let mut file_blob = new_file_blob("file_blob_set", temp_dir.path());
-    g.bench_with_input(
-        BenchmarkId::new("file", data.goodput_pretty()),
-        &blob_val,
-        |b, blob_val| bench_set(&mut file_blob, blob_val.clone(), b),
-    );
+    {
+        let async_runtime = Arc::new(AsyncRuntime::new().expect("failed to create async runtime"));
+        let async_guard = async_runtime.enter();
+        g.bench_with_input(
+            BenchmarkId::new("file", data.goodput_pretty()),
+            &blob_val,
+            |b, blob_val| bench_set(&mut file_blob, blob_val.clone(), b),
+        );
+        drop(async_guard);
+    }
 
     // Only run s3 benchmarks if the magic env vars are set.
     if let Some(config) =
@@ -353,7 +345,7 @@ pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, Wall
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let file_log = new_file_log("indexed_write_drain_log", temp_dir.path());
+    let log = ErrorLog;
     let file_blob = new_file_blob("indexed_write_drain_blob", temp_dir.path());
 
     let async_runtime = Arc::new(AsyncRuntime::new().unwrap());
@@ -366,7 +358,7 @@ pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, Wall
         None,
     );
     let file_indexed =
-        Indexed::new(file_log, blob_cache, metrics).expect("failed to create file indexed");
+        Indexed::new(log, blob_cache, metrics).expect("failed to create file indexed");
     bench_writes_indexed_inner(data, g, "file", file_indexed).expect("running benchmark failed");
 }
 
