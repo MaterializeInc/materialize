@@ -89,7 +89,7 @@ more details, see https://materialize.com/docs/cli#experimental-mode"#
     FailpointReached(String),
     #[error("{0}")]
     Unstructured(String),
-    #[error("stash error: {0}")]
+    #[error(transparent)]
     Stash(#[from] mz_stash::StashError),
     #[error("stash in unexpected state")]
     UnexpectedStashState,

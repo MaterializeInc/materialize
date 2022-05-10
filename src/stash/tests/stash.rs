@@ -34,7 +34,14 @@ async fn test_stash_sqlite() -> Result<(), anyhow::Error> {
 
 #[tokio::test]
 async fn test_stash_postgres() -> Result<(), anyhow::Error> {
-    use tokio_postgres::{self, NoTls};
+    {
+        // Verify invalid URLs fail on connect.
+        assert!(Postgres::new("host=invalid".into())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("stash error: error connecting to server"));
+    }
 
     let connstr = match std::env::var("POSTGRES_URL") {
         Ok(s) => s,
@@ -44,7 +51,9 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         }
     };
     async fn connect(connstr: &str, clear: bool) -> Postgres {
-        let (client, connection) = tokio_postgres::connect(&connstr, NoTls).await.unwrap();
+        let (client, connection) = tokio_postgres::connect(&connstr, tokio_postgres::NoTls)
+            .await
+            .unwrap();
         mz_ore::task::spawn(|| "postgres connection", async move {
             if let Err(e) = connection.await {
                 panic!("connection error: {}", e);
@@ -64,7 +73,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
                 .await
                 .unwrap();
         }
-        Postgres::open(client).await.unwrap()
+        Postgres::new(connstr.to_string()).await.unwrap()
     }
     {
         let mut conn = connect(&connstr, true).await;

@@ -9,14 +9,18 @@
 
 //! Durable metadata storage.
 
-use std::cmp;
 use std::marker::PhantomData;
+use std::{cmp, time::Duration};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use futures::StreamExt;
+use mz_ore::retry::Retry;
 use timely::progress::Antichain;
 use timely::PartialOrder;
-use tokio_postgres::{Client, Transaction};
+use tokio_postgres::error::SqlState;
+use tokio_postgres::{Client, NoTls, Transaction};
+use tracing::warn;
 
 use timely::progress::frontier::AntichainRef;
 
@@ -27,9 +31,10 @@ use crate::{
 
 const SCHEMA: &str = "
 CREATE TABLE fence (
-    epoch bigint PRIMARY KEY
+    epoch bigint PRIMARY KEY,
+    nonce bytea
 );
-INSERT INTO fence VALUES (1);
+INSERT INTO fence VALUES (1, '');
 
 CREATE TABLE collections (
     collection_id bigserial PRIMARY KEY,
@@ -47,12 +52,12 @@ CREATE TABLE data (
 CREATE INDEX data_time_idx ON data (collection_id, time);
 
 CREATE TABLE sinces (
-    collection_id bigint NOT NULL UNIQUE REFERENCES collections (collection_id),
+    collection_id bigint PRIMARY KEY REFERENCES collections (collection_id),
     since bigint
 );
 
 CREATE TABLE uppers (
-    collection_id bigint NOT NULL UNIQUE REFERENCES collections (collection_id),
+    collection_id bigint PRIMARY KEY REFERENCES collections (collection_id),
     upper bigint
 );
 ";
@@ -61,24 +66,38 @@ CREATE TABLE uppers (
 /// tables are not specified and should not be relied upon. The only promise is
 /// stability. Any changes to the table schemas will be accompanied by a clear
 pub struct Postgres {
-    conn: Client,
+    url: String,
+    client: Option<Client>,
     epoch: i64,
+    nonce: [u8; 16],
 }
 
 impl std::fmt::Debug for Postgres {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Postgres")
+            .field("url", &self.url)
             .field("epoch", &self.epoch)
+            .field("nonce", &self.nonce)
             .finish_non_exhaustive()
     }
 }
 
 impl Postgres {
     /// Opens the stash stored at the specified path.
-    pub async fn open(mut conn: Client) -> Result<Postgres, StashError> {
-        conn.batch_execute("SET default_transaction_isolation = serializable")
-            .await?;
-        let tx = conn.transaction().await?;
+    pub async fn new(url: String) -> Result<Postgres, StashError> {
+        let mut conn = Postgres {
+            url,
+            client: None,
+            epoch: 0,
+            // The call to rand::random here assumes that the seed source is from a secure
+            // source that will differ per thread. The docs for ThreadRng say it "is
+            // automatically seeded from OsRng", which meets this requirement.
+            nonce: rand::random(),
+        };
+        // Do the initial connection once here so we don't get stuck in transact's
+        // retry loop if the url is bad.
+        conn.connect().await?;
+        let tx = conn.client.as_mut().unwrap().transaction().await?;
         let fence_oid: Option<u32> = tx
             // `to_regclass` returns the regclass (OID) of the named object (table) or NULL
             // if it doesn't exist. This is a check for "does the fence table exist".
@@ -88,17 +107,42 @@ impl Postgres {
         if fence_oid.is_none() {
             tx.batch_execute(SCHEMA).await?;
         }
-        // Bump the epoch, which will cause any previous connection to fail.
+        // Bump the epoch, which will cause any previous connection to fail. Add a
+        // unique nonce so that if some other thing recreates the entire schema, we
+        // can't accidentally have the same epoch, nonce pair (especially risky if the
+        // current epoch has been bumped exactly once, then gets recreated by another
+        // connection that also bumps it once).
         let epoch = tx
-            .query_one("UPDATE fence SET epoch=epoch+1 RETURNING epoch", &[])
+            .query_one(
+                "UPDATE fence SET epoch=epoch+1, nonce=$1 RETURNING epoch",
+                &[&conn.nonce.to_vec()],
+            )
             .await?
             .get(0);
         tx.commit().await?;
-        Ok(Postgres { conn, epoch })
+        conn.epoch = epoch;
+        Ok(conn)
+    }
+
+    /// Sets `client` to a new connection to the Postgres server.
+    async fn connect(&mut self) -> Result<(), StashError> {
+        let (client, connection) = tokio_postgres::connect(&self.url, NoTls).await?;
+        mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
+            if let Err(e) = connection.await {
+                tracing::error!("postgres stash connection error: {}", e);
+            }
+        });
+        client
+            .batch_execute("SET default_transaction_isolation = serializable")
+            .await?;
+        self.client = Some(client);
+        Ok(())
     }
 
     /// Construct a fenced transaction, which will cause this Stash to fail if
-    /// another connection is opened to it.
+    /// another connection is opened to it. `f` may be called multiple times in a
+    /// backoff-retry loop if the Postgres server is unavailable, so it should only
+    /// call functions on its Transaction argument.
     ///
     /// # Examples
     ///
@@ -114,16 +158,60 @@ impl Postgres {
     /// ```
     async fn transact<F, T>(&mut self, f: F) -> Result<T, StashError>
     where
-        F: for<'a> FnOnce(&'a mut Transaction) -> BoxFuture<'a, Result<T, StashError>>,
+        F: for<'a> Fn(&'a mut Transaction) -> BoxFuture<'a, Result<T, StashError>>,
     {
-        let mut tx = self.conn.transaction().await?;
-        let current: i64 = tx.query_one("SELECT epoch FROM fence", &[]).await?.get(0);
-        if current != self.epoch {
+        let retry = Retry::default()
+            .clamp_backoff(Duration::from_secs(1))
+            .into_retry_stream();
+        let mut retry = Box::pin(retry);
+        let mut attempt: u64 = 0;
+        loop {
+            match self.transact_inner(&f).await {
+                Ok(r) => return Ok(r),
+                Err(e) => match &e.inner {
+                    InternalStashError::Postgres(pgerr) => {
+                        // Some errors aren't retryable.
+                        if let Some(dberr) = pgerr.as_db_error() {
+                            if dberr.code() == &SqlState::UNDEFINED_TABLE {
+                                return Err(e);
+                            }
+                        }
+                        attempt += 1;
+                        warn!("tokio-postgres stash error, retry attempt {attempt}: {pgerr}");
+                        self.client = None;
+                        retry.next().await;
+                    }
+                    _ => return Err(e),
+                },
+            }
+        }
+    }
+
+    async fn transact_inner<F, T>(&mut self, f: &F) -> Result<T, StashError>
+    where
+        F: for<'a> Fn(&'a mut Transaction) -> BoxFuture<'a, Result<T, StashError>>,
+    {
+        let reconnect = match &self.client {
+            Some(client) => client.is_closed(),
+            None => true,
+        };
+        if reconnect {
+            self.connect().await?;
+        }
+        // client is guaranteed to be Some here.
+        let mut tx = self.client.as_mut().unwrap().transaction().await?;
+        let row = tx.query_one("SELECT epoch, nonce FROM fence", &[]).await?;
+        let current_epoch: i64 = row.get(0);
+        if current_epoch != self.epoch {
             return Err(InternalStashError::Fence(format!(
-                "unexpected fence {}, expected {}",
-                current, self.epoch
+                "unexpected fence epoch {}, expected {}",
+                current_epoch, self.epoch
             ))
             .into());
+        }
+        let current_nonce: Vec<u8> = row.get(1);
+        if current_nonce != self.nonce {
+            return Err(InternalStashError::Fence("unexpected fence nonce".into()).into());
         }
         let res = f(&mut tx).await?;
         tx.commit().await?;
@@ -219,6 +307,7 @@ impl Stash for Postgres {
     {
         let name = name.to_string();
         self.transact(move |tx| {
+            let name = name.clone();
             Box::pin(async move {
                 let collection_id_opt: Option<_> = tx
                     .query_one(
@@ -317,6 +406,7 @@ impl Stash for Postgres {
         let mut key_buf = vec![];
         key.encode(&mut key_buf);
         self.transact(move |tx| {
+            let key_buf = key_buf.clone();
             Box::pin(async move {
                 let since = match Self::since_tx(tx, collection.id).await?.into_option() {
                     Some(since) => since,
@@ -372,6 +462,7 @@ impl Stash for Postgres {
             .collect::<Vec<_>>();
 
         self.transact(move |tx| {
+            let entries = entries.clone();
             Box::pin(Self::update_many_tx(tx, collection.id, entries.into_iter()))
         })
         .await
@@ -402,6 +493,7 @@ impl Stash for Postgres {
             .map(|(collection, frontier)| (collection.id, frontier.clone()))
             .collect::<Vec<_>>();
         self.transact(move |tx| {
+            let seals = seals.clone();
             Box::pin(
                 async move { Self::seal_batch_tx(tx, seals.iter().map(|d| (d.0, &d.1))).await },
             )
@@ -432,6 +524,7 @@ impl Stash for Postgres {
     {
         let compactions = compactions.to_owned();
         self.transact(|tx| {
+            let compactions = compactions.clone();
             Box::pin(async {
                 let compact_stmt = tx
                     .prepare("UPDATE sinces SET since = $1 WHERE collection_id = $2")
@@ -483,6 +576,7 @@ impl Stash for Postgres {
     {
         let collections = collections.to_owned();
         self.transact(|tx| {
+            let collections = collections.clone();
             Box::pin(async {
                 let consolidation_stmt = tx
                     .prepare(
@@ -579,7 +673,9 @@ impl Append for Postgres {
         I: IntoIterator<Item = AppendBatch> + Send + 'static,
         I::IntoIter: Send,
     {
+        let batches = batches.into_iter().collect::<Vec<_>>();
         self.transact(move |tx| {
+            let batches = batches.clone();
             Box::pin(async move {
                 for batch in batches {
                     let upper = Self::upper_tx(tx, batch.collection_id).await?;
