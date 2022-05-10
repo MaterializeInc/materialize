@@ -2897,7 +2897,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     .unwrap();
                             },
                             0 => {},
-                            _ => unreachable!("multi-table write transaction should fail immediately when the second table is add to the transaction"),
+                            _ => unreachable!("multi-table write transaction should fail immediately when the second table is added to the transaction"),
                         }
                     }
                     _ => {}
