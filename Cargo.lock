@@ -2362,9 +2362,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.7.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc633605454125dec4b66843673f01c7df2b89479b32e0ed634e43a91cff62a5"
+checksum = "0f647032dfaa1f8b6dc29bd3edb7bbef4861b8b8007ebb118d6db284fd59f6ee"
 dependencies = [
  "autocfg",
  "hashbrown",
@@ -5028,8 +5028,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc03e116981ff7d8da8e5c220e374587b98d294af7ba7dd7fda761158f00086f"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -5038,12 +5037,10 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65a1118354442de7feb8a2a76f3d80ef01426bd45542c8c1fdffca41a758f846"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
  "cfg-if",
- "cmake",
  "heck",
  "itertools",
  "lazy_static",
@@ -5052,6 +5049,7 @@ dependencies = [
  "petgraph",
  "prost",
  "prost-types",
+ "protobuf-src",
  "regex",
  "tempfile",
  "which",
@@ -5060,8 +5058,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b670f45da57fb8542ebdbb6105a925fe571b67f9e7ed9f47a06a84e72b4e7cc"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "anyhow",
  "itertools",
@@ -5087,8 +5084,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d0a014229361011dc8e69c8a1ec6c2e8d0f2af7c91e3ea3f5b2170298461e68"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
  "prost",
@@ -6385,9 +6381,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-build"
-version = "0.7.0"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d17087af5c80e5d5fc8ba9878e60258065a0a757e35efe7a05b7904bece1943"
+checksum = "d9263bf4c9bfaae7317c1c2faf7f18491d2fe476f70c414b73bf5d445b00ffa1"
 dependencies = [
  "prettyplease",
  "proc-macro2",

@@ -143,8 +143,12 @@ allow-git = [
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
     "https://github.com/MaterializeInc/proptest.git",
 
-    # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783.
+    # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783
+    # to make it into a release.
     "https://github.com/MaterializeInc/opentelemetry-rust.git",
+
+    # Works around https://github.com/tokio-rs/prost/issues/653.
+    "https://github.com/MaterializeInc/prost.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.
