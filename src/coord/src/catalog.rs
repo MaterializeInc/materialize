@@ -328,7 +328,12 @@ impl CatalogState {
         item: CatalogItem,
     ) {
         if !id.is_system() && !item.is_placeholder() {
-            info!("create {} {} ({})", item.typ(), name, id);
+            info!(
+                "create {} {} ({})",
+                item.typ(),
+                self.resolve_full_name(&name, None),
+                id
+            );
         }
 
         if !id.is_system() {
@@ -2647,7 +2652,11 @@ impl<S: Append> Catalog<S> {
                     database_id,
                     schema_name,
                 } => {
-                    info!("create schema {}.{}", database_id, schema_name);
+                    info!(
+                        "create schema {}.{}",
+                        state.get_database(&database_id).name,
+                        schema_name
+                    );
                     let db = state.database_by_id.get_mut(&database_id).unwrap();
                     db.schemas_by_id.insert(
                         id.clone(),
