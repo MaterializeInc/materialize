@@ -98,6 +98,13 @@ where
 
     /// Attempt to pull out the next values of this iterator.
     ///
+    /// The returned updates are not consolidated. In the presence of
+    /// compaction, consolidation can take an unbounded amount of memory so it's
+    /// not safe for persist to consolidate in the general case. Persist users
+    /// that know they are dealing with a small amount of data are free to
+    /// consolidate this themselves. See
+    /// [differential_dataflow::consolidation::consolidate_updates].
+    ///
     /// An None value is returned if this iterator is exhausted.
     pub async fn next(&mut self) -> Option<Vec<((Result<K, String>, Result<V, String>), T, D)>> {
         trace!("SnapshotIter::next");
@@ -232,6 +239,10 @@ where
     D: Semigroup + Codec64,
 {
     /// Attempt to pull out the next values of this subscription.
+    ///
+    /// The returned updates might or might not be consolidated. If you have a
+    /// use for consolidated listen output, given that snapshots can't be
+    /// consolidated, come talk to us!
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
         trace!("Listen::next");
 
