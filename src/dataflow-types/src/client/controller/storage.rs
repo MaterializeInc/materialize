@@ -196,7 +196,7 @@ pub enum StorageError {
     SourceIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
-    /// The update contained in the appended batch was at a timestamp beyond the batche's upper
+    /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
@@ -226,7 +226,10 @@ impl fmt::Display for StorageError {
             ),
             Self::IdentifierMissing(id) => write!(f, "source identifier is not present: {id}"),
             Self::UpdateBeyondUpper(id) => {
-                write!(f, "append batch for {id} contained update beyond its upper")
+                write!(
+                    f,
+                    "append batch for {id} contained update at or beyond its upper"
+                )
             }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),

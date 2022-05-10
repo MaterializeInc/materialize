@@ -108,6 +108,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -317,9 +318,6 @@ pub struct Coordinator<S> {
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog<S>,
-    /// An in-memory WAL that stages writes before publishing them to Storage
-    // TODO: this must be backed by some durable medium, e.g a STORAGE collection
-    volatile_updates: HashMap<GlobalId, Vec<Update<Timestamp>>>,
 
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
@@ -432,11 +430,29 @@ impl<S: Append + 'static> Coordinator<S> {
         self.global_timeline.read_ts()
     }
 
-    /// Assign a timestamp for a write to a local input. Writes following reads
+    /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
     fn get_local_write_ts(&mut self) -> Timestamp {
         self.global_timeline.write_ts()
+    }
+
+    /// Assign a timestamp for a write to a local input and increase the local ts.
+    /// Writes following reads must ensure that they are assigned a strictly larger
+    /// timestamp to ensure they are not visible to any real-time earlier reads.
+    fn get_and_step_local_write_ts(&mut self) -> (Timestamp, Timestamp) {
+        let ts = self.global_timeline.write_ts();
+        /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
+         * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
+         * timestamp will go up for the next write.
+         * The timestamp must be increased for every write because each call to APPEND will close
+         * the provided timestamp, meaning no more writes can happen at that timestamp.
+         * If we add an ADAPTER side durable WAL, then consecutive writes could all happen at the
+         * same timestamp as long as they're written to the WAL first.
+         */
+        let _ = self.global_timeline.read_ts();
+        let advance_to = ts.step_forward();
+        (ts, advance_to)
     }
 
     fn now(&self) -> EpochMillis {
@@ -783,30 +799,12 @@ impl<S: Append + 'static> Coordinator<S> {
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
     async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
-        let mut appends = vec![];
-        // First advance the timestamp of untouched tables by appending an empty batch
-        for table in self.catalog.entries().filter(|e| e.is_table()) {
-            let id = table.id();
-            if !self.volatile_updates.contains_key(&id) {
-                appends.push((id, vec![], advance_to));
-            }
-        }
-
-        // Scratch vector holding all updates that happen at `t < advance_to`
-        let mut scratch = vec![];
-        // Then drain all pending writes and prepare append commands
-        for (id, updates) in self.volatile_updates.iter_mut() {
-            // TODO(petrosagg): replace with `drain_filter` once it stabilizes
-            let mut cursor = 0;
-            while let Some(update) = updates.get(cursor) {
-                if update.timestamp < advance_to {
-                    scratch.push(updates.swap_remove(cursor));
-                } else {
-                    cursor += 1;
-                }
-            }
-            appends.push((*id, scratch.split_off(0), advance_to));
-        }
+        let appends = self
+            .catalog
+            .entries()
+            .filter(|e| e.is_table())
+            .map(|table| (table.id(), vec![], advance_to))
+            .collect();
         self.dataflow_client
             .storage_mut()
             .append(appends)
@@ -2884,7 +2882,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         // Although the transaction has a wall_time in its pcx, we use a new
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
-                        let timestamp = self.get_local_write_ts();
+                        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
+                        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
 
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
@@ -2903,7 +2902,20 @@ impl<S: Append + 'static> Coordinator<S> {
                                     timestamp,
                                 })
                                 .collect::<Vec<_>>();
-                            self.volatile_updates.entry(id).or_default().extend(updates);
+                            appends.entry(id).or_default().extend(updates);
+                        }
+
+                        match appends.len() {
+                            1 => {
+                                let (id, updates) = appends.into_element();
+                                self.dataflow_client
+                                    .storage_mut()
+                                    .append(vec![(id, updates, advance_to)])
+                                    .await
+                                    .unwrap();
+                            },
+                            0 => {},
+                            _ => unreachable!("multi-table write transaction should fail immediately when the second table is added to the transaction"),
                         }
                     }
                     _ => {}
@@ -4374,7 +4386,6 @@ impl<S: Append + 'static> Coordinator<S> {
             if !tables_to_drop.is_empty() {
                 for id in &tables_to_drop {
                     self.read_capability.remove(id);
-                    self.volatile_updates.remove(id);
                 }
                 self.dataflow_client
                     .storage_mut()
@@ -4418,14 +4429,24 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let timestamp = self.get_local_write_ts();
+        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         for u in updates {
-            self.volatile_updates.entry(u.id).or_default().push(Update {
+            appends.entry(u.id).or_default().push(Update {
                 row: u.row,
                 diff: u.diff,
                 timestamp,
             });
         }
+        let appends = appends
+            .into_iter()
+            .map(|(id, updates)| (id, updates, advance_to))
+            .collect();
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -4796,7 +4817,6 @@ pub async fn serve<S: Append + 'static>(
                 dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
-                volatile_updates: HashMap::new(),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
                 internal_cmd_tx,
