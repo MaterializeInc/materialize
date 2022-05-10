@@ -11,22 +11,21 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=applic
 {
   "name": "kafka",
   "listen": "0.0.0.0:9093",
-  "upstream": "kafka:9091"
+  "upstream": "kafka:9092"
 }
 
-$ file-append path=dynamic.csv
-city,state,zip
+$ kafka-create-topic topic=input
+$ kafka-ingest topic=input format=bytes
 Rochester,NY,14618
+New York,NY,10004
 
-> CREATE SOURCE input
-  FROM FILE '${testdrive.temp-dir}/dynamic.csv'
-  WITH (tail=true)
-  FORMAT CSV WITH HEADER (city,state,zip)
+# The source intentionally does not go through toxiproxy.
+> CREATE SOURCE input (city, state, zip)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
+  FORMAT CSV WITH 3 COLUMNS
+  INCLUDE OFFSET
 
 > CREATE SINK output FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-byo-sink-${testdrive.seed}'
+  INTO KAFKA BROKER 'toxiproxy:9093' TOPIC 'output-byo-sink-${testdrive.seed}'
   WITH (reuse_topic=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ file-append path=dynamic.csv
-New York,NY,10004
