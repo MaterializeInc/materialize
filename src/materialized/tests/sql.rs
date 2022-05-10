@@ -32,7 +32,6 @@ use mz_ore::now::NOW_ZERO;
 use mz_ore::now::SYSTEM_TIME;
 use postgres::Row;
 use regex::Regex;
-use tempfile::NamedTempFile;
 use tracing::info;
 
 use mz_ore::assert_contains;
@@ -730,58 +729,6 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 
     let tail = client.query("TAIL foo WITH (SNAPSHOT)", &[])?;
     assert_eq!(3, tail.len());
-
-    Ok(())
-}
-
-/// Test the TAIL SQL command on an unmaterialized, tailed file source. This is
-/// end-to-end tailing: changes to the file will propagate through Materialize
-/// and into the user's SQL console.
-#[test]
-fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
-    let config = util::Config::default();
-    let server = util::start_server(config)?;
-    let mut client = server.connect(postgres::NoTls)?;
-
-    let mut file = NamedTempFile::new()?;
-    client.batch_execute(&*format!(
-        "CREATE SOURCE f FROM FILE '{}' WITH (tail = true) FORMAT TEXT",
-        file.path().display()
-    ))?;
-    client.batch_execute(
-        "BEGIN;
-         DECLARE c CURSOR FOR TAIL f;",
-    )?;
-
-    let mut append = |data| -> Result<_, Box<dyn Error>> {
-        file.write_all(data)?;
-        file.as_file_mut().sync_all()?;
-        Ok(())
-    };
-
-    append(b"line 1\n")?;
-    let row = client.query_one("FETCH ALL c", &[])?;
-    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
-    assert_eq!(row.get::<_, String>("text"), "line 1");
-
-    append(b"line 2\n")?;
-    let row = client.query_one("FETCH ALL c", &[])?;
-    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
-    assert_eq!(row.get::<_, String>("text"), "line 2");
-
-    // Wait a little bit to make sure no more new rows arrive.
-    let rows = client.query("FETCH ALL c WITH (timeout = '1s')", &[])?;
-    assert_eq!(rows.len(), 0);
-
-    // Check that writing to the tailed file after the source is dropped doesn't
-    // cause a crash (#1361).
-    client.batch_execute("COMMIT")?;
-    client.batch_execute("DROP SOURCE f")?;
-    thread::sleep(Duration::from_millis(100));
-    append(b"line 3\n")?;
-    thread::sleep(Duration::from_millis(100));
 
     Ok(())
 }

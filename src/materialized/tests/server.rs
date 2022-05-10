@@ -17,7 +17,7 @@ use mz_ore::retry::Retry;
 use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
 
-use crate::util::{KAFKA_ADDRS, PostgresErrorExt};
+use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
 
