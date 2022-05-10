@@ -96,7 +96,7 @@ Run S3 tests against a real AWS region. This expects actual AWS credentials to
 be available (q.v. [our documentation][aws-creds]).
 
 ```
-./mzcompose --dev run default --aws-region=us-east-2 esoteric/s3.td
+./mzcompose --dev run default --aws-region=us-east-2 s3.td
 ```
 
 ## Running tests locally without mzcompose
