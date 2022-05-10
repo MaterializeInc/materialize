@@ -146,13 +146,14 @@ exact:error publishing kafka schemas for sink: unable to publish value schema to
   ENVELOPE DEBEZIUM
 contains:self signed certificate in certificate chain
 
-# The secrets containing the keys and certificates are created in mzcompose.py
+> CREATE SECRET client_cert AS '${arg.client-cert}'
+> CREATE SECRET client_key AS '${arg.client-key}'
 # Ensure that connectors work with SSL basic_auth
 > CREATE CONNECTOR kafka_ssl
   FOR KAFKA BROKER 'kafka:9092'
   SECURITY SSL
   CERTIFICATE client_cert
-#  KEY client_key
+  KEY client_key
 
 > CREATE SECRET csr_pass AS 'sekurity'
 

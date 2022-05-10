@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -572,23 +573,62 @@ fn create_kafka_config(
     // arbitrary, other layers of the system tightly control which configuration
     // options are allowable.
     for (k, v) in config_options {
-        let mut val = v.clone();
-        let mut buf = String::new();
-        if k == "sasl.password" || k == "password" {
-            info!("replacing password path {} with value", v);
-            let mut f = OpenOptions::new()
-                .read(true)
-                .open(v.clone())
-                .expect("secrets paths exist");
-
-            f.read_to_string(&mut buf)
-                .expect("secrets files are readable");
-            val = buf;
-        }
-        kafka_config.set(k, val);
+        kafka_config.set(k, v);
     }
 
+    // Fixup any secret values in the config
+    fixup_secrets(&mut kafka_config);
+
     kafka_config
+}
+
+/// Find secrets in the ClientConfig and transform them to values or canonical paths as appropriate
+/// The key strings to expect come from [`mz_sql::kafka_util::extract_config`]
+fn fixup_secrets(cfg: &mut ClientConfig) {
+    fn secret_path(uuid: &str) -> PathBuf {
+        //TODO: this should come from a config someplace
+        let secrets_dir = Path::new("/share/secrets/");
+        secrets_dir.with_file_name(uuid)
+    }
+    fn is_secret_path(maybe_path: &PathBuf) -> bool {
+        maybe_path.exists() && maybe_path.is_file()
+    }
+    fn secret_value(secret: PathBuf) -> String {
+        let mut result = String::new();
+        let mut f = OpenOptions::new()
+            .read(true)
+            .open(secret)
+            .expect("secrets paths exist");
+        f.read_to_string(&mut result)
+            .expect("secrets files are readable");
+        result
+    }
+    // Passwords get resolved to values
+    let keys_to_resolve = ["sasl.password", "password", "ssl.key.password"];
+    for key in keys_to_resolve {
+        if let Some(uuid) = cfg.get(key) {
+            let secret = secret_path(uuid);
+            if is_secret_path(&secret) {
+                cfg.set(key, secret_value(secret));
+            }
+        }
+    }
+    // Certificates and keys only get turned into canonical paths
+    let keys_to_canonicalize = [
+        "ssl.certificate.location",
+        "ssl.key.location",
+        "ssl.ca.location",
+    ];
+    for key in keys_to_canonicalize {
+        if let Some(uuid) = cfg.get(key) {
+            let path = secret_path(uuid)
+                .canonicalize()
+                .expect("secrets paths canonicalize correctly");
+            if is_secret_path(&path) {
+                cfg.set(key, path.display().to_string());
+            }
+        }
+    }
 }
 
 fn construct_source_message(

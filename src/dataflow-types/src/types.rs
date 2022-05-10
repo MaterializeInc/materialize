@@ -1503,22 +1503,14 @@ pub mod sources {
                         let mut with_options = BTreeMap::new();
                         with_options.insert(SECURITY_PROTOCOL.to_string(), "SSL".to_string());
                         if let Some(uuid) = key {
-                            with_options.insert(
-                                "ssl.key.location".to_string(),
-                                format!("secrets/{}", uuid),
-                            );
+                            with_options.insert("ssl.key.location".to_string(), uuid.to_owned());
                         }
                         if let Some(uuid) = certificate {
-                            with_options.insert(
-                                "ssl.certificate.location".to_string(),
-                                format!("secrets/{}", uuid),
-                            );
+                            with_options
+                                .insert("ssl.certificate.location".to_string(), uuid.to_owned());
                         }
                         if let Some(uuid) = passphrase {
-                            with_options.insert(
-                                "ssl.key.password".to_string(),
-                                format!("secrets/{}", uuid),
-                            );
+                            with_options.insert("ssl.key.password".to_string(), uuid.to_owned());
                         }
                         with_options
                     }
