@@ -49,7 +49,12 @@ impl<S: Stash> Memory<S> {
         V: Data,
     {
         let since = self.since(collection).await?;
-        if let Some(entry) = self.entries.get_mut(&collection.id) {
+        self.consolidate_id(&collection.id, since);
+        Ok(())
+    }
+
+    fn consolidate_id(&mut self, collection_id: &Id, since: Antichain<Timestamp>) {
+        if let Some(entry) = self.entries.get_mut(collection_id) {
             match since.as_option() {
                 Some(since) => {
                     for ((_k, _v), ts, _diff) in entry.iter_mut() {
@@ -63,11 +68,10 @@ impl<S: Stash> Memory<S> {
                     // This will cause all calls to iter over this collection to always pass
                     // through to the underlying stash, making those calls not cached. This isn't
                     // currently a performance problem because the empty since is not used.
-                    self.entries.remove(&collection.id);
+                    self.entries.remove(collection_id);
                 }
             }
         }
-        Ok(())
     }
 }
 
@@ -298,12 +302,15 @@ impl<S: Append> Append for Memory<S> {
         let batches: Vec<_> = batches.into_iter().collect();
         self.stash.append(batches.clone()).await?;
         for batch in batches {
-            self.uppers.insert(batch.collection_id, batch.upper);
             let entry = self
                 .entries
                 .entry(batch.collection_id)
                 .or_insert_with(Vec::new);
             entry.extend(batch.entries);
+            self.uppers.insert(batch.collection_id, batch.upper);
+            self.sinces
+                .insert(batch.collection_id, batch.compact.clone());
+            self.consolidate_id(&batch.collection_id, batch.compact);
         }
         Ok(())
     }
