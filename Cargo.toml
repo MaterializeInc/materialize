@@ -90,3 +90,7 @@ debug = 1
 [patch.crates-io]
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
+prost = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+prost-build = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+prost-derive = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+prost-types = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
