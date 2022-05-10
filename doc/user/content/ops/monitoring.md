@@ -124,7 +124,7 @@ is no longer necessary, with the above command the dashboard will be available o
 {{</ tabs >}}
 
 [simplemon-hub]: https://hub.docker.com/repository/docker/materialize/dashboard
-[dashboard-json]: https://github.com/MaterializeInc/materialize/blob/main/misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
+[dashboard-json]: https://github.com/MaterializeInc/materialize/blob/v0.26/misc/monitoring/dashboard/conf/grafana/dashboards/overview.json
 [graf-import]: https://grafana.com/docs/grafana/latest/reference/export_import/#importing-a-dashboard
 
 ## Health check
