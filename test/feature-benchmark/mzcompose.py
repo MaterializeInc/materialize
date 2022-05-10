@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List, Type
+from typing import List, Optional, Type
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -34,7 +34,8 @@ from materialize.feature_benchmark.termination import (
     RunAtMost,
     TerminationCondition,
 )
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
+from materialize.mzcompose.services import Computed
 from materialize.mzcompose.services import Kafka as KafkaService
 from materialize.mzcompose.services import Kgen as KgenService
 from materialize.mzcompose.services import (
@@ -80,10 +81,10 @@ SERVICES = [
     Zookeeper(),
     KafkaService(),
     SchemaRegistry(),
-    # We are going to override this service definition during the actual benchmark
-    # we put "latest" here so that we avoid recompiling the current source unless
-    # we will actually be benchmarking it.
-    Materialized(image="materialize/materialized:latest"),
+    # We are going to override the service definitions during the actual benchmark
+    # we put "unstable" here so that we fetch some image from Docker Hub and thus
+    # avoid recompiling the current source unless we will actually be benchmarking it.
+    Materialized(image="materialize/materialized:unstable"),
     Testdrive(
         validate_data_dir=False,
         default_timeout=default_timeout,
@@ -91,6 +92,77 @@ SERVICES = [
     KgenService(),
     Postgres(),
 ]
+
+
+def start_services(
+    c: Composition, args: argparse.Namespace, instance: str
+) -> List[Service]:
+    tag, options, nodes = (
+        (args.this_tag, args.this_options, args.this_nodes)
+        if instance == "this"
+        else (args.other_tag, args.other_options, args.other_nodes)
+    )
+
+    cluster_services: List[Service] = []
+
+    if nodes:
+        cluster_services.append(
+            Materialized(
+                image=f"materialize/materialized:{tag}" if tag else None,
+            )
+        )
+
+        node_names = [f"computed_{n}" for n in range(0, nodes)]
+        for node_id in range(0, nodes):
+            cluster_services.append(
+                Computed(
+                    name=node_names[node_id],
+                    options=options,
+                    peers=node_names,
+                    image=f"materialize/computed:{tag}" if tag else None,
+                )
+            )
+    else:
+        cluster_services.append(
+            Materialized(
+                image=f"materialize/materialized:{tag}" if tag else None,
+                options=options,
+            )
+        )
+
+    with c.override(*cluster_services):
+        print(f"The version of the '{instance.upper()}' Mz instance is:")
+        c.run("materialized", "--version")
+
+        c.start_and_wait_for_tcp(services=["materialized"])
+        c.wait_for_materialized()
+
+        if nodes:
+            print(f"Starting cluster for '{instance.upper()}' ...")
+            c.up(*[f"computed_{n}" for n in range(0, nodes)])
+
+            c.sql("DROP CLUSTER default")
+            c.sql(
+                "CREATE CLUSTER default REPLICA replica1 (REMOTE ("
+                + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
+                + "));"
+            )
+
+        c.up("testdrive", persistent=True)
+
+    return cluster_services
+
+
+def stop_services(c: Composition, cluster_services: List[Service]) -> None:
+
+    with c.override(*cluster_services):
+        service_names = [s.name for s in cluster_services]
+        c.kill(*service_names)
+        c.rm(*service_names)
+
+    c.kill("testdrive")
+    c.rm("testdrive")
+    c.rm_volumes("mzdata")
 
 
 def run_one_scenario(
@@ -101,52 +173,28 @@ def run_one_scenario(
     comparator = make_comparator(name)
     common_seed = round(time.time())
 
-    mzs = {
-        "this": Materialized(
-            image=f"materialize/materialized:{args.this_tag}"
-            if args.this_tag
-            else None,
-            options=args.this_options,
-        ),
-        "other": Materialized(
-            image=f"materialize/materialized:{args.other_tag}"
-            if args.other_tag
-            else None,
-            options=args.other_options,
-        ),
-    }
-
     for mz_id, instance in enumerate(["this", "other"]):
-        with c.override(mzs[instance]):
-            print(f"The version of the '{instance.upper()}' Mz instance is:")
-            c.run("materialized", "--version")
+        cluster_services = start_services(c, args, instance)
 
-            c.start_and_wait_for_tcp(services=["materialized"])
-            c.wait_for_materialized()
+        executor = Docker(
+            composition=c,
+            seed=common_seed,
+        )
 
-            c.up("testdrive", persistent=True)
+        benchmark = Benchmark(
+            mz_id=mz_id,
+            scenario=scenario,
+            scale=args.scale,
+            executor=executor,
+            filter=make_filter(args),
+            termination_conditions=make_termination_conditions(args),
+            aggregation=make_aggregation(),
+        )
 
-            executor = Docker(
-                composition=c,
-                seed=common_seed,
-            )
+        outcome, iterations = benchmark.run()
+        comparator.append(outcome)
 
-            benchmark = Benchmark(
-                mz_id=mz_id,
-                scenario=scenario,
-                scale=args.scale,
-                executor=executor,
-                filter=make_filter(args),
-                termination_conditions=make_termination_conditions(args),
-                aggregation=make_aggregation(),
-            )
-
-            outcome, iterations = benchmark.run()
-            comparator.append(outcome)
-
-            c.kill("materialized", "testdrive")
-            c.rm("materialized", "testdrive")
-            c.rm_volumes("mzdata")
+        stop_services(c, cluster_services)
 
     return comparator
 
@@ -219,6 +267,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         default=3,
         help="Retry any potential performance regressions up to N times.",
+    )
+
+    parser.add_argument(
+        "--this-nodes",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Start a cluster with that many nodes for 'THIS'",
+    )
+
+    parser.add_argument(
+        "--other-nodes",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Start a cluster with that many nodes for 'OTHER'",
     )
 
     args = parser.parse_args()
