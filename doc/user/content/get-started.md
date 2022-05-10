@@ -1,5 +1,5 @@
 ---
-title: "Get Started: Materialize a View"
+title: "Get Started with Materialize"
 description: "Get started with Materialize"
 menu:
   main:
@@ -35,7 +35,7 @@ Select an environment and follow the instructions to get the latest stable relea
 
     This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/psql), like `psql` or `mzcli`. If you already have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you already have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -60,7 +60,7 @@ Select an environment and follow the instructions to get the latest stable relea
 
     This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/psql), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize
@@ -92,7 +92,7 @@ Select an environment and follow the instructions to get the latest stable relea
 
     This starts a process using one [worker thread](/cli#worker-threads) and listening on port 6875 by default.
 
-1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/psql), like `psql` or `mzcli`. If you have `psql` installed on your machine, connect using:
+1. Using a new terminal window, you can then connect to the running instance using any [Materialize-compatible CLI](/integrations/sql-clients), like `psql`. If you have `psql` installed on your machine, connect using:
 
     ```shell
     psql -U materialize -h localhost -p 6875 materialize

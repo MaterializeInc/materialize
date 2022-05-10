@@ -30,6 +30,7 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::{PartitionId, RowSetFinishing};
+use mz_repr::proto::any_uuid;
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -49,24 +50,27 @@ pub mod replicated;
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
 
-/// An abstraction allowing us to name difference compute instances.
+/// An abstraction allowing us to name different compute instances.
 // TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
 // support natively storing `u64`. Revisit this before shipping Platform, as we
 // might not like to bake in this decision based on a SQLite limitation.
 // See #11123.
 pub type ComputeInstanceId = i64;
 
-/// Instance configuration
+/// An abstraction allowing us to name different replicas.
+pub type ReplicaId = i64;
+
+/// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum InstanceConfig {
-    /// Out-of-process named instance
+pub enum ConcreteComputeInstanceReplicaConfig {
+    /// Out-of-process replica
     Remote {
         /// A map from replica name to hostnames.
-        replicas: BTreeMap<String, BTreeSet<String>>,
+        replicas: BTreeSet<String>,
     },
-    /// A remote but managed instance.
+    /// A remote but managed replica
     Managed {
-        /// The size of the cluster.
+        /// The size of the replica
         size_config: ClusterReplicaSizeConfig,
     },
 }
@@ -100,10 +104,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
-}
-
-fn any_uuid() -> impl Strategy<Value = Uuid> {
-    (0..u128::MAX).prop_map(Uuid::from_u128)
 }
 
 impl From<&Peek> for ProtoPeek {
@@ -928,7 +928,7 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(4))]
+        #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {

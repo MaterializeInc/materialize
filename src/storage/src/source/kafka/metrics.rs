@@ -14,6 +14,7 @@ use tracing::debug;
 
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
+use mz_repr::GlobalId;
 
 use crate::source::metrics::SourceBaseMetrics;
 pub(super) struct KafkaPartitionMetrics {
@@ -27,18 +28,12 @@ impl KafkaPartitionMetrics {
         base_metrics: SourceBaseMetrics,
         ids: Vec<i32>,
         topic: String,
-        source_id: String,
-        source_instance: String,
+        source_id: GlobalId,
     ) -> Self {
         let metrics = &base_metrics.partition_specific;
         Self {
             partition_offset_map: HashMap::from_iter(ids.iter().map(|id| {
-                let labels = &[
-                    topic.clone(),
-                    source_id.clone(),
-                    source_instance.clone(),
-                    format!("{}", id),
-                ];
+                let labels = &[topic.clone(), source_id.to_string(), format!("{}", id)];
                 (
                     *id,
                     metrics
@@ -46,11 +41,7 @@ impl KafkaPartitionMetrics {
                         .get_delete_on_drop_gauge(labels.to_vec()),
                 )
             })),
-            labels: vec![
-                topic.clone(),
-                source_id.clone(),
-                source_instance.to_string(),
-            ],
+            labels: vec![topic.clone(), source_id.to_string()],
             base_metrics,
         }
     }

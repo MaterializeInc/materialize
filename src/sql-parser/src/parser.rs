@@ -1567,7 +1567,12 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(ROLE) || self.peek_keyword(USER) {
             self.parse_create_role()
         } else if self.peek_keyword(CLUSTER) {
-            self.parse_create_cluster()
+            self.next_token();
+            if self.peek_keyword(REPLICA) {
+                self.parse_create_cluster_replica()
+            } else {
+                self.parse_create_cluster()
+            }
         } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
             self.parse_create_index()
         } else if self.peek_keyword(SOURCE) || self.peek_keywords(&[MATERIALIZED, SOURCE]) {
@@ -2568,8 +2573,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.next_token();
         let name = self.parse_identifier()?;
+
+        let replicas = if self.peek_keyword(REPLICA) {
+            self.parse_comma_separated(Parser::parse_inline_replica)?
+        } else {
+            vec![]
+        };
+
         let _ = self.parse_keyword(WITH);
         let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
             vec![]
@@ -2578,40 +2589,68 @@ impl<'a> Parser<'a> {
         };
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
+            replicas,
             options,
         }))
     }
 
-    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[REMOTE, SIZE, INTROSPECTION])? {
+    fn parse_inline_replica(&mut self) -> Result<ReplicaDefinition<Raw>, ParserError> {
+        self.expect_keyword(REPLICA)?;
+        let name = self.parse_identifier()?;
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        self.expect_token(&Token::RParen)?;
+        Ok(ReplicaDefinition { name, options })
+    }
+
+    fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[REMOTE, SIZE])? {
             REMOTE => {
-                let name = self.parse_identifier()?;
                 self.expect_token(&Token::LParen)?;
                 let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
                 self.expect_token(&Token::RParen)?;
-                Ok(ClusterOption::Remote { name, hosts })
+                Ok(ReplicaOption::Remote { hosts })
             }
             SIZE => {
                 let _ = self.consume_token(&Token::Eq);
-                Ok(ClusterOption::Size(self.parse_with_option_value()?))
+                Ok(ReplicaOption::Size(self.parse_with_option_value()?))
             }
-            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
-                DEBUGGING => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionDebugging(
-                        self.parse_with_option_value()?,
-                    ))
-                }
-                GRANULARITY => {
-                    let _ = self.consume_token(&Token::Eq);
-                    Ok(ClusterOption::IntrospectionGranularity(
-                        self.parse_with_option_value()?,
-                    ))
-                }
-                _ => unreachable!(),
-            },
             _ => unreachable!(),
         }
+    }
+
+    fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
+        self.expect_keyword(INTROSPECTION)?;
+        match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+            DEBUGGING => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(ClusterOption::IntrospectionDebugging(
+                    self.parse_with_option_value()?,
+                ))
+            }
+            GRANULARITY => {
+                let _ = self.consume_token(&Token::Eq);
+                Ok(ClusterOption::IntrospectionGranularity(
+                    self.parse_with_option_value()?,
+                ))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.next_token();
+        let of_cluster = self.parse_identifier()?;
+        self.expect_token(&Token::Dot)?;
+        let name = self.parse_identifier()?;
+
+        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+        Ok(Statement::CreateClusterReplica(
+            CreateClusterReplicaStatement {
+                of_cluster,
+                definition: ReplicaDefinition { name, options },
+            },
+        ))
     }
 
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
@@ -2710,17 +2749,11 @@ impl<'a> Parser<'a> {
                 }));
             }
             Some(CLUSTER) => {
-                let if_exists = self.parse_if_exists()?;
-                let names = self.parse_comma_separated(Parser::parse_object_name)?;
-                let cascade = matches!(
-                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
-                    Some(CASCADE),
-                );
-                return Ok(Statement::DropClusters(DropClustersStatement {
-                    if_exists,
-                    names,
-                    cascade,
-                }));
+                return if self.peek_keyword(REPLICA) {
+                    self.parse_drop_cluster_replicas()
+                } else {
+                    self.parse_drop_clusters()
+                };
             }
             Some(INDEX) => ObjectType::Index,
             Some(SINK) => ObjectType::Sink,
@@ -2753,6 +2786,34 @@ impl<'a> Parser<'a> {
             names,
             cascade,
         }))
+    }
+
+    fn parse_drop_clusters(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_exists = self.parse_if_exists()?;
+        let names = self.parse_comma_separated(Parser::parse_object_name)?;
+        let cascade = matches!(
+            self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+            Some(CASCADE),
+        );
+        return Ok(Statement::DropClusters(DropClustersStatement {
+            if_exists,
+            names,
+            cascade,
+        }));
+    }
+
+    fn parse_drop_cluster_replicas(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(REPLICA).unwrap();
+        let if_exists = self.parse_if_exists()?;
+        let names = self.parse_comma_separated(|p| {
+            let cluster = p.parse_identifier()?;
+            p.expect_token(&Token::Dot)?;
+            let replica = p.parse_identifier()?;
+            Ok(QualifiedReplica { cluster, replica })
+        })?;
+        Ok(Statement::DropClusterReplicas(
+            DropClusterReplicasStatement { if_exists, names },
+        ))
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -2986,18 +3047,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self
-            .expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET, CLUSTER])?
-        {
-            SINK => ObjectType::Sink,
-            SOURCE => ObjectType::Source,
-            VIEW => ObjectType::View,
-            TABLE => ObjectType::Table,
-            INDEX => return self.parse_alter_index(),
-            SECRET => return self.parse_alter_secret(),
-            CLUSTER => return self.parse_alter_cluster(),
-            _ => unreachable!(),
-        };
+        let object_type =
+            match self.expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET])? {
+                SINK => ObjectType::Sink,
+                SOURCE => ObjectType::Source,
+                VIEW => ObjectType::View,
+                TABLE => ObjectType::Table,
+                INDEX => return self.parse_alter_index(),
+                SECRET => return self.parse_alter_secret(),
+                _ => unreachable!(),
+            };
 
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_raw_name()?;
@@ -3086,23 +3145,6 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         })
-    }
-
-    fn parse_alter_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let if_exists = self.parse_if_exists()?;
-        let name = self.parse_identifier()?;
-
-        let _ = self.parse_keyword(WITH);
-        let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
-            vec![]
-        } else {
-            self.parse_comma_separated(Parser::parse_cluster_option)?
-        };
-        Ok(Statement::AlterCluster(AlterClusterStatement {
-            name,
-            if_exists,
-            options,
-        }))
     }
 
     /// Parse a copy statement
@@ -4105,12 +4147,21 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS, SECRETS,
-            CONNECTORS,
+            OBJECTS, ROLES, CLUSTER, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
+            SECRETS, CONNECTORS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
                 ROLES | USERS => ObjectType::Role,
+                CLUSTER => {
+                    if self.parse_keyword(REPLICAS) {
+                        ObjectType::ClusterReplica
+                    } else {
+                        return Ok(Statement::ShowVariable(ShowVariableStatement {
+                            variable: Ident::from("cluster"),
+                        }));
+                    }
+                }
                 CLUSTERS => ObjectType::Cluster,
                 SINKS => ObjectType::Sink,
                 SOURCES => ObjectType::Source,

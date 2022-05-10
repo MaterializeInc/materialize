@@ -11,13 +11,25 @@
 
 syntax = "proto3";
 
-import "dataflow-types/src/plan.proto";
+import "expr/src/scalar.proto";
 
 package mz_dataflow_types.plan.threshold;
 
 message ProtoThresholdPlan {
    oneof kind {
-       mz_dataflow_types.plan.ProtoArrangement basic = 1;
-       mz_dataflow_types.plan.ProtoArrangement retractions = 2;
+       ProtoArrangement basic = 1;
+       ProtoArrangement retractions = 2;
    }
 }
+
+message ProtoArrangement {
+    message ProtoArrangementPermutation {
+        uint64 key = 1;
+        uint64 val = 2;
+    };
+
+    repeated mz_expr.scalar.ProtoMirScalarExpr all_columns = 1;
+    repeated ProtoArrangementPermutation  permutation = 2;
+    repeated uint64 thinning = 3;
+
+};

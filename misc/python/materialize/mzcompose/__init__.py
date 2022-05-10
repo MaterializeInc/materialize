@@ -420,11 +420,6 @@ class Composition:
         # Update the composition with the new service definitions.
         deps = self._munge_services([(s.name, cast(dict, s.config)) for s in services])
         for service in services:
-            if service.name not in self.compose["services"]:
-                raise RuntimeError(
-                    "programming error in call to Workflow.with_services: "
-                    f"{service.name!r} does not exist"
-                )
             self.compose["services"][service.name] = service.config
 
         # Re-acquire dependencies, as the override may have swapped an `image`
@@ -507,7 +502,27 @@ class Composition:
         """Run a batch of SQL statements against the materialized service."""
         with self.sql_cursor() as cursor:
             for statement in sqlparse.split(sql):
+                print(f"> {statement}")
                 cursor.execute(statement)
+
+    def create_cluster(
+        self,
+        cluster: List,
+        cluster_name: str = "cluster1",
+        replica_name: str = "replica1",
+    ) -> None:
+        """Construct and run a CREATE CLUSTER statement based a list of Computed instances
+
+        Args:
+            cluster: a List of Computed instances that will form the cluster
+            cluster_name: The cluster name to use
+            replica_name: The replica name to use
+        """
+        self.sql(
+            f"CREATE CLUSTER {cluster_name} REMOTE {replica_name} ("
+            + ", ".join(f'"{p.name}:2100"' for p in cluster)
+            + ")"
+        )
 
     def start_and_wait_for_tcp(self, services: List[str]) -> None:
         """Sequentially start the named services, waiting for eaach to become
@@ -632,7 +647,7 @@ class Composition:
             self.compose = old_compose
             self._write_compose()
 
-    def down(self, destroy_volumes: bool = True) -> None:
+    def down(self, destroy_volumes: bool = True, remove_orphans: bool = True) -> None:
         """Stop and remove resources.
 
         Delegates to `docker-compose down`. See that command's help for details.
@@ -641,7 +656,11 @@ class Composition:
             destroy_volumes: Remove named volumes and anonymous volumes attached
                 to containers.
         """
-        self.invoke("down", *(["--volumes"] if destroy_volumes else []))
+        self.invoke(
+            "down",
+            *(["--volumes"] if destroy_volumes else []),
+            *(["--remove-orphans"] if remove_orphans else []),
+        )
 
     def stop(self, *services: str) -> None:
         """Stop the docker containers for the named services.

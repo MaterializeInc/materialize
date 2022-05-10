@@ -20,7 +20,6 @@ Flag | Default | Modifies
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
-[`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where to emit log messages
 [`--log-filter`](#log-filter) | `info` | Which log messages to emit
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -130,23 +129,7 @@ time for the configured duration. The default window is 1 millisecond.
 See the [Deployment section](/ops/optimization/#compaction) for guidance on tuning
 the compaction window.
 
-### Logging
-
-#### Log file
-
-The `--log-file` option specifies the path to a file in which Materialize will
-write its log messages. The value `stderr` is treated specially and specifies
-the standard error stream.
-
-If the option is unspecified, Materialize writes log messages to the
-`materialized.log` file in the [data directory](#data-directory) and
-additionally forwards any log messages at the `WARN` or `ERROR` levels to the
-standard error stream. Forwarding does not occur if you explicitly specify a log
-file.
-
-#### Log filter
-
-{{< version-added v0.7.2 />}}
+### Log filter
 
 The `--log-filter` option specifies which log messages Materialize will emit.
 Its value is a comma-separated list of filter directives. Each filter directive
@@ -321,21 +304,6 @@ immediately run out of memory on boot, you can use `--disable-user-indexes` to
 boot the server and then drop the offending view.
 
 {{% troubleshooting/disable-user-indexes %}}
-
-## Special environment variables
-
-Materialize respects several environment variables that have conventional
-meanings in Unix systems.
-
-### HTTP proxies
-
-The `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` environment
-variables specify a proxy to use for outgoing HTTP and HTTPS traffic. There is
-no precise specification of how these variables behave, but Materialize's
-behavior generally matches the behavior of other HTTP clients.
-
-For precise details of Materialize's behavior, consult the documentation of
-the [`mz_http_proxy`](https://docs.rs/mz_http_proxy) crate.
 
 [api-indexes]: /overview/key-concepts/#indexes
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md

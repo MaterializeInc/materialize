@@ -1266,63 +1266,77 @@ CREATE CLUSTER cluster
 ----
 CREATE CLUSTER cluster
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [] })
 
 parse-statement
 CREATE CLUSTER cluster VIRTUAL
 ----
-error: Expected one of REMOTE or SIZE or INTROSPECTION, found identifier "virtual"
+error: Expected INTROSPECTION, found identifier "virtual"
 CREATE CLUSTER cluster VIRTUAL
                        ^
 
 parse-statement
 CREATE CLUSTER cluster SIZE 'small'
 ----
+error: Expected INTROSPECTION, found SIZE
 CREATE CLUSTER cluster SIZE 'small'
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small")))] })
+                       ^
 
 parse-statement
 CREATE CLUSTER cluster SIZE = 'small'
 ----
-CREATE CLUSTER cluster SIZE 'small'
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small")))] })
+error: Expected INTROSPECTION, found SIZE
+CREATE CLUSTER cluster SIZE = 'small'
+                       ^
 
 parse-statement
-CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
 ----
-CREATE CLUSTER cluster SIZE 'small', REMOTE replica1 ('host1'), SIZE 'medium', REMOTE replica2 ('host2')
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Size(Value(String("small"))), Remote { name: Ident("replica1"), hosts: [Value(String("host1"))] }, Size(Value(String("medium"))), Remote { name: Ident("replica2"), hosts: [Value(String("host2"))] }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }] })
 
 parse-statement
-CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
+CREATE CLUSTER cluster REPLICA a SIZE '1'
 ----
-CREATE CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Remote { name: Ident("replica1"), hosts: [Value(String("host1")), Value(String("host2"))] }, Remote { name: Ident("replica2"), hosts: [Value(String("host3")), Value(String("host4"))] }] })
+error: Expected left parenthesis, found SIZE
+CREATE CLUSTER cluster REPLICA a SIZE '1'
+                                 ^
 
 parse-statement
-ALTER CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
 ----
-ALTER CLUSTER cluster REMOTE replica1 ('host1', 'host2'), REMOTE replica2 ('host3', 'host4')
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
 =>
-AlterCluster(AlterClusterStatement { name: Ident("cluster"), if_exists: false, options: [Remote { name: Ident("replica1"), hosts: [Value(String("host1")), Value(String("host2"))] }, Remote { name: Ident("replica2"), hosts: [Value(String("host3")), Value(String("host4"))] }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }, Size(Value(String("1")))] }] })
 
 parse-statement
-ALTER CLUSTER cluster SIZE 'small'
+CREATE CLUSTER REPLICA replica REMOTE ('host1')
 ----
-ALTER CLUSTER cluster SIZE 'small'
-=>
-AlterCluster(AlterClusterStatement { name: Ident("cluster"), if_exists: false, options: [Size(Value(String("small")))] })
+error: Expected dot, found REMOTE
+CREATE CLUSTER REPLICA replica REMOTE ('host1')
+                               ^
 
 parse-statement
-ALTER CLUSTER cluster RENAME TO cluster2
+CREATE CLUSTER REPLICA replica SIZE 'small'
 ----
-error: Expected one of REMOTE or SIZE or INTROSPECTION, found RENAME
-ALTER CLUSTER cluster RENAME TO cluster2
-                      ^
+error: Expected dot, found SIZE
+CREATE CLUSTER REPLICA replica SIZE 'small'
+                               ^
+
+parse-statement
+CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ('host1'))
+----
+error: Expected dot, found SIZE
+CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ('host1'))
+                               ^
+
+parse-statement
+CREATE CLUSTER REPLICA default.replica SIZE 'small'
+----
+CREATE CLUSTER REPLICA default.replica SIZE 'small'
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [Size(Value(String("small")))] } })
 
 parse-statement
 DROP CLUSTER cluster
@@ -1344,6 +1358,27 @@ DROP CLUSTER IF EXISTS cluster RESTRICT
 DROP CLUSTER IF EXISTS cluster
 =>
 DropClusters(DropClustersStatement { if_exists: true, names: [UnresolvedObjectName([Ident("cluster")])], cascade: false })
+
+parse-statement
+DROP CLUSTER REPLICA r1, r2
+----
+error: Expected dot, found comma
+DROP CLUSTER REPLICA r1, r2
+                       ^
+
+parse-statement
+DROP CLUSTER REPLICA IF EXISTS cluster.replica
+----
+DROP CLUSTER REPLICA IF EXISTS cluster.replica
+=>
+DropClusterReplicas(DropClusterReplicasStatement { if_exists: true, names: [QualifiedReplica { cluster: Ident("cluster"), replica: Ident("replica") }] })
+
+parse-statement
+DROP CLUSTER REPLICA IF EXISTS replica
+----
+error: Expected dot, found EOF
+DROP CLUSTER REPLICA IF EXISTS replica
+                                      ^
 
 parse-statement
 DROP CLUSTER IF EXISTS cluster CASCADE

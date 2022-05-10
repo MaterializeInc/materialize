@@ -17,8 +17,7 @@ use aws_types::SdkConfig;
 
 use crate::util;
 
-/// Constructs a new AWS Kinesis client that respects the
-/// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
+/// Constructs a new AWS Kinesis client that respects the system proxy configuration.
 pub fn client(config: &SdkConfig) -> Client {
     Client::from_conf_conn(config.into(), util::connector())
 }

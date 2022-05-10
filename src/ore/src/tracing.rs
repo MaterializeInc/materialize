@@ -9,16 +9,13 @@
 
 //! Utilities for configuring [`tracing`]
 
-use std::fs;
 use std::io::{self, Write};
 use std::marker::PhantomData;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::Context as _;
 use hyper::client::HttpConnector;
-use hyper_proxy::ProxyConnector;
 use hyper_tls::HttpsConnector;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
@@ -27,7 +24,8 @@ use tonic::metadata::{MetadataKey, MetadataMap};
 use tonic::transport::Endpoint;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
-use tracing_subscriber::fmt;
+use tracing_subscriber::fmt::format::{format, Format, Writer};
+use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Context, Layer, Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -35,13 +33,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 use crate::metric;
 use crate::metrics::MetricsRegistry;
 
-fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnector>> {
+fn create_h2_alpn_https_connector() -> HttpsConnector<HttpConnector> {
     // This accomplishes the same thing as the default
     // + adding a `request_alpn`
     let mut http = HttpConnector::new();
     http.enforce_http(false);
 
-    mz_http_proxy::hyper::connector(HttpsConnector::from((
+    HttpsConnector::from((
         http,
         tokio_native_tls::TlsConnector::from(
             native_tls::TlsConnector::builder()
@@ -49,7 +47,7 @@ fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnect
                 .build()
                 .unwrap(),
         ),
-    )))
+    ))
 }
 
 /// Setting up opentel in the background requires we are in a tokio-runtime
@@ -125,9 +123,6 @@ where
 pub struct TracingConfig<'a> {
     /// `Targets` filter string.
     pub log_filter: &'a str,
-    /// Path of the file we log to. Defaults to
-    /// a standard location.
-    pub log_file: Option<&'a str>,
     /// When `Some(_)`, the https endpoint to send
     /// opentelemetry traces.
     pub opentelemetry_endpoint: Option<&'a str>,
@@ -135,9 +130,8 @@ pub struct TracingConfig<'a> {
     /// configure additional comma separated
     /// headers.
     pub opentelemetry_headers: Option<&'a str>,
-    /// The directory mz's data goes into. Used
-    /// to construct the `log_file` default.
-    pub data_directory: &'a PathBuf,
+    /// Optional prefix for log lines
+    pub prefix: Option<&'a str>,
     /// When enabled, optionally turn on the
     /// tokio console.
     #[cfg(feature = "tokio-console")]
@@ -168,87 +162,27 @@ pub async fn configure(
         var_labels: ["severity"],
     ));
 
-    let stream: Box<dyn Write> = match config.log_file.as_deref() {
-        Some("stderr") => {
-            // The user explicitly directed logs to stderr. Log only to
-            // stderr with the user-specified `filter`.
-            let stack = tracing_subscriber::registry()
-                .with(MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()))
-                .with(
-                    fmt::layer()
-                        .with_writer(io::stderr)
-                        .with_ansi(atty::is(atty::Stream::Stderr))
-                        .with_filter(filter),
-                );
+    let stack = tracing_subscriber::registry()
+        .with(MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()))
+        .with(
+            fmt::layer()
+                .with_writer(io::stderr)
+                .with_ansi(atty::is(atty::Stream::Stderr))
+                .event_format(SubprocessFormat::new_default(config.prefix))
+                .with_filter(filter),
+        );
 
-            #[cfg(feature = "tokio-console")]
-            let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
+    #[cfg(feature = "tokio-console")]
+    let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
 
-            configure_opentelemetry_and_init(
-                stack,
-                config.opentelemetry_endpoint,
-                config.opentelemetry_headers,
-            )
-            .await?;
+    configure_opentelemetry_and_init(
+        stack,
+        config.opentelemetry_endpoint,
+        config.opentelemetry_headers,
+    )
+    .await?;
 
-            Box::new(io::stderr())
-        }
-        log_file => {
-            // Logging to a file. If the user did not explicitly specify
-            // a file, bubble up warnings and errors to stderr.
-
-            let path = match log_file {
-                Some(log_file) => PathBuf::from(log_file),
-                None => config.data_directory.join("materialized.log"),
-            };
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!("creating log file directory: {}", parent.display())
-                })?;
-            }
-
-            let file = fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&path)
-                .with_context(|| format!("creating log file: {}", path.display()))?;
-
-            let stderr_level = match log_file {
-                Some(_) => LevelFilter::OFF,
-                None => LevelFilter::WARN,
-            };
-            let stack = tracing_subscriber::registry()
-                .with(MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()))
-                .with({
-                    let file = file.try_clone().expect("failed to clone log file");
-                    fmt::layer()
-                        .with_ansi(false)
-                        .with_writer(file)
-                        .with_filter(filter.clone())
-                })
-                .with(
-                    fmt::layer()
-                        .with_writer(io::stderr)
-                        .with_ansi(atty::is(atty::Stream::Stderr))
-                        .with_filter(stderr_level)
-                        .with_filter(filter),
-                );
-
-            #[cfg(feature = "tokio-console")]
-            let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
-
-            configure_opentelemetry_and_init(
-                stack,
-                config.opentelemetry_endpoint,
-                config.opentelemetry_headers,
-            )
-            .await?;
-
-            Box::new(file)
-        }
-    };
-
-    Ok(stream)
+    Ok(Box::new(io::stderr()))
 }
 
 /// A tracing [`Layer`] that allows hooking into the reporting/filtering chain
@@ -279,6 +213,62 @@ where
         self.counter
             .with_label_values(&[&metadata.level().to_string()])
             .inc();
+    }
+}
+
+/// A wrapper around a `tracing_subscriber` `Format` that
+/// prepends a subprocess name to the event logs
+#[derive(Debug)]
+pub struct SubprocessFormat<F> {
+    inner: F,
+    process_name: Option<String>,
+}
+
+impl SubprocessFormat<Format> {
+    /// Make a new `SubprocessFormat` that wraps
+    /// the `tracing_subscriber` default [`FormatEvent`].
+    pub fn new_default(process_name: Option<impl Into<String>>) -> Self {
+        SubprocessFormat {
+            inner: format(),
+            process_name: process_name.map(|pn| pn.into()),
+        }
+    }
+}
+
+impl<F, C, N> FormatEvent<C, N> for SubprocessFormat<F>
+where
+    C: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+    F: FormatEvent<C, N>,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, C, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        match &self.process_name {
+            None => self.inner.format_event(ctx, writer, event)?,
+            Some(process_name) => {
+                let style = ansi_term::Style::new();
+
+                let target_style = if writer.has_ansi_escapes() {
+                    style.bold()
+                } else {
+                    style
+                };
+
+                write!(
+                    writer,
+                    "{}{}:{} ",
+                    target_style.prefix(),
+                    process_name,
+                    target_style.infix(style)
+                )?;
+                self.inner.format_event(ctx, writer, event)?;
+            }
+        }
+        Ok(())
     }
 }
 

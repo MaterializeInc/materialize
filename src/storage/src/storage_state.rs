@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistLocation};
+use mz_persist_client::PersistLocation;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::ActivateCapability;
@@ -222,12 +222,8 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             };
 
                             // TODO: Make these parts async aware?
-                            let (blob, consensus) =
-                                futures_executor::block_on(location.open()).unwrap();
-
                             let persist_client =
-                                futures_executor::block_on(PersistClient::new(blob, consensus))
-                                    .unwrap();
+                                futures_executor::block_on(location.open()).unwrap();
 
                             let (write, _read) = futures_executor::block_on(
                                 persist_client.open::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(

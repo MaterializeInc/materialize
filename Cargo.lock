@@ -108,9 +108,9 @@ dependencies = [
 
 [[package]]
 name = "arrow2"
-version = "0.11.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35994323132313169feb0bfac20a5f30dedeaebf238d10589eb676fbed3be0f2"
+checksum = "b040061368d1314b0fd8b8f1fde0671eba1afc63a1c61a4dafaf2d4fc10c96f9"
 dependencies = [
  "arrow-format",
  "base64",
@@ -197,18 +197,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "async-native-tls"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d57d4cec3c647232e1094dc013546c0b33ce785d8aeb251e1f20dfaf8a9a13fe"
-dependencies = [
- "futures-util",
- "native-tls",
- "thiserror",
- "url",
 ]
 
 [[package]]
@@ -2847,7 +2835,6 @@ dependencies = [
  "mz-coord",
  "mz-dataflow-types",
  "mz-frontegg-auth",
- "mz-http-proxy",
  "mz-http-util",
  "mz-kafka-util",
  "mz-npm",
@@ -3113,7 +3100,6 @@ dependencies = [
  "aws-smithy-client",
  "aws-types",
  "hyper-tls",
- "mz-http-proxy",
 ]
 
 [[package]]
@@ -3154,7 +3140,6 @@ dependencies = [
  "anyhow",
  "hyper",
  "lazy_static",
- "mz-http-proxy",
  "mz-ore",
  "native-tls",
  "openssl",
@@ -3291,12 +3276,14 @@ dependencies = [
  "globset",
  "http",
  "http-serde",
+ "itertools",
  "maplit",
  "mz-ccsr",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
  "mz-orchestrator",
+ "mz-orchestrator-kubernetes",
  "mz-ore",
  "mz-persist",
  "mz-persist-client",
@@ -3398,18 +3385,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
-]
-
-[[package]]
-name = "mz-http-proxy"
-version = "0.1.0"
-dependencies = [
- "http",
- "hyper-proxy",
- "ipnet",
- "lazy_static",
- "reqwest",
- "tracing",
 ]
 
 [[package]]
@@ -3569,6 +3544,8 @@ dependencies = [
  "kube",
  "mz-orchestrator",
  "mz-secrets-kubernetes",
+ "punycode",
+ "regex",
  "serde_json",
  "sha2",
 ]
@@ -3595,6 +3572,7 @@ dependencies = [
 name = "mz-ore"
 version = "0.0.0"
 dependencies = [
+ "ansi_term",
  "anyhow",
  "async-trait",
  "atty",
@@ -3609,7 +3587,6 @@ dependencies = [
  "hyper-proxy",
  "hyper-tls",
  "lazy_static",
- "mz-http-proxy",
  "native-tls",
  "openssl",
  "opentelemetry",
@@ -3698,6 +3675,7 @@ dependencies = [
  "bytes",
  "clap",
  "differential-dataflow",
+ "futures",
  "futures-executor",
  "futures-task",
  "mz-ore",
@@ -4517,20 +4495,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "opentls"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f561874f8d6ecfb674fc08863414040c93cc90c0b6963fe679895fab8b65560"
-dependencies = [
- "futures-util",
- "log",
- "openssl",
- "openssl-probe",
- "openssl-sys",
- "url",
-]
-
-[[package]]
 name = "ordered-float"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5066,9 +5030,9 @@ dependencies = [
 
 [[package]]
 name = "prost-build"
-version = "0.10.1"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "120fbe7988713f39d780a58cf1a7ef0d7ef66c6d87e5aa3438940c05357929f4"
+checksum = "65a1118354442de7feb8a2a76f3d80ef01426bd45542c8c1fdffca41a758f846"
 dependencies = [
  "bytes",
  "cfg-if",
@@ -5203,6 +5167,12 @@ dependencies = [
  "sha2",
  "uritemplate-next",
 ]
+
+[[package]]
+name = "punycode"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
 
 [[package]]
 name = "quick-error"
@@ -6065,11 +6035,10 @@ dependencies = [
 
 [[package]]
 name = "tiberius"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca082fe560e504c0f1c1fe0b6bd395728a4d2b2baa97c1be454b6849341e5aee"
+checksum = "e1946bafaeed7315710af9bf9eb2074ea120da05b188059e1679eaf73d121bdb"
 dependencies = [
- "async-native-tls",
  "async-trait",
  "asynchronous-codec",
  "byteorder",
@@ -6082,7 +6051,6 @@ dependencies = [
  "futures-util",
  "num-traits",
  "once_cell",
- "opentls",
  "pin-project-lite",
  "pretty-hex",
  "thiserror",
@@ -6378,9 +6346,9 @@ dependencies = [
 
 [[package]]
 name = "tonic"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30fb54bf1e446f44d870d260d99957e7d11fb9d0a0f5bd1a662ad1411cc103f9"
+checksum = "5be9d60db39854b30b835107500cf0aca0b0d14d6e1c3de124217c23a29c2ddb"
 dependencies = [
  "async-stream",
  "async-trait",

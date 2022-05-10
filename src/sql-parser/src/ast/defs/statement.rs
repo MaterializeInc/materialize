@@ -49,17 +49,18 @@ pub enum Statement<T: AstInfo> {
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
+    CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
-    AlterCluster(AlterClusterStatement<T>),
     Discard(DiscardStatement),
     DropDatabase(DropDatabaseStatement<T>),
     DropSchema(DropSchemaStatement<T>),
     DropObjects(DropObjectsStatement<T>),
     DropRoles(DropRolesStatement),
     DropClusters(DropClustersStatement),
+    DropClusterReplicas(DropClusterReplicasStatement),
     SetVariable(SetVariableStatement),
     ShowDatabases(ShowDatabasesStatement<T>),
     ShowSchemas(ShowSchemasStatement<T>),
@@ -109,16 +110,17 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSecret(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
+            Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
-            Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropDatabase(stmt) => f.write_node(stmt),
             Statement::DropSchema(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropRoles(stmt) => f.write_node(stmt),
             Statement::DropClusters(stmt) => f.write_node(stmt),
+            Statement::DropClusterReplicas(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ShowDatabases(stmt) => f.write_node(stmt),
             Statement::ShowSchemas(stmt) => f.write_node(stmt),
@@ -882,12 +884,27 @@ pub struct CreateClusterStatement<T: AstInfo> {
     pub name: Ident,
     /// The comma-separated options.
     pub options: Vec<ClusterOption<T>>,
+    /// Replicas to create alongside the cluster.
+    pub replicas: Vec<ReplicaDefinition<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER ");
         f.write_node(&self.name);
+        if !self.replicas.is_empty() {
+            f.write_str(" ");
+            let replica_defs = self
+                .replicas
+                .iter()
+                .map(|ReplicaDefinition { name, options }| {
+                    let options =
+                        itertools::join(options.iter().map(|o| o.to_ast_string_stable()), ", ");
+                    format!("REPLICA {name} ({options})")
+                })
+                .collect::<Vec<_>>();
+            f.write_str(itertools::join(replica_defs, ", "));
+        }
         if !self.options.is_empty() {
             f.write_str(" ");
             f.write_node(&display::comma_separated(&self.options));
@@ -899,15 +916,6 @@ impl_display_t!(CreateClusterStatement);
 /// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ClusterOption<T: AstInfo> {
-    /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
-    Remote {
-        /// The name.
-        name: Ident,
-        /// The hosts.
-        hosts: Vec<WithOptionValue<T>>,
-    },
-    /// The `SIZE [[=] <size>]` option.
-    Size(WithOptionValue<T>),
     /// The `INTROSPECTION GRANULARITY [[=] <interval>] option.
     IntrospectionGranularity(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
@@ -917,17 +925,6 @@ pub enum ClusterOption<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            ClusterOption::Remote { name, hosts } => {
-                f.write_str("REMOTE ");
-                f.write_node(name);
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(hosts));
-                f.write_str(")");
-            }
-            ClusterOption::Size(size) => {
-                f.write_str("SIZE ");
-                f.write_node(size);
-            }
             ClusterOption::IntrospectionGranularity(granularity) => {
                 f.write_str("INTROSPECTION GRANULARITY ");
                 f.write_node(granularity);
@@ -935,6 +932,65 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
             ClusterOption::IntrospectionDebugging(debugging) => {
                 f.write_str("INTROSPECTION DEBUGGING ");
                 f.write_node(debugging);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ReplicaDefinition<T: AstInfo> {
+    /// Name of the created replica.
+    pub name: Ident,
+    /// The comma-separated options.
+    pub options: Vec<ReplicaOption<T>>,
+}
+
+/// `CREATE CLUSTER REPLICA ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateClusterReplicaStatement<T: AstInfo> {
+    /// Name of the replica's cluster.
+    pub of_cluster: Ident,
+    /// The replica's definition.
+    pub definition: ReplicaDefinition<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CLUSTER REPLICA ");
+        f.write_node(&self.of_cluster);
+        f.write_str(".");
+        f.write_node(&self.definition.name);
+        if !self.definition.options.is_empty() {
+            f.write_str(" ");
+            f.write_node(&display::comma_separated(&self.definition.options));
+        }
+    }
+}
+impl_display_t!(CreateClusterReplicaStatement);
+
+/// An option in a `CREATE CLUSTER` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ReplicaOption<T: AstInfo> {
+    /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
+    Remote {
+        /// The hosts.
+        hosts: Vec<WithOptionValue<T>>,
+    },
+    /// The `SIZE [[=] <size>]` option.
+    Size(WithOptionValue<T>),
+}
+
+impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ReplicaOption::Remote { hosts } => {
+                f.write_str("REMOTE (");
+                f.write_node(&display::comma_separated(hosts));
+                f.write_str(")");
+            }
+            ReplicaOption::Size(size) => {
+                f.write_str("SIZE ");
+                f.write_node(size);
             }
         }
     }
@@ -1046,33 +1102,6 @@ impl<T: AstInfo> AstDisplay for AlterSecretStatement<T> {
 }
 
 impl_display_t!(AlterSecretStatement);
-
-/// `ALTER CLUSTER ...`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterClusterStatement<T: AstInfo> {
-    /// Name of the cluster to alter.
-    pub name: Ident,
-    /// Whether the `IF EXISTS` clause was specified.
-    pub if_exists: bool,
-    /// The comma-separated options.
-    pub options: Vec<ClusterOption<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for AlterClusterStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("ALTER CLUSTER ");
-        if self.if_exists {
-            f.write_str("IF EXISTS ");
-        }
-        f.write_node(&self.name);
-        if !self.options.is_empty() {
-            f.write_str(" ");
-            f.write_node(&display::comma_separated(&self.options));
-        }
-    }
-}
-
-impl_display_t!(AlterClusterStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
@@ -1225,6 +1254,40 @@ impl AstDisplay for DropClustersStatement {
 }
 impl_display!(DropClustersStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QualifiedReplica {
+    pub cluster: Ident,
+    pub replica: Ident,
+}
+
+impl AstDisplay for QualifiedReplica {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.cluster);
+        f.write_str(".");
+        f.write_node(&self.replica);
+    }
+}
+impl_display!(QualifiedReplica);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropClusterReplicasStatement {
+    /// An optional `IF EXISTS` clause. (Non-standard.)
+    pub if_exists: bool,
+    /// One or more objects to drop. (ANSI SQL requires exactly one.)
+    pub names: Vec<QualifiedReplica>,
+}
+
+impl AstDisplay for DropClusterReplicasStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP CLUSTER REPLICA ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&display::comma_separated(&self.names));
+    }
+}
+impl_display!(DropClusterReplicasStatement);
+
 /// `SET <variable>`
 ///
 /// Note: this is not a standard SQL statement, but it is supported by at
@@ -1352,6 +1415,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ObjectType::Type => "TYPES",
             ObjectType::Role => "ROLES",
             ObjectType::Cluster => "CLUSTERS",
+            ObjectType::ClusterReplica => "CLUSTER REPLICAS",
             ObjectType::Object => "OBJECTS",
             ObjectType::Secret => "SECRETS",
             ObjectType::Connector => "CONNECTORS",
@@ -1676,6 +1740,7 @@ pub enum ObjectType {
     Type,
     Role,
     Cluster,
+    ClusterReplica,
     Object,
     Secret,
     Connector,
@@ -1692,6 +1757,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
             ObjectType::Cluster => "CLUSTER",
+            ObjectType::ClusterReplica => "CLUSTER REPLICA",
             ObjectType::Object => "OBJECT",
             ObjectType::Secret => "SECRET",
             ObjectType::Connector => "CONNECTOR",

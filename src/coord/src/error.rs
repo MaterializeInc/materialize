@@ -79,6 +79,8 @@ pub enum CoordError {
     InvalidTableMutationSelection,
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// Target cluster has no replicas to service query.
+    NoReplicasAvailable(String),
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
@@ -129,6 +131,8 @@ pub enum CoordError {
     UnmaterializableFunction(UnmaterializableFunc),
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
+    /// The transaction only supports single table writes
+    MultiTableWriteTransaction,
 }
 
 impl CoordError {
@@ -277,6 +281,9 @@ impl CoordError {
             CoordError::InvalidReplicaSize { expected, size: _ } => {
                 Some(format!("Valid cluster sizes are: {}", expected.join(", ")))
             }
+            CoordError::NoReplicasAvailable(_) => {
+                Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
+            }
             _ => None,
         }
     }
@@ -346,6 +353,13 @@ impl fmt::Display for CoordError {
             CoordError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
+            CoordError::NoReplicasAvailable(cluster) => {
+                write!(
+                    f,
+                    "CLUSTER {} has no replicas available to service request",
+                    cluster.quoted()
+                )
+            }
             CoordError::OperationProhibitsTransaction(op) => {
                 write!(f, "{} cannot be run inside a transaction block", op)
             }
@@ -396,6 +410,9 @@ impl fmt::Display for CoordError {
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
             CoordError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())
+            }
+            CoordError::MultiTableWriteTransaction => {
+                f.write_str("write transactions only support writes to a single table")
             }
         }
     }

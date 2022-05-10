@@ -28,9 +28,9 @@ use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
-    CreateClusterStatement, CreateDatabaseStatement, CreateSchemaStatement, CreateSecretStatement,
-    CreateSourceStatement, CreateTableStatement, CreateViewStatement, Raw, Statement,
-    ViewDefinition,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateDatabaseStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSourceStatement, CreateTableStatement,
+    CreateViewStatement, Raw, ReplicaDefinition, Statement, ViewDefinition,
 };
 
 use crate::action::{Action, ControlFlow, State};
@@ -101,9 +101,37 @@ impl Action for SqlAction {
                 .await
             }
             Statement::CreateCluster(CreateClusterStatement { name, .. }) => {
+                // Modifying the default cluster causes an enormous headache in
+                // isolating tests from one another, so testdrive won't let you.
+                assert_ne!(
+                    name,
+                    &mz_sql::ast::Ident::from("default"),
+                    "testdrive cannot create default cluster"
+                );
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP CLUSTER IF EXISTS {} CASCADE", name),
+                )
+                .await
+            }
+            Statement::CreateClusterReplica(CreateClusterReplicaStatement {
+                definition: ReplicaDefinition { name, .. },
+                of_cluster,
+                ..
+            }) => {
+                // Modifying the default cluster causes an enormous headache in
+                // isolating tests from one another, so testdrive won't let you.
+                assert_ne!(
+                    of_cluster.to_string(),
+                    "default",
+                    "testdrive cannot create default cluster replicas"
+                );
+                self.try_drop(
+                    &mut state.pgclient,
+                    &format!(
+                        "DROP CLUSTER REPLICA IF EXISTS {} FROM {}",
+                        name, of_cluster
+                    ),
                 )
                 .await
             }

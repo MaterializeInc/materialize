@@ -100,7 +100,6 @@ $ postgres-connect name=writer url=postgres://materialize:materialize@${testdriv
 $ postgres-execute connection=writer
 BEGIN;
 INSERT INTO s VALUES (2);
-INSERT INTO c VALUES (3);
 
 > INSERT INTO c SELECT * FROM s;
 
@@ -109,7 +108,7 @@ INSERT INTO c VALUES (3);
 
 $ postgres-execute connection=writer
 
-INSERT INTO s VALUES (4);
+INSERT INTO s VALUES (3);
 COMMIT;
 
 > INSERT INTO c SELECT * FROM s;
@@ -118,14 +117,12 @@ COMMIT;
 1
 2
 3
-4
 
 > BEGIN;
 > SELECT a FROM c
 1
 2
 3
-4
 
 $ postgres-execute connection=writer
 INSERT INTO c SELECT * FROM s;
@@ -134,19 +131,17 @@ INSERT INTO c SELECT * FROM s;
 1
 2
 3
-4
 
 > COMMIT;
 
 # Every value from s should be duplicated in c
 > SELECT a FROM s
 2
-4
+3
 
 > SELECT a FROM c;
 1
 2
 2
 3
-4
-4
+3

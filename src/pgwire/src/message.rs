@@ -388,6 +388,7 @@ impl ErrorResponse {
             CoordError::InvalidReplicaSize { .. } => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            CoordError::NoReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
@@ -409,10 +410,11 @@ impl ErrorResponse {
             CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             // It's not immediately clear which error code to use here because a
-            // "write-only transaction" is not a thing in Postgres. This error
-            // code is the generic "bad txn thing" code, so it's probably the
-            // best choice.
+            // "write-only transaction" and "single table write transaction" are
+            // not things in Postgres. This error code is the generic "bad txn thing"
+            // code, so it's probably the best choice.
             CoordError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            CoordError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
         };
         ErrorResponse {
             severity,

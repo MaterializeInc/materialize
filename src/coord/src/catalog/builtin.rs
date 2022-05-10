@@ -1133,7 +1133,15 @@ lazy_static! {
             .with_column("schema_id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false)),
     };
-
+    pub static ref MZ_CLUSTER_REPLICAS: BuiltinTable = BuiltinTable {
+        name: "mz_cluster_replicas",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("cluster_id", ScalarType::Int64.nullable(false))
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("size", ScalarType::String.nullable(true)),
+    };
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -2037,6 +2045,7 @@ lazy_static! {
             Builtin::Table(&MZ_CLUSTERS),
             Builtin::Table(&MZ_SECRETS),
             Builtin::Table(&MZ_CONNECTORS),
+            Builtin::Table(&MZ_CLUSTER_REPLICAS),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),

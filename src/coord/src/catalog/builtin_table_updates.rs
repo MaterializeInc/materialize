@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_dataflow_types::sinks::KafkaSinkConnector;
 use mz_dataflow_types::sources::ConnectorInner;
 use mz_expr::MirScalarExpr;
@@ -19,10 +20,10 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpeci
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_COLUMNS, MZ_CONNECTORS, MZ_DATABASES,
-    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES,
-    MZ_VIEWS,
+    MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS, MZ_COLUMNS, MZ_CONNECTORS,
+    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
+    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
@@ -97,10 +98,39 @@ impl CatalogState {
         name: &str,
         diff: Diff,
     ) -> BuiltinTableUpdate {
-        let compute_instance_id = &self.compute_instances_by_name[name];
+        let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::Int64(*compute_instance_id), Datum::String(&name)]),
+            row: Row::pack_slice(&[Datum::Int64(id), Datum::String(&name)]),
+            diff,
+        }
+    }
+
+    pub(super) fn pack_compute_instance_replica_update(
+        &self,
+        compute_instance_id: ComputeInstanceId,
+        name: &str,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let instance = &self.compute_instances_by_id[&compute_instance_id];
+        let id = instance.replica_id_by_name[name];
+        let config = &instance.replicas_by_id[&id];
+
+        let size = match config {
+            ConcreteComputeInstanceReplicaConfig::Managed { size_config } => {
+                Some(format!("{}-{}", size_config.scale, size_config.workers))
+            }
+            ConcreteComputeInstanceReplicaConfig::Remote { .. } => None,
+        };
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
+            row: Row::pack_slice(&[
+                Datum::Int64(compute_instance_id),
+                Datum::Int64(id),
+                Datum::String(&name),
+                Datum::from(size.as_deref()),
+            ]),
             diff,
         }
     }

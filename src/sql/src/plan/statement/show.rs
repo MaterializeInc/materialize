@@ -303,6 +303,7 @@ pub fn show_objects<'a>(
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
         ObjectType::Role => bail_unsupported!("SHOW ROLES"),
         ObjectType::Cluster => show_clusters(scx, filter),
+        ObjectType::ClusterReplica => show_cluster_replicas(scx, filter),
         ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
         ObjectType::Connector => show_connectors(scx, extended, full, from, filter),
@@ -668,6 +669,25 @@ pub fn show_clusters<'a>(
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let query = "SELECT mz_clusters.name FROM mz_catalog.mz_clusters".to_string();
+
+    ShowSelect::new(scx, query, filter, None, None)
+}
+
+pub fn show_cluster_replicas<'a>(
+    scx: &'a StatementContext<'a>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    let query = r#"
+    SELECT
+        mz_catalog.mz_clusters.name AS cluster,
+        mz_catalog.mz_cluster_replicas.name AS replica
+    FROM
+        mz_catalog.mz_cluster_replicas
+        JOIN mz_catalog.mz_clusters ON
+                mz_catalog.mz_cluster_replicas.cluster_id = mz_catalog.mz_clusters.id
+    ORDER BY
+        1, 2"#
+        .to_string();
 
     ShowSelect::new(scx, query, filter, None, None)
 }

@@ -11,6 +11,7 @@
 
 //! Catalog abstraction layer.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -131,10 +132,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
     ///
     /// If the provided name is `None`, resolves the currently-active compute
     /// instance.
-    fn resolve_compute_instance(
-        &self,
-        compute_instance_name: Option<&str>,
-    ) -> Result<&dyn CatalogComputeInstance, CatalogError>;
+    fn resolve_compute_instance<'a, 'b>(
+        &'a self,
+        compute_instance_name: Option<&'b str>,
+    ) -> Result<&dyn CatalogComputeInstance<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -256,7 +257,7 @@ pub trait CatalogRole {
 }
 
 /// A compute instance in a [`SessionCatalog`].
-pub trait CatalogComputeInstance {
+pub trait CatalogComputeInstance<'a> {
     /// Returns a fully-specified name of the compute instance.
     fn name(&self) -> &str;
 
@@ -265,6 +266,9 @@ pub trait CatalogComputeInstance {
 
     /// Returns the set of non-transient indexes on this cluster.
     fn indexes(&self) -> &std::collections::HashSet<GlobalId>;
+
+    /// Returns the set of non-transient indexes on this cluster.
+    fn replica_names(&self) -> HashSet<&String>;
 }
 
 /// A connector in a [`SessionCatalog`]
@@ -536,6 +540,8 @@ pub enum CatalogError {
     UnknownRole(String),
     /// Unknown compute instance.
     UnknownComputeInstance(String),
+    /// Unknown compute instance replica.
+    UnknownComputeInstanceReplica(String),
     /// Unknown item.
     UnknownItem(String),
     /// Unknown function.
@@ -563,6 +569,9 @@ impl fmt::Display for CatalogError {
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
+            Self::UnknownComputeInstanceReplica(name) => {
+                write!(f, "unknown cluster replica '{}'", name)
+            }
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
             Self::InvalidDependency { name, typ } => write!(
                 f,
@@ -662,10 +671,10 @@ impl SessionCatalog for DummyCatalog {
         unimplemented!();
     }
 
-    fn resolve_compute_instance(
-        &self,
-        _: Option<&str>,
-    ) -> Result<&dyn CatalogComputeInstance, CatalogError> {
+    fn resolve_compute_instance<'a, 'b>(
+        &'a self,
+        _: Option<&'b str>,
+    ) -> Result<&'a dyn CatalogComputeInstance, CatalogError> {
         unimplemented!();
     }
 

@@ -1067,6 +1067,9 @@ where
             ExecuteResponse::CreatedComputeInstance { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "cluster")
             }
+            ExecuteResponse::CreatedComputeInstanceReplica { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "cluster replica")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }
@@ -1098,6 +1101,9 @@ where
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
             ExecuteResponse::DroppedRole => command_complete!("DROP ROLE"),
             ExecuteResponse::DroppedComputeInstance => command_complete!("DROP CLUSTER"),
+            ExecuteResponse::DroppedComputeInstanceReplicas => {
+                command_complete!("DROP CLUSTER REPLICA")
+            }
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),

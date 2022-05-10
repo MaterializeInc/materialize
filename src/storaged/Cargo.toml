@@ -13,7 +13,7 @@ clap = { version = "3.1.15", features = ["derive", "env"] }
 futures = "0.3.21"
 mz-build-info = { path = "../build-info" }
 mz-dataflow-types = { path = "../dataflow-types" }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof", features = [ "jemalloc" ] }
@@ -36,3 +36,4 @@ tikv-jemallocator = { version = "0.4.3", features = ["profiling", "stats", "unpr
 [features]
 default = ["jemalloc"]
 jemalloc = ["tikv-jemallocator", "mz-prof/jemalloc"]
+tokio-console = ["mz-ore/tokio-console"]

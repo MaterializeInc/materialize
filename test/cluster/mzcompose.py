@@ -83,8 +83,9 @@ def test_cluster(c: Composition, *glob: str) -> None:
     # Create a remote cluster and verify that tests pass.
     c.up("computed_1")
     c.up("computed_2")
+    c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "CREATE CLUSTER cluster1 REMOTE replica1 ('computed_1:2100', 'computed_2:2100');"
+        "CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1:2100', 'computed_2:2100'));"
     )
     c.run("testdrive", *glob)
 
@@ -92,11 +93,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("computed_3")
     c.up("computed_4")
     c.sql(
-        """
-        ALTER CLUSTER cluster1
-            REMOTE replica1 ('computed_1:2100', 'computed_2:2100'),
-            REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
-        """
+        "CREATE CLUSTER REPLICA cluster1.replica2 REMOTE ('computed_3:2100', 'computed_4:2100')"
     )
     c.run("testdrive", *glob)
 
@@ -105,18 +102,6 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.kill("computed_1")
     c.run("testdrive", *glob)
 
-    # Kill one of the nodes in the first replica of the compute cluster and
-    # verify that tests still pass.
-    c.sql(
-        """
-        ALTER CLUSTER cluster1
-            REMOTE replica1 ('computed_1:2100', 'computed_2:2100')
-        """
-    )
-    c.sql(
-        """
-        ALTER CLUSTER cluster1
-            REMOTE replica2 ('computed_3:2100', 'computed_4:2100')
-        """
-    )
-    c.run("testdrive", "smoke/insert-select.td")
+    # Leave only replica 2 up and verify that tests still pass.
+    c.sql("DROP CLUSTER REPLICA cluster1.replica1")
+    c.run("testdrive", *glob)

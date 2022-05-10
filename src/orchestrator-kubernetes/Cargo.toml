@@ -14,5 +14,7 @@ mz-orchestrator = { path = "../orchestrator" }
 mz-secrets-kubernetes = { path = "../secrets-kubernetes" }
 k8s-openapi = { version = "0.14.0", features = ["v1_22"] }
 kube = { version = "0.71.0", features = ["ws"] }
+punycode = "0.4.1"
+regex = "1.5.4"
 serde_json = "1.0.80"
 sha2 = "0.10.2"
