@@ -6,7 +6,7 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use anyhow::Error;
+use anyhow::{bail, Error};
 use async_trait::async_trait;
 use mz_secrets::{SecretOp, SecretsController};
 use std::fs;
@@ -41,7 +41,9 @@ impl SecretsController for FilesystemSecretsController {
         for op in ops.iter() {
             match op {
                 SecretOp::Ensure { id, contents } => {
-                    assert_eq!(ops.len(), 1);
+                    if ops.len() > 1 {
+                        bail!("secrets controller does not support creating multiple secrets atomically")
+                    }
                     let file_path = self.secrets_storage_path.join(format!("{}", id));
                     let mut file = OpenOptions::new()
                         .mode(0o600)
