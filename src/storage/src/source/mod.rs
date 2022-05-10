@@ -42,7 +42,7 @@ use mz_persist_types::Codec;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::communication::Pull;
-use timely::dataflow::channels::pact::{Exchange, LogPuller, ParallelizationContract};
+use timely::dataflow::channels::pact::{Exchange, LogPuller, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::TeeCore;
 use timely::dataflow::channels::Bundle;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -945,7 +945,7 @@ where
     )
 }
 
-type SourceMessageInputHandle<S> = InputHandle<
+type SourceMessageInputHandleExchange<S> = InputHandle<
     Timestamp,
     Option<
         Result<SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>, SourceError>,
@@ -975,6 +975,58 @@ type SourceMessageInputHandle<S> = InputHandle<
         >,
     >,
 >;
+type SourceMessageInputHandlePipeline<S> = InputHandle<
+    Timestamp,
+    Option<
+        Result<SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>, SourceError>,
+    >,
+    LogPuller<
+        Timestamp,
+        Vec<
+            Option<
+                Result<
+                    SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>,
+                    SourceError,
+                >,
+            >,
+        >,
+        timely::communication::allocator::counters::Puller<
+            timely::communication::Message<
+                timely::dataflow::channels::Message<
+                    u64,
+                    Vec<
+                        std::option::Option<
+                            std::result::Result<
+                                SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>,
+                                mz_dataflow_types::SourceError,
+                            >,
+                        >,
+                    >,
+                >,
+            >,
+            timely::communication::allocator::thread::Puller<
+                timely::communication::Message<
+                    timely::dataflow::channels::Message<
+                        u64,
+                        Vec<
+                            std::option::Option<
+                                std::result::Result<
+                                    SourceMessage<
+                                        <S as SourceReader>::Key,
+                                        <S as SourceReader>::Value,
+                                    >,
+                                    mz_dataflow_types::SourceError,
+                                >,
+                            >,
+                        >,
+                    >,
+                >,
+            >,
+        >,
+    >,
+>;
+//type SourceMessageInputHandle<S> = SourceMessageInputHandleExchange<S>;
+type SourceMessageInputHandle<S> = SourceMessageInputHandlePipeline<S>;
 
 enum SourceMessageProcessingState<S: SourceReader> {
     Ready(SourceMessageInputHandle<S>),
@@ -1005,6 +1057,7 @@ impl<S: SourceReader> CreateSourceRunner<S> {
         CollectionMetadata {
             persist_location,
             timestamp_shard_id,
+            tx_timestamp_shard_id: _,
         }: CollectionMetadata,
         timestamp_frequency: Duration,
     ) -> anyhow::Result<Option<Self>> {
@@ -1541,7 +1594,8 @@ where
     let (mut merger_data_output, merger_data_stream) = merger_builder.new_output();
     // Move all data to one worker
     let merger_input =
-        merger_builder.new_input(&ingestor_data_stream, Exchange::new(move |_| 1738));
+        //merger_builder.new_input(&ingestor_data_stream, Exchange::new(move |_| 1738));
+        merger_builder.new_input(&ingestor_data_stream, Pipeline);
     merger_builder.set_notify(false);
 
     merger_builder.build_async(scope.clone(), |mut capabilities, frontiers, scheduler| {

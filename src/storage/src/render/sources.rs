@@ -451,7 +451,16 @@ where
                                                 as_of_frontier,
                                                 SourceInstanceDesc {
                                                     description: tx_src_desc,
-                                                    storage_metadata,
+                                                    storage_metadata: CollectionMetadata {
+                                                        persist_location: storage_metadata
+                                                            .persist_location
+                                                            .clone(),
+                                                        timestamp_shard_id: storage_metadata
+                                                            .tx_timestamp_shard_id
+                                                            .clone()
+                                                            .unwrap(),
+                                                        tx_timestamp_shard_id: None,
+                                                    },
                                                     arguments: SourceInstanceArguments {
                                                         operators: None,
                                                     },

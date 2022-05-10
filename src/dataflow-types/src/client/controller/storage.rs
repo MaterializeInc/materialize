@@ -147,6 +147,7 @@ pub trait StorageController: Debug + Send {
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
     pub timestamp_shard_id: ShardId,
+    pub tx_timestamp_shard_id: Option<ShardId>,
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
@@ -303,9 +304,10 @@ where
     }
 
     fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError> {
-        let timestamp_shard_id = self.collection(id)?.timestamp_shard_id;
+        let collection = self.collection(id)?;
         Ok(CollectionMetadata {
-            timestamp_shard_id,
+            timestamp_shard_id: collection.timestamp_shard_id,
+            tx_timestamp_shard_id: collection.tx_timestamp_shard_id,
             persist_location: self.persist_location.clone(),
         })
     }
@@ -382,12 +384,29 @@ where
                 .insert_without_overwrite(&mut self.state.stash, &id, ShardId::new())
                 .await?;
 
+            eprintln!("{:?} GENERATING SHARD ID: {:?}", id, timestamp_shard_id);
+
+            let tx_timestamp_shard_id = match desc.connector {
+                crate::sources::SourceConnector::External {
+                    envelope: crate::sources::SourceEnvelope::Debezium(ref dbz_envelope),
+                    ..
+                } => match dbz_envelope.mode.tx_metadata() {
+                    Some(md) => Some(
+                        self.collection_metadata(md.tx_metadata_global_id)?
+                            .timestamp_shard_id,
+                    ),
+                    None => None,
+                },
+                _ => None,
+            };
+
             let collection_state = CollectionState::new(
                 desc.clone(),
                 since.clone(),
                 read_handle,
                 last_bindings,
                 timestamp_shard_id,
+                tx_timestamp_shard_id,
             );
             self.state.collections.insert(id, collection_state);
 
@@ -772,6 +791,8 @@ pub struct CollectionState<T> {
 
     /// Stable shard ID that identifies where timestamp bindings are stored
     pub timestamp_shard_id: ShardId,
+    /// Stable shard ID that identifies where timestamp bindings are stored for timestamp bindings
+    pub tx_timestamp_shard_id: Option<ShardId>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -782,6 +803,7 @@ impl<T: Timestamp> CollectionState<T> {
         read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
         last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
         timestamp_shard_id: ShardId,
+        tx_timestamp_shard_id: Option<ShardId>,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
@@ -794,6 +816,7 @@ impl<T: Timestamp> CollectionState<T> {
             last_reported_ts_bindings,
             read_handle,
             timestamp_shard_id,
+            tx_timestamp_shard_id,
         }
     }
 }
