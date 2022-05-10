@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-mode cockroach
+# Test that Kafka sources with no format are disallowed.
 
-# Test that non-AOCF sources require a format
-statement error Source format must be specified
-CREATE SOURCE foo FROM FILE '/dev/null'
+! CREATE SOURCE s
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+exact:Source format must be specified
