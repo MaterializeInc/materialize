@@ -427,15 +427,15 @@ impl<S: Append + 'static> Coordinator<S> {
     fn get_and_step_local_write_ts(&mut self) -> (Timestamp, Timestamp) {
         let ts = self.global_timeline.write_ts();
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
-         * durable via an APPEND command to STORAGE.
+         * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
+         * timestamp will go up for the next write.
          * The timestamp must be increased for every write because each call to APPEND will close
          * the provided timestamp, meaning no more writes can happen at that timestamp.
          * If we add an ADAPTER side durable WAL, then consecutive writes could all happen at the
          * same timestamp as long as they're written to the WAL first.
          */
-        let advance_to = ts.step_forward();
-        self.global_timeline.fast_forward(advance_to);
-        (ts, advance_to)
+        let _ = self.global_timeline.read_ts();
+        (ts, ts.step_forward())
     }
 
     fn now(&self) -> EpochMillis {
@@ -2886,16 +2886,17 @@ impl<S: Append + 'static> Coordinator<S> {
                             appends.entry(id).or_default().extend(updates);
                         }
 
-                        // This should have been caught earlier, immediately when the second table
-                        // was added to the txn.
-                        assert!(appends.len() <= 1);
-                        if appends.len() == 1 {
-                            let (id, updates) = appends.into_element();
-                            self.dataflow_client
-                                .storage_mut()
-                                .append(vec![(id, updates, advance_to)])
-                                .await
-                                .unwrap();
+                        match appends.len() {
+                            1 => {
+                                let (id, updates) = appends.into_element();
+                                self.dataflow_client
+                                    .storage_mut()
+                                    .append(vec![(id, updates, advance_to)])
+                                    .await
+                                    .unwrap();
+                            },
+                            0 => {},
+                            _ => unreachable!("multi-table write transaction should fail immediately when the second table is add to the transaction"),
                         }
                     }
                     _ => {}
