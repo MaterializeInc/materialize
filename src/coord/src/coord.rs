@@ -290,7 +290,7 @@ fn concretize_replica_config(
                     )| (*scale, *cpu_limit),
                 );
                 let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                CoordError::InvalidReplicaSize { size, expected }
+                CoordError::InvalidClusterReplicaSize { size, expected }
             })?;
 
             if let Some(az) = &availability_zone {
@@ -3062,7 +3062,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .resolve_compute_instance(session.vars().cluster())?;
 
         if compute_instance.replicas_by_id.is_empty() {
-            return Err(CoordError::NoReplicasAvailable(
+            return Err(CoordError::NoClusterReplicasAvailable(
                 compute_instance.name.clone(),
             ));
         }
