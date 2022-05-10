@@ -48,7 +48,7 @@ test_cases = [
     TestCase(
         name="with-proxy",
         env=["ALL_PROXY=http://squid:3128"],
-        files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
+        files=["testdrive/avro-registry.td", "testdrive/s3.td"],
     ),
     TestCase(
         name="proxy-failure",
@@ -61,7 +61,7 @@ test_cases = [
             "ALL_PROXY=http://localhost:1234",
             "NO_PROXY=schema-registry,amazonaws.com,localstack",
         ],
-        files=["testdrive/avro-registry.td", "testdrive/esoteric/s3.td"],
+        files=["testdrive/avro-registry.td", "testdrive/s3.td"],
     ),
     # Another test that needs a working proxy to test
     TestCase(
