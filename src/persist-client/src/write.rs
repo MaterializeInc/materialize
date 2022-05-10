@@ -23,6 +23,7 @@ use mz_persist::location::{Atomicity, BlobMulti, ExternalError, SeqNo};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
@@ -153,7 +154,8 @@ where
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
-        new_upper: Antichain<T>,
+        lower: Antichain<T>,
+        upper: Antichain<T>,
     ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
@@ -163,12 +165,11 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::append new_upper={:?}", new_upper);
+        trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
 
-        let lower = self.upper.clone();
-        let upper = new_upper;
+        let upper = upper;
         let since = Antichain::from_elem(T::minimum());
-        let desc = Description::new(lower, upper, since);
+        let desc = Description::new(lower.clone(), upper, since);
 
         // TODO: Instead construct a Vec of batches here so it can be bounded
         // memory usage (if updates is large).
@@ -196,15 +197,32 @@ where
             vec![]
         };
 
-        let res = self.machine.append(&self.writer_id, &keys, &desc).await?;
-        match res {
-            Ok(_seqno) => {
-                self.upper = desc.upper().clone();
-                Ok(Ok(Ok(())))
-            }
-            Err(current_upper) => {
-                self.upper = current_upper.0.clone();
-                return Ok(Ok(Err(current_upper)));
+        loop {
+            let res = self.machine.append(&keys, &desc).await?;
+            match res {
+                Ok(_seqno) => {
+                    self.upper = desc.upper().clone();
+                    return Ok(Ok(Ok(())));
+                }
+                // TODO(aljoscha): This seems useless now because we have to read from consensus to
+                // get an up-to-date version of the upper.
+                Err(_current_upper) => {
+                    // If the state machine thinks that the shard upper is not far enough along, it
+                    // could be because the caller of this method has found out that it advanced
+                    // via some some side-channel that didn't update our local cache of the machine
+                    // state. So, fetch the latest state and try again if we indeed get something
+                    // different.
+                    self.machine.fetch_and_update_state().await;
+                    let current_upper = self.machine.upper();
+
+                    // We tried to to a non-contiguous append, that won't work.
+                    if PartialOrder::less_than(&current_upper, &lower) {
+                        self.upper = current_upper.clone();
+                        return Ok(Ok(Err(Upper(current_upper))));
+                    } else {
+                        // The upper stored in state was outdated. Retry after updating.
+                    }
+                }
             }
         }
     }
@@ -258,9 +276,13 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::write_batch new_upper={:?}", new_upper);
+        trace!(
+            "WriteHandle::compare_and_append expected_upper={:?} new_upper={:?}",
+            expected_upper,
+            new_upper
+        );
 
-        let lower = expected_upper;
+        let lower = expected_upper.clone();
         let upper = new_upper;
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
@@ -291,16 +313,36 @@ where
             vec![]
         };
 
-        let res = self
-            .machine
-            .compare_and_append(&self.writer_id, &keys, &desc)
-            .await?;
-        match res {
-            Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
-            Ok(Err(current_upper)) => return Ok(Ok(Err(current_upper))),
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(Ok(())))
+        loop {
+            let res = self.machine.compare_and_append(&keys, &desc).await?;
+            match res {
+                Ok(Ok(_seqno)) => {
+                    self.upper = desc.upper().clone();
+                    return Ok(Ok(Ok(())));
+                }
+                // TODO(aljoscha): This seems useless now because we have to read from consensus to
+                // get an up-to-date version of the upper.
+                Ok(Err(_current_upper)) => {
+                    // If the state machine thinks that the shard upper is not far enough along, it
+                    // could be because the caller of this method has found out that it advanced
+                    // via some some side-channel that didn't update our local cache of the machine
+                    // state. So, fetch the latest state and try again if we indeed get something
+                    // different.
+                    self.machine.fetch_and_update_state().await;
+                    let current_upper = self.machine.upper();
+
+                    // We tried to to a compare_and_append with the wrong expected upper, that
+                    // won't work.
+                    if current_upper != expected_upper {
+                        self.upper = current_upper.clone();
+                        return Ok(Ok(Err(Upper(current_upper))));
+                    } else {
+                        // The upper stored in state was outdated. Retry after updating.
+                    }
+                }
+                Err(err) => return Ok(Err(err)),
+            }
+        }
     }
 
     fn encode_batch<SB, KB, VB, TB, DB, I>(
@@ -393,15 +435,20 @@ where
     /// Test helper for an [Self::append] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_append(&mut self, updates: &[((K, V), T, D)], new_upper: T) {
+    pub async fn expect_append<L, U>(&mut self, updates: &[((K, V), T, D)], lower: L, new_upper: U)
+    where
+        L: Into<Antichain<T>>,
+        U: Into<Antichain<T>>,
+    {
         self.append(
             updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
-            Antichain::from_elem(new_upper),
+            lower.into(),
+            new_upper.into(),
         )
         .await
         .expect("external durability failed")
         .expect("invalid usage")
-        .expect("unexpected writer-local upper");
+        .expect("unexpected upper");
     }
 
     /// Test helper for a [Self::compare_and_append] call that is expected to
@@ -466,7 +513,7 @@ mod tests {
 
         // Write an initial batch.
         let mut upper = 3;
-        write.expect_append(&data[..2], upper).await;
+        write.expect_append(&data[..2], vec![0], vec![upper]).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
         let blob_count_before = blob

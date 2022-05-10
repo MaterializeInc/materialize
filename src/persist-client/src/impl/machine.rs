@@ -24,9 +24,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, info, trace};
 
 use crate::error::InvalidUsage;
-use crate::r#impl::state::{
-    ReadCapability, Since, State, StateCollections, Upper, WriteCapability,
-};
+use crate::r#impl::state::{ReadCapability, Since, State, StateCollections, Upper};
 use crate::read::ReaderId;
 use crate::write::WriterId;
 use crate::ShardId;
@@ -72,18 +70,22 @@ where
         self.state.upper()
     }
 
+    pub fn upper(&self) -> Antichain<T> {
+        self.state.upper()
+    }
+
     pub async fn register(
         &mut self,
         writer_id: &WriterId,
         reader_id: &ReaderId,
-    ) -> (WriteCapability<T>, ReadCapability<T>) {
-        let (seqno, (write_cap, read_cap)) = self
+    ) -> (Upper<T>, ReadCapability<T>) {
+        let (seqno, (shard_upper, read_cap)) = self
             .apply_unbatched_idempotent_cmd(|seqno, state| {
                 state.register(seqno, writer_id, reader_id)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
-        (write_cap, read_cap)
+        (shard_upper, read_cap)
     }
 
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
@@ -96,12 +98,11 @@ where
 
     pub async fn append(
         &mut self,
-        writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
     ) -> Result<Result<SeqNo, Upper<T>>, ExternalError> {
         let (seqno, res) = self
-            .apply_unbatched_cmd(|_, state| state.append(writer_id, keys, desc))
+            .apply_unbatched_cmd(|_, state| state.append(keys, desc))
             .await?;
         match res {
             Ok(()) => Ok(Ok(seqno)),
@@ -111,12 +112,11 @@ where
 
     pub async fn compare_and_append(
         &mut self,
-        writer_id: &WriterId,
         keys: &[String],
         desc: &Description<T>,
     ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, ExternalError> {
         let (seqno, res) = self
-            .apply_unbatched_cmd(|_, state| state.compare_and_append(writer_id, keys, desc))
+            .apply_unbatched_cmd(|_, state| state.compare_and_append(keys, desc))
             .await?;
         match res {
             Ok(()) => Ok(Ok(Ok(seqno))),
@@ -369,7 +369,7 @@ where
         }
     }
 
-    async fn fetch_and_update_state(&mut self) {
+    pub async fn fetch_and_update_state(&mut self) {
         let shard_id = self.shard_id();
         let current = retry_external("fetch_and_update_state::head", || async {
             self.consensus
