@@ -1009,6 +1009,19 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     }
 }
 
+fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let bytes = a.unwrap_bytes();
+    let index = b.unwrap_int32();
+    let err = EvalError::IndexOutOfRange {
+        provided: index,
+        valid_end: i32::try_from(bytes.len()).unwrap() - 1,
+    };
+    let i: &u8 = bytes
+        .get(usize::try_from(index).map_err(|_| err.clone())?)
+        .ok_or(err)?;
+    Ok(Datum::from(i32::from(*i)))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -1879,6 +1892,7 @@ pub enum BinaryFunc {
     LogNumeric,
     Power,
     PowerNumeric,
+    GetByte,
 }
 
 impl BinaryFunc {
@@ -2125,6 +2139,7 @@ impl BinaryFunc {
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerNumeric => eager!(power_numeric),
             BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
+            BinaryFunc::GetByte => eager!(get_byte),
         }
     }
 
@@ -2260,6 +2275,8 @@ impl BinaryFunc {
             | RoundNumeric | SubNumeric => {
                 ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
+
+            GetByte => ScalarType::Int32.nullable(in_nullable),
         }
     }
 
@@ -2499,7 +2516,8 @@ impl BinaryFunc {
             | RepeatString
             | ArrayRemove
             | ListRemove
-            | LikeEscape => false,
+            | LikeEscape
+            | GetByte => false,
         }
     }
 
@@ -2668,6 +2686,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
+            BinaryFunc::GetByte => f.write_str("get_byte"),
         }
     }
 }
@@ -2973,6 +2992,7 @@ impl From<&BinaryFunc> for ProtoBinaryFunc {
             BinaryFunc::LogNumeric => LogNumeric(()),
             BinaryFunc::Power => Power(()),
             BinaryFunc::PowerNumeric => PowerNumeric(()),
+            BinaryFunc::GetByte => GetByte(()),
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
@@ -3130,6 +3150,7 @@ impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
                 LogNumeric(()) => Ok(BinaryFunc::LogNumeric),
                 Power(()) => Ok(BinaryFunc::Power),
                 PowerNumeric(()) => Ok(BinaryFunc::PowerNumeric),
+                GetByte(()) => Ok(BinaryFunc::GetByte),
             }
         } else {
             Err(TryFromProtoError::missing_field("ProtoBinaryFunc::kind"))

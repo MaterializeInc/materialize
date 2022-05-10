@@ -1399,6 +1399,11 @@ pub enum EvalError {
     IntervalOutOfRange,
     TimestampOutOfRange,
     CharOutOfRange,
+    IndexOutOfRange {
+        provided: i32,
+        // The last valid index position, i.e. `v.len() - 1`
+        valid_end: i32,
+    },
     InvalidBase64Equals,
     InvalidBase64Symbol(char),
     InvalidBase64EndSequence,
@@ -1481,6 +1486,10 @@ impl fmt::Display for EvalError {
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
             EvalError::CharOutOfRange => f.write_str("\"char\" out of range"),
+            EvalError::IndexOutOfRange {
+                provided,
+                valid_end,
+            } => write!(f, "index {provided} out of valid range, 0..{valid_end}",),
             EvalError::InvalidBase64Equals => {
                 f.write_str("unexpected \"=\" while decoding base64 sequence")
             }
@@ -1680,6 +1689,13 @@ impl From<&EvalError> for ProtoEvalError {
             EvalError::IntervalOutOfRange => IntervalOutOfRange(()),
             EvalError::TimestampOutOfRange => TimestampOutOfRange(()),
             EvalError::CharOutOfRange => CharOutOfRange(()),
+            EvalError::IndexOutOfRange {
+                provided,
+                valid_end,
+            } => IndexOutOfRange(ProtoIndexOutOfRange {
+                provided: *provided,
+                valid_end: *valid_end,
+            }),
             EvalError::InvalidBase64Equals => InvalidBase64Equals(()),
             EvalError::InvalidBase64Symbol(sym) => InvalidBase64Symbol(sym.into_proto()),
             EvalError::InvalidBase64EndSequence => InvalidBase64EndSequence(()),
@@ -1782,6 +1798,10 @@ impl TryFrom<ProtoEvalError> for EvalError {
                 IntervalOutOfRange(()) => Ok(EvalError::IntervalOutOfRange),
                 TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
                 CharOutOfRange(()) => Ok(EvalError::CharOutOfRange),
+                IndexOutOfRange(v) => Ok(EvalError::IndexOutOfRange {
+                    provided: v.provided,
+                    valid_end: v.valid_end,
+                }),
                 InvalidBase64Equals(()) => Ok(EvalError::InvalidBase64Equals),
                 InvalidBase64Symbol(v) => char::from_proto(v).map(EvalError::InvalidBase64Symbol),
                 InvalidBase64EndSequence(()) => Ok(EvalError::InvalidBase64EndSequence),

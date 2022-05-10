@@ -283,6 +283,9 @@
     description: Encode `b` using the specified textual representation.
     url: encode
 
+  - signature: 'get_byte(b: bytea, n: int) -> int'
+    description: Return the `n`th byte from `b`, where the left-most byte in `b` is at the 0th position.
+
   - signature: 'left(s: str, n: int) -> str'
     description: The first `n` characters of `s`. If `n` is negative, all but the last `|n|` characters of `s`.
 
