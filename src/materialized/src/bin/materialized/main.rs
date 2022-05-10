@@ -148,13 +148,13 @@ pub struct Args {
         env = "MZ_POD_NAME",
         required_if_eq("orchestrator", "kubernetes")
     )]
-    pod_name: String,
+    pod_name: Option<String>,
     /// The name of the Kubernetes secret object to use for storing user secrets
     #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
-    user_defined_secret: String,
+    user_defined_secret: Option<String>,
     /// The mount location of the Kubernetes secret object to use for storing user secrets
     #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
-    user_defined_secret_mount_path: String,
+    user_defined_secret_mount_path: Option<String>,
     /// The storaged image reference to use.
     #[structopt(
         long,
@@ -619,7 +619,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         .collect(),
                     service_account: args.kubernetes_service_account,
                     image_pull_policy: args.kubernetes_image_pull_policy,
-                    user_defined_secret: args.user_defined_secret.clone(),
+                    user_defined_secret: args.user_defined_secret.clone().unwrap_or_default(),
                 })
             }
             Orchestrator::Process => {
@@ -758,9 +758,9 @@ max log level: {max_log_level}",
     let secrets_controller = match args.orchestrator {
         Orchestrator::Kubernetes => SecretsControllerConfig::Kubernetes {
             context: args.kubernetes_context,
-            user_defined_secret: args.user_defined_secret,
-            user_defined_secret_mount_path: args.user_defined_secret_mount_path,
-            refresh_pod_name: args.pod_name,
+            user_defined_secret: args.user_defined_secret.unwrap_or_default(),
+            user_defined_secret_mount_path: args.user_defined_secret_mount_path.unwrap_or_default(),
+            refresh_pod_name: args.pod_name.unwrap_or_default(),
         },
         Orchestrator::Process => SecretsControllerConfig::LocalFileSystem,
     };
