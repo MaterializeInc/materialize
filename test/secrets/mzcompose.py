@@ -29,6 +29,7 @@ def workflow_default(c: Composition) -> None:
     )
 
     c.sql("CREATE SECRET secret AS 's3cret'")
+    c.sql("CREATE SECRET secret2 AS 'secret2'")
     # Check that the contents of the secret have made it to the storage
     c.exec(
         "materialized",
