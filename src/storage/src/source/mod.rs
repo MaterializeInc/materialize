@@ -32,18 +32,18 @@ use std::fmt::{self, Debug};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::{Capability, CapabilitySet, Event};
+use timely::dataflow::operators::{Capability, Event};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
@@ -52,6 +52,7 @@ use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 use tracing::error;
 
 use mz_avro::types::Value;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{AwsExternalId, ExternalSourceConnector, MzOffset};
 use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
@@ -64,7 +65,6 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
 
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::timestamp::TimestampBindingRc;
 use crate::source::util::source;
 
 mod file;
@@ -74,10 +74,9 @@ pub mod metrics;
 pub mod persist_source;
 mod postgres;
 mod pubnub;
+mod reclock;
 mod s3;
 pub mod util;
-
-pub mod timestamp;
 
 pub use file::read_file_task;
 pub use file::FileReadStyle;
@@ -111,9 +110,6 @@ pub struct RawSourceCreationConfig<'a, G> {
     /// The total count of workers
     pub worker_count: usize,
     // Timestamping fields.
-    /// Data-timestamping updates: information about (timestamp, source offset)
-    pub timestamp_histories: Option<TimestampBindingRc>,
-    /// Source Type
     /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
     /// downgraded)
     pub timestamp_frequency: Duration,
@@ -127,6 +123,10 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub base_metrics: &'a SourceBaseMetrics,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
+    /// Storage metadata
+    pub storage_metadata: CollectionMetadata,
+    /// The since frontier that this source should be created at
+    pub as_of: Antichain<Timestamp>,
 }
 
 /// A record produced by a source
@@ -534,31 +534,11 @@ pub fn responsible_for(
     source_id: &GlobalId,
     worker_id: usize,
     worker_count: usize,
-    pid: &PartitionId,
+    _pid: &PartitionId,
 ) -> bool {
-    match pid {
-        PartitionId::None => {
-            // All workers are responsible for reading in Kafka sources. Other sources
-            // support single-threaded ingestion only. Note that in all cases we want all
-            // readers of the same source or same partition to reside on the same worker,
-            // and only load-balance responsibility across distinct sources.
-            (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
-        }
-        PartitionId::Kafka(p) => {
-            // We want to distribute partitions across workers evenly, such that
-            // - different partitions for the same source are uniformly distributed across workers
-            // - the same partition id across different sources are uniformly distributed across workers
-            // - the same partition id across different instances of the same source is sent to
-            //   the same worker.
-            // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
-            // that to offset distributing partitions round robin across workers.
-
-            // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
-            // overflow.
-            let hash = (source_id.hashed() >> 32) + *p as u64;
-            (hash % worker_count as u64) == worker_id as u64
-        }
-    }
+    // In the future load balancing will depend on persist shard ids but currently we write
+    // everything to a single shard
+    (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
 }
 
 /// Source-specific Prometheus metrics
@@ -897,12 +877,10 @@ where
         let mut metrics =
             SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
 
-        move |cap, durability_cap: &mut CapabilitySet<Timestamp>, output| {
+        move |cap, output| {
             if !active {
                 return SourceStatus::Done;
             }
-
-            durability_cap.downgrade(Vec::<Timestamp>::new());
 
             let waker = futures::task::waker_ref(&activator);
             let mut context = Context::from_waker(&waker);
@@ -974,94 +952,101 @@ where
         upstream_name,
         id,
         scope,
-        mut timestamp_histories,
         worker_id,
         worker_count,
         active,
         timestamp_frequency,
         encoding,
+        storage_metadata,
+        as_of,
         base_metrics,
+        now,
         ..
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
     let (stream, capability) = source(scope, name.clone(), move |info| {
-        // Create activator for source
-        let activator = scope.activator_for(&info.address[..]);
         let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
         let waker = futures::task::waker(waker_activator);
-
-        // This source will need to be activated when the durability frontier changes.
-        if let Some(wrapper) = timestamp_histories.as_mut() {
-            let durability_activator = scope.activator_for(&info.address[..]);
-            wrapper
-                .wrapper
-                .borrow_mut()
-                .activators
-                .push(durability_activator);
-        }
 
         let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
         let mut source_metrics =
             SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
-        let restored_offsets = timestamp_histories
-            .as_mut()
-            .map(|ts| ts.partitions())
-            .unwrap_or_default();
-        let mut partition_cursors: HashMap<_, _> = restored_offsets
-            .iter()
-            .cloned()
-            .flat_map(|(pid, offset)| Some((pid, offset?)))
-            .collect();
 
-        let mut source_reader = if !active {
-            None
-        } else {
-            match S::new(
-                name.clone(),
+        let sync_activator = scope.sync_activator_for(&info.address[..]);
+        let base_metrics = base_metrics.clone();
+        let source_connector = source_connector.clone();
+        let mut source_reader = Box::pin(async_stream::stream! {
+            let mut timestamper = reclock::Timestamper::new(storage_metadata, as_of, now).await;
+
+            // TODO(petrosagg): What is the purpose of an partition offset being None?
+            let start_offsets = timestamper.partition_cursors().into_iter().map(|(p, o)| (p, Some(o))).collect();
+
+            let source_reader = S::new(
+                name,
                 id,
                 worker_id,
                 worker_count,
-                scope.sync_activator_for(&info.address[..]),
+                sync_activator,
                 source_connector.clone(),
                 aws_external_id.clone(),
-                restored_offsets,
+                start_offsets,
                 encoding,
-                base_metrics.clone(),
-            ) {
-                Ok(source_reader) => Some(source_reader.into_stream(timestamp_frequency)),
+                base_metrics,
+            );
+            let source_stream = match source_reader {
+                Ok(s) => s.into_stream(timestamp_frequency).fuse(),
                 Err(e) => {
                     error!("Failed to create source: {}", e);
-                    None
+                    return;
+                }
+            };
+
+            tokio::pin!(source_stream);
+
+            let mut timestamp_interval = tokio::time::interval(timestamp_frequency);
+            let mut pending_messages = vec![];
+            loop {
+                tokio::select! {
+                    item = source_stream.next() => {
+                        match item {
+                            Some(Ok(message)) => pending_messages.push(message),
+                            Some(Err(_)) => {
+                                panic!("Errors have no offset, and so cannot be remapped");
+                            }
+                            None => {},
+                        }
+                    }
+                    // It's time to timestamp a batch
+                    _ = timestamp_interval.tick() => {
+                        let mut max_offsets = HashMap::new();
+                        for message in pending_messages.iter() {
+                            let entry = max_offsets.entry(message.partition.clone()).or_default();
+                            *entry = std::cmp::max(*entry, message.offset);
+                        }
+                        let _bindings = timestamper.timestamp_offsets(max_offsets).await;
+
+                        for message in pending_messages.drain(..) {
+                            //TODO find ts in returned bindings
+                            let ts = 0;
+                            yield Event::Message(ts, message);
+                        }
+                        yield Event::Progress(timestamper.upper().into_option());
+                        if source_stream.is_done() {
+                            // We just emitted the last piece of data that needed to be timestamped
+                            break;
+                        }
+                    }
                 }
             }
-        };
+        });
 
-        move |cap, durability_cap, output| {
-            // First check that the source was successfully created
-            let source_reader = match &mut source_reader {
-                Some(source_reader) => source_reader,
-                None => {
-                    return SourceStatus::Done;
-                }
-            };
+        move |cap, output| {
+            if !active {
+                return SourceStatus::Done;
+            }
 
-            // Check that we have a valid list of timestamp bindings.
-            let timestamp_histories = match &mut timestamp_histories {
-                Some(histories) => histories,
-                None => {
-                    error!("Source missing list of timestamp bindings");
-                    return SourceStatus::Done;
-                }
-            };
-
-            // Maintain a capability set that tracks the durability frontier.
-            durability_cap.downgrade(timestamp_histories.durability_frontier());
-
-            // Bound execution of operator to prevent a single operator from hogging
-            // the CPU if there are many messages to process
-            let timer = Instant::now();
             // Accumulate updates to bytes_read for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
@@ -1072,57 +1057,38 @@ where
 
             let mut context = Context::from_waker(&waker);
             let mut source_status = SourceStatus::Alive;
-            while let Poll::Ready(item) = source_reader.as_mut().poll_next(&mut context) {
-                match item {
-                    Some(Ok(message)) => {
-                        partition_cursors.insert(message.partition.clone(), message.offset + 1);
+
+            while let Poll::Ready(Some(event)) = source_reader.as_mut().poll_next(&mut context) {
+                match event {
+                    Event::Progress(upper) => {
+                        let ts = upper.unwrap_or(Timestamp::MAX);
+                        for partition_metrics in source_metrics.partition_metrics.values_mut() {
+                            partition_metrics.closed_ts.set(ts);
+                        }
+                        // TODO(petrosagg): `cap` should become a CapabilitySet to allow
+                        // downgrading it to the empty frontier. For now setting SourceStatus to
+                        // Done achieves the same effect
+                        cap.downgrade(&ts);
+                        if upper.is_none() {
+                            source_status = SourceStatus::Done;
+                        }
+                    }
+                    Event::Message(ts, message) => {
                         handle_message::<S>(
                             message,
                             &mut bytes_read,
                             &cap,
                             output,
                             &mut metric_updates,
-                            &timestamp_histories,
+                            ts,
                         );
                     }
-                    Some(Err(e)) => {
-                        output.session(&cap).give(Err(SourceError {
-                            source_id: id,
-                            error: e.inner,
-                        }));
-                        source_status = SourceStatus::Done;
-                        break;
-                    }
-                    None => {
-                        source_status = SourceStatus::Done;
-                        break;
-                    }
-                }
-                if timer.elapsed() > YIELD_INTERVAL {
-                    // We didn't drain the entire queue, so indicate that we
-                    // should run again but yield the CPU to other operators.
-                    activator.activate();
-                    break;
                 }
             }
 
             bytes_read_counter.inc_by(bytes_read as u64);
             source_metrics.record_partition_offsets(metric_updates);
-
-            // Attempt to update the timestamp and finalize the currently pending bindings
-            let cur_ts = timestamp_histories.upper();
-            timestamp_histories.update_timestamp();
-            if timestamp_histories.upper() > cur_ts {
-                for (_, partition_metrics) in source_metrics.partition_metrics.iter_mut() {
-                    partition_metrics.closed_ts.set(cur_ts);
-                }
-            }
-
-            // Downgrade capability (if possible) before exiting
-            timestamp_histories.downgrade(cap, &partition_cursors);
             source_metrics.capability.set(*cap.time());
-            // Downgrade compaction frontier to track the current time.
-            timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
             source_status
         }
@@ -1153,13 +1119,11 @@ fn handle_message<S: SourceReader>(
         Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, SourceError>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
-    timestamp_bindings: &TimestampBindingRc,
+    ts: Timestamp,
 ) {
     let partition = message.partition.clone();
     let offset = message.offset;
 
-    // Determine the timestamp to which we need to assign this message
-    let ts = timestamp_bindings.get_or_propose_binding(&partition, offset);
     // Note: empty and null payload/keys are currently
     // treated as the same thing.
     let key = message.key;

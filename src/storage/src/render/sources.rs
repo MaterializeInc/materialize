@@ -256,10 +256,6 @@ where
                 )
             };
 
-            let timestamp_histories = storage_state
-                .ts_histories
-                .get(&src_id)
-                .map(|history| history.clone());
             let source_name = format!("{}-{}", connector.name(), src_id);
             let base_source_config = RawSourceCreationConfig {
                 name: source_name,
@@ -268,13 +264,14 @@ where
                 scope,
                 // Distribute read responsibility among workers.
                 active: active_read_worker,
-                timestamp_histories,
                 timestamp_frequency: ts_frequency,
                 worker_id: scope.index(),
                 worker_count: scope.peers(),
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
+                storage_metadata: storage_metadata.clone(),
+                as_of: as_of_frontier.clone(),
                 aws_external_id: storage_state.aws_external_id.clone(),
             };
 

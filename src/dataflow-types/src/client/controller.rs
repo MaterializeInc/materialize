@@ -417,16 +417,9 @@ where
                 }
                 response = self.storage_controller.recv(), if storage_alive => {
                     match response? {
-                        Some(StorageResponse::TimestampBindings(feedback)) => {
-                            // Order is important here. We must durably record
-                            // the timestamp bindings before we act on them, or
-                            // an ill-timed crash could cause data loss.
+                        Some(StorageResponse::FrontierUppers(updates)) => {
                             self.storage_controller
-                                .persist_timestamp_bindings(&feedback)
-                                .await?;
-
-                            self.storage_controller
-                                .update_write_frontiers(&feedback.changes)
+                                .update_write_frontiers(&updates)
                                 .await?;
                         }
                         Some(StorageResponse::LinearizedTimestamps(res)) => {
