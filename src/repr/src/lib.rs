@@ -46,8 +46,8 @@ pub use row::{
     RowArena, RowPacker, RowRef,
 };
 pub use scalar::{
-    arb_datum, AsColumnType, Datum, DatumType, PropertizedArray, PropertizedDatum, PropertizedDict,
-    PropertizedList, ProtoScalarType, ScalarBaseType, ScalarType,
+    arb_datum, AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList,
+    ProtoScalarType, ScalarBaseType, ScalarType,
 };
 
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.

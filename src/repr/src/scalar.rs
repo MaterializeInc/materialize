@@ -2074,7 +2074,7 @@ impl Datum<'_> {
 
 /// A mirror type for [`Datum`] that can be proptest-generated.
 #[derive(Debug, PartialEq, Clone)]
-pub enum PropertizedDatum {
+pub enum PropDatum {
     Null,
     Bool(bool),
     Int16(i16),
@@ -2094,46 +2094,46 @@ pub enum PropertizedDatum {
     Bytes(Vec<u8>),
     String(String),
 
-    Array(PropertizedArray),
-    List(PropertizedList),
-    Map(PropertizedDict),
+    Array(PropArray),
+    List(PropList),
+    Map(PropDict),
 
     JsonNull,
     Uuid(Uuid),
     Dummy,
 }
 
-/// Generate an arbitrary [`PropertizedDatum`].
+/// Generate an arbitrary [`PropDatum`].
 ///
 /// TODO: we also need a variant that can be parameterized by
 /// a [`ColumnType`] or a [`ColumnType`] [`Strategy`].
-pub fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
+pub fn arb_datum() -> BoxedStrategy<PropDatum> {
     let leaf = prop_oneof![
-        Just(PropertizedDatum::Null),
-        any::<bool>().prop_map(PropertizedDatum::Bool),
-        any::<i16>().prop_map(PropertizedDatum::Int16),
-        any::<i32>().prop_map(PropertizedDatum::Int32),
-        any::<i64>().prop_map(PropertizedDatum::Int64),
-        any::<f32>().prop_map(PropertizedDatum::Float32),
-        any::<f64>().prop_map(PropertizedDatum::Float64),
-        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 1, 1)).prop_map(PropertizedDatum::Date),
-        add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropertizedDatum::Time),
+        Just(PropDatum::Null),
+        any::<bool>().prop_map(PropDatum::Bool),
+        any::<i16>().prop_map(PropDatum::Int16),
+        any::<i32>().prop_map(PropDatum::Int32),
+        any::<i64>().prop_map(PropDatum::Int64),
+        any::<f32>().prop_map(PropDatum::Float32),
+        any::<f64>().prop_map(PropDatum::Float64),
+        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 1, 1)).prop_map(PropDatum::Date),
+        add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropDatum::Time),
         add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
-            .prop_map(PropertizedDatum::Timestamp),
-        add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropertizedDatum::TimestampTz),
-        arb_interval().prop_map(PropertizedDatum::Interval),
-        arb_numeric().prop_map(PropertizedDatum::Numeric),
-        prop::collection::vec(any::<u8>(), 1024).prop_map(PropertizedDatum::Bytes),
-        ".*".prop_map(PropertizedDatum::String),
-        Just(PropertizedDatum::JsonNull),
-        Just(PropertizedDatum::Uuid(Uuid::nil())),
-        Just(PropertizedDatum::Dummy)
+            .prop_map(PropDatum::Timestamp),
+        add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropDatum::TimestampTz),
+        arb_interval().prop_map(PropDatum::Interval),
+        arb_numeric().prop_map(PropDatum::Numeric),
+        prop::collection::vec(any::<u8>(), 1024).prop_map(PropDatum::Bytes),
+        ".*".prop_map(PropDatum::String),
+        Just(PropDatum::JsonNull),
+        Just(PropDatum::Uuid(Uuid::nil())),
+        Just(PropDatum::Dummy)
     ];
     leaf.prop_recursive(3, 8, 16, |inner| {
         prop_oneof!(
-            arb_array(inner.clone()).prop_map(PropertizedDatum::Array),
-            arb_list(inner.clone()).prop_map(PropertizedDatum::List),
-            arb_dict(inner).prop_map(PropertizedDatum::Map),
+            arb_array(inner.clone()).prop_map(PropDatum::Array),
+            arb_list(inner.clone()).prop_map(PropDatum::List),
+            arb_dict(inner).prop_map(PropDatum::Map),
         )
     })
     .boxed()
@@ -2149,9 +2149,9 @@ fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct PropertizedArray(Row, Vec<PropertizedDatum>);
+pub struct PropArray(Row, Vec<PropDatum>);
 
-fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedArray> {
+fn arb_array(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropArray> {
     prop::collection::vec(
         arb_array_dimension(),
         1..(crate::adt::array::MAX_ARRAY_DIMENSIONS as usize),
@@ -2169,29 +2169,29 @@ fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy
         row.packer()
             .push_array(&dimensions, element_datums)
             .unwrap();
-        PropertizedArray(row, elements)
+        PropArray(row, elements)
     })
     .boxed()
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct PropertizedList(Row, Vec<PropertizedDatum>);
+pub struct PropList(Row, Vec<PropDatum>);
 
-fn arb_list(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedList> {
+fn arb_list(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropList> {
     prop::collection::vec(element_strategy, 1..50)
         .prop_map(|elements| {
             let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
             let mut row = Row::default();
             row.packer().push_list(element_datums.iter());
-            PropertizedList(row, elements)
+            PropList(row, elements)
         })
         .boxed()
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct PropertizedDict(Row, Vec<(String, PropertizedDatum)>);
+pub struct PropDict(Row, Vec<(String, PropDatum)>);
 
-fn arb_dict(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedDict> {
+fn arb_dict(element_strategy: BoxedStrategy<PropDatum>) -> BoxedStrategy<PropDict> {
     prop::collection::vec((".*", element_strategy), 1..50)
         .prop_map(|mut entries| {
             entries.sort_by_key(|(k, _)| k.clone());
@@ -2202,7 +2202,7 @@ fn arb_dict(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
                 .map(|(k, v)| (k.as_str(), v.into()))
                 .collect();
             row.packer().push_dict(entry_iter.into_iter());
-            PropertizedDict(row, entries)
+            PropDict(row, entries)
         })
         .boxed()
 }
@@ -2239,9 +2239,9 @@ fn arb_numeric() -> BoxedStrategy<Numeric> {
         .boxed()
 }
 
-impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
+impl<'a> Into<Datum<'a>> for &'a PropDatum {
     fn into(self) -> Datum<'a> {
-        use PropertizedDatum::*;
+        use PropDatum::*;
         match self {
             Null => Datum::Null,
             Bool(b) => Datum::from(*b),
@@ -2258,15 +2258,15 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Numeric(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
             String(s) => Datum::from(s.as_str()),
-            Array(PropertizedArray(row, _)) => {
+            Array(PropArray(row, _)) => {
                 let array = row.unpack_first().unwrap_array();
                 Datum::Array(array)
             }
-            List(PropertizedList(row, _)) => {
+            List(PropList(row, _)) => {
                 let list = row.unpack_first().unwrap_list();
                 Datum::List(list)
             }
-            Map(PropertizedDict(row, _)) => {
+            Map(PropDict(row, _)) => {
                 let map = row.unpack_first().unwrap_map();
                 Datum::Map(map)
             }
@@ -2324,7 +2324,7 @@ mod tests {
     proptest! {
         #[test]
         fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
-            let PropertizedArray(row, elts) = array;
+            let PropArray(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
             let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_array().elements().iter().collect();
             assert_eq!(unpacked_datums, datums);
@@ -2332,7 +2332,7 @@ mod tests {
 
         #[test]
         fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
-            let PropertizedList(row, elts) = array;
+            let PropList(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
             let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_list().iter().collect();
             assert_eq!(unpacked_datums, datums);
@@ -2340,7 +2340,7 @@ mod tests {
 
         #[test]
         fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
-            let PropertizedDict(row, elts) = array;
+            let PropDict(row, elts) = array;
             let datums: Vec<(&str, Datum<'_>)> = elts.iter().map(|(k, e)| (k.as_str(), e.into())).collect();
             let unpacked_datums: Vec<(&str, Datum<'_>)> = row.unpack_first().unwrap_map().iter().collect();
             assert_eq!(unpacked_datums, datums);
