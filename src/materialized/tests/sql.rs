@@ -257,6 +257,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         "BEGIN;
          DECLARE c CURSOR FOR TAIL t;",
     )?;
+    // Locks the timestamp of the TAIL to before any of the following INSERTs, which is required
+    // for mz_timestamp column to be accurate
+    let _ = client_reads.query_one("FETCH 0 c", &[]);
 
     let mut events = vec![];
 
@@ -281,9 +284,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         // Skip by the things we won't be able to see.
         for (_, expected) in events.iter().skip_while(|(inner_ts, _)| inner_ts < ts) {
             let actual = client_reads.query_one("FETCH c", &[])?;
-            let actual = actual.get::<_, String>("data");
-            let expected = expected.clone();
-            assert_eq!(actual, expected);
+            assert_eq!(actual.get::<_, String>("data"), *expected);
         }
     }
 
