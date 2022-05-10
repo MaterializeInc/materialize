@@ -20,6 +20,7 @@ use rand::random;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::io;
 use tracing::info;
 
 const FIELD_MANAGER: &str = "materialized";
@@ -95,6 +96,14 @@ impl KubernetesSecretsController {
 
         return Ok(());
     }
+
+    async fn try_exists(path: PathBuf) -> Result<bool, Error> {
+        match tokio::fs::metadata(path).await {
+            Ok(_) => Ok(true),
+            Err(x) if x.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(x) => Err(Error::from(x)),
+        }
+    }
 }
 
 #[async_trait]
@@ -142,16 +151,21 @@ impl SecretsController for KubernetesSecretsController {
         for op in ops.iter() {
             match op {
                 SecretOp::Ensure { id, .. } => {
-                    let file_path = secrets_storage_path.join(format!("{}", id));
                     Retry::default()
                         .max_duration(Duration::from_secs(POLL_TIMEOUT))
-                        .retry(|_| {
-                            if Path::exists(&*file_path) {
+                        .retry_async(|_| async {
+                            let file_path = secrets_storage_path.join(format!("{}", id));
+                            match KubernetesSecretsController::try_exists(file_path).await {
+                                Ok(result) => {
+                                    if result {
                                         Ok(())
                                     } else {
                                         Err(anyhow!("Secret write operation has timed out. Secret with id {} could not be written", id))
                                     }
-                        })?
+                                }
+                                Err(e) => Err(e)
+                            }
+                        }).await?
                 }
                 _ => {}
             }
