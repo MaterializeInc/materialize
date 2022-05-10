@@ -16,9 +16,8 @@ use std::time::Duration;
 use mz_ore::retry::Retry;
 use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
-use tempfile::NamedTempFile;
 
-use crate::util::PostgresErrorExt;
+use crate::util::{KAFKA_ADDRS, PostgresErrorExt};
 
 pub mod util;
 
@@ -29,14 +28,12 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     let data_dir = tempfile::tempdir()?;
     let config = util::Config::default().data_directory(data_dir.path());
 
-    let source_file = NamedTempFile::new()?;
-
     {
         let server = util::start_server(config.clone())?;
         let mut client = server.connect(postgres::NoTls)?;
         client.batch_execute(&format!(
-            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
-            source_file.path().display()
+            "CREATE SOURCE src FROM KAFKA BROKER '{}' TOPIC 'ignored' FORMAT BYTES",
+            &*KAFKA_ADDRS,
         ))?;
         client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
         client.batch_execute(
