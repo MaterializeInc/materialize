@@ -270,6 +270,11 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(row.get::<_, i64>("mz_diff"), 1);
         assert_eq!(row.get::<_, String>("data"), data);
         events.push((row.get::<_, MzTimestamp>("mz_timestamp").0, data));
+
+        if i > 1 {
+            // write timestamps should all increase
+            assert!(events[i - 1].0 > events[i - 2].0);
+        }
     }
 
     // Now tail without a snapshot as of each timestamp, verifying that when we do

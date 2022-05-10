@@ -435,7 +435,8 @@ impl<S: Append + 'static> Coordinator<S> {
          * same timestamp as long as they're written to the WAL first.
          */
         let _ = self.global_timeline.read_ts();
-        (ts, ts.step_forward())
+        let advance_to = ts.step_forward();
+        (ts, advance_to)
     }
 
     fn now(&self) -> EpochMillis {
