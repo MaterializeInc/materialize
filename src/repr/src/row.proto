@@ -10,6 +10,7 @@
 syntax = "proto3";
 
 import "repr/src/chrono.proto";
+import "repr/src/adt/interval.proto";
 
 package mz_repr.row;
 
@@ -49,7 +50,7 @@ message ProtoDatum {
         mz_repr.chrono.ProtoNaiveTime time = 17;
         mz_repr.chrono.ProtoNaiveDateTime timestamp = 18;
         mz_repr.chrono.ProtoNaiveDateTime timestamp_tz = 19;
-        ProtoInterval interval = 20;
+        mz_repr.adt.interval.ProtoInterval interval = 20;
         ProtoArray array = 21;
         ProtoRow list = 22;
         ProtoDict dict = 23;
@@ -77,13 +78,6 @@ enum ProtoDatumOther {
     NUMERIC_POS_INF = 6;
     NUMERIC_NEG_INF = 7;
     NUMERIC_NA_N = 8;
-}
-
-message ProtoInterval {
-    // A possibly negative number of months.
-    int32 months = 1;
-    int32 days = 2;
-    int64 micros = 3;
 }
 
 message ProtoArray {

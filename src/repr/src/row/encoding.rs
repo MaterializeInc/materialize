@@ -20,14 +20,13 @@ use prost::Message;
 use uuid::Uuid;
 
 use crate::adt::array::ArrayDimension;
-use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
 use crate::chrono::{ProtoNaiveDate, ProtoNaiveTime};
 use crate::proto::{ProtoRepr, TryFromProtoError};
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
-    ProtoInterval, ProtoNumeric, ProtoRow,
+    ProtoNumeric, ProtoRow,
 };
 use crate::{Datum, Row, RowPacker};
 
@@ -83,11 +82,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             }),
             Datum::Timestamp(x) => DatumType::Timestamp(x.into_proto()),
             Datum::TimestampTz(x) => DatumType::TimestampTz(x.into_proto()),
-            Datum::Interval(x) => DatumType::Interval(ProtoInterval {
-                months: x.months,
-                days: x.days,
-                micros: x.micros,
-            }),
+            Datum::Interval(x) => DatumType::Interval((&x).into()),
             Datum::Bytes(x) => DatumType::Bytes(x.to_vec()),
             Datum::String(x) => DatumType::String(x.to_owned()),
             Datum::Array(x) => DatumType::Array(ProtoArray {
@@ -209,11 +204,11 @@ impl RowPacker<'_> {
             Some(DatumType::TimestampTz(x)) => self.push(Datum::TimestampTz(
                 DateTime::<Utc>::from_proto(x.clone()).map_err(|e| e.to_string())?,
             )),
-            Some(DatumType::Interval(x)) => self.push(Datum::Interval(Interval {
-                months: x.months,
-                days: x.days,
-                micros: x.micros,
-            })),
+            Some(DatumType::Interval(x)) => self.push(Datum::Interval(
+                x.clone()
+                    .try_into()
+                    .map_err(|e: TryFromProtoError| e.to_string())?,
+            )),
             Some(DatumType::List(x)) => self.push_list_with(|row| -> Result<(), String> {
                 for d in x.datums.iter() {
                     row.try_push_proto(d)?;
