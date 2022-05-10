@@ -19,12 +19,12 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, ExternalError, SeqNo};
+use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::trace;
+use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
@@ -61,6 +61,10 @@ impl WriterId {
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
 ///
+/// Production users should call [Self::expire] before dropping a WriteHandle so
+/// that it can expire its leases. If/when rust gets AsyncDrop, this will be
+/// done automatically.
+///
 /// All async methods on ReadHandle retry for as long as they are able, but the
 /// returned [std::future::Future]s implement "cancel on drop" semantics. This
 /// means that callers can add a timeout using [tokio::time::timeout] or
@@ -77,17 +81,13 @@ impl WriterId {
 pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
-    // TODO: Only the T bound should exist, the rest are a temporary artifact of
-    // the current implementation (the ones on Machine infect everything).
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64,
 {
     pub(crate) writer_id: WriterId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
     pub(crate) upper: Antichain<T>,
+    pub(crate) explicitly_expired: bool,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -345,6 +345,13 @@ where
         }
     }
 
+    /// Politely expires this writer, releasing its lease.
+    pub async fn expire(mut self) {
+        trace!("WriteHandle::expire");
+        self.machine.expire_writer(&self.writer_id).await;
+        self.explicitly_expired = true;
+    }
+
     fn encode_batch<SB, KB, VB, TB, DB, I>(
         desc: &Description<T>,
         updates: I,
@@ -476,15 +483,21 @@ where
 impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
-    // TODO: Only the T bound should exist, the rest are a temporary artifact of
-    // the current implementation (the ones on Machine infect everything).
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
-        // TODO: Use tokio instead of futures_executor.
-        let _: SeqNo = futures_executor::block_on(self.machine.expire_writer(&self.writer_id));
+        if self.explicitly_expired {
+            return;
+        }
+        // Adding explicit expiration everywhere in tests would either make the
+        // code noisy or the logs spammy, so downgrade this message.
+        if cfg!(test) {
+            debug!(
+                "WriteHandle {} dropped without being explicitly expired, falling back to lease timeout",
+                self.writer_id
+            );
+        } else {
+            info!("WriteHandle {} dropped without being explicitly expired, falling back to lease timeout", self.writer_id);
+        }
     }
 }
 
