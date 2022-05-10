@@ -30,10 +30,18 @@ impl FilesystemSecretsController {
 #[async_trait]
 impl SecretsController for FilesystemSecretsController {
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
-        assert_eq!(ops.len(), 1);
+        // The filesystem controller can not execute multiple FS operations in a single atomic txn.
+        // Deletes are a special case. They are being executed as a post-commit event and once
+        // the coordinator reaches that code, the secrets can no longer be reached by any reader.
+        // This behavior is atomic in nature and the FS operations do not have to be.
+        // On the other hand, Ensure has to be atomic, since a concurrent reader should not
+        // see torn FS transactions.
+        // Hence we enforce the limit of exactly 1 ensure (update/create) operation per txn
+
         for op in ops.iter() {
             match op {
                 SecretOp::Ensure { id, contents } => {
+                    assert_eq!(ops.len(), 1);
                     let file_path = self.secrets_storage_path.join(format!("{}", id));
                     let mut file = OpenOptions::new()
                         .mode(0o600)
