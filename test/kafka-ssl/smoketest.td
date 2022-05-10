@@ -152,18 +152,18 @@ contains:self signed certificate in certificate chain
   FOR KAFKA BROKER 'kafka:9092'
   SECURITY SSL
   CERTIFICATE client_cert
-  KEY client_key
+#  KEY client_key
 
 > CREATE SECRET csr_pass AS 'sekurity'
 
 > CREATE CONNECTOR schema_reg
   FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  SECURITY
   USERNAME 'materialize'
   PASSWORD csr_pass
 
 > CREATE MATERIALIZED SOURCE connector_source
   FROM KAFKA CONNECTOR kafka_ssl
+  TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR schema_reg
   ENVELOPE DEBEZIUM
 
