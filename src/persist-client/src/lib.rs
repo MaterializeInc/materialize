@@ -7,14 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! An abstraction presenting as a durable time-varying collection (aka shard)
+
+#![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
 #![warn(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
-
-//! An abstraction presenting as a durable time-varying collection (aka shard)
 
 use std::fmt::Debug;
 use std::sync::Arc;
