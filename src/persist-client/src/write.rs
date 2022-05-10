@@ -276,7 +276,11 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::write_batch new_upper={:?}", new_upper);
+        trace!(
+            "WriteHandle::compare_and_append expected_upper={:?} new_upper={:?}",
+            expected_upper,
+            new_upper
+        );
 
         let lower = expected_upper.clone();
         let upper = new_upper;
