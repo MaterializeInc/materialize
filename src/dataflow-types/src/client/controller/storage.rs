@@ -169,6 +169,17 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
     }
 }
 
+/// A stub for generating arbitrary [CollectionMetadata].
+/// Currently only produces the simplest instance of one.
+pub fn any_collection_metadata_stub() -> CollectionMetadata {
+    CollectionMetadata {
+        persist_location: PersistLocation {
+            blob_uri: "".to_string(),
+            consensus_uri: "".to_string(),
+        },
+    }
+}
+
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T, S = mz_stash::Sqlite> {

@@ -16,16 +16,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::{any_uuid, FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
+use crate::Plan;
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.rs"));
 
@@ -83,7 +87,7 @@ pub struct Update<T = mz_repr::Timestamp> {
 pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
 /// An association of a global identifier to an expression.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc<P> {
     pub id: GlobalId,
     pub plan: P,
@@ -116,7 +120,6 @@ impl TryFrom<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 /// projection to the records as they emerge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceDesc<M> {
-    // TODO: have the proptest strategy be `any_source_desc_stub()`
     /// A description of the source to construct.
     pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
@@ -124,6 +127,22 @@ pub struct SourceInstanceDesc<M> {
     /// Additional metadata used by storage instances to render this source instance and by the
     /// storage client of a compute instance to read it.
     pub storage_metadata: M,
+}
+
+impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
+    type Strategy = BoxedStrategy<SourceInstanceDesc<CollectionMetadata>>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        any::<SourceInstanceArguments>()
+            .prop_map(|arguments| SourceInstanceDesc {
+                description: crate::sources::any_source_desc_stub(),
+                arguments,
+                storage_metadata: crate::client::controller::storage::any_collection_metadata_stub(
+                ),
+            })
+            .boxed()
+    }
 }
 
 impl From<&SourceInstanceDesc<CollectionMetadata>> for ProtoSourceInstanceDesc {
@@ -153,7 +172,7 @@ impl TryFrom<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata>
 }
 
 /// Per-source construction arguments.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::LinearOperator>,
@@ -227,6 +246,70 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub debug_name: String,
     /// Unique ID of the dataflow
     pub id: uuid::Uuid,
+}
+
+fn any_source_import() -> impl Strategy<Value = (GlobalId, SourceInstanceDesc<CollectionMetadata>)>
+{
+    (
+        any::<GlobalId>(),
+        any::<SourceInstanceDesc<CollectionMetadata>>(),
+    )
+}
+
+fn any_dataflow_index() -> impl Strategy<Value = (GlobalId, (IndexDesc, RelationType))> {
+    (any::<GlobalId>(), any::<IndexDesc>(), any::<RelationType>())
+        .prop_map(|(id, index, typ)| (id, (index, typ)))
+}
+
+impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
+    type Strategy =
+        BoxedStrategy<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            proptest::collection::vec(any_source_import(), 1..3),
+            proptest::collection::vec(any_dataflow_index(), 1..3),
+            proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
+            proptest::collection::vec(any_dataflow_index(), 1..3),
+            proptest::collection::vec(any::<GlobalId>(), 1..3),
+            any::<bool>(),
+            proptest::collection::vec(any::<u64>(), 1..5),
+            ".*",
+            any_uuid(),
+        )
+            .prop_map(
+                |(
+                    source_imports,
+                    index_imports,
+                    objects_to_build,
+                    index_exports,
+                    sink_ids,
+                    as_of_some,
+                    as_of,
+                    debug_name,
+                    id,
+                )| DataflowDescription {
+                    source_imports: BTreeMap::from_iter(source_imports.into_iter()),
+                    index_imports: BTreeMap::from_iter(index_imports.into_iter()),
+                    objects_to_build,
+                    index_exports: BTreeMap::from_iter(index_exports.into_iter()),
+                    sink_exports: BTreeMap::from_iter(
+                        sink_ids
+                            .into_iter()
+                            .map(|id| (id, crate::sinks::any_sink_desc_stub())),
+                    ),
+                    as_of: if as_of_some {
+                        Some(Antichain::from(as_of))
+                    } else {
+                        None
+                    },
+                    debug_name,
+                    id,
+                },
+            )
+            .boxed()
+    }
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
@@ -596,7 +679,6 @@ pub mod sources {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
-    use proptest::strategy::{Just, Strategy};
     use prost::Message;
     use serde::{Deserialize, Serialize};
     use timely::progress::Timestamp;
@@ -1386,15 +1468,14 @@ pub mod sources {
     }
 
     /// A stub for generating arbitrary [SourceDesc].
-    /// Produces the simplest possible instance of it.
-    #[allow(dead_code)]
-    fn any_source_desc_stub() -> impl Strategy<Value = SourceDesc> {
-        Just(SourceDesc {
+    /// Currently only produces the simplest instance of one.
+    pub(super) fn any_source_desc_stub() -> SourceDesc {
+        SourceDesc {
             connector: SourceConnector::Local {
                 timeline: Timeline::EpochMilliseconds,
             },
             desc: RelationDesc::empty(),
-        })
+        }
     }
 
     /// A `SourceConnector` describes how data is produced for a source, be
@@ -1994,6 +2075,21 @@ pub mod sinks {
         pub as_of: SinkAsOf<T>,
     }
 
+    /// A stub for generating arbitrary [SinkDesc].
+    /// Currently only produces the simplest instance of one.
+    pub(super) fn any_sink_desc_stub() -> SinkDesc<mz_repr::Timestamp> {
+        SinkDesc {
+            from: GlobalId::Explain,
+            from_desc: RelationDesc::empty(),
+            connector: SinkConnector::Tail(TailSinkConnector {}),
+            envelope: None,
+            as_of: SinkAsOf {
+                frontier: Antichain::new(),
+                strict: false,
+            },
+        }
+    }
+
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum SinkEnvelope {
         Debezium,
@@ -2161,11 +2257,12 @@ pub mod sinks {
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
+    #[proptest(strategy = "proptest::collection::vec(any::<MirScalarExpr>(), 1..3)")]
     pub key: Vec<MirScalarExpr>,
 }
 
@@ -2206,9 +2303,10 @@ impl TryFrom<ProtoIndexDesc> for IndexDesc {
 /// applied, and columns not in projection can then be overwritten with
 /// default values. This allows the projection to avoid capturing columns
 /// used by the predicates but not otherwise required.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub struct LinearOperator {
     /// Rows that do not pass all predicates may be discarded.
+    #[proptest(strategy = "proptest::collection::vec(any::<MirScalarExpr>(), 0..2)")]
     pub predicates: Vec<MirScalarExpr>,
     /// Columns not present in `projection` may be replaced with
     /// default values.
@@ -2248,5 +2346,23 @@ impl LinearOperator {
     /// input of the specified arity.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {
+            let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }
