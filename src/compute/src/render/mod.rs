@@ -166,13 +166,9 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
                     ..
                 } = &source.description.connector
                 {
-                    let source_instance_id = mz_expr::SourceInstanceId {
-                        source_id: source_id.clone(),
-                        dataflow_id: context.dataflow_id,
-                    };
                     let (ok_stream, err_stream, token) = persist_source::persist_source(
                         region,
-                        source_instance_id,
+                        *source_id,
                         persist_connector.consensus_uri.clone(),
                         persist_connector.blob_uri.clone(),
                         persist_connector.shard_id.clone(),

@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace};
 
 use mz_persist::workload::DataGenerator;
-use mz_persist_client::{PersistClient, PersistLocation, ShardId};
+use mz_persist_client::{PersistLocation, ShardId};
 
 use crate::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -114,8 +114,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
     };
-    let (blob, consensus) = location.open().await?;
-    let persist = PersistClient::new(blob, consensus).await?;
+    let persist = location.open().await?;
 
     let num_records_total = args.records_per_second * args.runtime_seconds;
     let data_generator =

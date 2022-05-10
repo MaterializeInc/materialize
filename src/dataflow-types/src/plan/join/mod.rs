@@ -116,12 +116,7 @@ impl Arbitrary for JoinClosure {
 impl From<&JoinClosure> for ProtoJoinClosure {
     fn from(x: &JoinClosure) -> Self {
         Self {
-            ready_equivalences: x
-                .ready_equivalences
-                .clone()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            ready_equivalences: x.ready_equivalences.iter().map(Into::into).collect(),
             before: Some((&x.before).into()),
         }
     }
@@ -430,7 +425,7 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(2))]
+        #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
         fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {

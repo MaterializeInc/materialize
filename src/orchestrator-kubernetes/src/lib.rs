@@ -333,6 +333,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_name: name.clone(),
                 replicas: Some(scale.get().try_into()?),
                 template: pod_template_spec,
+                pod_management_policy: Some("Parallel".to_string()),
                 ..Default::default()
             }),
             status: None,

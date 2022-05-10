@@ -25,4 +25,4 @@ RUSTDOCFLAGS="--html-in-header $PWD/ci/deploy/noindex.html" bin/doc --document-p
 aws s3 sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust-private
 
 bin/pydoc
-aws s3 sync --size-only target/pydoc/ s3://materialize-dev-website/api/python
+aws s3 sync --size-only --delete target/pydoc/ s3://materialize-dev-website/api/python

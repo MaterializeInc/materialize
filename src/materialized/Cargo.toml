@@ -56,7 +56,6 @@ mz-build-info = { path = "../build-info" }
 mz-coord = { path = "../coord" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-http-proxy = { path = "../http-proxy", features = ["reqwest", "hyper"] }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
@@ -141,8 +140,8 @@ default = ["jemalloc"]
 # WARNING: For development use only! When enabled, may allow unrestricted read
 # access to the file system.
 dev-web = []
-tokio-console = ["mz-ore/tokio-console"]
 jemalloc = ["mz-prof/jemalloc", "tikv-jemallocator"]
+tokio-console = ["mz-ore/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.

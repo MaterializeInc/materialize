@@ -1,0 +1,43 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "expr/src/scalar.proto";
+import "repr/src/global_id.proto";
+
+package mz_dataflow_types.errors;
+
+message ProtoDecodeError {
+    oneof kind {
+        string text = 1;
+    }
+}
+
+message ProtoSourceErrorDetails {
+    oneof kind {
+        string initialization = 1;
+        string file_io = 2;
+        string persistence = 3;
+        string other = 4;
+    }
+}
+
+message ProtoSourceError {
+    mz_repr.global_id.ProtoGlobalId source_id = 1;
+    ProtoSourceErrorDetails error = 2;
+}
+
+message ProtoDataflowError {
+    oneof kind {
+        ProtoDecodeError decode_error = 1;
+        mz_expr.scalar.ProtoEvalError eval_error = 2;
+        ProtoSourceError source_error = 3;
+    }
+}

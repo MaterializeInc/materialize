@@ -20,6 +20,13 @@ import "repr/src/adt/numeric.proto";
 import "repr/src/adt/varchar.proto";
 import "repr/src/global_id.proto";
 
+message ProtoRelationType {
+    message ProtoKey {
+        repeated uint64 keys = 1;
+    }
+    repeated ProtoColumnType column_types = 1;
+    repeated ProtoKey keys = 2;
+}
 
 message ProtoColumnName {
     optional string value = 1;

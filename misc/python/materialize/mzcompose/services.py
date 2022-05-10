@@ -42,6 +42,7 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
+                "RUST_BACKTRACE=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -114,21 +115,23 @@ class Materialized(Service):
 class Computed(Service):
     def __init__(
         self,
-        name: str = "storaged",
+        name: str = "computed",
+        peers: Optional[List[str]] = [],
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        ports: List[int] = [6876],
+        ports: List[int] = [2100, 2102],
         memory: Optional[str] = None,
         options: str = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
+        storage_addr: Optional[str] = "materialized:2101",
+        workers: Optional[int] = None,
     ) -> None:
-        command = f"{options}"
-
         if environment is None:
             environment = [
                 "COMPUTED_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
+                "RUST_BACKTRACE=1",
             ]
 
         if volumes is None:
@@ -146,9 +149,22 @@ class Computed(Service):
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
+        command_list = [f"{options}"]
+
+        if storage_addr:
+            command_list.append(f"--storage-addr {storage_addr}")
+
+        if workers:
+            command_list.append(f"--workers {workers}")
+
+        if peers:
+            command_list.append(f"--processes {len(peers)}")
+            command_list.append(f"--process {peers.index(name)}")
+            command_list.append(" ".join(f"{peer}:2102" for peer in peers))
+
         config.update(
             {
-                "command": command,
+                "command": " ".join(command_list),
                 "ports": ports,
                 "environment": environment,
                 "volumes": volumes,
@@ -493,6 +509,7 @@ class Testdrive(Service):
             environment = [
                 "TMPDIR=/share/tmp",
                 "MZ_SOFT_ASSERTIONS=1",
+                "RUST_BACKTRACE=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -541,11 +558,11 @@ class Testdrive(Service):
             if shard_count:
                 entrypoint += [f"--shard-count={shard_count}"]
 
-        if seed and consistent_seed:
+        if seed is not None and consistent_seed:
             raise RuntimeError("Can't pass `seed` and `consistent_seed` at same time")
         elif consistent_seed:
             entrypoint.append(f"--seed={random.getrandbits(32)}")
-        elif seed:
+        elif seed is not None:
             entrypoint.append(f"--seed={seed}")
 
         entrypoint.extend(entrypoint_extra)
@@ -588,6 +605,7 @@ class SqlLogicTest(Service):
             "PGHOST=postgres",
             "PGPASSWORD=postgres",
             "MZ_SOFT_ASSERTIONS=1",
+            "RUST_BACKTRACE=1",
         ],
         volumes: List[str] = ["../..:/workdir"],
         depends_on: List[str] = ["postgres"],

@@ -27,10 +27,10 @@ use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KafkaOffset,
     KafkaSourceConnector, MzOffset,
 };
-use mz_expr::{PartitionId, SourceInstanceId};
+use mz_expr::PartitionId;
 use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
-use mz_repr::adt::jsonb::Jsonb;
+use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
 use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
 
@@ -45,8 +45,8 @@ pub struct KafkaSourceReader {
     topic_name: String,
     /// Name of the source (will have format kafka-source-id)
     source_name: String,
-    /// Source instance ID
-    id: SourceInstanceId,
+    /// Source global ID
+    id: GlobalId,
     /// Kafka consumer for this source
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
@@ -80,7 +80,7 @@ impl SourceReader for KafkaSourceReader {
     /// Create a new instance of a Kafka reader.
     fn new(
         source_name: String,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
@@ -188,8 +188,7 @@ impl SourceReader for KafkaSourceReader {
                 base_metrics,
                 partition_ids,
                 topic,
-                source_id.source_id.to_string(),
-                source_id.dataflow_id.to_string(),
+                source_id,
             ),
         })
     }
@@ -260,12 +259,7 @@ impl KafkaSourceReader {
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
     fn add_partition(&mut self, pid: PartitionId) {
-        if !crate::source::responsible_for(
-            &self.id.source_id,
-            self.worker_id,
-            self.worker_count,
-            &pid,
-        ) {
+        if !crate::source::responsible_for(&self.id, self.worker_id, self.worker_count, &pid) {
             return;
         }
         let pid = match pid {

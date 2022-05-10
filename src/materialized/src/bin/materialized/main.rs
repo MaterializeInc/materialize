@@ -493,6 +493,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             log_filter: &args.log_filter,
             opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
             opentelemetry_headers: args.opentelemetry_headers.as_deref(),
+            prefix: None,
             #[cfg(feature = "tokio-console")]
             tokio_console: args.tokio_console,
         },

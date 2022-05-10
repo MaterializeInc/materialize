@@ -9,13 +9,11 @@
 
 import os
 from pathlib import Path
-from typing import List
 
 import boto3
 import semver
 
 from materialize import cargo, ci_util, deb, git, mzbuild, spawn
-from materialize.mzbuild import DependencySet
 from materialize.xcompile import Arch
 
 from . import deploy_util
@@ -50,16 +48,16 @@ def main() -> None:
 
     if buildkite_tag:
         # On tag builds, always tag the images as such.
-        publish_multiarch_images(buildkite_tag, deps)
+        mzbuild.publish_multiarch_images(buildkite_tag, deps)
 
         # Also tag the images as `latest` if this is the latest version.
         version = semver.VersionInfo.parse(buildkite_tag.lstrip("v"))
         latest_version = next(t for t in git.get_version_tags() if t.prerelease is None)
         if version == latest_version:
-            publish_multiarch_images("latest", deps)
+            mzbuild.publish_multiarch_images("latest", deps)
     else:
-        publish_multiarch_images("unstable", deps)
-        publish_multiarch_images(f'unstable-{git.rev_parse("HEAD")}', deps)
+        mzbuild.publish_multiarch_images("unstable", deps)
+        mzbuild.publish_multiarch_images(f'unstable-{git.rev_parse("HEAD")}', deps)
 
     print("--- Uploading binary tarball")
     for repo in repos:
@@ -97,17 +95,6 @@ def publish_deb(arch: Arch, version: str) -> None:
             filename,
         ]
     )
-
-
-def publish_multiarch_images(tag: str, dependency_sets: List[DependencySet]) -> None:
-    for images in zip(*dependency_sets):
-        names = set(image.image.name for image in images)
-        assert len(names) == 1, "dependency sets did not contain identical images"
-        name = f"materialize/{next(iter(names))}:{tag}"
-        spawn.runv(
-            ["docker", "manifest", "create", name, *(image.spec() for image in images)]
-        )
-        spawn.runv(["docker", "manifest", "push", name])
 
 
 if __name__ == "__main__":

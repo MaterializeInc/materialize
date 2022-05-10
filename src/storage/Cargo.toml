@@ -100,7 +100,7 @@ server = [
 ]
 
 [build-dependencies]
-prost-build = { version = "0.10.1", features = ["vendored"] }
+prost-build = { version = "0.10.3", features = ["vendored"] }
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux

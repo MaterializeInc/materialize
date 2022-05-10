@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use hyper::client::HttpConnector;
-use hyper_proxy::ProxyConnector;
 use hyper_tls::HttpsConnector;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
@@ -25,7 +24,8 @@ use tonic::metadata::{MetadataKey, MetadataMap};
 use tonic::transport::Endpoint;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
-use tracing_subscriber::fmt;
+use tracing_subscriber::fmt::format::{format, Format, Writer};
+use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Context, Layer, Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -33,13 +33,13 @@ use tracing_subscriber::util::SubscriberInitExt;
 use crate::metric;
 use crate::metrics::MetricsRegistry;
 
-fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnector>> {
+fn create_h2_alpn_https_connector() -> HttpsConnector<HttpConnector> {
     // This accomplishes the same thing as the default
     // + adding a `request_alpn`
     let mut http = HttpConnector::new();
     http.enforce_http(false);
 
-    mz_http_proxy::hyper::connector(HttpsConnector::from((
+    HttpsConnector::from((
         http,
         tokio_native_tls::TlsConnector::from(
             native_tls::TlsConnector::builder()
@@ -47,7 +47,7 @@ fn create_h2_alpn_https_connector() -> ProxyConnector<HttpsConnector<HttpConnect
                 .build()
                 .unwrap(),
         ),
-    )))
+    ))
 }
 
 /// Setting up opentel in the background requires we are in a tokio-runtime
@@ -130,6 +130,8 @@ pub struct TracingConfig<'a> {
     /// configure additional comma separated
     /// headers.
     pub opentelemetry_headers: Option<&'a str>,
+    /// Optional prefix for log lines
+    pub prefix: Option<&'a str>,
     /// When enabled, optionally turn on the
     /// tokio console.
     #[cfg(feature = "tokio-console")]
@@ -166,6 +168,7 @@ pub async fn configure(
             fmt::layer()
                 .with_writer(io::stderr)
                 .with_ansi(atty::is(atty::Stream::Stderr))
+                .event_format(SubprocessFormat::new_default(config.prefix))
                 .with_filter(filter),
         );
 
@@ -210,6 +213,62 @@ where
         self.counter
             .with_label_values(&[&metadata.level().to_string()])
             .inc();
+    }
+}
+
+/// A wrapper around a `tracing_subscriber` `Format` that
+/// prepends a subprocess name to the event logs
+#[derive(Debug)]
+pub struct SubprocessFormat<F> {
+    inner: F,
+    process_name: Option<String>,
+}
+
+impl SubprocessFormat<Format> {
+    /// Make a new `SubprocessFormat` that wraps
+    /// the `tracing_subscriber` default [`FormatEvent`].
+    pub fn new_default(process_name: Option<impl Into<String>>) -> Self {
+        SubprocessFormat {
+            inner: format(),
+            process_name: process_name.map(|pn| pn.into()),
+        }
+    }
+}
+
+impl<F, C, N> FormatEvent<C, N> for SubprocessFormat<F>
+where
+    C: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+    F: FormatEvent<C, N>,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, C, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        match &self.process_name {
+            None => self.inner.format_event(ctx, writer, event)?,
+            Some(process_name) => {
+                let style = ansi_term::Style::new();
+
+                let target_style = if writer.has_ansi_escapes() {
+                    style.bold()
+                } else {
+                    style
+                };
+
+                write!(
+                    writer,
+                    "{}{}:{} ",
+                    target_style.prefix(),
+                    process_name,
+                    target_style.infix(style)
+                )?;
+                self.inner.format_event(ctx, writer, event)?;
+            }
+        }
+        Ok(())
     }
 }
 

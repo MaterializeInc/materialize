@@ -22,6 +22,7 @@ use mz_pgrepr::TypeFromOidError;
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
+use mz_repr::arb_datum;
 use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
@@ -86,7 +87,9 @@ impl Arbitrary for MirScalarExpr {
             (0..10)
                 .prop_map(|i| MirScalarExpr::Column(i as usize))
                 .boxed(),
-            // TODO (#12125): add a leaf variant for MirScalarExpr::literal_ok
+            (arb_datum(), any::<ScalarType>())
+                .prop_map(|(datum, typ)| MirScalarExpr::literal(Ok((&datum).into()), typ))
+                .boxed(),
             (any::<EvalError>(), any::<ScalarType>())
                 .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ))
                 .boxed(),

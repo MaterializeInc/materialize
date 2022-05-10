@@ -30,6 +30,7 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::{PartitionId, RowSetFinishing};
+use mz_repr::proto::any_uuid;
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -105,15 +106,11 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub map_filter_project: mz_expr::SafeMfpPlan,
 }
 
-fn any_uuid() -> impl Strategy<Value = Uuid> {
-    (0..u128::MAX).prop_map(Uuid::from_u128)
-}
-
 impl From<&Peek> for ProtoPeek {
     fn from(x: &Peek) -> Self {
         ProtoPeek {
             id: Some((&x.id).into()),
-            key: x.key.clone().map(|x| (&x).into()),
+            key: x.key.as_ref().map(Into::into),
             uuid: Some(x.uuid.into_proto()),
             timestamp: x.timestamp,
             finishing: Some((&x.finishing).into()),
@@ -931,7 +928,7 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(4))]
+        #![proptest_config(ProptestConfig::with_cases(32))]
 
         #[test]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {

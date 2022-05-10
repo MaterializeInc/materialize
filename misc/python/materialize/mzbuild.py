@@ -839,3 +839,26 @@ class Repository:
 
     def __iter__(self) -> Iterator[Image]:
         return iter(self.images.values())
+
+
+def publish_multiarch_images(tag: str, dependency_sets: List[DependencySet]) -> None:
+    """Publishes a set of docker images under a given tag."""
+    for images in zip(*dependency_sets):
+        names = set(image.image.name for image in images)
+        assert len(names) == 1, "dependency sets did not contain identical images"
+        name = f"materialize/{next(iter(names))}:{tag}"
+        spawn.runv(
+            ["docker", "manifest", "create", name, *(image.spec() for image in images)]
+        )
+        spawn.runv(["docker", "manifest", "push", name])
+    print(f"--- Nofifying for tag {tag}")
+    markdown = f"""Pushed images with Docker tag `{tag}`"""
+    spawn.runv(
+        [
+            "buildkite-agent",
+            "annotate",
+            "--style=info",
+            f"--context=build-tags-{tag}",
+        ],
+        stdin=markdown.encode(),
+    )

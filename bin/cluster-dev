@@ -23,7 +23,7 @@ eval "$(minikube docker-env --shell bash)"
 
 bin/mzimage acquire --dev storaged
 bin/mzimage acquire --dev computed
-bin/mzimage acquire --dev materialized
+bin/mzimage acquire --dev materialized-slim
 
 kubectl apply --context=minikube  -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
@@ -70,7 +70,7 @@ spec:
     spec:
       containers:
       - name: materialized
-        image: $(bin/mzimage spec --dev materialized)
+        image: $(bin/mzimage spec --dev materialized-slim)
         args:
             - --storaged-image=$(bin/mzimage spec --dev storaged)
             - --computed-image=$(bin/mzimage spec --dev computed)

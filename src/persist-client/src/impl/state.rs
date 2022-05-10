@@ -112,7 +112,7 @@ where
             return Continue(());
         }
 
-        self.trace.push((keys.to_vec(), desc.clone()));
+        self.push_batch(keys, &desc);
         debug_assert_eq!(&self.upper(), desc.upper());
 
         Continue(())
@@ -140,7 +140,7 @@ where
         }
         write_cap.upper.clone_from(desc.upper());
 
-        self.trace.push((keys.to_vec(), desc.clone()));
+        self.push_batch(keys, desc);
         debug_assert_eq!(&self.upper(), desc.upper());
 
         Continue(())
@@ -222,6 +222,30 @@ where
             since.meet_assign(&reader.since);
         }
         self.since = since;
+    }
+
+    fn push_batch(&mut self, keys: &[String], desc: &Description<T>) {
+        // Sneaky optimization! If there are no keys in this batch, we can
+        // simply extend the description of the last one (assuming there is
+        // one). This will be an absurdly common case in actual usage because
+        // empty batches are used to communicate progress and most things will
+        // be low-traffic.
+        //
+        // To make things easier to reason about, we avoid mutating any batch
+        // that actually has data, and only apply the optimization if the most
+        // recent batch _also_ has no keys. We call these batches with no keys
+        // "padding batches".
+        if let Some((last_batch_keys, last_desc)) = self.trace.last_mut() {
+            if keys.is_empty() && last_batch_keys.is_empty() {
+                *last_desc = Description::new(
+                    last_desc.lower().clone(),
+                    desc.upper().clone(),
+                    last_desc.since().clone(),
+                );
+                return;
+            }
+        }
+        self.trace.push((keys.to_owned(), desc.clone()));
     }
 }
 
@@ -568,5 +592,95 @@ mod codec_impls {
         fn from(x: &AntichainMeta) -> Self {
             Antichain::from(x.0.iter().map(|x| T::decode(*x)).collect::<Vec<_>>())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn desc<T: Timestamp>(lower: T, upper: T) -> Description<T> {
+        Description::new(
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(T::minimum()),
+        )
+    }
+
+    #[test]
+    fn empty_batch_optimization() {
+        mz_ore::test::init_logging();
+
+        let writer_id = WriterId::new();
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
+        state.register(SeqNo(0), &writer_id, &ReaderId::new());
+
+        // Initial empty batch should result in a padding batch.
+        assert_eq!(
+            state.compare_and_append(&writer_id, &[], &desc(0, 1)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 1);
+
+        // Writing data should create a new batch, so now there's two.
+        assert_eq!(
+            state.compare_and_append(&writer_id, &["key1".to_owned()], &desc(1, 2)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 2);
+
+        // The first empty batch after one with data doesn't get squished in,
+        // instead becoming a padding batch.
+        assert_eq!(
+            state.compare_and_append(&writer_id, &[], &desc(2, 3)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 3);
+
+        // More empty batches should all get squished into the existing padding
+        // batch.
+        assert_eq!(
+            state.compare_and_append(&writer_id, &[], &desc(3, 4)),
+            Continue(())
+        );
+        assert_eq!(
+            state.compare_and_append(&writer_id, &[], &desc(4, 5)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 3);
+
+        // Try it all again with a second non-empty batch, this one with 2 keys,
+        // and then some more empty batches.
+        assert_eq!(
+            state.compare_and_append(
+                &writer_id,
+                &["key2".to_owned(), "key3".to_owned()],
+                &desc(5, 6)
+            ),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 4);
+        assert_eq!(
+            state.compare_and_append(&writer_id, &[], &desc(6, 7)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 5);
+        assert_eq!(
+            state.compare_and_append(&writer_id, &[], &desc(7, 8)),
+            Continue(())
+        );
+        assert_eq!(
+            state.compare_and_append(&writer_id, &[], &desc(8, 9)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 5);
+
+        // Confirm that we still have all the keys.
+        let actual = state
+            .trace
+            .iter()
+            .flat_map(|(keys, _)| keys.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, vec!["key1", "key2", "key3"]);
     }
 }

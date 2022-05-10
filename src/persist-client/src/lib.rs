@@ -47,37 +47,6 @@ pub(crate) mod r#impl {
     pub mod state;
 }
 
-// Notes
-// - Pretend that everything marked with Serialize and Deserialize instead has
-//   some sort of encode/decode API that uses byte slices, Buf+BufMut, or proto,
-//   depending on what we decide.
-
-// TODOs
-// - Decide if the inner and outer error of the two-level errors should be
-//   swapped.
-// - Split errors into definitely failed vs maybe failed variants. More
-//   generally, possibly we just overhaul our errors.
-// - Figure out how to communicate that a lease expired.
-// - Add a cache around location usage.
-// - Crate mz_persist_client shouldn't depend on mz_persist. Pull common code
-//   out into mz_persist_types or a new crate.
-// - Hook up timeouts into various location impls.
-// - Incremental state
-// - After incremental state, state roll-ups and truncation
-// - Permanent storage format for State
-// - Non-polling listener
-// - Impls and tests for setting upper to empty antichain (no more writes)
-// - Impls and tests for setting since to empty antichain (no more reads)
-// - Idempotence and retries + tests
-// - Leasing
-// - Physical and logical compaction
-// - Garbage collection of blob and consensus data
-// - Nemesis
-// - Benchmarks
-// - Logging
-// - Tests, tests, tests
-// - Test coverage of every `PartialOrder::less_*` call
-
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
 ///
@@ -93,8 +62,22 @@ pub struct PersistLocation {
 }
 
 impl PersistLocation {
+    /// Returns a new client for interfacing with persist shards made durable to
+    /// the given `location`.
+    ///
+    /// The same `location` may be used concurrently from multiple processes.
+    /// Concurrent usage is subject to the constraints documented on individual
+    /// methods (mostly [WriteHandle::append]).
+    pub async fn open(&self) -> Result<PersistClient, ExternalError> {
+        let (blob, consensus) = self.open_locations().await?;
+        PersistClient::new(blob, consensus).await
+    }
+
     /// Opens the associated implementations of [BlobMulti] and [Consensus].
-    pub async fn open(
+    ///
+    /// This is exposed mostly for testing. Persist users likely want
+    /// [Self::open].
+    pub async fn open_locations(
         &self,
     ) -> Result<
         (
@@ -184,11 +167,10 @@ pub struct PersistClient {
 
 impl PersistClient {
     /// Returns a new client for interfacing with persist shards made durable to
-    /// the given `location`.
+    /// the given [BlobMulti] and [Consensus].
     ///
-    /// The same `location` may be used concurrently from multiple processes.
-    /// Concurrent usage is subject to the constraints documented on individual
-    /// methods (mostly [WriteHandle::append]).
+    /// This is exposed mostly for testing. Persist users likely want
+    /// [PersistLocation::open].
     pub async fn new(
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,

@@ -16,20 +16,19 @@ use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport};
 use tracing::info;
 
 use mz_dataflow_types::{sources::PubNubSourceConnector, SourceErrorDetails};
-use mz_expr::SourceInstanceId;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, GlobalId, Row};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
-    source_id: SourceInstanceId,
+    source_id: GlobalId,
     connector: PubNubSourceConnector,
 }
 
 impl PubNubSourceReader {
     /// Constructs a new instance
-    pub fn new(source_id: SourceInstanceId, connector: PubNubSourceConnector) -> Self {
+    pub fn new(source_id: GlobalId, connector: PubNubSourceConnector) -> Self {
         Self {
             source_id,
             connector,

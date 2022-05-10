@@ -10,6 +10,7 @@
 //! Generated protobuf code and companion impls.
 
 use mz_ore::cast::CastFrom;
+use proptest::prelude::Strategy;
 use std::{char::CharTryFromError, num::TryFromIntError};
 use uuid::Uuid;
 
@@ -29,6 +30,9 @@ pub enum TryFromProtoError {
     RegexError(regex::Error),
     /// A [crate::Row] conversion failed
     RowConversionError(String),
+    /// A JSON deserialization failed.
+    /// TODO: Remove this when we have complete coverage for source and sink structs.
+    DeserializationError(serde_json::Error),
     /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
     /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
@@ -53,6 +57,18 @@ impl From<CharTryFromError> for TryFromProtoError {
     }
 }
 
+impl From<regex::Error> for TryFromProtoError {
+    fn from(error: regex::Error) -> Self {
+        TryFromProtoError::RegexError(error)
+    }
+}
+
+impl From<serde_json::Error> for TryFromProtoError {
+    fn from(error: serde_json::Error) -> Self {
+        TryFromProtoError::DeserializationError(error)
+    }
+}
+
 impl std::fmt::Display for TryFromProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TryFromProtoError::*;
@@ -61,6 +77,7 @@ impl std::fmt::Display for TryFromProtoError {
             CharTryFromError(error) => error.fmt(f),
             DateConversionError(msg) => write!(f, "Date conversion failed: `{}`", msg),
             RegexError(error) => error.fmt(f),
+            DeserializationError(error) => error.fmt(f),
             RowConversionError(msg) => write!(f, "Row packing failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
         }
@@ -74,6 +91,7 @@ impl std::error::Error for TryFromProtoError {
             TryFromIntError(error) => Some(error),
             CharTryFromError(error) => Some(error),
             RegexError(error) => Some(error),
+            DeserializationError(error) => Some(error),
             DateConversionError(_) => None,
             RowConversionError(_) => None,
             MissingField(_) => None,
@@ -166,6 +184,10 @@ impl ProtoRepr for Uuid {
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
         Ok(Uuid::from_u128(u128::from_proto(repr)?))
     }
+}
+
+pub fn any_uuid() -> impl Strategy<Value = Uuid> {
+    (0..u128::MAX).prop_map(Uuid::from_u128)
 }
 
 impl<T: ProtoRepr> ProtoRepr for Option<T> {

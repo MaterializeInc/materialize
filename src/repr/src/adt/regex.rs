@@ -95,7 +95,7 @@ impl ProtoRepr for regex::Regex {
     }
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        Ok(regex::Regex::new(&repr).map_err(TryFromProtoError::RegexError)?)
+        Ok(regex::Regex::new(&repr).map_err(TryFromProtoError::from)?)
     }
 }
 
