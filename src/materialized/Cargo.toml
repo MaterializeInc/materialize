@@ -64,6 +64,7 @@ mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgwire = { path = "../pgwire" }
 mz-pid-file = { path = "../pid-file" }
+mz-postgres-util = { path = "../postgres-util" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }

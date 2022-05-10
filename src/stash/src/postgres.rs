@@ -16,10 +16,11 @@ use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use mz_ore::retry::Retry;
+use postgres_openssl::MakeTlsConnector;
 use timely::progress::Antichain;
 use timely::PartialOrder;
 use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, NoTls, Transaction};
+use tokio_postgres::{Client, Transaction};
 use tracing::warn;
 
 use timely::progress::frontier::AntichainRef;
@@ -67,6 +68,7 @@ CREATE TABLE uppers (
 /// stability. Any changes to the table schemas will be accompanied by a clear
 pub struct Postgres {
     url: String,
+    tls: MakeTlsConnector,
     client: Option<Client>,
     epoch: i64,
     nonce: [u8; 16],
@@ -84,9 +86,10 @@ impl std::fmt::Debug for Postgres {
 
 impl Postgres {
     /// Opens the stash stored at the specified path.
-    pub async fn new(url: String) -> Result<Postgres, StashError> {
+    pub async fn new(url: String, tls: MakeTlsConnector) -> Result<Postgres, StashError> {
         let mut conn = Postgres {
             url,
+            tls,
             client: None,
             epoch: 0,
             // The call to rand::random here assumes that the seed source is from a secure
@@ -126,7 +129,7 @@ impl Postgres {
 
     /// Sets `client` to a new connection to the Postgres server.
     async fn connect(&mut self) -> Result<(), StashError> {
-        let (client, connection) = tokio_postgres::connect(&self.url, NoTls).await?;
+        let (client, connection) = tokio_postgres::connect(&self.url, self.tls.clone()).await?;
         mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
             if let Err(e) = connection.await {
                 tracing::error!("postgres stash connection error: {}", e);
