@@ -145,7 +145,7 @@ pub struct Args {
     #[clap(
         long,
         hide = true,
-        env = "POD_NAME",
+        env = "MZ_POD_NAME",
         required_if_eq("orchestrator", "kubernetes")
     )]
     pod_name: String,
@@ -760,7 +760,7 @@ max log level: {max_log_level}",
             context: args.kubernetes_context,
             user_defined_secret: args.user_defined_secret,
             user_defined_secret_mount_path: args.user_defined_secret_mount_path,
-            coordd_pod_name: args.pod_name,
+            refresh_pod_name: args.pod_name,
         },
         Orchestrator::Process => SecretsControllerConfig::LocalFileSystem,
     };

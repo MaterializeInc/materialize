@@ -195,7 +195,7 @@ pub enum SecretsControllerConfig {
         context: String,
         user_defined_secret: String,
         user_defined_secret_mount_path: String,
-        coordd_pod_name: String,
+        refresh_pod_name: String,
     },
 }
 
@@ -359,14 +359,14 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             context,
             user_defined_secret,
             user_defined_secret_mount_path,
-            coordd_pod_name,
+            refresh_pod_name,
         }) => Box::new(
             KubernetesSecretsController::new(
                 context,
                 KubernetesSecretsControllerConfig {
                     user_defined_secret,
                     user_defined_secret_mount_path,
-                    coordd_pod_name,
+                    refresh_pod_name,
                 },
             )
             .await

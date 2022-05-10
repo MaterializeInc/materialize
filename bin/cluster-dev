@@ -98,7 +98,7 @@ spec:
         - mountPath: /secrets
           name: secrets-mount
         env:
-        - name: POD_NAME
+        - name: MZ_POD_NAME
           valueFrom:
             fieldRef:
               fieldPath: metadata.name

@@ -23,13 +23,13 @@ use std::time::Duration;
 use tracing::info;
 
 const FIELD_MANAGER: &str = "materialized";
-const POD_ANNOTATION: &str = "secret-refresh";
+const POD_ANNOTATION: &str = "materialized.materialize.cloud/secret-refresh";
 const POLL_TIMEOUT: u64 = 120;
 
 pub struct KubernetesSecretsControllerConfig {
     pub user_defined_secret: String,
     pub user_defined_secret_mount_path: String,
-    pub coordd_pod_name: String,
+    pub refresh_pod_name: String,
 }
 
 pub struct KubernetesSecretsController {
@@ -79,21 +79,17 @@ impl KubernetesSecretsController {
     }
 
     async fn trigger_resync(&mut self) -> Result<(), Error> {
-        let mut coordd: Pod = self.pod_api.get(&*self.config.coordd_pod_name).await?;
-        coordd.annotations_mut().insert(
+        let mut pod = Pod::default();
+        pod.annotations_mut().insert(
             String::from(POD_ANNOTATION),
             format!("{:x}", random::<u64>()),
         );
 
-        // Managed_fields can not be present in the object that is being patched.
-        // if present, they lead to an 'metadata.managedFields must be nil' error
-        coordd.metadata.managed_fields = None;
-
         self.pod_api
             .patch(
-                &self.config.coordd_pod_name,
+                &self.config.refresh_pod_name,
                 &PatchParams::apply(FIELD_MANAGER).force(),
-                &Patch::Apply(coordd),
+                &Patch::Apply(pod),
             )
             .await?;
 
