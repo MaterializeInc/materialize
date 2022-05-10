@@ -21,7 +21,6 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use mz_aws_util::kinesis;
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KinesisSourceConnector,
     MzOffset,
@@ -80,7 +79,7 @@ impl ShardMetrics {
 impl KinesisSourceReader {
     async fn update_shard_information(&mut self) -> Result<(), anyhow::Error> {
         let current_shards: HashSet<_> =
-            kinesis::get_shard_ids(&self.kinesis_client, &self.stream_name)
+            mz_kinesis_util::get_shard_ids(&self.kinesis_client, &self.stream_name)
                 .await?
                 .collect();
         let known_shards: HashSet<_> = self.shard_set.keys().cloned().collect();
@@ -94,8 +93,12 @@ impl KinesisSourceReader {
             );
             self.shard_queue.push_back((
                 shard_id.to_string(),
-                kinesis::get_shard_iterator(&self.kinesis_client, &self.stream_name, &shard_id)
-                    .await?,
+                mz_kinesis_util::get_shard_iterator(
+                    &self.kinesis_client,
+                    &self.stream_name,
+                    &shard_id,
+                )
+                .await?,
             ));
         }
         Ok(())
@@ -271,15 +274,15 @@ async fn create_state(
     anyhow::Error,
 > {
     let config = c.aws.load(aws_external_id).await;
-    let kinesis_client = kinesis::client(&config);
+    let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
-    let shard_set = kinesis::get_shard_ids(&kinesis_client, &c.stream_name).await?;
+    let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
     let mut shard_map = HashMap::new();
     for shard_id in shard_set {
         shard_queue.push_back((
             shard_id.clone(),
-            kinesis::get_shard_iterator(&kinesis_client, &c.stream_name, &shard_id).await?,
+            mz_kinesis_util::get_shard_iterator(&kinesis_client, &c.stream_name, &shard_id).await?,
         ));
         shard_map.insert(
             shard_id.clone(),

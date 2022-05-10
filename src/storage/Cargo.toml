@@ -11,9 +11,9 @@ anyhow = "1.0.57"
 async-compression = { version = "0.3.12", features = ["tokio", "gzip"], optional = true }
 async-stream = "0.3.3"
 async-trait = "0.1.53"
-aws-sdk-kinesis = { version = "0.10.1", default-features = false, optional = true }
-aws-sdk-s3 = { version = "0.10.1", default-features = false, optional = true }
-aws-sdk-sqs = { version = "0.10.1", default-features = false, optional = true }
+aws-sdk-kinesis = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
+aws-sdk-s3 = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
+aws-sdk-sqs = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
 bincode = { version = "1.3.3", optional = true }
 bytes = { version = "1.1.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
@@ -29,12 +29,12 @@ inotify = { version = "0.10.0", optional = true }
 lazy_static = { version = "1.4.0", optional = true }
 log = { version = "0.4.16", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
-mz-aws-util = { path = "../aws-util", features = ["kinesis", "s3", "sqs"], optional = true }
 mz-ccsr = { path = "../ccsr", optional = true }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange", optional = true }
 mz-kafka-util = { path = "../kafka-util", optional = true }
+mz-kinesis-util = { path = "../kinesis-util", optional = true }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client", optional = true }
@@ -79,10 +79,10 @@ server = [
     "lazy_static",
     "log",
     "mz-avro",
-    "mz-aws-util",
     "mz-ccsr",
     "mz-interchange",
     "mz-kafka-util",
+    "mz-kinesis-util",
     "mz-persist-client",
     "mz-persist-types",
     "mz-pgcopy",

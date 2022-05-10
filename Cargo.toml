@@ -2,7 +2,6 @@
 members = [
     "src/avro-derive",
     "src/avro",
-    "src/aws-util",
     "src/billing-demo",
     "src/build-info",
     "src/ccsr",
@@ -16,6 +15,7 @@ members = [
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
+    "src/kinesis-util",
     "src/lowertest-derive",
     "src/lowertest",
     "src/materialized",

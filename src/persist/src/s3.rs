@@ -65,7 +65,7 @@ impl S3BlobConfig {
                 SharedCredentialsProvider::new(credentials::default_provider().await);
             loader = loader.credentials_provider(role_provider.build(default_provider));
         }
-        let client = mz_aws_util::s3::client(&loader.load().await);
+        let client = aws_sdk_s3::Client::new(&loader.load().await);
         Ok(S3BlobConfig {
             client,
             bucket,

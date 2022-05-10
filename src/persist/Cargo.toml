@@ -40,7 +40,6 @@ futures-executor = "0.3.21"
 futures-util = "0.3.19"
 lazy_static = "1.4.0"
 md-5 = "0.10.1"
-mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "task"] }
 mz-persist-types = { path = "../persist-types" }

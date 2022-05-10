@@ -1,0 +1,10 @@
+[package]
+name = "mz-kinesis-util"
+description = "AWS Kinesis utilities."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.60.0"
+publish = false
+
+[dependencies]
+aws-sdk-kinesis = { version = "0.10.1", default-features = false, features = ["native-tls"] }

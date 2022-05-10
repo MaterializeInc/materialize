@@ -66,7 +66,7 @@ async fn run() -> Result<(), anyhow::Error> {
 
     // Initialize test resources in Kinesis.
     let config = aws_config::load_from_env().await;
-    let kinesis_client = mz_aws_util::kinesis::client(&config);
+    let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
     let stream_arn =
         kinesis::create_stream(&kinesis_client, &stream_name, args.shard_count).await?;
