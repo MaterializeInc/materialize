@@ -668,7 +668,7 @@ async fn validate_aws_credentials(
     external_id: AwsExternalId,
 ) -> Result<(), anyhow::Error> {
     let config = config.load(external_id).await;
-    let sts_client = mz_aws_util::sts::client(&config);
+    let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client
         .get_caller_identity()
         .send()

@@ -7,20 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! AWS Kinesis client and utilities.
+//! AWS Kinesis utilities.
 
 use aws_sdk_kinesis::error::{GetShardIteratorError, ListShardsError};
 use aws_sdk_kinesis::model::{Shard, ShardIteratorType};
 use aws_sdk_kinesis::types::SdkError;
 use aws_sdk_kinesis::Client;
-use aws_types::SdkConfig;
-
-use crate::util;
-
-/// Constructs a new AWS Kinesis client that respects the system proxy configuration.
-pub fn client(config: &SdkConfig) -> Client {
-    Client::from_conf_conn(config.into(), util::connector())
-}
 
 /// Lists the shards of the named Kinesis stream.
 ///

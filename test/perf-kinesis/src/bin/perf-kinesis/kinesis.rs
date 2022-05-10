@@ -76,17 +76,16 @@ pub async fn generate_and_put_records(
 ) -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
     // For each string, round robin puts across all of the shards.
-    let mut shard_starting_hash_keys =
-        mz_aws_util::kinesis::list_shards(&kinesis_client, &stream_name)
-            .await?
-            .into_iter()
-            .map(|shard| {
-                shard
-                    .hash_key_range
-                    .and_then(|hkr| hkr.starting_hash_key)
-                    .ok_or_else(|| anyhow!("starting hash key missing"))
-            })
-            .collect::<Result<VecDeque<_>, _>>()?;
+    let mut shard_starting_hash_keys = mz_kinesis_util::list_shards(&kinesis_client, &stream_name)
+        .await?
+        .into_iter()
+        .map(|shard| {
+            shard
+                .hash_key_range
+                .and_then(|hkr| hkr.starting_hash_key)
+                .ok_or_else(|| anyhow!("starting hash key missing"))
+        })
+        .collect::<Result<VecDeque<_>, _>>()?;
 
     let mut put_record_count = 0;
     while put_record_count < total_records {

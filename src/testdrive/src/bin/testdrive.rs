@@ -190,7 +190,7 @@ async fn main() {
                 .load()
                 .await;
             let account = async {
-                let sts_client = mz_aws_util::sts::client(&config);
+                let sts_client = aws_sdk_sts::Client::new(&config);
                 Ok::<_, Box<dyn Error>>(
                     sts_client
                         .get_caller_identity()

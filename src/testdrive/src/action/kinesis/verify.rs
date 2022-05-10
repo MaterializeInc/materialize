@@ -16,8 +16,6 @@ use async_trait::async_trait;
 use aws_sdk_kinesis::Client as KinesisClient;
 use itertools::Itertools;
 
-use mz_aws_util::kinesis;
-
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 
@@ -99,12 +97,12 @@ async fn get_shard_iterators(
     stream_name: &str,
 ) -> Result<VecDeque<Option<String>>, anyhow::Error> {
     let mut iterators: VecDeque<Option<String>> = VecDeque::new();
-    for shard_id in kinesis::get_shard_ids(kinesis_client, stream_name)
+    for shard_id in mz_kinesis_util::get_shard_ids(kinesis_client, stream_name)
         .await
         .context("listing Kinesis shards")?
     {
         iterators.push_back(
-            kinesis::get_shard_iterator(kinesis_client, stream_name, &shard_id)
+            mz_kinesis_util::get_shard_iterator(kinesis_client, stream_name, &shard_id)
                 .await
                 .context("getting Kinesis shard iterator")?,
         );
