@@ -930,6 +930,15 @@ impl MinElapsed {
     }
 }
 
+// Make sure the "vendored" feature of the openssl_sys crate makes it into the
+// transitive dep graph of persist, so that we don't attempt to link against the
+// system OpenSSL library. Fake a usage of the crate here so that a good
+// samaritan doesn't remove our unused dep.
+#[allow(dead_code)]
+fn openssl_sys_hack() {
+    openssl_sys::init();
+}
+
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
