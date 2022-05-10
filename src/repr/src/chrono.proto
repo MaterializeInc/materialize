@@ -16,8 +16,10 @@ message ProtoTz {
 }
 
 message ProtoNaiveDate {
-   int32 year = 1;
-   uint32 ordinal = 2;
+    // Year
+    int32 year = 1;
+    // Day-of-year (0..365)
+    uint32 ordinal = 2;
 }
 
 message ProtoNaiveTime {

@@ -9,6 +9,8 @@
 
 syntax = "proto3";
 
+import "repr/src/chrono.proto";
+
 package mz_repr.row;
 
 message ProtoRow {
@@ -43,7 +45,7 @@ message ProtoDatum {
         //
         // Of these, I'd guess Timestamp and UUID are probably the first ones
         // we'd bless followed by Date and Time.
-        ProtoDate date = 16;
+        mz_repr.chrono.ProtoNaiveDate date = 16;
         ProtoTime time = 17;
         ProtoTimestamp timestamp = 18;
         ProtoInterval interval = 19;
@@ -74,13 +76,6 @@ enum ProtoDatumOther {
     NUMERIC_POS_INF = 6;
     NUMERIC_NEG_INF = 7;
     NUMERIC_NA_N = 8;
-}
-
-message ProtoDate {
-    // Year
-    int32 year = 1;
-    // Day-of-year (0..365)
-    uint32 ordinal = 2;
 }
 
 message ProtoTime {

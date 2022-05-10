@@ -22,11 +22,12 @@ use uuid::Uuid;
 use crate::adt::array::ArrayDimension;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
+use crate::chrono::ProtoNaiveDate;
 use crate::proto::TryFromProtoError;
 use crate::row::proto_datum::DatumType;
 use crate::row::{
-    ProtoArray, ProtoArrayDimension, ProtoDate, ProtoDatum, ProtoDatumOther, ProtoDict,
-    ProtoDictElement, ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
+    ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
+    ProtoInterval, ProtoNumeric, ProtoRow, ProtoTime, ProtoTimestamp,
 };
 use crate::{Datum, Row, RowPacker};
 
@@ -72,7 +73,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             Datum::Int64(x) => DatumType::Int64(x),
             Datum::Float32(x) => DatumType::Float32(x.into_inner()),
             Datum::Float64(x) => DatumType::Float64(x.into_inner()),
-            Datum::Date(x) => DatumType::Date(ProtoDate {
+            Datum::Date(x) => DatumType::Date(ProtoNaiveDate {
                 year: x.year(),
                 ordinal: x.ordinal(),
             }),
@@ -211,9 +212,9 @@ impl RowPacker<'_> {
                 let u = Uuid::from_slice(&x).map_err(|err| err.to_string())?;
                 self.push(Datum::Uuid(u));
             }
-            Some(DatumType::Date(x)) => {
-                self.push(Datum::Date(NaiveDate::from_yo(x.year, x.ordinal)))
-            }
+            Some(DatumType::Date(x)) => self.push(Datum::Date(
+                NaiveDate::from_proto(x.clone()).map_err(|e| e.to_string())?,
+            )),
             Some(DatumType::Time(x)) => self.push(Datum::Time(
                 NaiveTime::from_num_seconds_from_midnight(x.secs, x.nanos),
             )),
