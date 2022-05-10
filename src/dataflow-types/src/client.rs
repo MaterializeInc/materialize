@@ -110,7 +110,7 @@ impl From<&Peek> for ProtoPeek {
     fn from(x: &Peek) -> Self {
         ProtoPeek {
             id: Some((&x.id).into()),
-            key: x.key.clone().map(|x| (&x).into()),
+            key: x.key.as_ref().map(Into::into),
             uuid: Some(x.uuid.into_proto()),
             timestamp: x.timestamp,
             finishing: Some((&x.finishing).into()),

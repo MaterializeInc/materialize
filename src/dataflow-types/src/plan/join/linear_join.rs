@@ -98,8 +98,8 @@ impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
     }
 }
 
-impl From<Vec<MirScalarExpr>> for ProtoMirScalarVec {
-    fn from(x: Vec<MirScalarExpr>) -> Self {
+impl From<&Vec<MirScalarExpr>> for ProtoMirScalarVec {
+    fn from(x: &Vec<MirScalarExpr>) -> Self {
         Self {
             values: x.iter().map(Into::into).collect(),
         }
@@ -118,10 +118,10 @@ impl From<&LinearJoinPlan> for ProtoLinearJoinPlan {
     fn from(x: &LinearJoinPlan) -> Self {
         ProtoLinearJoinPlan {
             source_relation: x.source_relation.into_proto(),
-            source_key: x.source_key.clone().map(Into::into),
-            initial_closure: x.initial_closure.clone().map(|x| Into::into(&x)),
+            source_key: x.source_key.as_ref().map(Into::into),
+            initial_closure: x.initial_closure.as_ref().map(Into::into),
             stage_plans: x.stage_plans.iter().map(Into::into).collect(),
-            final_closure: x.final_closure.clone().map(|x| Into::into(&x)),
+            final_closure: x.final_closure.as_ref().map(Into::into),
         }
     }
 }
@@ -157,12 +157,7 @@ impl From<&LinearStagePlan> for ProtoLinearStagePlan {
         Self {
             lookup_relation: x.lookup_relation.into_proto(),
             stream_key: x.stream_key.iter().map(Into::into).collect(),
-            stream_thinning: x
-                .stream_thinning
-                .clone()
-                .into_iter()
-                .map(|x| x.into_proto())
-                .collect(),
+            stream_thinning: x.stream_thinning.iter().map(|x| x.into_proto()).collect(),
             lookup_key: x.lookup_key.iter().map(Into::into).collect(),
             closure: Some(Into::into(&x.closure)),
         }

@@ -1964,14 +1964,9 @@ impl From<&RowSetFinishing> for ProtoRowSetFinishing {
     fn from(x: &RowSetFinishing) -> Self {
         ProtoRowSetFinishing {
             order_by: x.order_by.iter().map(Into::into).collect(),
-            limit: x.limit.clone().map(usize::into_proto),
+            limit: x.limit.as_ref().map(|x| usize::into_proto(*x)),
             offset: x.offset.into_proto(),
-            project: x
-                .project
-                .clone()
-                .into_iter()
-                .map(usize::into_proto)
-                .collect(),
+            project: x.project.iter().map(|x| usize::into_proto(*x)).collect(),
         }
     }
 }

@@ -66,12 +66,7 @@ impl Arbitrary for DeltaJoinPlan {
 impl From<&DeltaJoinPlan> for ProtoDeltaJoinPlan {
     fn from(x: &DeltaJoinPlan) -> Self {
         Self {
-            path_plans: x
-                .path_plans
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
+            path_plans: x.path_plans.iter().map(Into::into).collect(),
         }
     }
 }
@@ -138,20 +133,10 @@ impl From<&DeltaPathPlan> for ProtoDeltaPathPlan {
     fn from(x: &DeltaPathPlan) -> Self {
         Self {
             source_relation: x.source_relation.into_proto(),
-            source_key: x
-                .source_key
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
+            source_key: x.source_key.iter().map(Into::into).collect(),
             initial_closure: Some((&x.initial_closure).into()),
-            stage_plans: x
-                .stage_plans
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
-            final_closure: x.final_closure.clone().map(|x| Into::into(&x)),
+            stage_plans: x.stage_plans.iter().map(Into::into).collect(),
+            final_closure: x.final_closure.as_ref().map(Into::into),
         }
     }
 }
@@ -231,24 +216,9 @@ impl From<&DeltaStagePlan> for ProtoDeltaStagePlan {
     fn from(x: &DeltaStagePlan) -> Self {
         Self {
             lookup_relation: x.lookup_relation.into_proto(),
-            stream_key: x
-                .stream_key
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
-            stream_thinning: x
-                .stream_thinning
-                .clone()
-                .into_iter()
-                .map(|x| x.into_proto())
-                .collect(),
-            lookup_key: x
-                .lookup_key
-                .clone()
-                .into_iter()
-                .map(|x| Into::into(&x))
-                .collect(),
+            stream_key: x.stream_key.iter().map(Into::into).collect(),
+            stream_thinning: x.stream_thinning.iter().map(|x| x.into_proto()).collect(),
+            lookup_key: x.lookup_key.iter().map(Into::into).collect(),
             closure: Some((&x.closure).into()),
         }
     }
@@ -263,7 +233,7 @@ impl TryFrom<ProtoDeltaStagePlan> for DeltaStagePlan {
             stream_key: x
                 .stream_key
                 .into_iter()
-                .map(|x| x.try_into())
+                .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             stream_thinning: x
                 .stream_thinning
@@ -273,7 +243,7 @@ impl TryFrom<ProtoDeltaStagePlan> for DeltaStagePlan {
             lookup_key: x
                 .lookup_key
                 .into_iter()
-                .map(|x| x.try_into())
+                .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             closure: x.closure.try_into_if_some("ProtoDeltaStagePlan::closure")?,
         })
