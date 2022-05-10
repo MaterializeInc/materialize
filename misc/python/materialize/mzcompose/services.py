@@ -114,17 +114,18 @@ class Materialized(Service):
 class Computed(Service):
     def __init__(
         self,
-        name: str = "storaged",
+        name: str = "computed",
+        peers: Optional[List[str]] = [],
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        ports: List[int] = [6876],
+        ports: List[int] = [2100, 2102],
         memory: Optional[str] = None,
         options: str = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
+        storage_addr: Optional[str] = "materialized:2101",
+        workers: Optional[int] = None,
     ) -> None:
-        command = f"{options}"
-
         if environment is None:
             environment = [
                 "COMPUTED_LOG_FILTER",
@@ -146,9 +147,22 @@ class Computed(Service):
         if memory:
             config["deploy"] = {"resources": {"limits": {"memory": memory}}}
 
+        command_list = [f"{options}"]
+
+        if storage_addr:
+            command_list.append(f"--storage-addr {storage_addr}")
+
+        if workers:
+            command_list.append(f"--workers {workers}")
+
+        if peers:
+            command_list.append(f"--processes {len(peers)}")
+            command_list.append(f"--process {peers.index(name)}")
+            command_list.append(" ".join(f"{peer}:2102" for peer in peers))
+
         config.update(
             {
-                "command": command,
+                "command": " ".join(command_list),
                 "ports": ports,
                 "environment": environment,
                 "volumes": volumes,
