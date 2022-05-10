@@ -110,11 +110,16 @@ pub fn bench_blob_set(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
     let mut file_blob = new_file_blob("file_blob_set", temp_dir.path());
-    g.bench_with_input(
-        BenchmarkId::new("file", data.goodput_pretty()),
-        &blob_val,
-        |b, blob_val| bench_set(&mut file_blob, blob_val.clone(), b),
-    );
+    {
+        let async_runtime = Arc::new(AsyncRuntime::new().expect("failed to create async runtime"));
+        let async_guard = async_runtime.enter();
+        g.bench_with_input(
+            BenchmarkId::new("file", data.goodput_pretty()),
+            &blob_val,
+            |b, blob_val| bench_set(&mut file_blob, blob_val.clone(), b),
+        );
+        drop(async_guard);
+    }
 
     // Only run s3 benchmarks if the magic env vars are set.
     if let Some(config) =
