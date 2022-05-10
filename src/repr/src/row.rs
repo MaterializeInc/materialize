@@ -15,13 +15,13 @@ use std::fmt::{self, Debug};
 use std::mem::{size_of, transmute};
 use std::str;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
 use mz_ore::soft_assert;
 use mz_ore::vec::Vector;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
-use proptest::strategy::{BoxedStrategy, Just, Strategy};
+use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
@@ -34,6 +34,7 @@ use crate::adt::array::{
 use crate::adt::interval::Interval;
 use crate::adt::numeric;
 use crate::adt::numeric::Numeric;
+use crate::scalar::arb_datum;
 use crate::Datum;
 
 mod encoding;
@@ -102,35 +103,18 @@ pub struct Row {
 }
 
 impl Arbitrary for Row {
-    type Parameters = ();
+    type Parameters = prop::collection::SizeRange;
     type Strategy = BoxedStrategy<Row>;
 
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let datums = prop_oneof![
-            Just(Datum::Null),
-            Just(Datum::False),
-            Just(Datum::Int16(0)),
-            Just(Datum::Int32(0)),
-            Just(Datum::Int64(0)),
-            Just(Datum::Float32(OrderedFloat(0.0))),
-            Just(Datum::Float64(OrderedFloat(0.0))),
-            Just(Datum::Date(NaiveDate::from_ymd(1, 1, 1))),
-            Just(Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0))),
-            Just(Datum::TimestampTz(DateTime::from_utc(
-                NaiveDateTime::from_timestamp(0, 0),
-                Utc
-            ))),
-            Just(Datum::Interval(Interval::default())),
-            Just(Datum::Bytes(&[])),
-            Just(Datum::String("")),
-            Just(Datum::JsonNull),
-        ];
-
-        datums
-            .prop_map(|x| {
+    fn arbitrary_with(size: Self::Parameters) -> Self::Strategy {
+        prop::collection::vec(arb_datum(), size)
+            .prop_map(|items| {
                 let mut row = Row::default();
                 let mut packer = row.packer();
-                packer.push(x);
+                for item in items.iter() {
+                    let datum: Datum<'_> = item.into();
+                    packer.push(datum);
+                }
                 row
             })
             .boxed()
