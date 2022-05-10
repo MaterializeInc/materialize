@@ -13,12 +13,13 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::location::{Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, info, trace};
@@ -153,6 +154,7 @@ where
         as_of: &Antichain<T>,
     ) -> Result<Vec<(String, Description<T>)>, Since<T>> {
         let mut fetches = 0;
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
             let upper = match self.state.snapshot(as_of) {
                 Ok(Ok(x)) => return Ok(x),
@@ -164,19 +166,14 @@ where
             };
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
-            //
-            // TODO: Some sort of backoff instead of a fixed sleep.
             if fetches > 0 {
-                let sleep = if cfg!(test) {
-                    Duration::from_nanos(1)
-                } else {
-                    Duration::from_secs(1)
-                };
                 info!(
                     "snapshot as of {:?} not available for upper {:?} retrying in {:?}",
-                    as_of, upper, sleep
+                    as_of,
+                    upper,
+                    retry.next_sleep()
                 );
-                tokio::time::sleep(sleep).await;
+                retry = retry.sleep().await;
             }
             self.fetch_and_update_state().await;
             fetches += 1;
@@ -190,21 +187,21 @@ where
         // This unconditionally fetches the latest state and uses that to
         // determine if we can serve `as_of`. TODO: We could instead check first
         // and only fetch if necessary.
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
             self.fetch_and_update_state().await;
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
                 return (keys.to_owned(), desc.clone());
             }
-            let sleep = if cfg!(test) {
-                Duration::from_nanos(1)
-            } else {
-                Duration::from_secs(1)
-            };
             // Wait a bit and try again.
             //
             // TODO: See if we can watch for changes in Consensus to be more
             // reactive here.
-            tokio::time::sleep(sleep).await;
+            debug!(
+                "next_listen_batch didn't find new data, retrying in {:?}",
+                retry.next_sleep()
+            );
+            retry = retry.sleep().await;
         }
     }
 
@@ -215,6 +212,7 @@ where
         &mut self,
         mut work_fn: WorkFn,
     ) -> (SeqNo, R) {
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
             match self.apply_unbatched_cmd(&mut work_fn).await {
                 Ok((seqno, x)) => match x {
@@ -223,7 +221,8 @@ where
                 },
                 Err(err @ ExternalError { .. }) => {
                     debug!(
-                        "apply_unbatched_idempotent_cmd received an indeterminate error, retrying: {}", err);
+                        "apply_unbatched_idempotent_cmd received an indeterminate error, retrying in {:?}: {}", retry.next_sleep(), err);
+                    retry = retry.sleep().await;
                     continue;
                 }
             }
@@ -297,7 +296,11 @@ where
                     );
                     self.update_state(current).await;
 
-                    // TODO: Some sort of exponential backoff here?
+                    // TODO: Some sort of exponential backoff here? We have
+                    // Retry for this but using it here seems to hang our unit
+                    // tests. We should look into that, but also maybe it
+                    // doesn't make sense here anyway because it would just make
+                    // starvation worse.
                     continue;
                 }
             }
@@ -408,12 +411,18 @@ where
     F: std::future::Future<Output = Result<R, ExternalError>>,
     WorkFn: FnMut() -> F,
 {
+    let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
     loop {
         match work_fn().await {
             Ok(x) => return x,
             Err(err @ ExternalError { .. }) => {
-                info!("external operation {} failed, retrying: {}", name, err)
-                // TODO: Some sort of backoff.
+                info!(
+                    "external operation {} failed, retrying in {:?}: {}",
+                    name,
+                    retry.next_sleep(),
+                    err
+                );
+                retry = retry.sleep().await;
             }
         }
     }

@@ -5,6 +5,22 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.60.0"
 publish = false
+# Since we intentionally will only ever have one bench target, auto discovery of
+# benches is unnecessary. Turning it off allows us to have helper code in
+# src/benches.
+autobenches = false
+
+# Disable the ability to use benches in the library because the bench harness
+# isn't overridable there and the stock one prevents using Criterion specific
+# flags, e.g. `cargo bench -p persist -- --baseline=foo`.
+[lib]
+bench = false
+
+# We intentionally have only a single bench target because it saves on linking
+# time.
+[[bench]]
+name = "benches"
+harness = false
 
 [dependencies]
 anyhow = { version = "1.0.57", features = ["backtrace"] }
@@ -18,6 +34,7 @@ futures = "0.3"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist = { path = "../persist" }
+rand = { version = "0.8.5", features = ["small_rng"] }
 serde = { version = "1.0.137", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.17.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
@@ -25,4 +42,7 @@ tracing = "0.1.34"
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
+criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
 futures-task = "0.3.21"
+num_cpus = "1.13.1"
+tempfile = "3.2.0"

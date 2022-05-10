@@ -31,6 +31,7 @@ pub mod mem;
 pub mod operators;
 pub mod pfuture;
 pub mod postgres;
+pub mod retry;
 pub mod runtime;
 pub mod s3;
 pub mod sqlite;

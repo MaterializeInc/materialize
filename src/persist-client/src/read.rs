@@ -13,12 +13,13 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Instant, SystemTime};
 
 use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_persist::retry::Retry;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -100,6 +101,7 @@ where
     /// An None value is returned if this iterator is exhausted.
     pub async fn next(&mut self) -> Option<Vec<((Result<K, String>, Result<V, String>), T, D)>> {
         trace!("SnapshotIter::next");
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
             let (key, desc) = match self.batches.last() {
                 Some(x) => x.clone(),
@@ -121,12 +123,12 @@ where
                     //
                     // TODO: This should increment a counter.
                     None => {
-                        let sleep = Duration::from_secs(1);
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
-                            sleep, key
+                            retry.next_sleep(),
+                            key
                         );
-                        tokio::time::sleep(sleep).await;
+                        retry = retry.sleep().await;
                         continue;
                     }
                 };
@@ -262,6 +264,7 @@ where
         keys: &[String],
         desc: &Description<T>,
     ) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         let mut ret = Vec::new();
         for key in keys {
             // TODO: Deduplicate this with the logic in SnapshotIter.
@@ -279,12 +282,12 @@ where
                     //
                     // TODO: This should increment a counter.
                     None => {
-                        let sleep = Duration::from_secs(1);
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
-                            sleep, key
+                            retry.next_sleep(),
+                            key
                         );
-                        tokio::time::sleep(sleep).await;
+                        retry = retry.sleep().await;
                     }
                 };
             };
