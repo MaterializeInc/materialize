@@ -12,7 +12,7 @@
 //! See row.proto for details.
 
 use bytes::BufMut;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::Decimal;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec;
@@ -23,11 +23,11 @@ use crate::adt::array::ArrayDimension;
 use crate::adt::interval::Interval;
 use crate::adt::numeric::Numeric;
 use crate::chrono::{ProtoNaiveDate, ProtoNaiveTime};
-use crate::proto::TryFromProtoError;
+use crate::proto::{ProtoRepr, TryFromProtoError};
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
-    ProtoInterval, ProtoNumeric, ProtoRow, ProtoTimestamp,
+    ProtoInterval, ProtoNumeric, ProtoRow,
 };
 use crate::{Datum, Row, RowPacker};
 
@@ -81,23 +81,8 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
                 secs: x.num_seconds_from_midnight(),
                 frac: x.nanosecond(),
             }),
-            Datum::Timestamp(x) => DatumType::Timestamp(ProtoTimestamp {
-                year: x.date().year(),
-                ordinal: x.date().ordinal(),
-                secs: x.time().num_seconds_from_midnight(),
-                nanos: x.time().nanosecond(),
-                is_tz: false,
-            }),
-            Datum::TimestampTz(x) => {
-                let date = x.date().naive_utc();
-                DatumType::Timestamp(ProtoTimestamp {
-                    year: date.year(),
-                    ordinal: date.ordinal(),
-                    secs: x.time().num_seconds_from_midnight(),
-                    nanos: x.time().nanosecond(),
-                    is_tz: true,
-                })
-            }
+            Datum::Timestamp(x) => DatumType::Timestamp(x.into_proto()),
+            Datum::TimestampTz(x) => DatumType::TimestampTz(x.into_proto()),
             Datum::Interval(x) => DatumType::Interval(ProtoInterval {
                 months: x.months,
                 days: x.days,
@@ -218,16 +203,12 @@ impl RowPacker<'_> {
             Some(DatumType::Time(x)) => self.push(Datum::Time(
                 NaiveTime::from_proto(x.clone()).map_err(|e| e.to_string())?,
             )),
-            Some(DatumType::Timestamp(x)) => {
-                let date = NaiveDate::from_yo(x.year, x.ordinal);
-                let time = NaiveTime::from_num_seconds_from_midnight(x.secs, x.nanos);
-                let datetime = date.and_time(time);
-                if x.is_tz {
-                    self.push(Datum::TimestampTz(DateTime::from_utc(datetime, Utc)));
-                } else {
-                    self.push(Datum::Timestamp(datetime));
-                }
-            }
+            Some(DatumType::Timestamp(x)) => self.push(Datum::Timestamp(
+                NaiveDateTime::from_proto(x.clone()).map_err(|e| e.to_string())?,
+            )),
+            Some(DatumType::TimestampTz(x)) => self.push(Datum::TimestampTz(
+                DateTime::<Utc>::from_proto(x.clone()).map_err(|e| e.to_string())?,
+            )),
             Some(DatumType::Interval(x)) => self.push(Datum::Interval(Interval {
                 months: x.months,
                 days: x.days,
