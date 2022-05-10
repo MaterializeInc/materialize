@@ -3644,6 +3644,7 @@ dependencies = [
  "mz-build-info",
  "mz-ore",
  "mz-persist-types",
+ "openssl-sys",
  "prost",
  "prost-build",
  "rand",
