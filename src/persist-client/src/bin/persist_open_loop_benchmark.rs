@@ -434,8 +434,7 @@ mod raw_persist_benchmark {
 
         let mut readers = vec![];
         for _ in 0..num_readers {
-            let (writer, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
-            writer.expire().await;
+            let (_writer, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
 
             let listen = reader
                 .listen(Antichain::from_elem(0))

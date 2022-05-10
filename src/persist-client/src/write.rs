@@ -21,49 +21,17 @@ use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
 use mz_persist_types::{Codec, Codec64};
-use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info, trace};
+use tracing::trace;
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
 use crate::r#impl::state::Upper;
 
-/// An opaque identifier for a writer of a persist durable TVC (aka shard).
-///
-/// Unlike [crate::read::ReaderId], this is intentionally not Serialize and
-/// Deserialize. It's difficult to reason about the behavior if multiple writers
-/// accidentally end up concurrently using the same [WriterId] and we haven't
-/// (yet) found a need for it.
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct WriterId(pub(crate) [u8; 16]);
-
-impl std::fmt::Display for WriterId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "w{}", Uuid::from_bytes(self.0))
-    }
-}
-
-impl std::fmt::Debug for WriterId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WriterId({})", Uuid::from_bytes(self.0))
-    }
-}
-
-impl WriterId {
-    pub(crate) fn new() -> Self {
-        WriterId(*Uuid::new_v4().as_bytes())
-    }
-}
-
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
-///
-/// Production users should call [Self::expire] before dropping a WriteHandle so
-/// that it can expire its leases. If/when rust gets AsyncDrop, this will be
-/// done automatically.
 ///
 /// All async methods on ReadHandle retry for as long as they are able, but the
 /// returned [std::future::Future]s implement "cancel on drop" semantics. This
@@ -82,12 +50,10 @@ pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub(crate) writer_id: WriterId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
     pub(crate) upper: Antichain<T>,
-    pub(crate) explicitly_expired: bool,
 }
 
 impl<K, V, T, D> WriteHandle<K, V, T, D>
@@ -123,11 +89,10 @@ where
     /// upper. This is useful in cases where a timeout happens in between a
     /// successful write and returning that to the client.
     ///
-    /// In contrast to [Self::compare_and_append], multiple [WriteHandle]s (with
-    /// different [WriterId]s) may be used concurrently to write to the same
-    /// shard, but in this case, the data being written must be identical (in
-    /// the sense of "definite"-ness).  It's intended for replicated use by
-    /// source ingestion, sinks, etc.
+    /// In contrast to [Self::compare_and_append], multiple [WriteHandle]s may
+    /// be used concurrently to write to the same shard, but in this case, the
+    /// data being written must be identical (in the sense of "definite"-ness).
+    /// It's intended for replicated use by source ingestion, sinks, etc.
     ///
     /// All times in `updates` must be greater or equal to `self.upper()` and
     /// not greater or equal to `new_upper`. A `new_upper` of the empty
@@ -345,13 +310,6 @@ where
         }
     }
 
-    /// Politely expires this writer, releasing its lease.
-    pub async fn expire(mut self) {
-        trace!("WriteHandle::expire");
-        self.machine.expire_writer(&self.writer_id).await;
-        self.explicitly_expired = true;
-    }
-
     fn encode_batch<SB, KB, VB, TB, DB, I>(
         desc: &Description<T>,
         updates: I,
@@ -477,27 +435,6 @@ where
         .expect("external durability failed")
         .expect("invalid usage")
         .expect("unexpected upper")
-    }
-}
-
-impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-{
-    fn drop(&mut self) {
-        if self.explicitly_expired {
-            return;
-        }
-        // Adding explicit expiration everywhere in tests would either make the
-        // code noisy or the logs spammy, so downgrade this message.
-        if cfg!(test) {
-            debug!(
-                "WriteHandle {} dropped without being explicitly expired, falling back to lease timeout",
-                self.writer_id
-            );
-        } else {
-            info!("WriteHandle {} dropped without being explicitly expired, falling back to lease timeout", self.writer_id);
-        }
     }
 }
 

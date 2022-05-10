@@ -33,7 +33,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
 use crate::read::{ReadHandle, ReaderId};
-use crate::write::{WriteHandle, WriterId};
+use crate::write::WriteHandle;
 
 pub mod error;
 mod examples;
@@ -207,14 +207,12 @@ impl PersistClient {
     {
         trace!("Client::open shard_id={:?}", shard_id);
         let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
-        let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
-        let (shard_upper, read_cap) = machine.register(&writer_id, &reader_id).await;
+        let reader_id = ReaderId::new();
+        let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
-            writer_id,
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
-            explicitly_expired: false,
         };
         let reader = ReadHandle {
             reader_id,
@@ -756,14 +754,6 @@ mod tests {
         assert_eq!(
             format!("{:?}", ShardId([0u8; 16])),
             "ShardId(00000000-0000-0000-0000-000000000000)"
-        );
-        assert_eq!(
-            format!("{}", WriterId([0u8; 16])),
-            "w00000000-0000-0000-0000-000000000000"
-        );
-        assert_eq!(
-            format!("{:?}", WriterId([0u8; 16])),
-            "WriterId(00000000-0000-0000-0000-000000000000)"
         );
         assert_eq!(
             format!("{}", ReaderId([0u8; 16])),

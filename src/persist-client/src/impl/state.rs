@@ -22,7 +22,6 @@ use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
 use crate::read::ReaderId;
-use crate::write::WriterId;
 use crate::ShardId;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,17 +30,9 @@ pub struct ReadCapability<T> {
     pub since: Antichain<T>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct WriteCapability<T> {
-    _phantom: PhantomData<T>,
-}
-
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {
-    // TODO(aljoscha): Do we want to get rid of this field right now? The WriteCapability doesn't
-    // store a writer-local upper anymore.
-    writers: HashMap<WriterId, WriteCapability<T>>,
     readers: HashMap<ReaderId, ReadCapability<T>>,
 
     since: Antichain<T>,
@@ -55,15 +46,10 @@ where
     pub fn register(
         &mut self,
         seqno: SeqNo,
-        writer_id: &WriterId,
         reader_id: &ReaderId,
     ) -> ControlFlow<Infallible, (Upper<T>, ReadCapability<T>)> {
         // TODO: Handle if the reader or writer already exist (probably with a
         // retry).
-        let write_cap = WriteCapability {
-            _phantom: PhantomData,
-        };
-        self.writers.insert(writer_id.clone(), write_cap);
         let read_cap = ReadCapability {
             seqno,
             since: self.since.clone(),
@@ -155,13 +141,6 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn expire_writer(&mut self, writer_id: &WriterId) -> ControlFlow<Infallible, bool> {
-        let existed = self.writers.remove(writer_id).is_some();
-        // No-op if existed is false, but still commit the state change so that
-        // this gets linearized.
-        Continue(existed)
-    }
-
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
         let existed = self.readers.remove(reader_id).is_some();
         if existed {
@@ -177,17 +156,6 @@ where
             || Antichain::from_elem(T::minimum()),
             |(_, desc)| desc.upper().clone(),
         )
-    }
-
-    #[allow(dead_code)]
-    fn writer(&mut self, id: &WriterId) -> &mut WriteCapability<T> {
-        self.writers
-            .get_mut(id)
-            // The only (tm) ways to hit this are (1) inventing a WriterId
-            // instead of getting it from Register or (2) if a lease expired.
-            // (1) is a gross mis-use and (2) isn't implemented yet, so it feels
-            // okay to leave this for followup work.
-            .expect("TODO: Implement automatic lease renewals")
     }
 
     fn reader(&mut self, id: &ReaderId) -> &mut ReadCapability<T> {
@@ -276,7 +244,6 @@ where
             shard_id,
             seqno: SeqNo::minimum(),
             collections: StateCollections {
-                writers: HashMap::new(),
                 readers: HashMap::new(),
                 since: Antichain::from_elem(T::minimum()),
                 trace: Vec::new(),
@@ -399,7 +366,6 @@ struct StateRollupMeta {
     diff_codec: String,
 
     seqno: SeqNo,
-    writers: Vec<WriterId>,
     readers: Vec<(ReaderId, AntichainMeta, SeqNo)>,
     since: AntichainMeta,
     trace: Vec<(Vec<String>, DescriptionMeta)>,
@@ -416,7 +382,6 @@ mod codec_impls {
     use crate::error::InvalidUsage;
     use crate::r#impl::state::{
         AntichainMeta, DescriptionMeta, ReadCapability, State, StateCollections, StateRollupMeta,
-        WriteCapability,
     };
 
     impl<K, V, T, D> Codec for State<K, V, T, D>
@@ -462,12 +427,6 @@ mod codec_impls {
                 val_codec: V::codec_name(),
                 ts_codec: T::codec_name(),
                 diff_codec: D::codec_name(),
-                writers: x
-                    .collections
-                    .writers
-                    .iter()
-                    .map(|(id, _cap)| (id.clone()))
-                    .collect(),
                 readers: x
                     .collections
                     .readers
@@ -516,16 +475,6 @@ mod codec_impls {
                 });
             }
 
-            let writers = x
-                .writers
-                .iter()
-                .map(|id| {
-                    let cap = WriteCapability {
-                        _phantom: PhantomData,
-                    };
-                    (id.clone(), cap)
-                })
-                .collect();
             let readers = x
                 .readers
                 .iter()
@@ -544,7 +493,6 @@ mod codec_impls {
                 .map(|(key, desc)| (key.clone(), desc.into()))
                 .collect();
             let collections = StateCollections {
-                writers,
                 readers,
                 since,
                 trace,
@@ -603,9 +551,7 @@ mod tests {
     fn empty_batch_optimization() {
         mz_ore::test::init_logging();
 
-        let writer_id = WriterId::new();
         let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
-        state.register(SeqNo(0), &writer_id, &ReaderId::new());
 
         // Initial empty batch should result in a padding batch.
         assert_eq!(state.compare_and_append(&[], &desc(0, 1)), Continue(()));

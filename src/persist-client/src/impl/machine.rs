@@ -27,7 +27,6 @@ use tracing::{debug, info, trace};
 use crate::error::InvalidUsage;
 use crate::r#impl::state::{ReadCapability, Since, State, StateCollections, Upper};
 use crate::read::ReaderId;
-use crate::write::WriterId;
 use crate::ShardId;
 
 #[derive(Debug)]
@@ -75,15 +74,9 @@ where
         self.state.upper()
     }
 
-    pub async fn register(
-        &mut self,
-        writer_id: &WriterId,
-        reader_id: &ReaderId,
-    ) -> (Upper<T>, ReadCapability<T>) {
+    pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
         let (seqno, (shard_upper, read_cap)) = self
-            .apply_unbatched_idempotent_cmd(|seqno, state| {
-                state.register(seqno, writer_id, reader_id)
-            })
+            .apply_unbatched_idempotent_cmd(|seqno, state| state.register(seqno, reader_id))
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         (shard_upper, read_cap)
@@ -133,13 +126,6 @@ where
     ) -> (SeqNo, Since<T>) {
         self.apply_unbatched_idempotent_cmd(|_, state| state.downgrade_since(reader_id, new_since))
             .await
-    }
-
-    pub async fn expire_writer(&mut self, writer_id: &WriterId) -> SeqNo {
-        let (seqno, _existed) = self
-            .apply_unbatched_idempotent_cmd(|_, state| state.expire_writer(writer_id))
-            .await;
-        seqno
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
