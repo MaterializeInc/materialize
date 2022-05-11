@@ -14,6 +14,9 @@ include!(concat!(
     "/mz_dataflow_types.postgres_source.rs"
 ));
 
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Strategy};
+
 use mz_postgres_util::{PgColumn, TableInfo};
 
 impl From<PgColumn> for PostgresColumn {
@@ -59,5 +62,62 @@ impl From<PostgresTable> for TableInfo {
             rel_id: t.relation_id,
             schema: t.columns.into_iter().map(|c| c.into()).collect(),
         }
+    }
+}
+
+impl Arbitrary for PostgresColumn {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<String>(),
+            any::<i32>(),
+            any::<i32>(),
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(
+                |(name, type_oid, type_mod, nullable, primary_key)| PostgresColumn {
+                    name,
+                    type_oid,
+                    type_mod,
+                    nullable,
+                    primary_key,
+                },
+            )
+            .boxed()
+    }
+}
+
+impl Arbitrary for PostgresTable {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<String>(),
+            any::<String>(),
+            any::<u32>(),
+            any::<Vec<PostgresColumn>>(),
+        )
+            .prop_map(|(name, namespace, relation_id, columns)| PostgresTable {
+                name,
+                namespace,
+                relation_id,
+                columns,
+            })
+            .boxed()
+    }
+}
+
+impl Arbitrary for PostgresSourceDetails {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (any::<Vec<PostgresTable>>(), any::<String>())
+            .prop_map(|(tables, slot)| PostgresSourceDetails { tables, slot })
+            .boxed()
     }
 }

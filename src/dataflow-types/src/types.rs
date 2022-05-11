@@ -1029,6 +1029,7 @@ pub mod sources {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
+    use proptest_derive::Arbitrary;
     use prost::Message;
     use serde::{Deserialize, Serialize};
     use timely::progress::Timestamp;
@@ -2156,12 +2157,39 @@ pub mod sources {
         pub aws: AwsConfig,
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PostgresSourceConnector {
         pub conn: String,
         pub publication: String,
         pub slot_name: String,
         pub details: PostgresSourceDetails,
+    }
+
+    impl From<&PostgresSourceConnector> for ProtoPostgresSourceConnector {
+        fn from(x: &PostgresSourceConnector) -> Self {
+            ProtoPostgresSourceConnector {
+                conn: x.conn.clone(),
+                publication: x.publication.clone(),
+                slot_name: x.slot_name.clone(),
+                details: Some(x.details.clone()),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoPostgresSourceConnector> for PostgresSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoPostgresSourceConnector) -> Result<Self, Self::Error> {
+            Ok(PostgresSourceConnector {
+                conn: x.conn,
+                publication: x.publication,
+                slot_name: x.slot_name,
+                // try_into_if_some doesn't work because PostgresSourceDetails doesn't implement ToString/Display
+                details: x.details.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoPostgresSourceConnector::details")
+                })?,
+            })
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
