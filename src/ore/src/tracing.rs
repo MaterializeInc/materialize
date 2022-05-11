@@ -9,7 +9,7 @@
 
 //! Utilities for configuring [`tracing`]
 
-use std::io::{self, Write};
+use std::io;
 use std::time::Duration;
 
 use http::HeaderMap;
@@ -115,10 +115,8 @@ pub struct TracingConfig {
     pub tokio_console: bool,
 }
 
-/// Configures tracing according to the provided command-line arguments.
-/// Returns a `Write` stream that represents the main place `tracing` will
-/// log to.
-pub async fn configure(config: TracingConfig) -> Result<Box<dyn Write>, anyhow::Error> {
+/// Configures [`tracing`] and OpenTelemetry.
+pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
     // before our custom panic hook is installed (because the panic hook needs
     // tracing configured to execute), so a panic here will not direct the
@@ -146,7 +144,7 @@ pub async fn configure(config: TracingConfig) -> Result<Box<dyn Write>, anyhow::
     )
     .await?;
 
-    Ok(Box::new(io::stderr()))
+    Ok(())
 }
 
 /// A wrapper around a `tracing_subscriber` `Format` that

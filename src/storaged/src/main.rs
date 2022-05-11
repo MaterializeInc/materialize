@@ -140,7 +140,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let mut _tracing_stream = mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
+    mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
         log_filter: args.log_filter.clone(),
         opentelemetry_endpoint: None,
         opentelemetry_headers: HeaderMap::new(),

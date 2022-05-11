@@ -471,19 +471,18 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    let mut tracing_stream =
-        runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
-            log_filter: args.log_filter,
-            opentelemetry_endpoint: args.opentelemetry_endpoint,
-            opentelemetry_headers: args
-                .opentelemetry_header
-                .into_iter()
-                .map(|header| (header.key, header.value))
-                .collect(),
-            prefix: None,
-            #[cfg(feature = "tokio-console")]
-            tokio_console: args.tokio_console,
-        }))?;
+    runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
+        log_filter: args.log_filter,
+        opentelemetry_endpoint: args.opentelemetry_endpoint,
+        opentelemetry_headers: args
+            .opentelemetry_header
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect(),
+        prefix: None,
+        #[cfg(feature = "tokio-console")]
+        tokio_console: args.tokio_console,
+    }))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
@@ -672,8 +671,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut system = sysinfo::System::new();
     system.refresh_system();
 
-    writeln!(
-        tracing_stream,
+    eprintln!(
         "booting server
 materialized {mz_version}
 {dep_versions}
@@ -717,7 +715,7 @@ max log level: {max_log_level}",
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
         max_log_level = ::tracing::level_filters::LevelFilter::current(),
-    )?;
+    );
 
     sys::adjust_rlimits();
 
