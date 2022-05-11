@@ -261,6 +261,8 @@ mod tests {
 
     use super::*;
 
+    pub const EMPTY: &'static [((String, String), u64, i64)] = &[];
+
     pub async fn new_test_client() -> PersistClient {
         let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
         let consensus = Arc::new(MemConsensus::default());

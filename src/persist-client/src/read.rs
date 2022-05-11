@@ -270,6 +270,25 @@ where
         ret
     }
 
+    /// Test helper to read from the listener until the the shard is closed and
+    /// all events have been emitted.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn read_to_end(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
+        let mut ret = Vec::new();
+        loop {
+            let mut next = self.next().await;
+            ret.append(&mut next);
+            let finished = ret
+                .iter()
+                .any(|x| matches!(x, ListenEvent::Progress(x) if x.is_empty()));
+            if finished {
+                break;
+            }
+        }
+        ret
+    }
+
     async fn fetch_batch(
         &self,
         keys: &[String],
@@ -619,5 +638,67 @@ where
         } else {
             info!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tests::{all_ok, new_test_client, EMPTY};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_since() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let shard_id = ShardId::new();
+        let client = new_test_client().await;
+        let (mut write, mut read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        // Write some data and grab a snapshot and listen.
+        write.expect_compare_and_append(&data, 0, 4).await;
+        let mut snap = read.expect_snapshot(2).await;
+        let mut listen = read.expect_listen(2).await;
+
+        // Now downgrade the since to the empty antichain, preventing future
+        // reads (effectively deleting the shard).
+        read.downgrade_since(Antichain::new()).await;
+
+        // New readers should not be able to read anything.
+        let (_, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+        assert_eq!(read.since(), &Antichain::new());
+        assert!(matches!(
+            read.listen(Antichain::from_elem(2)).await,
+            Err(Since(x)) if x.is_empty()
+        ));
+        assert!(matches!(
+            read.snapshot(Antichain::from_elem(2)).await,
+            Err(Since(x)) if x.is_empty()
+        ));
+
+        // Existing readers should still work though.
+        assert_eq!(snap.read_all().await, all_ok(&data[..2], 2));
+        let expected_events = vec![
+            ListenEvent::Updates(all_ok(&data[2..], 1)),
+            ListenEvent::Progress(Antichain::from_elem(4)),
+        ];
+        assert_eq!(listen.read_until(&4).await, expected_events);
+
+        // Unclear if this is interesting, but writers still work. We just can't
+        // read them.
+        write.expect_compare_and_append(EMPTY, 4, 6).await;
+
+        // TODO: Decide what the contract of the listener is here. Should it
+        // internally hold a capability on since so it keeps working?
     }
 }

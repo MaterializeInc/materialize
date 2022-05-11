@@ -264,6 +264,13 @@ where
 
         let lower = expected_upper.clone();
         let upper = new_upper;
+
+        // Description::new panics on an empty lower, special case this and
+        // return cleanly.
+        if lower.is_empty() {
+            return Ok(Err(InvalidUsage::InvalidBounds { lower, upper }));
+        }
+
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
@@ -455,7 +462,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::tests::new_test_client;
+    use crate::read::ListenEvent;
+    use crate::tests::{all_ok, new_test_client, EMPTY};
     use crate::ShardId;
 
     use super::*;
@@ -497,6 +505,77 @@ mod tests {
                 .expect("list_keys failed")
                 .len(),
             blob_count_before
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_upper() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let shard_id = ShardId::new();
+        let client = new_test_client().await;
+        let (mut write, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+
+        // Write some data and start a listener.
+        write.expect_compare_and_append(&data, 0, 4).await;
+        let mut listen1 = read.expect_listen(2).await;
+
+        // Now advance the upper to the empty antichain (permanently closing the
+        // shard to additional writes).
+        write
+            .compare_and_append(EMPTY, Antichain::from_elem(4), Antichain::new())
+            .await
+            .expect("external durability failed")
+            .expect("invalid usage")
+            .expect("unexpected upper");
+
+        // Additional write attempts should fail cleanly.
+        let res = write
+            .compare_and_append(EMPTY, Antichain::from_elem(4), Antichain::from_elem(5))
+            .await;
+        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::new())))));
+
+        // Regression: Attempts to advance from the empty antichain to the empty
+        // antichain shouldn't panic.
+        let res = write
+            .compare_and_append(EMPTY, Antichain::new(), Antichain::new())
+            .await;
+        assert_eq!(
+            res,
+            Ok(Err(InvalidUsage::InvalidBounds {
+                lower: Antichain::new(),
+                upper: Antichain::new()
+            }))
+        );
+
+        // The listener started before the closure should end cleanly.
+        let expected_events = vec![
+            ListenEvent::Updates(all_ok(&data[2..], 1)),
+            ListenEvent::Progress(Antichain::from_elem(4)),
+            ListenEvent::Progress(Antichain::new()),
+        ];
+        assert_eq!(listen1.read_to_end().await, expected_events);
+
+        // A new reader should be able to register and get a snapshot and
+        // listen.
+        let (_, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+        assert_eq!(
+            read.expect_snapshot(2).await.read_all().await,
+            all_ok(&data[..2], 2)
+        );
+        assert_eq!(
+            read.expect_listen(2).await.read_to_end().await,
+            expected_events
         );
     }
 }
