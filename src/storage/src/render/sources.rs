@@ -296,7 +296,7 @@ where
                         .as_collection(),
                 );
 
-                (ok_stream.as_collection(), capability)
+                (ok_stream.as_collection(), Some(capability))
             } else if let ExternalSourceConnector::Persist(_) = connector {
                 unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
             } else {
@@ -613,7 +613,7 @@ where
             use differential_dataflow::operators::consolidate::ConsolidateStream;
             collection = collection.consolidate_stream();
 
-            let source_tokens = capability.into_iter().map(Arc::new).collect::<Vec<_>>();
+            let source_token = Arc::new(capability);
 
             // We also need to keep track of this mapping globally to activate sources
             // on timestamp advancement queries
@@ -621,13 +621,9 @@ where
                 .ts_source_mapping
                 .entry(src_id)
                 .or_insert_with(Vec::new)
-                .extend(source_tokens.iter().map(Arc::downgrade));
+                .push(Arc::downgrade(&source_token));
 
-            needed_tokens.extend(
-                source_tokens
-                    .into_iter()
-                    .map(|s| s as Arc<dyn Any + Send + Sync + 'static>),
-            );
+            needed_tokens.push(source_token);
 
             // Return the collections and any needed tokens.
             ((collection, err_collection), Arc::new(needed_tokens))

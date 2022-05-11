@@ -533,31 +533,10 @@ pub fn responsible_for(
     source_id: &GlobalId,
     worker_id: usize,
     worker_count: usize,
-    pid: &PartitionId,
+    _pid: &PartitionId,
 ) -> bool {
-    match pid {
-        PartitionId::None => {
-            // All workers are responsible for reading in Kafka sources. Other sources
-            // support single-threaded ingestion only. Note that in all cases we want all
-            // readers of the same source or same partition to reside on the same worker,
-            // and only load-balance responsibility across distinct sources.
-            (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
-        }
-        PartitionId::Kafka(p) => {
-            // We want to distribute partitions across workers evenly, such that
-            // - different partitions for the same source are uniformly distributed across workers
-            // - the same partition id across different sources are uniformly distributed across workers
-            // - the same partition id across different instances of the same source is sent to
-            //   the same worker.
-            // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
-            // that to offset distributing partitions round robin across workers.
-
-            // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
-            // overflow.
-            let hash = (source_id.hashed() >> 32) + *p as u64;
-            (hash % worker_count as u64) == worker_id as u64
-        }
-    }
+    // In the future, load balancing will depend on persist shard ids but currently we write everything to a single shard
+    (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
 }
 
 /// Source-specific Prometheus metrics
@@ -844,7 +823,7 @@ pub fn create_raw_source_simple<G, C>(
         timely::dataflow::Stream<G, (Row, Timestamp, Diff)>,
         timely::dataflow::Stream<G, SourceError>,
     ),
-    Vec<SourceToken>,
+    SourceToken,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -937,7 +916,7 @@ where
 
     (
         stream.map_fallible("SimpleSourceErrorDemux", |r| r),
-        vec![capability],
+        capability,
     )
 }
 
