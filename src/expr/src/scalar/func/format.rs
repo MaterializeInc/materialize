@@ -11,6 +11,8 @@
 //!
 //! <https://www.postgresql.org/docs/current/functions-formatting.html>
 
+#![allow(non_camel_case_types)]
+
 use std::fmt;
 
 use aho_corasick::AhoCorasickBuilder;
@@ -21,7 +23,6 @@ use crate::scalar::func::TimestampLike;
 
 /// The raw tokens that can appear in a format string. Many of these tokens
 /// overlap, in which case the longest matching token should be selected.
-#[allow(non_camel_case_types)]
 #[repr(u8)]
 #[derive(Eq, PartialEq, TryFromPrimitive, IntoPrimitive, IntoEnumIterator)]
 enum DateTimeToken {
