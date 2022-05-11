@@ -127,7 +127,7 @@ use mz_sql::ast::{
     Statement,
 };
 use mz_sql::catalog::{
-    CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
+    CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
 };
 use mz_sql::names::{
     FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
@@ -4061,15 +4061,46 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        // Ensure selection targets are valid, i.e. user-defined tables, or
-        // objects local to the dataflow.
+        // Ensure all objects `selection` depends on are valid for
+        // `ReadThenWrite` operations, i.e. they do not refer to any objects
+        // whose notion of time moves differently than that of user tables.
+        // `true` indicates they're all valid; `false` there are > 0 invalid
+        // dependencies.
+        //
+        // This limitation is meant to ensure no writes occur between this read
+        // and the subsequent write.
+        fn validate_read_dependencies<S>(catalog: &Catalog<S>, id: &GlobalId) -> bool
+        where
+            S: mz_stash::Append,
+        {
+            use CatalogItemType::*;
+            match catalog.try_get_entry(id) {
+                Some(entry) => match entry.item().typ() {
+                    typ @ (Func | View) => {
+                        let valid_id = id.is_user() || matches!(typ, Func);
+                        valid_id
+                            && (
+                                // empty `uses` indicates either system func or
+                                // view created from constants
+                                entry.uses().is_empty()
+                                    || entry
+                                        .uses()
+                                        .iter()
+                                        .all(|id| validate_read_dependencies(catalog, id))
+                            )
+                    }
+                    Source | Secret | Connector => false,
+                    // Cannot select from sinks or indexes
+                    Sink | Index => unreachable!(),
+                    Table => id.is_user(),
+                    Type => true,
+                },
+                None => false,
+            }
+        }
+
         for id in selection.depends_on() {
-            let valid = match self.catalog.try_get_entry(&id) {
-                // TODO: Widen this check when supporting temporary tables.
-                Some(entry) if id.is_user() => entry.is_table(),
-                _ => false,
-            };
-            if !valid {
+            if !validate_read_dependencies(&self.catalog, &id) {
                 tx.send(Err(CoordError::InvalidTableMutationSelection), session);
                 return;
             }

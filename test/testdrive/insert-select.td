@@ -33,13 +33,6 @@
     VALUES (9.1::numeric, 10, 'e')
   );
 
-> SELECT * FROM t ORDER BY i
-1 2 a
-3 4 b
-5 6 c
-7 8 d
-9 10 e
-
 ! INSERT INTO t SELECT * FROM (
     VALUES ('11', '12', 'f')
   );
@@ -74,17 +67,49 @@ contains:cannot be run inside a transaction block
 
 > CREATE MATERIALIZED VIEW v (a, b, c) AS SELECT 11, 12::real, 'f';
 
-! INSERT INTO t SELECT * FROM v;
-contains:invalid selection
+> INSERT INTO t (i, f, t) SELECT a, b, c FROM v;
 
 # Table check descends into select targets
-! INSERT INTO t (i, f, t) SELECT column1, column2, column3
-    FROM ( VALUES (11, 12, 'f') )
+> INSERT INTO t (i, f, t) SELECT column1, column2, column3
+    FROM ( VALUES (13, 14, 'g') )
     LEFT JOIN (
         SELECT a, b, c FROM v
     ) AS y
     ON y.a = column1
+
+$ set schema={
+    "type": "record",
+    "name": "row",
+    "fields": [
+      {"name": "a", "type": "long"},
+      {"name": "b", "type": "float"},
+      {"name": "c", "type": "string"}
+    ]
+  }
+
+$ kafka-create-topic topic=data
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"a": 15, "b": 16, "c": "h"}
+
+> CREATE SOURCE source_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+
+> CREATE MATERIALIZED VIEW source_data_mat_view AS
+  SELECT * FROM source_data;
+
+! INSERT INTO t SELECT * FROM source_data_mat_view;
 contains:invalid selection
+
+> SELECT * FROM t ORDER BY i
+1 2 a
+3 4 b
+5 6 c
+7 8 d
+9 10 e
+11 12 f
+13 14 g
 
 # Multiple connections
 
