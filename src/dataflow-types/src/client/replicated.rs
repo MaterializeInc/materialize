@@ -136,7 +136,7 @@ where
         }
         let (_, cmd_tx, resp_rx) = spawn_client_tasklet(client);
         self.replicas.insert(identifier.clone(), (cmd_tx, resp_rx));
-        self.hydrate_replica(&identifier).await;
+        self.hydrate_replica(&identifier);
     }
 
     pub fn get_replica_identifiers(&self) -> impl Iterator<Item = &String> {
@@ -152,7 +152,7 @@ where
     }
 
     /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
-    async fn hydrate_replica(&mut self, replica_id: &str) {
+    fn hydrate_replica(&mut self, replica_id: &str) {
         // Zero out frontiers maintained by this replica.
         for (_id, (_, frontiers)) in self.uppers.iter_mut() {
             *frontiers.get_mut(replica_id).unwrap() =
@@ -370,7 +370,7 @@ where
 
                 if let Some(replica_id) = &errored_replica {
                     tracing::warn!("Rehydrating replica {:?}", replica_id);
-                    self.hydrate_replica(replica_id).await;
+                    self.hydrate_replica(replica_id);
                 }
 
                 clean_recv = errored_replica.is_none();
