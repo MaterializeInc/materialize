@@ -1618,18 +1618,18 @@ dependencies = [
 
 [[package]]
 name = "enum-iterator"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4eeac5c5edb79e4e39fe8439ef35207780a11f69c52cbe424ce3dfad4cb78de6"
+checksum = "290eb5d7a675838488e822e620fe79ee9e02b514e927b1dd7a63b550896ed7ed"
 dependencies = [
  "enum-iterator-derive",
 ]
 
 [[package]]
 name = "enum-iterator-derive"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c134c37760b27a871ba422106eedbb8247da973a09e82558bf26d619c882b159"
+checksum = "65f47486b8d9f73cd59abc14a3742c9285c22a0e7e4ed7b55d81993be97cd2ce"
 dependencies = [
  "proc-macro2",
  "quote",
