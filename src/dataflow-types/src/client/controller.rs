@@ -222,6 +222,10 @@ where
                                             "--listen-addr={}:{}",
                                             default_listen_host, my_ports["controller"]
                                         ),
+                                        format!(
+                                            "--http-console-addr={}:{}",
+                                            default_listen_host, my_ports["http"]
+                                        ),
                                         format!("--processes={}", size_config.scale),
                                         format!("--workers={}", size_config.workers),
                                         "--log-process-name".to_string(),
@@ -245,6 +249,10 @@ where
                                     ServicePort {
                                         name: "compute".into(),
                                         port_hint: 2102,
+                                    },
+                                    ServicePort {
+                                        name: "http".into(),
+                                        port_hint: 2103,
                                     },
                                 ],
                                 cpu_limit: size_config.cpu_limit,
