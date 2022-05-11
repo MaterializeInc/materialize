@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
+use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, SourceInstanceDesc};
@@ -46,7 +46,7 @@ use super::ReadPolicy;
 /// Controller state maintained for each compute instance.
 #[derive(Debug)]
 pub(super) struct ComputeControllerState<T> {
-    pub(super) client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
+    pub(super) client: ActiveReplication<ComputeCommand<T>, ComputeResponse<T>, T>,
     /// Tracks expressed `since` and received `upper` frontiers for indexes and sinks.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     /// Currently outstanding peeks: identifiers and timestamps.

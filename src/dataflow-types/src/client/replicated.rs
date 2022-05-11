@@ -25,6 +25,9 @@
 use std::collections::{HashMap, HashSet};
 
 use timely::progress::{frontier::MutableAntichain, Antichain};
+use tokio::spawn;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::task::JoinHandle;
 
 use crate::client::Peek;
 use mz_repr::GlobalId;
@@ -32,11 +35,65 @@ use mz_repr::GlobalId;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
 
+// `Client` must have a cancelation-safe `recv` method.
+pub fn spawn_client_tasklet<
+    C: Send + 'static,
+    R: Send + 'static,
+    Client: GenericClient<C, R> + 'static,
+>(
+    mut client: Client,
+) -> (
+    JoinHandle<()>,
+    UnboundedSender<C>,
+    UnboundedReceiver<Result<R, anyhow::Error>>,
+) {
+    let (cmd_tx, mut cmd_rx) = unbounded_channel();
+    let (response_tx, response_rx) = unbounded_channel();
+    let handle = spawn(async move {
+        loop {
+            tokio::select! {
+                m = cmd_rx.recv() => {
+                    match m {
+                        Some(c) => {
+                            // Issues should be detected, and
+                            // reconnect attempted, on the `recv` path.
+                            let _ = client.send(c).await;
+                        },
+                        None => break,
+                    }
+                },
+                m = client.recv() => {
+                    match m {
+                        Ok(None) => break,
+                        Ok(Some(response)) => {
+                            if response_tx.send(Ok(response)).is_err() {
+                                break;
+                            };
+                        }
+                        Err(e) => {
+                            if response_tx.send(Err(e)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    (handle, cmd_tx, response_rx)
+}
+
 /// A client backed by multiple replicas.
 #[derive(Debug)]
-pub struct ActiveReplication<C, T> {
-    /// The replicas themselves.
-    replicas: HashMap<String, C>,
+pub struct ActiveReplication<Cmd, Resp, T> {
+    /// Handles to the replicas themselves.
+    replicas: HashMap<
+        String,
+        (
+            UnboundedSender<Cmd>,
+            UnboundedReceiver<Result<Resp, anyhow::Error>>,
+        ),
+    >,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashSet<uuid::Uuid>,
     /// Reported frontier of each in-progress tail.
@@ -49,7 +106,7 @@ pub struct ActiveReplication<C, T> {
     last_command_count: usize,
 }
 
-impl<C, T> Default for ActiveReplication<C, T> {
+impl<Cmd, Resp, T> Default for ActiveReplication<Cmd, Resp, T> {
     fn default() -> Self {
         Self {
             replicas: Default::default(),
@@ -62,14 +119,14 @@ impl<C, T> Default for ActiveReplication<C, T> {
     }
 }
 
-impl<C: ComputeClient<T>, T> ActiveReplication<C, T>
+impl<T> ActiveReplication<ComputeCommand<T>, ComputeResponse<T>, T>
 where
     T: timely::progress::Timestamp,
 {
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub async fn add_replica(&mut self, identifier: String, client: C) {
+    pub async fn add_replica<C: ComputeClient<T> + 'static>(&mut self, identifier: String, client: C) {
         for (_, frontiers) in self.uppers.values_mut() {
             frontiers.insert(identifier.clone(), {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
@@ -77,7 +134,8 @@ where
                 frontier
             });
         }
-        self.replicas.insert(identifier.clone(), client);
+        let (_, cmd_tx, resp_rx) = spawn_client_tasklet(client);
+        self.replicas.insert(identifier.clone(), (cmd_tx, resp_rx));
         self.hydrate_replica(&identifier).await;
     }
 
@@ -108,7 +166,7 @@ where
         self.last_command_count = self.history.reduce(&self.peeks);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let client = self.replicas.get_mut(replica_id).unwrap();
+        let (cmd_tx, _) = self.replicas.get_mut(replica_id).unwrap();
         for command in self.history.iter() {
             let mut command = command.clone();
             // Replace dataflow identifiers with new unique ids.
@@ -117,15 +175,16 @@ where
                     dataflow.id = uuid::Uuid::new_v4();
                 }
             }
-            // Suppress errors, as we will observe them in `recv` and react there.
-            let _ = client.send(command).await;
+            cmd_tx
+                .send(command)
+                .expect("Channel to client has gone away!")
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<C: ComputeClient<T>, T> GenericClient<ComputeCommand<T>, ComputeResponse<T>>
-    for ActiveReplication<C, T>
+impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>>
+    for ActiveReplication<ComputeCommand<T>, ComputeResponse<T>, T>
 where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
@@ -167,7 +226,7 @@ where
         }
 
         // Clone the command for each active replica.
-        for (_id, replica) in self.replicas.iter_mut() {
+        for (_id, (tx, _)) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
             // Replace dataflow identifiers with new unique ids.
             if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
@@ -178,7 +237,7 @@ where
 
             // Errors are suppressed by this client, which awaits a reconnection in `recv` and
             // will rehydrate the client when that happens.
-            let _ = replica.send(command).await;
+            let _ = tx.send(command);
         }
 
         Ok(())
@@ -198,7 +257,19 @@ where
                 let mut stream: tokio_stream::StreamMap<_, _> = self
                     .replicas
                     .iter_mut()
-                    .map(|(id, shard)| (id.clone(), shard.as_stream()))
+                    .map(|(id, (_, rx))| {
+                        let rx_stream = Box::pin(async_stream::stream! {
+                            loop {
+                                match rx.recv().await {
+                                    Some(Ok(response)) => yield Ok(response),
+                                    Some(Err(error)) => yield Err(error),
+                                    None => { return; }
+                                }
+                            }
+                        });
+
+                        (id.clone(), rx_stream)
+                    })
                     .collect();
 
                 use futures::StreamExt;
