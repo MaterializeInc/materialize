@@ -25,7 +25,6 @@
 use std::collections::{HashMap, HashSet};
 
 use timely::progress::{frontier::MutableAntichain, Antichain};
-use tokio::spawn;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
@@ -40,8 +39,11 @@ pub fn spawn_client_tasklet<
     C: Send + 'static,
     R: Send + 'static,
     Client: GenericClient<C, R> + 'static,
+    Name: AsRef<str>,
+    NameClosure: FnOnce() -> Name,
 >(
     mut client: Client,
+    nc: NameClosure,
 ) -> (
     JoinHandle<()>,
     UnboundedSender<C>,
@@ -49,7 +51,7 @@ pub fn spawn_client_tasklet<
 ) {
     let (cmd_tx, mut cmd_rx) = unbounded_channel();
     let (response_tx, response_rx) = unbounded_channel();
-    let handle = spawn(async move {
+    let handle = mz_ore::task::spawn(nc, async move {
         loop {
             tokio::select! {
                 m = cmd_rx.recv() => {
@@ -138,7 +140,8 @@ where
                 frontier
             });
         }
-        let (_, cmd_tx, resp_rx) = spawn_client_tasklet(client);
+        let (_, cmd_tx, resp_rx) =
+            spawn_client_tasklet(client, || "ActiveReplication client message pump");
         self.replicas.insert(identifier.clone(), (cmd_tx, resp_rx));
         self.hydrate_replica(&identifier);
     }
