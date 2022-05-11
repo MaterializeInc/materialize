@@ -48,7 +48,7 @@ use mz_ore::task;
 use mz_pid_file::PidFile;
 use mz_secrets::SecretsController;
 use mz_secrets_filesystem::FilesystemSecretsController;
-use mz_secrets_kubernetes::KubernetesSecretsController;
+use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
 
 use crate::mux::Mux;
 
@@ -193,6 +193,9 @@ pub enum SecretsControllerConfig {
         /// The name of a Kubernetes context to use, if the Kubernetes configuration
         /// is loaded from the local kubeconfig.
         context: String,
+        user_defined_secret: String,
+        user_defined_secret_mount_path: String,
+        refresh_pod_name: String,
     },
 }
 
@@ -347,10 +350,22 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             fs::set_permissions(secrets_storage.clone(), permissions)?;
             Box::new(FilesystemSecretsController::new(secrets_storage))
         }
-        Some(SecretsControllerConfig::Kubernetes { context }) => Box::new(
-            KubernetesSecretsController::new(context)
-                .await
-                .context("connecting to kubernetes")?,
+        Some(SecretsControllerConfig::Kubernetes {
+            context,
+            user_defined_secret,
+            user_defined_secret_mount_path,
+            refresh_pod_name,
+        }) => Box::new(
+            KubernetesSecretsController::new(
+                context,
+                KubernetesSecretsControllerConfig {
+                    user_defined_secret,
+                    user_defined_secret_mount_path,
+                    refresh_pod_name,
+                },
+            )
+            .await
+            .context("connecting to kubernetes")?,
         ),
     };
 

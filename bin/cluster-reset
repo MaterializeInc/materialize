@@ -13,3 +13,4 @@
 
 kubectl delete all --context=minikube --all
 kubectl delete pvc --all
+kubectl delete secret --context=minikube --all
