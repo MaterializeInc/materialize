@@ -49,7 +49,6 @@ pub struct Config {
     tls: Option<materialized::TlsConfig>,
     frontegg: Option<FronteggAuthentication>,
     experimental_mode: bool,
-    safe_mode: bool,
     workers: usize,
     logical_compaction_window: Option<Duration>,
     now: NowFn,
@@ -64,7 +63,6 @@ impl Default for Config {
             tls: None,
             frontegg: None,
             experimental_mode: false,
-            safe_mode: false,
             workers: 1,
             logical_compaction_window: None,
             now: SYSTEM_TIME.clone(),
@@ -99,11 +97,6 @@ impl Config {
 
     pub fn experimental_mode(mut self) -> Self {
         self.experimental_mode = true;
-        self
-    }
-
-    pub fn safe_mode(mut self) -> Self {
-        self.safe_mode = true;
         self
     }
 
@@ -176,7 +169,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         tls: config.tls,
         frontegg: config.frontegg,
         experimental_mode: config.experimental_mode,
-        safe_mode: config.safe_mode,
         metrics_registry: metrics_registry.clone(),
         metrics_listen_addr: None,
         now: config.now,

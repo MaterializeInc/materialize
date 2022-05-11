@@ -568,10 +568,6 @@ pub struct KafkaSourceConnector {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
 pub enum CreateSourceConnector<T: AstInfo> {
-    File {
-        path: String,
-        compression: Compression,
-    },
     Kafka(KafkaSourceConnector),
     Kinesis {
         arn: String,
@@ -610,13 +606,6 @@ pub enum CreateSourceConnector<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceConnector::File { path, compression } => {
-                f.write_str("FILE '");
-                f.write_node(&display::escape_single_quote_string(path));
-                f.write_str("'");
-                f.write_str(" COMPRESSION ");
-                f.write_node(compression);
-            }
             CreateSourceConnector::Kafka(KafkaSourceConnector {
                 connector: broker,
                 topic,

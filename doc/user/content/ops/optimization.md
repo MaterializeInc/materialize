@@ -72,9 +72,6 @@ solutions:
     setting compaction policy on the Kafka topic to have Kafka perform the
     compaction.
 
-    If you are using a [file source](/sql/create-source/text-file), consider
-    rewriting the file to remove irrelevant historical data.
-
   * Periodically send dummy updates to trigger compaction.
 
 ## Swap

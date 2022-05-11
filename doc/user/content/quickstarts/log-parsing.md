@@ -165,7 +165,7 @@ FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "
 ```
 
 While you can find more details about this statement in [`CREATE
-SOURCES`](/sql/create-source/text-file), here's an explanation of the
+SOURCE`](/sql/create-source/), here's an explanation of the
 arguments:
 
 Argument | Function

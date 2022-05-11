@@ -5,7 +5,6 @@ columns to create in the source, as well as the columns' names.
 
 Method | Outcome
 -------|--------
-**HEADER** | Materialize reads the first line of the file to determine:<br/><br/>&bull; The number of columns in the file<br/><br/>&bull; The name of each column<br/><br/>The first line of the file is not ingested as data.
 **HEADER** (name_list) | All of the same behaviors as bare **HEADER** with the additional features that:<br/><br/>&bull; Header names from source objects will be validated to exactly match those specified in the name list.<br/><br/>&bull; Specifying a column list allows using CSV format with sources that have headers but individual objects may not yet exist. Primarily this is intended for S3 sources.
 _n_ **COLUMNS** | &bull; Materialize treats the file as if it has _n_ columns.<br/><br/>&bull; Columns are named `column1`, `column2`...`columnN`.
 

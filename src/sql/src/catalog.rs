@@ -205,8 +205,6 @@ pub struct CatalogConfig {
     pub session_id: Uuid,
     /// Whether the server is running in experimental mode.
     pub experimental_mode: bool,
-    /// Whether the server is running in safe mode.
-    pub safe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -603,7 +601,6 @@ lazy_static! {
         cluster_id: Uuid::from_u128(0),
         session_id: Uuid::from_u128(0),
         experimental_mode: true,
-        safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
         aws_external_id: AwsExternalId::NotProvided,
         timestamp_frequency: Duration::from_secs(1),

@@ -8,17 +8,17 @@
 # by the Apache License, Version 2.0.
 
 > select * from csv
-al  sia     mz_line_no
-----------------------
+al  sia     mz_offset
+---------------------
 id  value   1
 1   person  2
 
-$ file-append path=csv-basic.csv
+$ kafka-ingest topic=csv-basic format=bytes
 2,animal
 
 > select * from csv
-al  sia     mz_line_no
-----------------------
+al  sia     mz_offset
+---------------------
 id  value   1
 1   person  2
 2   animal  3

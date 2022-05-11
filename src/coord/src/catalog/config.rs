@@ -22,8 +22,6 @@ pub struct Config<'a, S> {
     pub storage: storage::Connection<S>,
     /// Whether to enable experimental mode.
     pub experimental_mode: Option<bool>,
-    /// Whether to enable safe mode.
-    pub safe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// An [External ID][] to use for all AWS AssumeRole operations.

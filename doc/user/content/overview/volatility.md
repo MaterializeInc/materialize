@@ -47,7 +47,6 @@ The following source types are always considered to be of unknown volatility:
 
   * [Kafka sources](/sql/create-source/avro-kafka/)
   * [S3 sources](/sql/create-source/text-s3/)
-  * [File sources](/sql/create-source/text-file/)
 
 In the future, Materialize will let you configure whether a given Kafka, S3, or
 file source is considered volatile or nonvolatile, as their volatility depends

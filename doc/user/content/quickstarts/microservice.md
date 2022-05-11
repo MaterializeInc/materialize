@@ -290,7 +290,7 @@ CREATE MATERIALIZED VIEW billing_prices AS
 	FROM price_source;
 ```
 
-For more details on how CSV sources work, see [`CREATE SOURCES`](/sql/create-source/csv-file).
+For more details on how CSV sources work, see [`CREATE SOURCE`](/sql/create-source/).
 
 ### Aggregating data
 

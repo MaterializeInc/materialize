@@ -1643,7 +1643,7 @@ impl<'a> Parser<'a> {
             self.expect_keyword(WITH)?;
             let columns = if self.parse_keyword(HEADER) || self.parse_keyword(HEADERS) {
                 CsvColumns::Header {
-                    names: self.parse_parenthesized_column_list(Optional)?,
+                    names: self.parse_parenthesized_column_list(Mandatory)?,
                 }
             } else {
                 let n_cols = self.parse_literal_uint()? as usize;
@@ -2132,15 +2132,6 @@ impl<'a> Parser<'a> {
                     collection_id: shard_id,
                     columns,
                 })
-            }
-            FILE => {
-                let path = self.parse_literal_string()?;
-                let compression = if self.parse_keyword(COMPRESSION) {
-                    self.parse_compression()?
-                } else {
-                    Compression::None
-                };
-                Ok(CreateSourceConnector::File { path, compression })
             }
             KAFKA => {
                 let connector = match self.expect_one_of_keywords(&[BROKER, CONNECTOR])? {

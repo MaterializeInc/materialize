@@ -17,7 +17,7 @@ use mz_ore::retry::Retry;
 use reqwest::{blocking::Client, StatusCode, Url};
 use serde_json::json;
 
-use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
+use crate::util::KAFKA_ADDRS;
 
 pub mod util;
 
@@ -184,27 +184,6 @@ fn test_pid_file() -> Result<(), Box<dyn Error>> {
     // `server1`'s old data directory.
     drop(server1);
     util::start_server(config)?;
-
-    Ok(())
-}
-
-#[test]
-fn test_safe_mode() -> Result<(), Box<dyn Error>> {
-    let server = util::start_server(util::Config::default().safe_mode())?;
-    let mut client = server.connect(postgres::NoTls)?;
-
-    // No file sources or sinks.
-    let err = client
-        .batch_execute("CREATE SOURCE src FROM FILE '/ignored' FORMAT BYTES")
-        .unwrap_db_error();
-    assert_eq!(err.message(), "cannot create file source in safe mode");
-    let err = client
-        .batch_execute("CREATE SINK snk FROM mz_sources INTO FILE '/ignored' FORMAT BYTES")
-        .unwrap_db_error();
-    assert_eq!(
-        err.message(),
-        "Expected one of KAFKA or AVRO or PERSIST, found FILE"
-    );
 
     Ok(())
 }

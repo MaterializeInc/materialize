@@ -67,7 +67,6 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::util::source;
 
-mod file;
 mod kafka;
 mod kinesis;
 pub mod metrics;
@@ -79,9 +78,6 @@ pub mod util;
 
 pub mod timestamp;
 
-pub use file::read_file_task;
-pub use file::FileReadStyle;
-pub use file::FileSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
