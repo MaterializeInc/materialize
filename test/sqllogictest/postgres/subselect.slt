@@ -18,69 +18,51 @@
 # license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# RT File sources don't work with SLT, as we cannot guarantee that they have been
-# fully ingested at any time other than Timestamp::MAX.
-halt
-
 mode cockroach
 
 statement ok
-CREATE SOURCE onek_src FROM FILE 'test/sqllogictest/postgres/testdata/onek.data'
-WITH (timestamp_frequency_ms=1) FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
+CREATE TABLE onek (
+  unique1 int4,
+  unique2 int4,
+  two int4,
+  four int4,
+  ten int4,
+  twenty int4,
+  hundred int4,
+  thousand int4,
+  twothousand int4,
+  fivethous int4,
+  tenthous int4,
+  odd int4,
+  even int4,
+  stringu1 text,
+  stringu2 text,
+  string4 text
+)
+
+copy onek test/sqllogictest/postgres/testdata/onek.data
 
 statement ok
-CREATE MATERIALIZED VIEW onek AS SELECT
-  column1::int4 AS unique1,
-  column2::int4 AS unique2,
-  column3::int4 AS two,
-  column4::int4 AS four,
-  column5::int4 AS ten,
-  column6::int4 AS twenty,
-  column7::int4 AS hundred,
-  column8::int4 AS thousand,
-  column9::int4 AS twothousand,
-  column10::int4 AS fivethous,
-  column11::int4 AS tenthous,
-  column12::int4 AS odd,
-  column13::int4 AS even,
-  column14::text AS stringu1,
-  column15::text AS stringu2,
-  column16::text AS string4
-  FROM onek_src
+CREATE TABLE tenk1 (
+  unique1 int4,
+  unique2 int4,
+  two int4,
+  four int4,
+  ten int4,
+  twenty int4,
+  hundred int4,
+  thousand int4,
+  twothousand int4,
+  fivethous int4,
+  tenthous int4,
+  odd int4,
+  even int4,
+  stringu1 text,
+  stringu2 text,
+  string4 text
+)
 
-statement ok
-CREATE SOURCE tenk1_src FROM FILE 'test/sqllogictest/postgres/testdata/tenk.data'
-WITH (timestamp_frequency_ms=1) FORMAT CSV WITH 16 COLUMNS DELIMITED BY E'\t'
-
-statement ok
-CREATE MATERIALIZED VIEW tenk1 AS SELECT
-  column1::int4 AS unique1,
-  column2::int4 AS unique2,
-  column3::int4 AS two,
-  column4::int4 AS four,
-  column5::int4 AS ten,
-  column6::int4 AS twenty,
-  column7::int4 AS hundred,
-  column8::int4 AS thousand,
-  column9::int4 AS twothousand,
-  column10::int4 AS fivethous,
-  column11::int4 AS tenthous,
-  column12::int4 AS odd,
-  column13::int4 AS even,
-  column14::text AS stringu1,
-  column15::text AS stringu2,
-  column16::text AS string4
-  FROM tenk1_src
-
-# Wait for asynchronous ingestion to complete.
-query TI rowsort
-SELECT 'onek', count(*) FROM onek
-UNION ALL
-SELECT 'tenk1', count(*) FROM tenk1
-AS OF 18446744073709551615
-----
-onek 1000
-tenk1 10000
+copy tenk1 test/sqllogictest/postgres/testdata/tenk.data
 
 statement ok
 CREATE TABLE int4_tbl (f1 int)
