@@ -52,5 +52,7 @@ def workflow_default(c: Composition) -> None:
             # Depending on timing, either of these errors can occur. The stash error comes
             # from the stash complaining. The network error comes from pg8000 complaining
             # because materialize panic'd.
-            if "stash error: db error" not in str(e) and "network error" not in str(e):
+            if "stash error: postgres: db error" not in str(
+                e
+            ) and "network error" not in str(e):
                 raise e
