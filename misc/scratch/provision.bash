@@ -14,35 +14,38 @@
 
 set -euo pipefail
 
-# Progress notes are reported to this directory.
-mkdir /opt/provision
-
-# Step 1. Update APT repositories.
+# Install APT dependencies.
 apt-get update
+apt-get install -y \
+    cmake \
+    docker.io \
+    docker-compose \
+    g++ \
+    postgresql \
+    python3-venv \
+    unzip
 
-# Step 2. Install Docker and grant the `ubuntu` user permission to access the
-# Docker daemon.
-apt-get install -y docker.io docker-compose python3-venv
-adduser ubuntu docker
-touch /opt/provision/docker-installed
-
-# Step 3. Install Materialize build prerequisites. These are just a convenience
-# for manual debugging/development.
-apt-get install -y cmake g++
+# Install Rust.
 sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y"
-touch /opt/provision/materialize-build-deps-installed
 
-# Step 4. Install the AWS CLI. Again, this is just a convenience for manual
-# debugging/development.
-apt-get install unzip
+# Install the AWS CLI.
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" > awscliv2.zip
 unzip awscliv2.zip
 aws/install
 rm -r aws awscliv2.zip
-touch /opt/provision/awscli-installed
 
-# Step 5. Install the psql CLI
-apt-get install -y postgresql-client
-touch /opt/provision/psql-installed
+# Allow the Ubuntu user to access the Docker daemon.
+adduser ubuntu docker
 
+# Configure PostgreSQL for passwordless use by the `ubuntu` user. Both stash and
+# persist are backed by postgres when doing local development, so seems
+# reasonable to have around. Set it up so it's easy to connect to and export the
+# MZDEV_POSTGRES env var with connection details.
+apt-get install -y postgresql
+sudo -u postgres createuser ubuntu
+sudo -u postgres createdb ubuntu -O ubuntu
+echo "export MZDEV_POSTGRES=postgresql://ubuntu@%2Fvar%2Frun%2Fpostgresql" >> /home/ubuntu/.bashrc
+
+# Report that provisioning has completed.
+mkdir /opt/provision
 touch /opt/provision/done
