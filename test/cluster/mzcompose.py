@@ -7,7 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import time
 from pathlib import Path
+
+from pg8000.dbapi import ProgrammingError
 
 from materialize import spawn
 from materialize.mzcompose import Composition
@@ -61,6 +64,7 @@ SERVICES = [
 
 def workflow_default(c: Composition) -> None:
     test_cluster(c, "smoke/*.td")
+    test_github_12251(c)
 
 
 def workflow_nightly(c: Composition) -> None:
@@ -109,3 +113,41 @@ def test_cluster(c: Composition, *glob: str) -> None:
     # Leave only replica 2 up and verify that tests still pass.
     c.sql("DROP CLUSTER REPLICA cluster1.replica1")
     c.run("testdrive", *glob)
+
+
+# This tests that the client does not wait indefinitely on a resource that crashed
+def test_github_12251(c: Composition) -> None:
+    c.up("materialized")
+    c.wait_for_materialized(service="materialized")
+    c.up("computed_1")
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster1 CASCADE;
+        CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1:2100'));
+        SET cluster = cluster1;
+        """
+    )
+    start_time = time.process_time()
+    try:
+        c.sql(
+            """
+        SET statement_timeout = '1 s';
+        CREATE TABLE IF NOT EXISTS log_table (f1 TEXT);
+        CREATE TABLE IF NOT EXISTS panic_table (f1 TEXT);
+        INSERT INTO panic_table VALUES ('panic!');
+        -- Crash loop the cluster with the table's index
+        INSERT INTO log_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
+        """
+        )
+    except ProgrammingError as e:
+        # Ensure we received the correct error message
+        assert "statement timeout" in e.args[0]["M"], e
+        # Ensure the statemenet_timeout setting is ~honored
+        assert (
+            time.process_time() - start_time < 2
+        ), "idle_in_transaction_session_timeout not respected"
+    else:
+        assert False, "unexpected success in test_github_12251"
+
+    # Ensure we can select from tables after cancellation.
+    c.sql("SELECT * FROM log_table;")

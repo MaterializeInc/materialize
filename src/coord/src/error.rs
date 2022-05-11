@@ -108,6 +108,10 @@ pub enum CoordError {
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
+    /// Waiting on a query timed out.
+    ///
+    /// Note this differs slightly from PG's implementation/semantics.
+    StatementTimeout,
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
@@ -357,6 +361,9 @@ impl fmt::Display for CoordError {
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
+            }
+            CoordError::StatementTimeout => {
+                write!(f, "canceling statement due to statement timeout")
             }
             CoordError::RecursionLimit(e) => e.fmt(f),
             CoordError::RelationOutsideTimeDomain { .. } => {

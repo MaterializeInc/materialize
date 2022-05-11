@@ -396,6 +396,7 @@ impl ErrorResponse {
             CoordError::QGM(_) => SqlState::INTERNAL_ERROR,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            CoordError::StatementTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
             CoordError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
             CoordError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,

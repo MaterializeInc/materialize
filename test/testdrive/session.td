@@ -26,6 +26,7 @@ server_version              9.5.0           "Shows the server version (PostgreSQ
 server_version_num          90500           "Shows the server version as an integer (PostgreSQL)."
 sql_safe_updates            off             "Prohibits SQL statements that may be overly destructive (CockroachDB)."
 standard_conforming_strings on              "Causes '...' strings to treat backslashes literally (PostgreSQL)."
+statement_timeout           "10 s"          "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations."
 TimeZone                    UTC             "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
 transaction_isolation       serializable    "Sets the current transaction's isolation level (PostgreSQL)."
 

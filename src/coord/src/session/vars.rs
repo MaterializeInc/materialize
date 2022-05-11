@@ -9,6 +9,7 @@
 
 use std::borrow::Borrow;
 use std::fmt;
+use std::time::Duration;
 
 use const_format::concatcp;
 use once_cell::sync::Lazy;
@@ -119,6 +120,13 @@ static SEARCH_PATH: Lazy<ServerVar<[String]>> = Lazy::new(|| ServerVar {
         "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
 });
 
+const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("statement_timeout"),
+    value: &Duration::from_secs(10),
+    description:
+        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
+};
+
 const SERVER_VERSION: ServerVar<str> = ServerVar {
     name: UncasedStr::new("server_version"),
     value: concatcp!(
@@ -207,6 +215,7 @@ pub struct Vars {
     server_version_num: ServerVar<i32>,
     sql_safe_updates: SessionVar<bool>,
     standard_conforming_strings: ServerVar<bool>,
+    statement_timeout: SessionVar<Duration>,
     timezone: SessionVar<TimeZone>,
     transaction_isolation: ServerVar<str>,
 }
@@ -231,6 +240,7 @@ impl Default for Vars {
             server_version_num: SERVER_VERSION_NUM,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
+            statement_timeout: SessionVar::new(&STATEMENT_TIMEOUT),
             timezone: SessionVar::new(&TIMEZONE),
             transaction_isolation: TRANSACTION_ISOLATION,
         }
@@ -259,6 +269,7 @@ impl Vars {
             &self.server_version_num,
             &self.sql_safe_updates,
             &self.standard_conforming_strings,
+            &self.statement_timeout,
             &self.timezone,
             &self.transaction_isolation,
         ]
@@ -325,6 +336,8 @@ impl Vars {
             Ok(&self.sql_safe_updates)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             Ok(&self.standard_conforming_strings)
+        } else if name == STATEMENT_TIMEOUT.name {
+            Ok(&self.statement_timeout)
         } else if name == TIMEZONE.name {
             Ok(&self.timezone)
         } else if name == TRANSACTION_ISOLATION.name {
@@ -440,6 +453,8 @@ impl Vars {
                     &STANDARD_CONFORMING_STRINGS,
                 )),
             }
+        } else if name == STATEMENT_TIMEOUT.name {
+            self.statement_timeout.set(value, local)
         } else if name == TIMEZONE.name {
             if let Ok(_) = TimeZone::parse(value) {
                 self.timezone.set(value, local)
@@ -480,6 +495,7 @@ impl Vars {
             server_version_num: _,
             sql_safe_updates,
             standard_conforming_strings: _,
+            statement_timeout: _,
             timezone,
             transaction_isolation: _,
         } = self;
@@ -578,6 +594,11 @@ impl Vars {
     /// parameter.
     pub fn standard_conforming_strings(&self) -> bool {
         *self.standard_conforming_strings.value
+    }
+
+    /// Returns the value of the `statement_timeout` configuration parameter.
+    pub fn statement_timeout(&self) -> &Duration {
+        self.statement_timeout.value()
     }
 
     /// Returns the value of the `timezone` configuration parameter.
@@ -771,6 +792,139 @@ impl Value for i32 {
     fn format(&self) -> String {
         self.to_string()
     }
+}
+
+const SEC_TO_MIN: u64 = 60u64;
+const SEC_TO_HOUR: u64 = 60u64 * 60;
+const SEC_TO_DAY: u64 = 60u64 * 60 * 24;
+const MICRO_TO_MILLI: u32 = 1000u32;
+
+impl Value for Duration {
+    const TYPE_NAME: &'static str = "duration";
+
+    fn parse(s: &str) -> Result<Duration, ()> {
+        let s = s.trim();
+        // Take all numeric values from [0..]
+        let split_pos = s
+            .chars()
+            .position(|p| !char::is_numeric(p))
+            .unwrap_or_else(|| s.chars().count());
+
+        // Error if the numeric values don't parse, i.e. there aren't any.
+        let d = s[..split_pos].parse::<u64>().map_err(|_| ())?;
+
+        // We've already trimmed end
+        let (f, m): (fn(u64) -> Duration, u64) = match s[split_pos..].trim_start() {
+            "us" => (Duration::from_micros, 1),
+            // Default unit is milliseconds
+            "ms" | "" => (Duration::from_millis, 1),
+            "s" => (Duration::from_secs, 1),
+            "min" => (Duration::from_secs, SEC_TO_MIN),
+            "h" => (Duration::from_secs, SEC_TO_HOUR),
+            "d" => (Duration::from_secs, SEC_TO_DAY),
+            _ => return Err(()),
+        };
+
+        let d = if d == 0 {
+            Duration::from_secs(u64::MAX)
+        } else {
+            f(d.checked_mul(m).ok_or(())?)
+        };
+        Ok(d)
+    }
+
+    // The strategy for formatting these strings is to find the least
+    // significant unit of time that can be printed as an integer––we know this
+    // is always possible because the input can only be an integer of a single
+    // unit of time.
+    fn format(&self) -> String {
+        let micros = self.subsec_micros();
+        if micros > 0 {
+            match micros {
+                ms if ms != 0 && ms % MICRO_TO_MILLI == 0 => {
+                    format!(
+                        "{} ms",
+                        self.as_secs() * 1000 + u64::from(ms / MICRO_TO_MILLI)
+                    )
+                }
+                us => format!("{} us", self.as_secs() * 1_000_000 + u64::from(us)),
+            }
+        } else {
+            match self.as_secs() {
+                zero if zero == u64::MAX => "0".to_string(),
+                d if d != 0 && d % SEC_TO_DAY == 0 => format!("{} d", d / SEC_TO_DAY),
+                h if h != 0 && h % SEC_TO_HOUR == 0 => format!("{} h", h / SEC_TO_HOUR),
+                m if m != 0 && m % SEC_TO_MIN == 0 => format!("{} min", m / SEC_TO_MIN),
+                s => format!("{} s", s),
+            }
+        }
+    }
+}
+
+#[test]
+fn test_value_duration() {
+    fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
+        let d = Duration::parse(t).unwrap();
+        assert_eq!(d, e);
+        let mut d_format = d.format();
+        d_format.retain(|c| !c.is_whitespace());
+        if let Some(expected) = expected_format {
+            assert_eq!(d_format, expected);
+        } else {
+            assert_eq!(
+                t.chars().filter(|c| !c.is_whitespace()).collect::<String>(),
+                d_format
+            )
+        }
+    }
+    inner("1", Duration::from_millis(1), Some("1ms"));
+    inner("0", Duration::from_secs(u64::MAX), None);
+    inner("1ms", Duration::from_millis(1), None);
+    inner("1000ms", Duration::from_millis(1000), Some("1s"));
+    inner("1001ms", Duration::from_millis(1001), None);
+    inner("1us", Duration::from_micros(1), None);
+    inner("1000us", Duration::from_micros(1000), Some("1ms"));
+    inner("1s", Duration::from_secs(1), None);
+    inner("60s", Duration::from_secs(60), Some("1min"));
+    inner("3600s", Duration::from_secs(3600), Some("1h"));
+    inner("3660s", Duration::from_secs(3660), Some("61min"));
+    inner("1min", Duration::from_secs(1 * SEC_TO_MIN), None);
+    inner("60min", Duration::from_secs(60 * SEC_TO_MIN), Some("1h"));
+    inner("1h", Duration::from_secs(1 * SEC_TO_HOUR), None);
+    inner("24h", Duration::from_secs(24 * SEC_TO_HOUR), Some("1d"));
+    inner("1d", Duration::from_secs(1 * SEC_TO_DAY), None);
+    inner("2d", Duration::from_secs(2 * SEC_TO_DAY), None);
+    inner("  1   s ", Duration::from_secs(1), None);
+    inner("1s ", Duration::from_secs(1), None);
+    inner("   1s", Duration::from_secs(1), None);
+    inner("0s", Duration::from_secs(u64::MAX), Some("0"));
+    inner("0d", Duration::from_secs(u64::MAX), Some("0"));
+    inner(
+        "18446744073709551615",
+        Duration::from_millis(u64::MAX),
+        Some("18446744073709551615ms"),
+    );
+    inner(
+        "18446744073709551615 s",
+        Duration::from_secs(u64::MAX),
+        Some("0"),
+    );
+
+    fn errs(t: &'static str) {
+        assert!(Duration::parse(t).is_err());
+    }
+    errs("1 m");
+    errs("1 sec");
+    errs("1 min 1 s");
+    errs("1m1s");
+    errs("1.1");
+    errs("1.1 min");
+    errs("-1 s");
+    errs("");
+    errs("   ");
+    errs("x");
+    errs("s");
+    errs("18446744073709551615 min");
 }
 
 impl Value for str {
