@@ -20,9 +20,9 @@ use timely::scheduling::Activator;
 use tokio::sync::mpsc::Sender;
 
 use mz_dataflow_types::sources::MzOffset;
-use mz_expr::{PartitionId, SourceInstanceId};
+use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
-use mz_repr::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
 use tracing::info;
 
 use crate::source::{
@@ -36,7 +36,7 @@ pub struct CreateSourceIngestor<S: SourceReader> {
     waker: Waker,
     partition_cursors: HashMap<PartitionId, MzOffset>,
     timestamp_frequency: Duration,
-    source_id: SourceInstanceId,
+    source_id: GlobalId,
     bindings_channel: Sender<(PartitionId, MzOffset)>,
     now: NowFn,
 }
@@ -48,7 +48,7 @@ impl<S: SourceReader> CreateSourceIngestor<S> {
         activator: Activator,
         waker: Waker,
         timestamp_frequency: Duration,
-        source_id: SourceInstanceId,
+        source_id: GlobalId,
         bindings_channel: Sender<(PartitionId, MzOffset)>,
         now: NowFn,
     ) -> anyhow::Result<Option<Self>> {

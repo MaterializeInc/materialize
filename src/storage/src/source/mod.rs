@@ -72,7 +72,6 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::source::ingestor::CreateSourceIngestor;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::timestamp::TimestampBindingRc;
 use crate::source::timestamper::CreateSourceTimestamper;
 use crate::source::util::source;
 
@@ -84,7 +83,6 @@ pub mod persist_source;
 mod postgres;
 mod pubnub;
 mod s3;
-pub mod timestamp;
 mod timestamper;
 pub mod util;
 
@@ -116,10 +114,6 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub worker_id: usize,
     /// The total count of workers
     pub worker_count: usize,
-    // Timestamping fields.
-    /// Data-timestamping updates: information about (timestamp, source offset)
-    pub timestamp_histories: Option<TimestampBindingRc>,
-    /// Source Type
     /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
     /// downgraded)
     pub timestamp_frequency: Duration,
@@ -133,6 +127,8 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub base_metrics: &'a SourceBaseMetrics,
     /// An external ID to use for all AWS AssumeRole operations.
     pub aws_external_id: AwsExternalId,
+    /// Storage Metadata
+    pub storage_metadata: CollectionMetadata,
 }
 
 /// A record produced by a source
@@ -1414,7 +1410,6 @@ pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_connector: &ExternalSourceConnector,
     aws_external_id: AwsExternalId,
-    collection_metadata: CollectionMetadata,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
@@ -1432,7 +1427,6 @@ where
         name,
         id: source_id,
         scope,
-        mut timestamp_histories,
         worker_id,
         worker_count,
         timestamp_frequency,
@@ -1440,6 +1434,7 @@ where
         encoding,
         base_metrics,
         now,
+        storage_metadata: collection_metadata,
         ..
     } = config;
 
@@ -1481,10 +1476,7 @@ where
     ingestor_builder.set_notify(false);
 
     // Pre-existing reclocking information.
-    let restored_offsets = timestamp_histories
-        .as_mut()
-        .map(|ts| ts.partitions())
-        .unwrap_or_default();
+    let restored_offsets = vec![];
 
     let source_reader = if !active {
         None

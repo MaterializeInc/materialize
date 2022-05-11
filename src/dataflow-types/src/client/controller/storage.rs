@@ -19,7 +19,6 @@
 //! empty frontier.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
@@ -36,12 +35,11 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use mz_expr::PartitionId;
 use mz_persist_client::{read::ReadHandle, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_stash::{self, Stash, StashError, TypedCollection};
+use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{CreateSourceCommand, StorageClient, StorageCommand, StorageResponse};
@@ -153,6 +151,8 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            timestamp_shard_id: ShardId::new(),
+            tx_timestamp_shard_id: None,
         })
     }
 }
@@ -169,6 +169,8 @@ impl Arbitrary for CollectionMetadata {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            timestamp_shard_id: ShardId::new(),
+            tx_timestamp_shard_id: None,
         })
         .boxed()
     }
@@ -366,7 +368,6 @@ where
                 desc.clone(),
                 since.clone(),
                 read_handle,
-                last_bindings,
                 timestamp_shard_id,
                 tx_timestamp_shard_id,
             );
@@ -378,7 +379,6 @@ where
                 id,
                 desc,
                 since,
-                ts_bindings,
                 storage_metadata,
             };
 
