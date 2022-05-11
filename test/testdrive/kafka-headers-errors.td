@@ -50,10 +50,18 @@ exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 # even the csv header validation doesn't happen before this error
-$ file-append path=static.csv
+$ s3-create-bucket bucket=test
+$ s3-put-object bucket=test key=static.csv
 
 ! CREATE SOURCE headers_src
-  FROM FILE '${testdrive.temp-dir}/static.csv'
+  FROM S3 DISCOVER OBJECTS MATCHING 'static.csv' USING BUCKET SCAN 'testdrive-test-${testdrive.seed}'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
   FORMAT CSV WITH HEADER (city, state, zip)
   INCLUDE HEADERS
 exact:INCLUDE HEADERS with non-Kafka sources not supported
