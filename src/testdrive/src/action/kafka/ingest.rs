@@ -17,7 +17,7 @@ use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::{FuturesUnordered, StreamExt};
 use maplit::hashmap;
 use prost::Message;
-use prost_reflect::{DynamicMessage, FileDescriptor, MessageDescriptor};
+use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
 use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
@@ -367,7 +367,7 @@ impl Action for IngestAction {
                     let bytes = fs::read(temp_path.join(descriptor_file))
                         .await
                         .context("reading protobuf descriptor file")?;
-                    let fd = FileDescriptor::decode(&*bytes)
+                    let fd = DescriptorPool::decode(&*bytes)
                         .context("parsing protobuf descriptor file")?;
                     let message = fd
                         .get_message_by_name(&message)

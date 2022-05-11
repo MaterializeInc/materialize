@@ -48,7 +48,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 prost = "0.10.1"
-prost-reflect = { version = "0.7.0", features = ["serde"] }
+prost-reflect = { version = "0.8.0", features = ["serde"] }
 protobuf-src = "1.0.4"
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
