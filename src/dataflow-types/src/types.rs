@@ -1121,9 +1121,25 @@ pub mod sources {
         }
     }
 
+    impl Add<Self> for MzOffset {
+        type Output = Self;
+
+        fn add(self, x: Self) -> Self {
+            MzOffset {
+                offset: self.offset + x.offset,
+            }
+        }
+    }
+
     impl AddAssign<i64> for MzOffset {
         fn add_assign(&mut self, x: i64) {
             self.offset += x;
+        }
+    }
+
+    impl AddAssign<Self> for MzOffset {
+        fn add_assign(&mut self, x: Self) {
+            self.offset += x.offset;
         }
     }
 
