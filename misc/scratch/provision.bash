@@ -44,7 +44,7 @@ adduser ubuntu docker
 apt-get install -y postgresql
 sudo -u postgres createuser ubuntu
 sudo -u postgres createdb ubuntu -O ubuntu
-echo "export MZDEV_POSTGRES='host=/var/run/postgresql user=ubuntu'" >> /home/ubuntu/.bashrc
+echo "export MZDEV_POSTGRES=postgresql://ubuntu@%2Fvar%2Frun%2Fpostgresql" >> /home/ubuntu/.bashrc
 
 # Report that provisioning has completed.
 mkdir /opt/provision
