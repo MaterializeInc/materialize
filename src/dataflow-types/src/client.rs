@@ -29,15 +29,13 @@ use timely::progress::ChangeBatch;
 use tracing::trace;
 use uuid::Uuid;
 
-use mz_expr::{PartitionId, RowSetFinishing};
+use mz_expr::RowSetFinishing;
 use mz_repr::proto::any_uuid;
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
-use crate::{
-    sources::{MzOffset, SourceDesc},
-    DataflowDescription, PeekResponse, Plan, SourceInstanceDesc, TailResponse, Update,
-};
+use crate::sources::SourceDesc;
+use crate::{DataflowDescription, PeekResponse, Plan, SourceInstanceDesc, TailResponse, Update};
 
 pub mod controller;
 pub use controller::Controller;
@@ -305,8 +303,6 @@ pub struct CreateSourceCommand<T> {
     pub desc: SourceDesc,
     /// The initial `since` frontier
     pub since: Antichain<T>,
-    /// Any previously stored timestamp bindings
-    pub ts_bindings: Vec<(PartitionId, T, crate::sources::MzOffset)>,
     /// Additional storage controller metadata needed to ingest this source
     pub storage_metadata: CollectionMetadata,
 }
@@ -342,12 +338,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// frontier that the collection must be advanced to. The times of the updates not be beyond
     /// the given frontier.
     Append(Vec<(GlobalId, Vec<Update<T>>, T)>),
-    /// Update durability information for sources.
-    ///
-    /// Each entry names a source and provides a frontier before which the source can
-    /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
-    /// all the same data)
-    DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
 }
 
 impl<T> ComputeCommand<T> {
@@ -547,15 +537,6 @@ pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
     pub peek_id: Uuid,
 }
 
-/// Data about timestamp bindings that dataflow workers send to the coordinator
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TimestampBindingFeedback<T = mz_repr::Timestamp> {
-    /// Durability frontier changes
-    pub changes: Vec<(GlobalId, ChangeBatch<T>)>,
-    /// Timestamp bindings for all of those frontier changes
-    pub bindings: Vec<(GlobalId, Vec<(PartitionId, T, MzOffset)>)>,
-}
-
 /// Responses that the controller can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
@@ -686,9 +667,8 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
-    /// Timestamp bindings and prior and new frontiers for those bindings for all
-    /// sources
-    TimestampBindings(TimestampBindingFeedback<T>),
+    /// A list of identifiers of traces, with prior and new upper frontiers.
+    FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
 
     /// Data about timestamp bindings, sent to the coordinator, in service
     /// of a specific "linearized" read request
