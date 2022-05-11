@@ -9,8 +9,10 @@
 
 use std::collections::BTreeMap;
 
+use postgres_openssl::MakeTlsConnector;
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
+use tokio_postgres::Config;
 
 use mz_stash::{
     Append, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction, Timestamp,
@@ -34,9 +36,11 @@ async fn test_stash_sqlite() -> Result<(), anyhow::Error> {
 
 #[tokio::test]
 async fn test_stash_postgres() -> Result<(), anyhow::Error> {
+    let tls = mz_postgres_util::make_tls(&Config::new()).unwrap();
+
     {
         // Verify invalid URLs fail on connect.
-        assert!(Postgres::new("host=invalid".into())
+        assert!(Postgres::new("host=invalid".into(), tls.clone())
             .await
             .unwrap_err()
             .to_string()
@@ -50,7 +54,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
             return Ok(());
         }
     };
-    async fn connect(connstr: &str, clear: bool) -> Postgres {
+    async fn connect(connstr: &str, tls: MakeTlsConnector, clear: bool) -> Postgres {
         let (client, connection) = tokio_postgres::connect(&connstr, tokio_postgres::NoTls)
             .await
             .unwrap();
@@ -73,21 +77,21 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
                 .await
                 .unwrap();
         }
-        Postgres::new(connstr.to_string()).await.unwrap()
+        Postgres::new(connstr.to_string(), tls).await.unwrap()
     }
     {
-        let mut conn = connect(&connstr, true).await;
+        let mut conn = connect(&connstr, tls.clone(), true).await;
         test_stash(&mut conn).await?;
     }
     {
-        let mut conn = connect(&connstr, true).await;
+        let mut conn = connect(&connstr, tls.clone(), true).await;
         test_append(&mut conn).await?;
     }
     // Test the fence.
     {
-        let mut conn1 = connect(&connstr, true).await;
+        let mut conn1 = connect(&connstr, tls.clone(), true).await;
         // Don't clear the stash tables.
-        let mut conn2 = connect(&connstr, false).await;
+        let mut conn2 = connect(&connstr, tls.clone(), false).await;
         assert!(match conn1.collection::<String, String>("c").await {
             Err(e) => e.is_unrecoverable(),
             _ => panic!("expected error"),
