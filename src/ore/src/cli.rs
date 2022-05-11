@@ -15,6 +15,9 @@
 
 //! Command-line parsing utilities.
 
+use std::fmt::Display;
+use std::str::FromStr;
+
 use clap::Parser;
 
 /// A help template for use with clap that does not include the name of the
@@ -37,4 +40,35 @@ where
         .args_override_self(true)
         .help_template(NO_VERSION_HELP_TEMPLATE);
     O::from_arg_matches(&clap.get_matches()).unwrap()
+}
+
+/// A command-line argument of the form `KEY=VALUE`.
+#[derive(Debug)]
+pub struct KeyValueArg<K, V> {
+    /// The key of the command-line argument.
+    pub key: K,
+    /// The value of the command-line argument.
+    pub value: V,
+}
+
+impl<K, V> FromStr for KeyValueArg<K, V>
+where
+    K: FromStr,
+    K::Err: Display,
+    V: FromStr,
+    V::Err: Display,
+{
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<KeyValueArg<K, V>, String> {
+        let mut parts = s.splitn(2, '=');
+        let key = parts.next().expect("always one part");
+        let value = parts
+            .next()
+            .ok_or_else(|| "must have format KEY=VALUE".to_string())?;
+        Ok(KeyValueArg {
+            key: key.parse().map_err(|e| format!("parsing key: {}", e))?,
+            value: value.parse().map_err(|e| format!("parsing value: {}", e))?,
+        })
+    }
 }

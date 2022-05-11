@@ -15,11 +15,13 @@ use std::sync::{Arc, Mutex};
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use http::HeaderMap;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
+use tracing_subscriber::filter::Targets;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
@@ -106,7 +108,7 @@ struct Args {
         value_name = "FILTER",
         default_value = "info"
     )]
-    log_filter: String,
+    log_filter: Targets,
 
     /// Add the process name to the tracing logs
     #[clap(long, hide = true)]
@@ -139,10 +141,10 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut _tracing_stream = mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
-        log_filter: &args.log_filter,
+        log_filter: args.log_filter.clone(),
         opentelemetry_endpoint: None,
-        opentelemetry_headers: None,
-        prefix: args.log_process_name.then(|| "storaged"),
+        opentelemetry_headers: HeaderMap::new(),
+        prefix: args.log_process_name.then(|| "storaged".into()),
         #[cfg(feature = "tokio-console")]
         tokio_console: false,
     })
