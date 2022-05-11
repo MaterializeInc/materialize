@@ -44,7 +44,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
             .await
             .unwrap_err()
             .to_string()
-            .contains("stash error: error connecting to server"));
+            .contains("stash error: postgres: error connecting to server"));
     }
 
     let connstr = match std::env::var("POSTGRES_URL") {

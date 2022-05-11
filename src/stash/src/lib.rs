@@ -483,8 +483,8 @@ impl fmt::Display for StashError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("stash error: ")?;
         match &self.inner {
-            InternalStashError::Sqlite(e) => std::fmt::Display::fmt(&e, f),
-            InternalStashError::Postgres(e) => std::fmt::Display::fmt(&e, f),
+            InternalStashError::Sqlite(e) => write!(f, "sqlite: {e}"),
+            InternalStashError::Postgres(e) => write!(f, "postgres: {e}"),
             InternalStashError::Fence(e) => f.write_str(&e),
             InternalStashError::PeekSinceUpper(e) => f.write_str(&e),
             InternalStashError::Other(e) => f.write_str(&e),
