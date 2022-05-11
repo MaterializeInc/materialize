@@ -337,10 +337,6 @@ impl MaybeLength for mz_repr::Row {
     fn len(&self) -> Option<usize> {
         Some(self.data().len())
     }
-
-    fn is_empty(&self) -> bool {
-        self.data().is_empty()
-    }
 }
 
 impl MaybeLength for Value {
