@@ -3659,6 +3659,8 @@ dependencies = [
  "mz-persist-types",
  "num_cpus",
  "num_enum",
+ "proptest",
+ "proptest-derive",
  "rand",
  "serde",
  "serde_json",

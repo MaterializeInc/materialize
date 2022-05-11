@@ -1019,6 +1019,7 @@ impl TryFrom<ProtoDataflowDescription>
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
+    use std::str::FromStr;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -2218,11 +2219,34 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PersistSourceConnector {
         pub consensus_uri: String,
         pub blob_uri: String,
         pub shard_id: ShardId,
+    }
+
+    impl From<&PersistSourceConnector> for ProtoPersistSourceConnector {
+        fn from(x: &PersistSourceConnector) -> Self {
+            ProtoPersistSourceConnector {
+                consensus_uri: x.consensus_uri.clone(),
+                blob_uri: x.blob_uri.clone(),
+                shard_id: x.shard_id.to_string(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoPersistSourceConnector> for PersistSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoPersistSourceConnector) -> Result<Self, Self::Error> {
+            Ok(PersistSourceConnector {
+                consensus_uri: x.consensus_uri,
+                blob_uri: x.blob_uri,
+                shard_id: ShardId::from_str(&x.shard_id)
+                    .map_err(|_| TryFromProtoError::InvalidShardId(x.shard_id))?,
+            })
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

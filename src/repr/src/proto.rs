@@ -36,6 +36,9 @@ pub enum TryFromProtoError {
     /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
     /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
+    /// Indicates that the serialized ShardId value failed to deserialize, according
+    /// to its custom deserialization logic.
+    InvalidShardId(String),
 }
 
 impl TryFromProtoError {
@@ -80,6 +83,7 @@ impl std::fmt::Display for TryFromProtoError {
             DeserializationError(error) => error.fmt(f),
             RowConversionError(msg) => write!(f, "Row packing failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
+            InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
         }
     }
 }
@@ -95,6 +99,7 @@ impl std::error::Error for TryFromProtoError {
             DateConversionError(_) => None,
             RowConversionError(_) => None,
             MissingField(_) => None,
+            InvalidShardId(_) => None,
         }
     }
 }

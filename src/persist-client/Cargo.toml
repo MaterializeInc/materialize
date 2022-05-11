@@ -39,6 +39,8 @@ futures-util = "0.3"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist = { path = "../persist" }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 serde = { version = "1.0.137", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
