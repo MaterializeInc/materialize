@@ -9,6 +9,8 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
 import "dataflow-types/src/postgres_source.proto";
@@ -38,4 +40,11 @@ message ProtoPersistSourceConnector {
     string consensus_uri = 1;
     string blob_uri = 2;
     string shard_id = 3;
+}
+
+message ProtoCompression {
+    oneof kind {
+        google.protobuf.Empty gzip = 1;
+        google.protobuf.Empty none = 2;
+    }
 }

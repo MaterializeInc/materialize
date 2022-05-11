@@ -1834,10 +1834,39 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum Compression {
         Gzip,
         None,
+    }
+
+    impl From<&Compression> for ProtoCompression {
+        fn from(x: &Compression) -> Self {
+            use proto_compression::Kind;
+            ProtoCompression {
+                kind: Some(match x {
+                    Compression::Gzip => Kind::Gzip(()),
+                    Compression::None => Kind::None(()),
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoCompression> for Compression {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoCompression) -> Result<Self, Self::Error> {
+            use proto_compression::Kind;
+            Ok(match x.kind {
+                Some(Kind::Gzip(())) => Compression::Gzip,
+                Some(Kind::None(())) => Compression::None,
+                None => {
+                    return Err(TryFromProtoError::MissingField(
+                        "ProtoCompression::kind".into(),
+                    ))
+                }
+            })
+        }
     }
 
     /// A source of updates for a relational collection.
