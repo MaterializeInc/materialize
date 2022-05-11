@@ -16,15 +16,12 @@ use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, ensure, Context};
+use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
-use csv::ReaderBuilder;
 use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
-use tokio::fs::File;
-use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use tracing::info;
 use uuid::Uuid;
@@ -70,7 +67,6 @@ pub async fn purify_create_source(
     let mut with_options_map = normalize::options(with_options);
     let mut config_options = BTreeMap::new();
 
-    let mut file = None;
     match connector {
         CreateSourceConnector::Kafka(KafkaSourceConnector {
             connector, topic, ..
@@ -139,14 +135,6 @@ pub async fn purify_create_source(
                 None => {}
             }
         }
-        // Report an error if a file cannot be opened, or if it is a directory.
-        CreateSourceConnector::File { path, .. } => {
-            let f = File::open(&path).await?;
-            if f.metadata().await?.is_dir() {
-                bail!("Expected a regular file, but {} is a directory.", path);
-            }
-            file = Some(f);
-        }
         CreateSourceConnector::S3 { .. } => {
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
             validate_aws_credentials(&aws_config, aws_external_id).await?;
@@ -187,15 +175,7 @@ pub async fn purify_create_source(
         CreateSourceConnector::Persist { .. } => (),
     }
 
-    purify_source_format(
-        format,
-        connector,
-        &envelope,
-        file,
-        &config_options,
-        with_options,
-    )
-    .await?;
+    purify_source_format(format, connector, &envelope, &config_options, with_options).await?;
 
     Ok(stmt)
 }
@@ -204,7 +184,6 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
     connector: &mut CreateSourceConnector<Raw>,
     envelope: &Option<Envelope>,
-    file: Option<File>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
@@ -241,7 +220,6 @@ async fn purify_source_format(
                 format,
                 connector,
                 envelope,
-                file,
                 connector_options,
                 with_options,
             )
@@ -249,29 +227,10 @@ async fn purify_source_format(
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            ensure!(
-                file.is_none(),
-                anyhow!("[internal-error] File sources cannot be key-value sources")
-            );
-
-            purify_source_format_single(
-                key,
-                connector,
-                envelope,
-                None,
-                connector_options,
-                with_options,
-            )
-            .await?;
-            purify_source_format_single(
-                val,
-                connector,
-                envelope,
-                None,
-                connector_options,
-                with_options,
-            )
-            .await?;
+            purify_source_format_single(key, connector, envelope, connector_options, with_options)
+                .await?;
+            purify_source_format_single(val, connector, envelope, connector_options, with_options)
+                .await?;
         }
     }
     Ok(())
@@ -281,7 +240,6 @@ async fn purify_source_format_single(
     format: &mut Format<Raw>,
     connector: &mut CreateSourceConnector<Raw>,
     envelope: &Option<Envelope>,
-    file: Option<File>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
@@ -335,10 +293,19 @@ async fn purify_source_format_single(
             }
         },
         Format::Csv {
-            delimiter,
+            delimiter: _,
             ref mut columns,
         } => {
-            purify_csv(file, connector, *delimiter, columns).await?;
+            if let CsvColumns::Header { names } = columns {
+                match connector {
+                    CreateSourceConnector::S3 { .. } => {
+                        if names.is_empty() {
+                            bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
+                        }
+                    }
+                    _ => bail!("CSV WITH HEADER is only supported for S3 sources"),
+                }
+            }
         }
         Format::Bytes | Format::Regex(_) | Format::Json | Format::Text => (),
     }
@@ -453,134 +420,6 @@ async fn purify_csr_connector_avro(
         })
     }
 
-    Ok(())
-}
-
-pub async fn purify_csv(
-    file: Option<File>,
-    connector: &CreateSourceConnector<Raw>,
-    delimiter: char,
-    columns: &mut CsvColumns,
-) -> anyhow::Result<()> {
-    if matches!(columns, CsvColumns::Header { .. })
-        && !matches!(
-            connector,
-            CreateSourceConnector::File { .. } | CreateSourceConnector::S3 { .. }
-        )
-    {
-        bail_unsupported!("CSV WITH HEADER with non-file or S3 sources");
-    }
-
-    let first_row = if let Some(file) = file {
-        let file = tokio::io::BufReader::new(file);
-        let csv_header = file.lines().next_line().await;
-        if !delimiter.is_ascii() {
-            bail!("CSV delimiter must be ascii");
-        }
-        match csv_header {
-            Ok(Some(csv_header)) => {
-                let mut reader = ReaderBuilder::new()
-                    .delimiter(delimiter as u8)
-                    .has_headers(false)
-                    .from_reader(csv_header.as_bytes());
-
-                if let Some(result) = reader.records().next() {
-                    match result {
-                        Ok(headers) => Some(headers),
-                        Err(e) => bail!("Unable to parse header row: {}", e),
-                    }
-                } else {
-                    None
-                }
-            }
-            Ok(None) => {
-                if let CsvColumns::Header { names } = columns {
-                    if names.is_empty() {
-                        bail!(
-                            "CSV file expected to have at least one line \
-                             to determine column names, but is empty"
-                        );
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            Err(e) => {
-                // TODO(#7562): support compressed files
-                if let CsvColumns::Header { names } = columns {
-                    if names.is_empty() {
-                        bail!("Cannot determine header by reading CSV file: {}", e);
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-        }
-    } else {
-        None
-    };
-
-    match (&columns, first_row) {
-        (CsvColumns::Header { names }, Some(headers)) if names.is_empty() => {
-            *columns = CsvColumns::Header {
-                names: headers.into_iter().map(Ident::from).collect(),
-            };
-        }
-        (CsvColumns::Header { names }, Some(headers)) => {
-            if names.len() != headers.len() {
-                bail!(
-                    "Named column count ({}) does not match \
-                     number of columns discovered ({})",
-                    names.len(),
-                    headers.len()
-                );
-            } else if let Some((sql, csv)) = names
-                .iter()
-                .zip(headers.iter())
-                .find(|(sql, csv)| sql.as_str() != &**csv)
-            {
-                bail!(
-                    "Header columns do not match named columns from CREATE SOURCE statement. \
-                               First mismatched columns: {} != {}",
-                    sql,
-                    csv
-                );
-            }
-        }
-        (CsvColumns::Header { names }, None) if names.is_empty() => match connector {
-            CreateSourceConnector::File { .. } => {
-                bail!("CSV WITH HEADER requires a way to determine the header row, but does not exist")
-            }
-            CreateSourceConnector::S3 { .. } => {
-                bail!("CSV WITH HEADER for S3 sources requires specifying the header columns")
-            }
-            _ => bail!("CSV WITH HEADER is only supported for S3 and file sources"),
-        },
-        (CsvColumns::Header { names }, None) => {
-            // we don't need to do any verification if we are told the names of the headers
-            assert!(
-                !names.is_empty(),
-                "empty names should be caught in a previous match arm"
-            );
-        }
-
-        (CsvColumns::Count(n), first_line) => {
-            if let Some(columns) = first_line {
-                if *n != columns.len() {
-                    bail!(
-                        "Specified column count (WITH {} COLUMNS) \
-                                 does not match number of columns in CSV file ({})",
-                        n,
-                        columns.len()
-                    );
-                }
-            }
-        }
-    }
     Ok(())
 }
 

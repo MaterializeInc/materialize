@@ -95,15 +95,6 @@ pub struct Args {
     /// [DANGEROUS] Enable experimental features.
     #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
-    /// Whether to run in safe mode.
-    ///
-    /// In safe mode, features that provide access to the underlying machine,
-    /// like file sources and sinks, are disabled.
-    ///
-    /// This option is intended for use by the cloud product
-    /// (cloud.materialize.com), but may be useful in other contexts as well.
-    #[clap(long, hide = true)]
-    safe: bool,
 
     /// The address on which Prometheus metrics get exposed.
     ///
@@ -774,7 +765,6 @@ max log level: {max_log_level}",
         orchestrator,
         secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
-        safe_mode: args.safe,
         aws_external_id: args
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)

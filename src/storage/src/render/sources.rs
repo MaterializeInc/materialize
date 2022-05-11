@@ -33,9 +33,8 @@ use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::{
-    self, DecodeResult, DelimitedValueSource, FileSourceReader, KafkaSourceReader,
-    KinesisSourceReader, PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig,
-    S3SourceReader, SourceToken,
+    self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
+    PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader, SourceToken,
 };
 use crate::storage_state::LocalInput;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -328,14 +327,6 @@ where
                     }
                     ExternalSourceConnector::S3(_) => {
                         let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader>(
-                            base_source_config,
-                            &connector,
-                            storage_state.aws_external_id.clone(),
-                        );
-                        ((SourceType::ByteStream(ok), err), cap)
-                    }
-                    ExternalSourceConnector::File(_) => {
-                        let ((ok, err), cap) = source::create_raw_source::<_, FileSourceReader>(
                             base_source_config,
                             &connector,
                             storage_state.aws_external_id.clone(),

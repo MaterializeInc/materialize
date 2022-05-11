@@ -131,7 +131,7 @@ Rochester      NY        14618   2
     token = '${testdrive.aws-token}'
   )
   FORMAT CSV WITH HEADER
-exact:CSV WITH HEADER for S3 sources requires specifying the header columns
+exact:Expected a list of columns in parentheses, found EOF
 
 # The timestamp chosen when reading from a static CSV should be the end of time,
 # since the definition of "static" means "will never change again".

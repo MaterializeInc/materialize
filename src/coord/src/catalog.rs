@@ -1183,7 +1183,6 @@ impl Catalog<Sqlite> {
         let (catalog, _) = Self::open(Config {
             storage,
             experimental_mode,
-            safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
             aws_external_id: AwsExternalId::NotProvided,
             timestamp_frequency: Duration::from_secs(1),
@@ -1220,7 +1219,6 @@ impl<S: Append> Catalog<S> {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     experimental_mode: config.storage.experimental_mode(),
-                    safe_mode: config.safe_mode,
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,

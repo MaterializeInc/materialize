@@ -665,7 +665,6 @@ impl TryFrom<ProtoDataflowDescription>
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, Deref, DerefMut};
-    use std::path::PathBuf;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -1506,7 +1505,7 @@ pub mod sources {
                 // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
                 match connector {
                     // TODO(guswynn): does postgres count here as well?
-                    ExternalSourceConnector::Kafka(_) | ExternalSourceConnector::File(_) => true,
+                    ExternalSourceConnector::Kafka(_) => true,
                     // Currently, the Kinesis connector assigns "offsets" by counting the message in the order it was received
                     // and this order is not replayable across different reads of the same Kinesis stream.
                     ExternalSourceConnector::Kinesis(_) => false,
@@ -1575,7 +1574,6 @@ pub mod sources {
     pub enum ExternalSourceConnector {
         Kafka(KafkaSourceConnector),
         Kinesis(KinesisSourceConnector),
-        File(FileSourceConnector),
         S3(S3SourceConnector),
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
@@ -1648,12 +1646,6 @@ pub mod sources {
 
                     items.into_values().collect()
                 }
-                Self::File(_) => {
-                    if include_defaults {
-                        columns.push(default_col("mz_line_no"));
-                    }
-                    columns
-                }
                 Self::Kinesis(_) => {
                     if include_defaults {
                         columns.push(default_col("mz_offset"))
@@ -1678,7 +1670,6 @@ pub mod sources {
             match self {
                 ExternalSourceConnector::Kafka(_) => Some("mz_offset"),
                 ExternalSourceConnector::Kinesis(_) => Some("mz_offset"),
-                ExternalSourceConnector::File(_) => Some("mz_line_no"),
                 ExternalSourceConnector::S3(_) => Some("mz_record"),
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
@@ -1718,9 +1709,7 @@ pub mod sources {
                     items.into_values().collect()
                 }
 
-                ExternalSourceConnector::Kinesis(_)
-                | ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::S3(_) => {
+                ExternalSourceConnector::Kinesis(_) | ExternalSourceConnector::S3(_) => {
                     if include_defaults {
                         vec![IncludedColumnSource::DefaultPosition]
                     } else {
@@ -1738,7 +1727,6 @@ pub mod sources {
             match self {
                 ExternalSourceConnector::Kafka(_) => "kafka",
                 ExternalSourceConnector::Kinesis(_) => "kinesis",
-                ExternalSourceConnector::File(_) => "file",
                 ExternalSourceConnector::S3(_) => "s3",
                 ExternalSourceConnector::Postgres(_) => "postgres",
                 ExternalSourceConnector::PubNub(_) => "pubnub",
@@ -1757,7 +1745,6 @@ pub mod sources {
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                     stream_name, ..
                 }) => Some(stream_name.as_str()),
-                ExternalSourceConnector::File(_) => None,
                 ExternalSourceConnector::S3(_) => None,
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
@@ -1772,7 +1759,6 @@ pub mod sources {
 
                 ExternalSourceConnector::Kafka(_)
                 | ExternalSourceConnector::Kinesis(_)
-                | ExternalSourceConnector::File(_)
                 | ExternalSourceConnector::PubNub(_)
                 | ExternalSourceConnector::Persist(_) => false,
             }
@@ -1783,13 +1769,6 @@ pub mod sources {
     pub struct KinesisSourceConnector {
         pub stream_name: String,
         pub aws: AwsConfig,
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct FileSourceConnector {
-        pub path: PathBuf,
-        pub tail: bool,
-        pub compression: Compression,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -39,10 +39,9 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    FileSourceConnector, IncludedColumnPos, KafkaSourceConnector, KeyEnvelope,
-    KinesisSourceConnector, PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector,
-    S3SourceConnector, SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope,
-    UpsertStyle,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
+    PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
+    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -518,27 +517,6 @@ pub fn plan_create_source(
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
             let encoding = get_encoding(format, &envelope, with_options_original)?;
-            (connector, encoding)
-        }
-        CreateSourceConnector::File { path, compression } => {
-            let tail = match with_options.remove("tail") {
-                None => false,
-                Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("tail must be a boolean"),
-            };
-
-            let connector = ExternalSourceConnector::File(FileSourceConnector {
-                path: path.clone().into(),
-                compression: match compression {
-                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
-                    Compression::None => mz_dataflow_types::sources::Compression::None,
-                },
-                tail,
-            });
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                bail!("File sources do not support key decoding");
-            }
             (connector, encoding)
         }
         CreateSourceConnector::S3 {

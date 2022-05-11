@@ -32,7 +32,6 @@ Kafka           | [Avro + Kafka](./avro-kafka) | [Text/bytes + Kafka](./text-kaf
 Kinesis         | -                            | [Text/bytes + Kinesis](./text-kinesis) | [Protobuf + Kinesis](./protobuf-kinesis) | [CSV + Kinesis](./csv-kinesis) | [JSON + Kinesis](./json-kinesis)
 S3              | -                            | [Text/bytes + S3](./text-s3)           | -                                        | [CSV + S3](./csv-s3)           | [JSON + S3](./json-s3)
 PubNub          | -                            | [Text + PubNub](./text-pubnub)         | -                                        | -                              | [JSON + PubNub](./json-pubnub)
-Local files     | [Avro + file](./avro-file)   | [Text/bytes + file](./text-file)       | -                                        | [CSV + files](./csv-file)      | [JSON + file](./json-file)
 [Postgres](./postgres)  | -  | - | -  | -  | -
 
 

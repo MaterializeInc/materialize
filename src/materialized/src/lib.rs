@@ -115,8 +115,6 @@ pub struct Config {
     // === Mode switches. ===
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
-    /// Whether to run in safe mode.
-    pub safe_mode: bool,
     /// The place where the server's metrics will be reported from.
     pub metrics_registry: MetricsRegistry,
     /// Now generation function.
@@ -389,7 +387,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
-        safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
         aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),

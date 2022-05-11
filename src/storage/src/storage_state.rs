@@ -128,9 +128,7 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 self.storage_state.now.clone(),
             );
             match connector {
-                ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::Kinesis(_)
-                | ExternalSourceConnector::S3(_) => {
+                ExternalSourceConnector::Kinesis(_) | ExternalSourceConnector::S3(_) => {
                     rt_default.add_partition(PartitionId::None, None);
                     Some(rt_default)
                 }

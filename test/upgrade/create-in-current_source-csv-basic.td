@@ -7,11 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ file-append path=csv-basic.csv
+$ kafka-create-topic topic=csv-basic
+$ kafka-ingest topic=csv-basic format=bytes
 id,value
 1,person
 
 > CREATE MATERIALIZED SOURCE csv (al, sia)
-  FROM FILE '${testdrive.temp-dir}/csv-basic.csv'
-  WITH (tail = true)
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csv-basic-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS

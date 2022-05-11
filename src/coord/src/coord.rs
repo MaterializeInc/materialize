@@ -122,9 +122,8 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceConnector, CreateSourceStatement,
-    ExplainStage, FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr,
-    Statement,
+    CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident, InsertSource,
+    ObjectType, Query, Raw, RawIdent, SetExpr, Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
@@ -233,7 +232,6 @@ pub struct Config<S> {
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
-    pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub aws_external_id: AwsExternalId,
     pub metrics_registry: MetricsRegistry,
@@ -1394,12 +1392,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         )
                     }
                 }
-            }
-        }
-
-        if self.catalog.config().safe_mode {
-            if let Err(e) = check_statement_safety(&stmt) {
-                return tx.send(Err(e), session);
             }
         }
 
@@ -4717,7 +4709,6 @@ pub async fn serve<S: Append + 'static>(
         timestamp_frequency,
         logical_compaction_window,
         experimental_mode,
-        safe_mode,
         build_info,
         aws_external_id,
         metrics_registry,
@@ -4733,7 +4724,6 @@ pub async fn serve<S: Append + 'static>(
     let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
         storage,
         experimental_mode: Some(experimental_mode),
-        safe_mode,
         build_info,
         aws_external_id,
         timestamp_frequency,
@@ -4912,23 +4902,6 @@ pub fn describe<S: Append>(
             )?)
         }
     }
-}
-
-fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
-    match stmt {
-        Statement::CreateSource(CreateSourceStatement { connector, .. }) => match connector {
-            CreateSourceConnector::File { .. } => {
-                return Err(CoordError::SafeModeViolation(format!("file source",)));
-            }
-            _ => (),
-        },
-        Statement::CreateSink(CreateSinkStatement { connector, .. }) => match connector {
-            _ => (),
-        },
-        _ => (),
-    };
-
-    Ok(())
 }
 
 /// Logic and types for fast-path determination for dataflow execution.
