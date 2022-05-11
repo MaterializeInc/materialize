@@ -23,10 +23,6 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 - [Key Concepts](/overview/key-concepts/)
 - [Materialize Cloud overview](/cloud/)
 {{</ linkbox >}}
-{{< linkbox icon="touch" title="Quickstarts" >}}
-- [Streaming SQL on server logs](/quickstarts/log-parsing/)
-- [Microservices](/quickstarts/microservice/)
-{{</ linkbox >}}
 {{< linkbox icon="doc" title="Guides" >}}
 - [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 - [dbt &amp; Materialize](/integrations/dbt/)
