@@ -66,7 +66,6 @@ task = ["tokio", "tokio/tracing"]
 tracing_ = [
   "ansi_term",
   "atty",
-  "metrics",
   "tracing",
   "tracing-subscriber",
   "tracing-subscriber/ansi",

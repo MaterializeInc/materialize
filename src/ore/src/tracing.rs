@@ -10,7 +10,6 @@
 //! Utilities for configuring [`tracing`]
 
 use std::io::{self, Write};
-use std::marker::PhantomData;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -19,19 +18,15 @@ use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
-use prometheus::IntCounterVec;
 use tonic::metadata::{MetadataKey, MetadataMap};
 use tonic::transport::Endpoint;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::format::{format, Format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
-use tracing_subscriber::layer::{Context, Layer, Layered, SubscriberExt};
+use tracing_subscriber::layer::{Layer, Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-
-use crate::metric;
-use crate::metrics::MetricsRegistry;
 
 fn create_h2_alpn_https_connector() -> HttpsConnector<HttpConnector> {
     // This accomplishes the same thing as the default
@@ -141,10 +136,7 @@ pub struct TracingConfig<'a> {
 /// Configures tracing according to the provided command-line arguments.
 /// Returns a `Write` stream that represents the main place `tracing` will
 /// log to.
-pub async fn configure(
-    config: TracingConfig<'_>,
-    metrics_registry: &MetricsRegistry,
-) -> Result<Box<dyn Write>, anyhow::Error> {
+pub async fn configure(config: TracingConfig<'_>) -> Result<Box<dyn Write>, anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
     // before our custom panic hook is installed (because the panic hook needs
     // tracing configured to execute), so a panic here will not direct the
@@ -156,21 +148,13 @@ pub async fn configure(
         // otherwise.
         .with_target("panic", LevelFilter::ERROR);
 
-    let log_message_counter: IntCounterVec = metrics_registry.register(metric!(
-        name: "mz_log_message_total",
-        help: "The number of log messages produced by this materialized instance",
-        var_labels: ["severity"],
-    ));
-
-    let stack = tracing_subscriber::registry()
-        .with(MetricsRecorderLayer::new(log_message_counter).with_filter(filter.clone()))
-        .with(
-            fmt::layer()
-                .with_writer(io::stderr)
-                .with_ansi(atty::is(atty::Stream::Stderr))
-                .event_format(SubprocessFormat::new_default(config.prefix))
-                .with_filter(filter),
-        );
+    let stack = tracing_subscriber::registry().with(
+        fmt::layer()
+            .with_writer(io::stderr)
+            .with_ansi(atty::is(atty::Stream::Stderr))
+            .event_format(SubprocessFormat::new_default(config.prefix))
+            .with_filter(filter),
+    );
 
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
@@ -183,37 +167,6 @@ pub async fn configure(
     .await?;
 
     Ok(Box::new(io::stderr()))
-}
-
-/// A tracing [`Layer`] that allows hooking into the reporting/filtering chain
-/// for log messages, incrementing a counter for the severity of messages
-/// reported.
-#[derive(Debug)]
-pub struct MetricsRecorderLayer<S> {
-    counter: IntCounterVec,
-    _inner: PhantomData<S>,
-}
-
-impl<S> MetricsRecorderLayer<S> {
-    /// Construct a metrics-recording layer.
-    pub fn new(counter: IntCounterVec) -> Self {
-        Self {
-            counter,
-            _inner: PhantomData,
-        }
-    }
-}
-
-impl<S> Layer<S> for MetricsRecorderLayer<S>
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_event(&self, ev: &Event<'_>, _ctx: Context<'_, S>) {
-        let metadata = ev.metadata();
-        self.counter
-            .with_label_values(&[&metadata.level().to_string()])
-            .inc();
-    }
 }
 
 /// A wrapper around a `tracing_subscriber` `Format` that
@@ -269,52 +222,5 @@ where
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::collections::HashMap;
-
-    use super::MetricsRecorderLayer;
-    use crate::metric;
-    use crate::metrics::raw::IntCounterVec;
-    use crate::metrics::MetricsRegistry;
-    use tracing::{error, info, warn};
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-
-    #[test]
-    fn increments_per_sev_counter() {
-        let r = MetricsRegistry::new();
-        let counter: IntCounterVec = r.register(metric!(
-            name: "test_counter",
-            help: "a test counter",
-            var_labels: ["severity"],
-        ));
-        tracing_subscriber::registry()
-            .with(MetricsRecorderLayer::new(counter))
-            .init();
-
-        info!("test message");
-        (0..5).for_each(|_| warn!("a warning"));
-        error!("test error");
-        error!("test error");
-
-        println!("gathered: {:?}", r.gather());
-
-        let metric = r
-            .gather()
-            .into_iter()
-            .find(|fam| fam.get_name() == "test_counter")
-            .expect("Didn't find the counter we set up");
-        let mut sevs: HashMap<&str, u32> = HashMap::new();
-        for counter in metric.get_metric() {
-            let sev = counter.get_label()[0].get_value();
-            sevs.insert(sev, counter.get_counter().get_value() as u32);
-        }
-        let mut sevs: Vec<(&str, u32)> = sevs.into_iter().collect();
-        sevs.sort_by_key(|(name, _)| name.to_string());
-        assert_eq!(&[("ERROR", 2), ("INFO", 1), ("WARN", 5)][..], &sevs[..]);
     }
 }

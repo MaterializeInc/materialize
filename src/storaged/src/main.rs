@@ -138,18 +138,14 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let metrics_registry = mz_ore::metrics::MetricsRegistry::new();
-    let mut _tracing_stream = mz_ore::tracing::configure(
-        mz_ore::tracing::TracingConfig {
-            log_filter: &args.log_filter,
-            opentelemetry_endpoint: None,
-            opentelemetry_headers: None,
-            prefix: args.log_process_name.then(|| "storaged"),
-            #[cfg(feature = "tokio-console")]
-            tokio_console: false,
-        },
-        &metrics_registry,
-    )
+    let mut _tracing_stream = mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
+        log_filter: &args.log_filter,
+        opentelemetry_endpoint: None,
+        opentelemetry_headers: None,
+        prefix: args.log_process_name.then(|| "storaged"),
+        #[cfg(feature = "tokio-console")]
+        tokio_console: false,
+    })
     .await?;
 
     if args.workers == 0 {

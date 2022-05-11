@@ -502,17 +502,15 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    let mut tracing_stream = runtime.block_on(mz_ore::tracing::configure(
-        mz_ore::tracing::TracingConfig {
+    let mut tracing_stream =
+        runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
             log_filter: &args.log_filter,
             opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
             opentelemetry_headers: args.opentelemetry_headers.as_deref(),
             prefix: None,
             #[cfg(feature = "tokio-console")]
             tokio_console: args.tokio_console,
-        },
-        &metrics_registry,
-    ))?;
+        }))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
