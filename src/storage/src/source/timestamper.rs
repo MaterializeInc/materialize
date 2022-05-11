@@ -158,18 +158,10 @@ impl CreateSourceTimestamper {
             Antichain<Timestamp>,
         )>,
     > {
-        eprintln!("{:?} TS NEW OFFSETS: {:?}", self.name, observed_max_offsets);
         let mut matched_offsets = HashMap::new();
         let mut context = Context::from_waker(&self.waker);
         loop {
             if self.write_upper.is_empty() || self.read_handle.since().is_empty() {
-                eprintln!(
-                    "{:?} TS CLOSING {:?} {:?}",
-                    self.name,
-                    self.write_upper,
-                    self.read_handle.since()
-                );
-
                 if !self.write_upper.is_empty() {
                     self.write_upper = Antichain::new();
                 }
@@ -179,7 +171,6 @@ impl CreateSourceTimestamper {
                 return Ok(None);
             }
 
-            eprintln!("{:?} TS WAITING ON LISTEN", self.name);
             // See how much we can read in from the collection
             //while let Poll::Ready(Some(event)) = self
             //    .timestamp_bindings_listener
@@ -199,17 +190,8 @@ impl CreateSourceTimestamper {
                         self.read_progress = progress;
                     }
                     ListenEvent::Updates(updates) => {
-                        eprintln!(
-                            "{:?} TIMESTAMPER READING UPDATES {:?}",
-                            self.name,
-                            updates.len()
-                        );
                         for ((_, value), timestamp, diff) in updates {
                             let partition = value.expect("Unable to decode partition id");
-                            eprintln!(
-                                "{:?} TIMESTAMPER READING UPDATE {:?} {:?}",
-                                self.name, partition, diff
-                            );
                             self.persisted_timestamp_bindings
                                 .entry(partition)
                                 .or_insert_with(VecDeque::new)
@@ -218,11 +200,9 @@ impl CreateSourceTimestamper {
                     }
                 }
             }
-            eprintln!("{:?} TS FINISHED WAITING ON LISTEN", self.name);
 
             // Decide if we're up to date enough to attempt to persist new bindings!  If not, don't bother trying and shortcut to reading in again
             if !PartialOrder::less_equal(&self.write_upper, &self.read_progress) {
-                eprintln!("{:?} TS NOT READ UP TO DATE", self.name);
                 // Use intentionally wrong value of `expected_upper` in order to update the upper for next iteration.
                 let empty: [(((), PartitionId), Timestamp, Diff); 0] = [];
                 self.write_upper = self
@@ -254,11 +234,6 @@ impl CreateSourceTimestamper {
                     continue;
                 }
 
-                eprintln!(
-                    "{:?} TS PRE BINDINGS FOR {:?}: {:?}",
-                    self.name, partition, bindings
-                );
-
                 // Compact as able, relying on all messages being in ascending offset order
                 while bindings.len() > 1
                     && bindings
@@ -271,11 +246,6 @@ impl CreateSourceTimestamper {
                     let (_timestamp, incremental_offset) = bindings.front_mut().unwrap();
                     *incremental_offset += old_max_offset;
                 }
-
-                eprintln!(
-                    "{:?} TS POST BINDINGS FOR {:?}: {:?}",
-                    self.name, partition, bindings
-                );
 
                 let (timestamp, max_offset) = bindings
                     .front()
@@ -292,11 +262,6 @@ impl CreateSourceTimestamper {
             }
 
             // TODO(#12267): Properly downgrade `since` of the timestamp collection based on the source data collection.
-
-            eprintln!(
-                "{:?} TS PROPOSED OFFSETS POST {:?}; UPPER: {:?}; PROGRESS: {:?}",
-                self.name, matched_offsets, self.write_upper, self.read_progress,
-            );
 
             // XXX: should clamp to round timestamp_frequency??
             let new_ts = (self.now)();
@@ -324,11 +289,6 @@ impl CreateSourceTimestamper {
                 })
                 .collect();
 
-            eprintln!(
-                "{:?} TS NEW BINDINGS {:?} AT {:?}",
-                self.name, new_bindings, new_ts
-            );
-
             if new_bindings.is_empty() {
                 assert_eq!(matched_offsets.len(), observed_max_offsets.len());
                 // This should be a sensible value for the source to downgrade its capability to after emitting the messages that we return
@@ -340,10 +300,6 @@ impl CreateSourceTimestamper {
                     ))
                     .min()
                     .unwrap_or_else(Timestamp::minimum);
-                eprintln!(
-                    "{:?} TS PROGRESS: {:?} {:?}",
-                    self.name, progress, self.read_progress
-                );
                 return Ok(Some((matched_offsets, Antichain::from_elem(progress))));
             }
 

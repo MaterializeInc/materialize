@@ -1011,7 +1011,6 @@ where
             loop {
                 tokio::select! {
                     item = source_stream.next(), if !source_stream.is_done() => {
-                        eprintln!("{:?} MERG SOURCE STREAM ITEM {:?}", name, item.is_some());
                         match item {
                             Some(Ok(message)) => pending_messages.push(Ok(message)),
                             // TODO: make errors definite
@@ -1021,7 +1020,6 @@ where
                     }
                     // It's time to timestamp a batch
                     _ = timestamp_interval.tick() => {
-                        eprintln!("{:?} MERG TIK TOK", name);
                         let mut max_offsets = HashMap::new();
                         for message in pending_messages.iter().filter_map(|m| m.as_ref().ok()) {
                             let entry = max_offsets.entry(message.partition.clone()).or_default();
@@ -1039,27 +1037,21 @@ where
                             }
                         };
 
-                        eprintln!("{:?} MERG BINDINGS PROGRESS {:?} {:?}", name, bindings, progress);
-
                         for msg in pending_messages.drain(..) {
                             match msg{
                                 Ok(message) => {
                                     let ts = bindings.get(&message.partition).expect("timestamper didn't return partition").0;
-                                    eprintln!("{:?} MERG YIELDING MESSAGE {:?} {:?} AT {:?}", name, message.partition, message.offset, ts);
                                     yield Event::Message(ts, Ok(message));
                                 },
                                 Err(e) => {
-                                    eprintln!("{:?} MERG YIELDING ERR", name);
                                     yield Event::Message(0, Err(e));
                                 },
                             }
                         }
                         let progress_some = progress.as_option().is_some();
-                            eprintln!("{:?} MERG YIELDING PROGRESS {:?}", name, progress);
                         yield Event::Progress(progress.into_option());
                         if source_stream.is_done() {
                             // We just emitted the last piece of data that needed to be timestamped
-                            eprintln!("{:?} MERG STREAM DONE {:?}", name, progress_some);
                             if progress_some {
                                 yield Event::Progress(None);
                             }

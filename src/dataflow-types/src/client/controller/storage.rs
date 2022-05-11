@@ -348,8 +348,6 @@ where
                 .insert_without_overwrite(&mut self.state.stash, &id, ShardId::new())
                 .await?;
 
-            eprintln!("{:?} GENERATING SHARD ID: {:?}", id, timestamp_shard_id);
-
             let tx_timestamp_shard_id = match desc.connector {
                 crate::sources::SourceConnector::External {
                     envelope: crate::sources::SourceEnvelope::Debezium(ref dbz_envelope),
