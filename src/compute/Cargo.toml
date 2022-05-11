@@ -19,6 +19,7 @@ dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.
 futures = "0.3.21"
 futures-executor = "0.3.21"
 futures-util = "0.3.19"
+http = "0.2.7"
 itertools = "0.10.3"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }

@@ -26,23 +26,23 @@ use std::panic;
 use std::panic::PanicInfo;
 use std::path::PathBuf;
 use std::process;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
-use http::header::HeaderValue;
+use http::header::{HeaderName, HeaderValue};
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
 use mz_persist_client::PersistLocation;
 use sysinfo::{ProcessorExt, SystemExt};
 use tower_http::cors::{self, AllowOrigin};
+use tracing_subscriber::filter::Targets;
 use url::Url;
 use uuid::Uuid;
 
@@ -54,6 +54,7 @@ use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::cli::KeyValueArg;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -116,11 +117,11 @@ pub struct Args {
     /// Labels to apply to all services created by the orchestrator in the form
     /// `KEY=VALUE`.
     #[structopt(long, hide = true)]
-    orchestrator_service_label: Vec<KeyValue>,
+    orchestrator_service_label: Vec<KeyValueArg<String, String>>,
     /// Node selector to apply to all services created by the orchestrator in
     /// the form `KEY=VALUE`.
     #[structopt(long, hide = true)]
-    orchestrator_service_node_selector: Vec<KeyValue>,
+    orchestrator_service_node_selector: Vec<KeyValueArg<String, String>>,
     #[structopt(long)]
     kubernetes_service_account: Option<String>,
     /// The Kubernetes context to use with the Kubernetes orchestrator.
@@ -225,7 +226,7 @@ pub struct Args {
         value_name = "FILTER",
         default_value = "info"
     )]
-    log_filter: String,
+    log_filter: Targets,
 
     /// Prevent dumping of backtraces on SIGSEGV/SIGBUS
     ///
@@ -378,21 +379,22 @@ pub struct Args {
     /// If not provided, tracing is not sent.
     ///
     /// You most likely also need to provide
-    /// `--opentelemetry-headers`/`MZ_OPENTELEMETRY_HEADERS`
+    /// `--opentelemetry-header`/`MZ_OPENTELEMETRY_HEADER`
     /// depending on the collector you are talking to.
     #[clap(long, env = "MZ_OPENTELEMETRY_ENDPOINT", hide = true)]
     opentelemetry_endpoint: Option<String>,
 
-    /// Comma separated headers of the form `KEY=VALUE`
-    /// to pass through to the opentelemetry
-    /// collector
+    /// Headers to pass to the OpenTelemetry collector.
+    ///
+    /// May be specified multiple times.
     #[clap(
         long,
-        env = "MZ_OPENTELEMETRY_HEADERS",
+        value_name = "HEADER",
+        env = "MZ_OPENTELEMETRY_HEADER",
         requires = "opentelemetry-endpoint",
         hide = true
     )]
-    opentelemetry_headers: Option<String>,
+    opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
 
     #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: Option<String>,
@@ -426,27 +428,6 @@ impl Orchestrator {
             Self::Kubernetes => true,
             Self::Process => false,
         }
-    }
-}
-
-#[derive(Debug)]
-struct KeyValue {
-    key: String,
-    value: String,
-}
-
-impl FromStr for KeyValue {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<KeyValue, anyhow::Error> {
-        let mut parts = s.splitn(2, '=');
-        let key = parts.next().expect("always one part");
-        let value = parts
-            .next()
-            .ok_or_else(|| anyhow!("must have format KEY=VALUE"))?;
-        Ok(KeyValue {
-            key: key.into(),
-            value: value.into(),
-        })
     }
 }
 
@@ -492,9 +473,13 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     let mut tracing_stream =
         runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
-            log_filter: &args.log_filter,
-            opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
-            opentelemetry_headers: args.opentelemetry_headers.as_deref(),
+            log_filter: args.log_filter,
+            opentelemetry_endpoint: args.opentelemetry_endpoint,
+            opentelemetry_headers: args
+                .opentelemetry_header
+                .into_iter()
+                .map(|header| (header.key, header.value))
+                .collect(),
             prefix: None,
             #[cfg(feature = "tokio-console")]
             tokio_console: args.tokio_console,
