@@ -29,6 +29,8 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_repr::proto::TryFromProtoError;
+use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
+use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -169,14 +171,20 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
     }
 }
 
-/// A stub for generating arbitrary [CollectionMetadata].
-/// Currently only produces the simplest instance of one.
-pub fn any_collection_metadata_stub() -> CollectionMetadata {
-    CollectionMetadata {
-        persist_location: PersistLocation {
-            blob_uri: "".to_string(),
-            consensus_uri: "".to_string(),
-        },
+impl Arbitrary for CollectionMetadata {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        // TODO (#12359): derive Arbitrary after CollectionMetadata
+        // gains proper protobuf support.
+        Just(CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: "".to_string(),
+                consensus_uri: "".to_string(),
+            },
+        })
+        .boxed()
     }
 }
 

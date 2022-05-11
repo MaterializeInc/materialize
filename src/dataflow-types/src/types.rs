@@ -130,16 +130,18 @@ pub struct SourceInstanceDesc<M> {
 }
 
 impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
-    type Strategy = BoxedStrategy<SourceInstanceDesc<CollectionMetadata>>;
+    type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any::<SourceInstanceArguments>()
-            .prop_map(|arguments| SourceInstanceDesc {
+        (
+            any::<SourceInstanceArguments>(),
+            any::<CollectionMetadata>(),
+        )
+            .prop_map(|(arguments, storage_metadata)| SourceInstanceDesc {
                 description: crate::sources::any_source_desc_stub(),
                 arguments,
-                storage_metadata: crate::client::controller::storage::any_collection_metadata_stub(
-                ),
+                storage_metadata,
             })
             .boxed()
     }
@@ -256,59 +258,55 @@ fn any_source_import() -> impl Strategy<Value = (GlobalId, SourceInstanceDesc<Co
     )
 }
 
-fn any_dataflow_index() -> impl Strategy<Value = (GlobalId, (IndexDesc, RelationType))> {
-    (any::<GlobalId>(), any::<IndexDesc>(), any::<RelationType>())
-        .prop_map(|(id, index, typ)| (id, (index, typ)))
+proptest::prop_compose! {
+    fn any_dataflow_index()(
+        id in any::<GlobalId>(),
+        index in any::<IndexDesc>(),
+        typ in any::<RelationType>()
+    ) -> (GlobalId, (IndexDesc, RelationType)) {
+        (id, (index, typ))
+    }
+}
+
+proptest::prop_compose! {
+    fn any_dataflow_description()(
+        source_imports in proptest::collection::vec(any_source_import(), 1..3),
+        index_imports in proptest::collection::vec(any_dataflow_index(), 1..3),
+        objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
+        index_exports in proptest::collection::vec(any_dataflow_index(), 1..3),
+        sink_ids in proptest::collection::vec(any::<GlobalId>(), 1..3),
+        as_of_some in any::<bool>(),
+        as_of in proptest::collection::vec(any::<u64>(), 1..5),
+        debug_name in ".*",
+        id in any_uuid(),
+    ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
+        DataflowDescription {
+            source_imports: BTreeMap::from_iter(source_imports.into_iter()),
+            index_imports: BTreeMap::from_iter(index_imports.into_iter()),
+            objects_to_build,
+            index_exports: BTreeMap::from_iter(index_exports.into_iter()),
+            sink_exports: BTreeMap::from_iter(
+                sink_ids
+                    .into_iter()
+                    .map(|id| (id, crate::sinks::any_sink_desc_stub())),
+            ),
+            as_of: if as_of_some {
+                Some(Antichain::from(as_of))
+            } else {
+                None
+            },
+            debug_name,
+            id,
+        }
+    }
 }
 
 impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
-    type Strategy =
-        BoxedStrategy<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>;
+    type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            proptest::collection::vec(any_source_import(), 1..3),
-            proptest::collection::vec(any_dataflow_index(), 1..3),
-            proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
-            proptest::collection::vec(any_dataflow_index(), 1..3),
-            proptest::collection::vec(any::<GlobalId>(), 1..3),
-            any::<bool>(),
-            proptest::collection::vec(any::<u64>(), 1..5),
-            ".*",
-            any_uuid(),
-        )
-            .prop_map(
-                |(
-                    source_imports,
-                    index_imports,
-                    objects_to_build,
-                    index_exports,
-                    sink_ids,
-                    as_of_some,
-                    as_of,
-                    debug_name,
-                    id,
-                )| DataflowDescription {
-                    source_imports: BTreeMap::from_iter(source_imports.into_iter()),
-                    index_imports: BTreeMap::from_iter(index_imports.into_iter()),
-                    objects_to_build,
-                    index_exports: BTreeMap::from_iter(index_exports.into_iter()),
-                    sink_exports: BTreeMap::from_iter(
-                        sink_ids
-                            .into_iter()
-                            .map(|id| (id, crate::sinks::any_sink_desc_stub())),
-                    ),
-                    as_of: if as_of_some {
-                        Some(Antichain::from(as_of))
-                    } else {
-                        None
-                    },
-                    debug_name,
-                    id,
-                },
-            )
-            .boxed()
+        any_dataflow_description().boxed()
     }
 }
 
