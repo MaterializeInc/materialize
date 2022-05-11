@@ -134,7 +134,7 @@ where
 
         let upper = upper;
         let since = Antichain::from_elem(T::minimum());
-        let desc = Description::new(lower.clone(), upper, since);
+        let mut desc = Description::new(lower.clone(), upper, since);
 
         // TODO: Instead construct a Vec of batches here so it can be bounded
         // memory usage (if updates is large).
@@ -163,15 +163,15 @@ where
         };
 
         loop {
-            let res = self.machine.append(&keys, &desc).await?;
+            let res = self.machine.compare_and_append(&keys, &desc).await?;
             match res {
-                Ok(_seqno) => {
+                Ok(Ok(_seqno)) => {
                     self.upper = desc.upper().clone();
                     return Ok(Ok(Ok(())));
                 }
                 // TODO(aljoscha): This seems useless now because we have to read from consensus to
                 // get an up-to-date version of the upper.
-                Err(_current_upper) => {
+                Ok(Err(_current_upper)) => {
                     // If the state machine thinks that the shard upper is not far enough along, it
                     // could be because the caller of this method has found out that it advanced
                     // via some some side-channel that didn't update our local cache of the machine
@@ -184,10 +184,25 @@ where
                     if PartialOrder::less_than(&current_upper, &lower) {
                         self.upper = current_upper.clone();
                         return Ok(Ok(Err(Upper(current_upper))));
+                    } else if PartialOrder::less_than(&current_upper, desc.upper()) {
+                        // Cut down the Description by advancing its lower to the current shard
+                        // upper and try again. IMPORTANT: We can only advance the lower, meaning
+                        // we cut updates away, we must not "extend" the batch by changing to a
+                        // lower that is not beyond the current lower. This invariant is checked by
+                        // the first if branch: if `!(current_upper < lower)` then it holds that
+                        // `lower <= current_upper`.
+                        desc = Description::new(
+                            current_upper,
+                            desc.upper().clone(),
+                            desc.since().clone(),
+                        );
                     } else {
-                        // The upper stored in state was outdated. Retry after updating.
+                        // We already have updates past this batch's upper, the append is a no-op.
+                        self.upper = current_upper;
+                        return Ok(Ok(Ok(())));
                     }
                 }
+                Err(err) => return Ok(Err(err)),
             }
         }
     }

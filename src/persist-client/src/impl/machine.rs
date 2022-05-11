@@ -90,20 +90,6 @@ where
         read_cap
     }
 
-    pub async fn append(
-        &mut self,
-        keys: &[String],
-        desc: &Description<T>,
-    ) -> Result<Result<SeqNo, Upper<T>>, ExternalError> {
-        let (seqno, res) = self
-            .apply_unbatched_cmd(|_, state| state.append(keys, desc))
-            .await?;
-        match res {
-            Ok(()) => Ok(Ok(seqno)),
-            Err(current_upper) => return Ok(Err(current_upper)),
-        }
-    }
-
     pub async fn compare_and_append(
         &mut self,
         keys: &[String],

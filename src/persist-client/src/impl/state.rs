@@ -72,34 +72,6 @@ where
         Continue(read_cap)
     }
 
-    pub fn append(&mut self, keys: &[String], desc: &Description<T>) -> ControlFlow<Upper<T>, ()> {
-        // Sanity check that the writer is sending appends that allow us to construct a contiguous
-        // history of batches.
-        let shard_upper = self.upper();
-        if PartialOrder::less_than(&shard_upper, desc.lower()) {
-            return Break(Upper(shard_upper));
-        }
-
-        // Construct a new desc for the part of this append that the shard
-        // didn't already know about: i.e. a lower of the *shard upper* to an
-        // upper of the *append upper*. This might truncate the data we're
-        // receiving now (if the shard upper is partially past the input desc)
-        // or even make it a no-op (if the shard upper is entirely past the
-        // input desc).
-        let lower = self.upper();
-        let desc = Description::new(lower, desc.upper().clone(), desc.since().clone());
-        if PartialOrder::less_equal(desc.upper(), desc.lower()) {
-            // No-op, but still commit the state change so that this gets
-            // linearized.
-            return Continue(());
-        }
-
-        self.push_batch(keys, &desc);
-        debug_assert_eq!(&self.upper(), desc.upper());
-
-        Continue(())
-    }
-
     pub fn compare_and_append(
         &mut self,
         keys: &[String],
