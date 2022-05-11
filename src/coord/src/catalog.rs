@@ -881,7 +881,7 @@ impl Volatility {
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
-    fn typ(&self) -> mz_sql::catalog::CatalogItemType {
+    pub(crate) fn typ(&self) -> mz_sql::catalog::CatalogItemType {
         match self {
             CatalogItem::Table(_) => mz_sql::catalog::CatalogItemType::Table,
             CatalogItem::Source(_) => mz_sql::catalog::CatalogItemType::Source,
