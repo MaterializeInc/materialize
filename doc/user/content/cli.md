@@ -28,7 +28,6 @@ Flag | Default | Modifies
 [`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
 `-v` / `--version` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
-[`--disable-user-indexes`](#disable-user-indexes) | Disabled | Start without creating any dataflows for user indexes.
 
 If a command line flag takes an argument, you can alternatively set that flag
 via an environment variable named after the flag. If both the environment
@@ -287,23 +286,6 @@ or things you'd like to see changed, let us know on [GitHub][gh-feature].
 You cannot disable experimental mode for a server. You can, however, extract your
 view and source definitions ([`SHOW CREATE VIEW`][scv], [`SHOW CREATE SOURCE`][scs],
 etc.), and then create a new server with those items.
-
-### Disable user indexes
-
-{{< version-added v0.9.2 />}}
-
-{{< warning >}}
-This feature is primarily meant for advanced administrators of Materialize.
-{{< /warning >}}
-
-If you cannot boot a Materialize server because it runs out of memory, you can use
-the `--disable-user-indexes` to prevent Materialize from creating any
-[indexes][api-indexes] on user-created objects. For
-example, if you add a view that contains a cross join that causes your server to
-immediately run out of memory on boot, you can use `--disable-user-indexes` to
-boot the server and then drop the offending view.
-
-{{% troubleshooting/disable-user-indexes %}}
 
 [api-indexes]: /overview/key-concepts/#indexes
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md

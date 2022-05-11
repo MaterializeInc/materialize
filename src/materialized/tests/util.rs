@@ -177,7 +177,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         frontegg: config.frontegg,
         experimental_mode: config.experimental_mode,
         safe_mode: config.safe_mode,
-        disable_user_indexes: false,
         metrics_registry: metrics_registry.clone(),
         metrics_listen_addr: None,
         now: config.now,

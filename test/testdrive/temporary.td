@@ -59,10 +59,10 @@ contains:non-temporary items cannot depend on temporary item
 > CREATE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v
 
 > SHOW INDEXES FROM foo
-cluster on_name    key_name         seq_in_index  column_name  expression  nullable  enabled
---------------------------------------------------------------------------------------------
-<CLUSTER_NAME> foo        foo_primary_idx  1             column1      <null>      false     true
-<CLUSTER_NAME> foo        foo_primary_idx  2             column2      <null>      false     true
+cluster on_name    key_name         seq_in_index  column_name  expression  nullable
+---------------------------------------------------------------------------------------
+<CLUSTER_NAME> foo        foo_primary_idx  1             column1      <null>      false
+<CLUSTER_NAME> foo        foo_primary_idx  2             column2      <null>      false
 
 ! CREATE TEMP MATERIALIZED VIEW foo AS SELECT * FROM v
 contains:catalog item 'foo' already exists
@@ -125,10 +125,10 @@ contains:catalog item 'temp_t' already exists
 # > CREATE TEMPORARY DEFAULT INDEX ON temp_t
 #
 # > SHOW INDEXES FROM temp_t
-#  on_name    key_name            seq_in_index  column_name  expression  nullable enabled
-# ---------------------------------------------------------------------------------------
-#  temp_t     temp_t_primary_idx  1             a            <null>      true     true
-#  temp_t     temp_t_primary_idx  2             b            <null>      false    true
+#  on_name    key_name            seq_in_index  column_name  expression  nullable
+# --------------------------------------------------------------------------------
+#  temp_t     temp_t_primary_idx  1             a            <null>      true
+#  temp_t     temp_t_primary_idx  2             b            <null>      false
 
 > DROP TABLE temp_t
 

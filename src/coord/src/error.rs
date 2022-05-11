@@ -31,8 +31,6 @@ pub enum CoordError {
     AutomaticTimestampFailure {
         /// The names of any unmaterialized sources.
         unmaterialized: Vec<String>,
-        /// Vec<(Objectname, Vec<Index names w/ enabled stats>)>.
-        disabled_indexes: Vec<(String, Vec<String>)>,
     },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
@@ -54,8 +52,6 @@ pub enum CoordError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
-    /// Specified index is disabled, but received non-enabling update request
-    InvalidAlterOnDisabledIndex(String),
     /// Attempted to build a materialization on a source that does not allow multiple materializations
     InvalidRematerialization {
         base_source: String,
@@ -146,37 +142,11 @@ impl CoordError {
         match self {
             CoordError::AutomaticTimestampFailure {
                 unmaterialized,
-                disabled_indexes,
             } => {
-                let unmaterialized_err = if unmaterialized.is_empty() {
-                    "".into()
-                } else {
-                    format!(
-                        "\nUnmaterialized sources:\n\t{}",
-                        itertools::join(unmaterialized, "\n\t")
-                    )
-                };
-
-                let disabled_indexes_err = if disabled_indexes.is_empty() {
-                    "".into()
-                } else {
-                    let d = disabled_indexes.iter().fold(
-                        String::default(),
-                        |acc, (object_name, disabled_indexes)| {
-                            format!(
-                                "{}\n\n\t{}\n\tDisabled indexes:\n\t\t{}",
-                                acc,
-                                object_name,
-                                itertools::join(disabled_indexes, "\n\t\t")
-                            )
-                        },
-                    );
-                    format!("\nSources w/ disabled indexes:{}", d)
-                };
 
                 Some(format!(
-                    "The query transitively depends on the following:{}{}",
-                    unmaterialized_err, disabled_indexes_err
+                    "The query transitively depends on the following unmaterialized sources:\n\t{}",
+                        itertools::join(unmaterialized, "\n\t")
                 ))
             }
             CoordError::Catalog(c) => c.detail(),
@@ -225,32 +195,9 @@ impl CoordError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
-            CoordError::AutomaticTimestampFailure {
-                unmaterialized,
-                disabled_indexes,
-            } => {
-                let unmaterialized_hint = if unmaterialized.is_empty() {
-                    ""
-                } else {
-                    "\n- Use `SELECT ... AS OF` to manually choose a timestamp for your query.
-- Create indexes on the listed unmaterialized sources or on the views derived from those sources"
-                };
-                let disabled_indexes_hint = if disabled_indexes.is_empty() {
-                    ""
-                } else {
-                    "ALTER INDEX ... SET ENABLED to enable indexes"
-                };
-
-                Some(format!(
-                    "{}{}{}",
-                    unmaterialized_hint,
-                    if !unmaterialized_hint.is_empty() {
-                        "\n-"
-                    } else {
-                        ""
-                    },
-                    disabled_indexes_hint
-                ))
+            CoordError::AutomaticTimestampFailure {..} => {
+                Some("\n- Use `SELECT ... AS OF` to manually choose a timestamp for your query.
+                - Create indexes on the listed unmaterialized sources or on the views derived from those sources".into())
             }
             CoordError::Catalog(c) => c.hint(),
             CoordError::ConstrainedParameter {
@@ -258,11 +205,6 @@ impl CoordError {
                 ..
             } => Some(format!("Available values: {}.", valid_values.join(", "))),
             CoordError::Eval(e) => e.hint(),
-            CoordError::InvalidAlterOnDisabledIndex(idx) => Some(format!(
-                "To perform this ALTER, first enable the index using ALTER \
-                INDEX {} SET ENABLED",
-                idx.quoted()
-            )),
             CoordError::UnknownLoginRole(_) => {
                 // TODO(benesch): this will be a bad hint when people are used
                 // to creating roles in Materialize, since they might drop the
@@ -330,9 +272,6 @@ impl fmt::Display for CoordError {
             ),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             CoordError::Internal(e) => write!(f, "internal error: {}", e),
-            CoordError::InvalidAlterOnDisabledIndex(name) => {
-                write!(f, "invalid ALTER on disabled index {}", name.quoted())
-            }
             CoordError::InvalidRematerialization {
                 base_source,
                 existing_indexes: _,

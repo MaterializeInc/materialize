@@ -35,10 +35,10 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
     SELECT * FROM mz_data
 
 > SHOW INDEXES FROM mz_view
-cluster on_name  key_name             seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  1             a            <null>      false    true
-<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  2             b            <null>      false    true
+cluster on_name  key_name             seq_in_index  column_name  expression  nullable
+--------------------------------------------------------------------------------------------
+<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  1             a            <null>      false
+<VARIABLE_OUTPUT> mz_view  mz_view_primary_idx  2             b            <null>      false
 
 > CREATE VIEW dependent_view AS
     SELECT * FROM mz_view;
@@ -172,10 +172,10 @@ materialize.public.renamed_mz_view  "CREATE VIEW \"materialize\".\"public\".\"re
 
 # Item's indexes are properly re-attributed
 > SHOW INDEXES FROM renamed_mz_view
-cluster on_name          key_name       seq_in_index  column_name expression nullable enabled
----------------------------------------------------------------------------------------------
-<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  1             a           <null>     false    true
-<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  2             b           <null>     false    true
+cluster on_name          key_name       seq_in_index  column_name expression nullable
+--------------------------------------------------------------------------------------------
+<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  1             a           <null>     false
+<VARIABLE_OUTPUT> renamed_mz_view  renamed_index  2             b           <null>     false
 
 > SHOW CREATE INDEX renamed_index
 Index               "Create Index"

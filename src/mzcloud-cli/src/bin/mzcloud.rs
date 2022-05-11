@@ -145,10 +145,6 @@ enum DeploymentsCommand {
         #[clap(long)]
         storage_mb: Option<i32>,
 
-        /// Disable user-created indexes (used for debugging).
-        #[clap(long)]
-        disable_user_indexes: Option<bool>,
-
         /// Disable materialized entirely, for recovering from catalog backups.
         #[clap(long, hide = true)]
         catalog_restore_mode: Option<bool>,
@@ -188,10 +184,6 @@ enum DeploymentsCommand {
         /// Size of the deployment. Defaults to current size.
         #[clap(short, long, parse(try_from_str = parse_size))]
         size: Option<DeploymentSizeEnum>,
-
-        /// Disable user-created indexes (used for debugging).
-        #[clap(long)]
-        disable_user_indexes: Option<bool>,
 
         /// Disable materialized entirely, for recovering from catalog backups.
         #[clap(long, hide = true)]
@@ -388,7 +380,6 @@ async fn handle_deployment_operations(
             name,
             size,
             storage_mb,
-            disable_user_indexes,
             catalog_restore_mode,
             materialized_extra_args,
             mz_version,
@@ -402,7 +393,8 @@ async fn handle_deployment_operations(
                     name,
                     size: size.map(Box::new),
                     storage_mb,
-                    disable_user_indexes,
+                    // TODO: remove once https://github.com/MaterializeInc/cloud-sdks/pull/15 lands
+                    disable_user_indexes: None,
                     catalog_restore_mode,
                     materialized_extra_args,
                     mz_version,
@@ -422,7 +414,6 @@ async fn handle_deployment_operations(
             id,
             name,
             size,
-            disable_user_indexes,
             catalog_restore_mode,
             materialized_extra_args,
             mz_version,
@@ -442,7 +433,8 @@ async fn handle_deployment_operations(
                     name,
                     size: size.map(Box::new),
                     storage_mb: None,
-                    disable_user_indexes,
+                    // TODO: remove once https://github.com/MaterializeInc/cloud-sdks/pull/15 lands
+                    disable_user_indexes: None,
                     catalog_restore_mode,
                     materialized_extra_args,
                     mz_version,

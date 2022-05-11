@@ -3096,20 +3096,12 @@ impl<'a> Parser<'a> {
                 })
             }
             SET => {
-                if self.parse_keyword(ENABLED) {
-                    Statement::AlterIndex(AlterIndexStatement {
-                        index_name: name,
-                        if_exists,
-                        action: AlterIndexAction::Enable,
-                    })
-                } else {
-                    let set_options = self.parse_with_options(true)?;
-                    Statement::AlterIndex(AlterIndexStatement {
-                        index_name: name,
-                        if_exists,
-                        action: AlterIndexAction::SetOptions(set_options),
-                    })
-                }
+                let set_options = self.parse_with_options(true)?;
+                Statement::AlterIndex(AlterIndexStatement {
+                    index_name: name,
+                    if_exists,
+                    action: AlterIndexAction::SetOptions(set_options),
+                })
             }
             RENAME => {
                 self.expect_keyword(TO)?;

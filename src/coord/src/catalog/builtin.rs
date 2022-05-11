@@ -987,7 +987,6 @@ lazy_static! {
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("on_id", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
-            .with_column("enabled", ScalarType::Bool.nullable(false))
             .with_column("cluster_id", ScalarType::Int64.nullable(false)),
     };
     pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {

@@ -84,10 +84,10 @@ SELECT * FROM v
 ----
 1
 
-query TTTTTTTT
+query TTTTTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-bar v v_primary_idx 1 ?column? NULL false true
+bar v v_primary_idx 1 ?column? NULL false
 
 query T
 SELECT
@@ -129,11 +129,11 @@ v_primary_idx
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER bar ON v
 
-query TTTTTTTT
+query TTTTTTT
 SHOW INDEXES ON v IN CLUSTER bar;
 ----
-bar v v_primary_idx 1 ?column? NULL false true
-bar v v_primary_idx1 1 ?column? NULL false true
+bar v v_primary_idx 1 ?column? NULL false
+bar v v_primary_idx1 1 ?column? NULL false
 
 statement error unknown cluster 'noexist'
 CREATE DEFAULT INDEX IN CLUSTER noexist ON v
@@ -151,11 +151,11 @@ DROP CLUSTER baz
 statement error cannot drop cluster with active indexes, sinks, or replicas
 DROP CLUSTER bar
 
-query TTTTTTTT
+query TTTTTTT
 SHOW INDEXES IN CLUSTER bar WHERE on_name = 'v';
 ----
-bar v v_primary_idx 1 ?column? NULL false true
-bar v v_primary_idx1 1 ?column? NULL false true
+bar v v_primary_idx 1 ?column? NULL false
+bar v v_primary_idx1 1 ?column? NULL false
 
 statement ok
 DROP INDEX v_primary_idx

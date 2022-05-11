@@ -1049,7 +1049,6 @@ impl_display_t!(AlterObjectRenameStatement);
 pub enum AlterIndexAction<T: AstInfo> {
     SetOptions(Vec<WithOption<T>>),
     ResetOptions(Vec<Ident>),
-    Enable,
 }
 
 /// `ALTER INDEX ... {RESET, SET}`
@@ -1080,7 +1079,6 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
                 f.write_node(&display::comma_separated(&options));
                 f.write_str(")");
             }
-            AlterIndexAction::Enable => f.write_str("SET ENABLED"),
         }
     }
 }

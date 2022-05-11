@@ -17,7 +17,6 @@ menu:
 Field | Use
 ------|-----
 _name_ | The identifier of the index you want to alter.
-**ENABLED** | [Enable](#enabling-indexes) the index, which lets Materialize use it again after being [disabled](/cli/#disable-user-indexes).
 _field_ | The name of the option you want to alter.
 _val_ | The new value for the option.
 
@@ -28,16 +27,6 @@ The following option is valid within the `SET` and `RESET` clauses:
 {{% index-with-options %}}
 
 ## Details
-
-### Enabling indexes
-
-After booting Materialize in
-[`--disable-user-indexes`](/cli/#disable-user-indexes) mode, you can enable
-individual indexes. This lets Materialize use the index again, which:
-
-- Restarts the dataflow associated with the index, which can in turn e.g. start
-  ingesting data from sources or sending data to sinks
-- Allows inserting into tables
 
 #### Tables
 

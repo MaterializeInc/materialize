@@ -2958,7 +2958,7 @@ lazy_static! {
                 params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
             },
             "mz_is_materialized" => Scalar {
-                params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_catalog.mz_indexes WHERE on_id = $1 AND enabled)") => Bool,
+                params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_catalog.mz_indexes WHERE on_id = $1)") => Bool,
                     oid::FUNC_MZ_IS_MATERIALIZED_OID;
             },
             "mz_render_typmod" => Scalar {

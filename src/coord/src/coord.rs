@@ -133,16 +133,15 @@ use mz_sql::names::{
     FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr,
-    IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
+    HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig,
+    Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -234,7 +233,6 @@ pub struct Config<S> {
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
-    pub disable_user_indexes: bool,
     pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub aws_external_id: AwsExternalId,
@@ -614,9 +612,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         let df = self
                             .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
-                        if let Some(df) = df {
-                            self.ship_dataflow(df, idx.compute_instance).await;
-                        }
+                        self.ship_dataflow(df, idx.compute_instance).await;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -1653,7 +1649,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(&session, plan).await, session);
+                tx.send(self.sequence_create_index(plan).await, session);
             }
             Plan::CreateType(plan) => {
                 tx.send(self.sequence_create_type(plan).await, session);
@@ -1751,20 +1747,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_alter_item_rename(plan).await, session);
             }
             Plan::AlterIndexSetOptions(plan) => {
-                tx.send(
-                    self.sequence_alter_index_set_options(&session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_alter_index_set_options(plan).await, session);
             }
             Plan::AlterIndexResetOptions(plan) => {
-                tx.send(
-                    self.sequence_alter_index_reset_options(&session, plan)
-                        .await,
-                    session,
-                );
-            }
-            Plan::AlterIndexEnable(plan) => {
-                tx.send(self.sequence_alter_index_enable(plan).await, session);
+                tx.send(self.sequence_alter_index_reset_options(plan).await, session);
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
@@ -2208,7 +2194,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 &source.desc,
                 None,
                 vec![source_id],
-                self.catalog.index_enabled_by_default(&index_id),
             );
             let index_oid = self.catalog.allocate_oid().await?;
             ops.push(catalog::Op::CreateItem {
@@ -2225,9 +2210,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(ops, move |txn| {
                 if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
-                    Ok(builder
-                        .build_index_dataflow(index_id)?
-                        .map(|df| (df, compute_instance)))
+                    Ok(Some((
+                        builder.build_index_dataflow(index_id)?,
+                        compute_instance,
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -2452,7 +2438,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 &view.desc,
                 view.conn_id,
                 vec![view_id],
-                self.catalog.index_enabled_by_default(&index_id),
             );
             let index_oid = self.catalog.allocate_oid().await?;
             ops.push(catalog::Op::CreateItem {
@@ -2488,9 +2473,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(ops, |txn| {
                 if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
-                    Ok(builder
-                        .build_index_dataflow(index_id)?
-                        .map(|df| (df, compute_instance)))
+                    Ok(Some((
+                        builder.build_index_dataflow(index_id)?,
+                        compute_instance,
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -2534,7 +2520,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let df = builder.build_index_dataflow(index_id)?;
                     dfs.entry(compute_instance)
                         .or_insert_with(Vec::new)
-                        .extend(df);
+                        .push(df);
                 }
                 Ok(dfs)
             })
@@ -2555,7 +2541,6 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_index(
         &mut self,
-        session: &Session,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
@@ -2575,7 +2560,6 @@ impl<S: Append + 'static> Coordinator<S> {
             on: index.on,
             conn_id: None,
             depends_on: index.depends_on,
-            enabled: self.catalog.index_enabled_by_default(&id),
             compute_instance,
         };
         let oid = self.catalog.allocate_oid().await?;
@@ -2594,12 +2578,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
         {
             Ok(df) => {
-                if let Some(df) = df {
-                    self.ship_dataflow(df, compute_instance).await;
-                    self.set_index_options(id, options, session)
-                        .await
-                        .expect("index enabled");
-                }
+                self.ship_dataflow(df, compute_instance).await;
+                self.set_index_options(id, options)
+                    .await
+                    .expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -3021,7 +3003,6 @@ impl<S: Append + 'static> Coordinator<S> {
             session: &Session,
         ) -> Result<(), CoordError> {
             let mut unmaterialized = vec![];
-            let mut disabled_indexes = vec![];
             for id in &id_bundle.storage_ids {
                 let entry = catalog.get_entry(id);
                 if entry.is_table() {
@@ -3034,31 +3015,12 @@ impl<S: Append + 'static> Coordinator<S> {
                             .resolve_full_name(entry.name(), Some(session.conn_id()))
                             .to_string(),
                     );
-                } else {
-                    let disabled_index_names = indexes
-                        .filter(|(_id, idx)| !idx.enabled)
-                        .map(|(id, _idx)| catalog.get_entry(&id).name())
-                        .map(|name| {
-                            catalog
-                                .resolve_full_name(name, Some(session.conn_id()))
-                                .to_string()
-                        })
-                        .collect();
-                    disabled_indexes.push((
-                        catalog
-                            .resolve_full_name(entry.name(), Some(session.conn_id()))
-                            .to_string(),
-                        disabled_index_names,
-                    ));
                 }
             }
-            if unmaterialized.is_empty() && disabled_indexes.is_empty() {
+            if unmaterialized.is_empty() {
                 Ok(())
             } else {
-                Err(CoordError::AutomaticTimestampFailure {
-                    unmaterialized,
-                    disabled_indexes,
-                })
+                Err(CoordError::AutomaticTimestampFailure { unmaterialized })
             }
         }
 
@@ -4215,17 +4177,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_alter_index_set_options(
         &mut self,
-        session: &Session,
         plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(plan.id, plan.options, session)
-            .await?;
+        self.set_index_options(plan.id, plan.options).await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
     async fn sequence_alter_index_reset_options(
         &mut self,
-        session: &Session,
         plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let options = plan
@@ -4237,39 +4196,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 ),
             })
             .collect();
-        self.set_index_options(plan.id, options, session).await?;
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    async fn sequence_alter_index_enable(
-        &mut self,
-        plan: AlterIndexEnablePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
-        let index = self
-            .catalog
-            .get_entry(&plan.id)
-            .index()
-            .expect("cannot enable non-indexes");
-        if !index.enabled {
-            let compute_instance = index.compute_instance;
-            let ops = vec![catalog::Op::UpdateItem {
-                id: plan.id,
-                to_item: CatalogItem::Index(catalog::Index {
-                    enabled: true,
-                    ..index.clone()
-                }),
-            }];
-            let df = self
-                .catalog_transact(ops, |txn| {
-                    let df = txn
-                        .dataflow_builder(compute_instance)
-                        .build_index_dataflow(plan.id)?
-                        .expect("index enabled");
-                    Ok(df)
-                })
-                .await?;
-            self.ship_dataflow(df, compute_instance).await;
-        }
+        self.set_index_options(plan.id, options).await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -4524,25 +4451,11 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         id: GlobalId,
         options: Vec<IndexOption>,
-        session: &Session,
     ) -> Result<(), CoordError> {
-        let needs = match self.read_capability.get_mut(&id) {
-            Some(needs) => needs,
-            None => {
-                if !self.catalog.is_index_enabled(&id) {
-                    return Err(CoordError::InvalidAlterOnDisabledIndex(
-                        self.catalog
-                            .resolve_full_name(
-                                self.catalog.get_entry(&id).name(),
-                                Some(session.conn_id()),
-                            )
-                            .to_string(),
-                    ));
-                } else {
-                    panic!("coord indexes out of sync")
-                }
-            }
-        };
+        let needs = self
+            .read_capability
+            .get_mut(&id)
+            .expect("coord indexes out of sync");
 
         for o in options {
             match o {
@@ -4804,7 +4717,6 @@ pub async fn serve<S: Append + 'static>(
         timestamp_frequency,
         logical_compaction_window,
         experimental_mode,
-        disable_user_indexes,
         safe_mode,
         build_info,
         aws_external_id,
@@ -4828,7 +4740,6 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
-        disable_user_indexes,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -4903,7 +4814,6 @@ fn auto_generate_primary_idx(
     on_desc: &RelationDesc,
     conn_id: Option<u32>,
     depends_on: Vec<GlobalId>,
-    enabled: bool,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
@@ -4921,7 +4831,6 @@ fn auto_generate_primary_idx(
             .collect(),
         conn_id,
         depends_on,
-        enabled,
         compute_instance,
     }
 }

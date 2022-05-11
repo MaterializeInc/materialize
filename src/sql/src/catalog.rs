@@ -216,8 +216,6 @@ pub struct CatalogConfig {
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
-    /// Whether to prevent user indexes from being considered for use.
-    pub disable_user_indexes: bool,
 }
 
 /// A database in a [`SessionCatalog`].
@@ -610,7 +608,6 @@ lazy_static! {
         aws_external_id: AwsExternalId::NotProvided,
         timestamp_frequency: Duration::from_secs(1),
         now: NOW_ZERO.clone(),
-        disable_user_indexes: false,
     };
 }
 
