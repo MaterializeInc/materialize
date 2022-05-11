@@ -28,3 +28,8 @@ message ProtoPostgresSourceConnector {
     string slot_name = 3;
     mz_dataflow_types.postgres_source.PostgresSourceDetails details = 4;
 }
+
+message ProtoPubNubSourceConnector {
+    string subscribe_key = 1;
+    string channel = 2;
+}

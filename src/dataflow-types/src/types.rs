@@ -2192,10 +2192,30 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PubNubSourceConnector {
         pub subscribe_key: String,
         pub channel: String,
+    }
+
+    impl From<&PubNubSourceConnector> for ProtoPubNubSourceConnector {
+        fn from(x: &PubNubSourceConnector) -> Self {
+            ProtoPubNubSourceConnector {
+                subscribe_key: x.subscribe_key.clone(),
+                channel: x.channel.clone(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoPubNubSourceConnector> for PubNubSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoPubNubSourceConnector) -> Result<Self, Self::Error> {
+            Ok(PubNubSourceConnector {
+                subscribe_key: x.subscribe_key,
+                channel: x.channel,
+            })
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
