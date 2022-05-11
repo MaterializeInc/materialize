@@ -3977,6 +3977,7 @@ dependencies = [
  "chrono",
  "clap",
  "fallible-iterator",
+ "futures",
  "junit-report",
  "lazy_static",
  "materialized",

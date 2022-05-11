@@ -42,6 +42,7 @@ use anyhow::{anyhow, bail};
 use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
+use futures::sink::SinkExt;
 use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use mz_persist_client::PersistLocation;
@@ -646,6 +647,20 @@ impl Runner {
                 location,
                 ..
             } => self.run_simple(*conn, sql, output, location.clone()).await,
+            Record::Copy {
+                table_name,
+                tsv_path,
+            } => {
+                let tsv = tokio::fs::read(tsv_path).await?;
+                let copy = self
+                    .client
+                    .copy_in(&*format!("COPY {} FROM STDIN", table_name))
+                    .await?;
+                tokio::pin!(copy);
+                copy.send(bytes::Bytes::from(tsv)).await?;
+                copy.finish().await?;
+                Ok(Outcome::Success)
+            }
             _ => Ok(Outcome::Success),
         }
     }

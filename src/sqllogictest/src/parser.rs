@@ -135,6 +135,15 @@ impl<'a> Parser<'a> {
                 self.parse_record()
             }
 
+            "copy" => Ok(Record::Copy {
+                table_name: words
+                    .next()
+                    .ok_or_else(|| anyhow!("load directive missing table name"))?,
+                tsv_path: words
+                    .next()
+                    .ok_or_else(|| anyhow!("load directive missing TSV path"))?,
+            }),
+
             other => bail!("Unexpected start of record: {}", other),
         }
     }
