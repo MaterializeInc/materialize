@@ -16,18 +16,30 @@ message ProtoTz {
 }
 
 message ProtoNaiveDate {
-   int32 year = 1;
-   uint32 ordinal = 2;
+    // Year
+    int32 year = 1;
+    // Day-of-year (0..365)
+    uint32 ordinal = 2;
 }
 
 message ProtoNaiveTime {
+    // The number of seconds since midnight
     uint32 secs = 1;
+    // Additional fractional seconds since midnight in nanosecond granularity.
+    // This can can exceed 1,000,000,000 in order to represent the leap second.
     uint32 frac = 2;
 }
 
 message ProtoNaiveDateTime {
-    ProtoNaiveDate date = 1;
-    ProtoNaiveTime time = 2;
+    // Year
+    int32 year = 1;
+    // Day-of-year (0..365)
+    uint32 ordinal = 2;
+    // The number of seconds since midnight
+    uint32 secs = 3;
+    // Additional fractional seconds since midnight in nanosecond granularity.
+    // This can can exceed 1,000,000,000 in order to represent the leap second.
+    uint32 frac = 4;
 }
 
 message ProtoFixedOffset {

@@ -9,6 +9,9 @@
 
 syntax = "proto3";
 
+import "repr/src/chrono.proto";
+import "repr/src/adt/interval.proto";
+
 package mz_repr.row;
 
 message ProtoRow {
@@ -43,17 +46,18 @@ message ProtoDatum {
         //
         // Of these, I'd guess Timestamp and UUID are probably the first ones
         // we'd bless followed by Date and Time.
-        ProtoDate date = 16;
-        ProtoTime time = 17;
-        ProtoTimestamp timestamp = 18;
-        ProtoInterval interval = 19;
-        ProtoArray array = 20;
-        ProtoRow list = 21;
-        ProtoDict dict = 22;
-        ProtoNumeric numeric = 23;
-        bytes uuid = 24;
-        uint32 uint32 = 25;
-        uint32 uint8 = 26;
+        mz_repr.chrono.ProtoNaiveDate date = 16;
+        mz_repr.chrono.ProtoNaiveTime time = 17;
+        mz_repr.chrono.ProtoNaiveDateTime timestamp = 18;
+        mz_repr.chrono.ProtoNaiveDateTime timestamp_tz = 19;
+        mz_repr.adt.interval.ProtoInterval interval = 20;
+        ProtoArray array = 21;
+        ProtoRow list = 22;
+        ProtoDict dict = 23;
+        ProtoNumeric numeric = 24;
+        bytes uuid = 25;
+        uint32 uint32 = 26;
+        uint32 uint8 = 27;
     }
 }
 
@@ -74,42 +78,6 @@ enum ProtoDatumOther {
     NUMERIC_POS_INF = 6;
     NUMERIC_NEG_INF = 7;
     NUMERIC_NA_N = 8;
-}
-
-message ProtoDate {
-    // Year
-    int32 year = 1;
-    // Day-of-year (0..365)
-    uint32 ordinal = 2;
-}
-
-message ProtoTime {
-    // The number of seconds since midnight
-    uint32 secs = 1;
-    // Additional fractional seconds since midnight in nanosecond granularity.
-    // This can can exceed 1,000,000,000 in order to represent the leap second.
-    uint32 nanos = 2;
-}
-
-message ProtoTimestamp {
-    // Year
-    int32 year = 1;
-    // Day-of-year (0..365)
-    uint32 ordinal = 2;
-    // The number of seconds since midnight
-    uint32 secs = 3;
-    // Additional fractional seconds since midnight in nanosecond granularity.
-    // This can can exceed 1,000,000,000 in order to represent the leap second.
-    uint32 nanos = 4;
-    // If true, this timestamp is in UTC. If false, this timestamp is zoneless.
-    bool is_tz = 5;
-}
-
-message ProtoInterval {
-    // A possibly negative number of months.
-    int32 months = 1;
-    int32 days = 2;
-    int64 micros = 3;
 }
 
 message ProtoArray {
