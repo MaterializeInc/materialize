@@ -36,13 +36,11 @@ these goals in the future.
 
 ## Description
 
-The general idea is that replicas sink their introspection dataflows (which they
-already maintain) to persistent storage. The resulting storage collections are
-exposed to the user as per-replica *introspection tables* in the system catalog.
-When these tables are referenced in queries, query planning translates these
-references to persist source reads. As persistent storage is shared between all
-replicas, any replica is able to access all introspection sources and yield
-consistent introspection data back to the user.
+The general idea is that replicas sink their introspection dataflows (which
+they already maintain) to persistent storage. The resulting storage collections
+are exposed to the user as per-replica persist sources. As persistent storage
+is shared between all replicas, any replica is able to access all introspection
+sources and yield consistent introspection data back to the user.
 
 ![Introspection data flow](static/introspection-data-flow.png)
 
@@ -162,12 +160,12 @@ On the SQL-side nothing needs to be changed, users will still be able to
 configure introspection (granularity and debug mode) on a per-cluster basis
 only.
 
-#### Introspection Tables
+#### Introspection Sources
 
 When a new replica is created, the coordinator creates a new replica-specific
-introspection table for each log variant.
+persist source (referred to as an "introspection source") for each log variant.
 
-Replica IDs are global between all clusters, so introspection tables can be
+Replica IDs are global between all clusters, so introspection sources can be
 uniquely named by log variant and replica ID:
 
 ```text
@@ -176,25 +174,21 @@ uniquely named by log variant and replica ID:
 
 ... where `<mz-log-variant>` is the value of `BuiltinLog::name` for the
 respective log variant. For example, for log variant `Timely(Operates)` and
-replica `5` the introspection table name is `mz_dataflow_operators_5`.
+replica `5` the introspection source name is `mz_dataflow_operators_5`.
 
 When a replica is dropped, the coordinator removes all associated introspection
-tables.
+sources.
 
-Query planning translates references to introspection tables to reads from
-persist sources using `ExternalSourceConnector::Persist` and the respective
-persist shard ID for that log variant-replica combination.
-
-Introspection tables being backed by unmaterialized sources means that they have
-worse ergonomics that the existing arrangement-backed introspection tables. To
-query them, users must either specify an explicit `AS OF` or create an index. We
-consider this loss in ergonomics acceptable.
+Introspection data being exposed as unmaterialized sources means that they have
+worse ergonomics than the existing arrangement-backed introspection tables. To
+query them, users must either specify an explicit `AS OF` or create an index.
+We consider this loss in ergonomics acceptable.
 
 #### Introspection Views
 
 For convenient access to introspection data from all replicas, the coordinator
 maintains a built-in introspection view for each log variant. An introspection
-view contains the union of all replica-specific introspection tables for the
+view contains the union of all replica-specific introspection sources for the
 respective log variant, tagged with cluster name and replica name:
 
 ```sql
@@ -216,11 +210,11 @@ because the old arrangement-based introspection tables already occupy the plain
 `<mz-log-variant>` names. Once we remove the arrangement-based introspection
 tables, we can also drop the suffix.
 
-When a new replica is created, the coordinator adds its introspection tables to
-the respective introspection views.
+When a new replica is created, the coordinator adds its introspection sources
+to the respective introspection views.
 
-When a replica is dropped, the coordinator removes its introspection tables from
-the respective introspection views.
+When a replica is dropped, the coordinator removes its introspection sources
+from the respective introspection views.
 
 ### Feature Flag
 
@@ -233,9 +227,9 @@ We add a feature flag `--replicated-compute-introspection` to both
 `materialized` and `computed`, to opt into logging introspection data to
 persist. `materialized` passes the flag (if set) on to `computed`.
 
-If the flag is not set, the coordinator does not create the introspection tables
-and views described above. It may still generate shard IDs and pass them to the
-compute controller, as this is invisible to users.
+If the flag is not set, the coordinator does not create the introspection
+sources and views described above. It may still generate shard IDs and pass
+them to the compute controller, as this is invisible to users.
 
 If the flag is not set, replicas don't sink introspection data to persist.
 
@@ -346,7 +340,7 @@ accessible to the user. We might need a new SQL construct like
 
 * **How can replicas drop their persist shards?**
 
-* **Should introspection tables be created inside `mz_catalog` or a separate
+* **Should introspection sources be created inside `mz_catalog` or a separate
   schema?**
 
   Adding them all to `mz_catalog` might get noisy if we have a lot of replicas.
