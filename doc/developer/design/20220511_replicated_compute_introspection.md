@@ -314,26 +314,14 @@ accessible to the user. We might need a new SQL construct like
 
 ## Open questions
 
-* **How is the coordinator made aware of the storage location (blob URI, consensus
-  URI)?**
+* **Who is responsible for maintaining the `since` frontier of introspection
+  collections?**
 
-  Should we pass this information via `--replicated-compute-introspection` for
-  now? At some point this needs to be solved properly, but maybe it's fine to
-  leave it out of scope here?
-
-* **What happens if all handles to a persist shard are dropped temporarily?**
-
-  This can happen if a replica is restarted and there are no concurrent readers.
-  Is the shard dropped? Is the replica able to open it again after the restart?
-  Do we need to keep a handle open in ADAPTER?
-  
-* **Does persist compaction work if there is only a single writer to a shard?**
-
-  A writer cannot advance `since`, so is `since` advanced automatically, or not
-  advanced at all? Do we need to keep a read handle open in ADAPTER to
-  periodically advance `since`?
-
-* **How can replicas drop their persist shards?**
+  Some component needs to periodically downgrade `since` of the introspection
+  storage collections to enable compaction when there are no other readers.
+  Also, some component needs to downgrade `since` to the empty frontier when a
+  collection should be cleaned up (its replica is dropped). What should this
+  component be? Does the storage controller already handle this for us?
 
 * **Should introspection sources be created inside `mz_catalog` or a separate
   schema?**
