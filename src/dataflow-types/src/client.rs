@@ -36,7 +36,7 @@ use mz_repr::{GlobalId, Row};
 use crate::logging::LoggingConfig;
 use crate::{
     sources::{MzOffset, SourceDesc},
-    DataflowDescription, PeekResponse, SourceInstanceDesc, TailResponse, Update,
+    DataflowDescription, PeekResponse, Plan, SourceInstanceDesc, TailResponse, Update,
 };
 
 pub mod controller;
@@ -142,7 +142,7 @@ impl TryFrom<ProtoPeek> for Peek {
 }
 
 /// Commands related to the computation and maintenance of views.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     ///
@@ -174,6 +174,125 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// The identifiers of the peek requests to cancel.
         uuids: BTreeSet<Uuid>,
     },
+}
+
+impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
+    fn from(x: &ComputeCommand<mz_repr::Timestamp>) -> Self {
+        use proto_compute_command::Kind::*;
+        use proto_compute_command::*;
+        ProtoComputeCommand {
+            kind: Some(match x {
+                ComputeCommand::CreateInstance(logging) => CreateInstance(ProtoCreateInstance {
+                    logging: logging.as_ref().map(Into::into),
+                }),
+                ComputeCommand::DropInstance => DropInstance(()),
+                ComputeCommand::CreateDataflows(dataflows) => {
+                    CreateDataflows(ProtoCreateDataflows {
+                        dataflows: dataflows.iter().map(Into::into).collect(),
+                    })
+                }
+                ComputeCommand::AllowCompaction(collections) => AllowCompaction(ProtoCompactions {
+                    collections: collections
+                        .iter()
+                        .map(|(id, frontier)| ProtoCompaction {
+                            id: Some(id.into()),
+                            frontier: Some(frontier.into()),
+                        })
+                        .collect(),
+                }),
+                ComputeCommand::Peek(peek) => Peek(peek.into()),
+                ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
+                    uuids: uuids.into_iter().map(|id| id.into_proto()).collect(),
+                }),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoComputeCommand) -> Result<Self, Self::Error> {
+        use proto_compute_command::Kind::*;
+        use proto_compute_command::*;
+        match x.kind {
+            Some(CreateInstance(ProtoCreateInstance { logging })) => Ok(
+                ComputeCommand::CreateInstance(logging.map(TryInto::try_into).transpose()?),
+            ),
+            Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
+            Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
+                Ok(ComputeCommand::CreateDataflows(
+                    dataflows
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()?,
+                ))
+            }
+            Some(AllowCompaction(ProtoCompactions { collections })) => {
+                Ok(ComputeCommand::AllowCompaction(
+                    collections
+                        .into_iter()
+                        .map(|collection| {
+                            Ok((
+                                collection.id.try_into_if_some("ProtoCompaction::id")?,
+                                collection.frontier.map(Into::into).ok_or_else(|| {
+                                    TryFromProtoError::missing_field("ProtoCompaction::frontier")
+                                })?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+                ))
+            }
+            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.try_into()?)),
+            Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
+                uuids: uuids
+                    .into_iter()
+                    .map(Uuid::from_proto)
+                    .collect::<Result<BTreeSet<_>, _>>()?,
+            }),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoComputeCommand::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            any::<Option<LoggingConfig>>()
+                .prop_map(|logging| ComputeCommand::CreateInstance(logging)),
+            Just(ComputeCommand::DropInstance),
+            proptest::collection::vec(
+                any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>(),
+                1..4
+            )
+            .prop_map(|dataflows| ComputeCommand::CreateDataflows(dataflows)),
+            proptest::collection::vec(
+                (
+                    any::<GlobalId>(),
+                    proptest::collection::vec(any::<u64>(), 1..4)
+                ),
+                1..4
+            )
+            .prop_map(|collections| ComputeCommand::AllowCompaction(
+                collections
+                    .into_iter()
+                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
+                    .collect()
+            )),
+            any::<Peek>().prop_map(|peek| ComputeCommand::Peek(peek)),
+            proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
+                ComputeCommand::CancelPeeks {
+                    uuids: BTreeSet::from_iter(uuids.into_iter()),
+                }
+            })
+        ]
+        .boxed()
+    }
 }
 
 /// A command creating a single source
@@ -935,6 +1054,13 @@ mod tests {
         #[test]
         fn peek_protobuf_roundtrip(expect in any::<Peek>() ) {
             let actual = protobuf_roundtrip::<_, ProtoPeek>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }

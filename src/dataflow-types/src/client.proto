@@ -9,11 +9,16 @@
 
 syntax = "proto3";
 
+import "dataflow-types/src/logging.proto";
+import "dataflow-types/src/types.proto";
+import "expr/src/linear.proto";
+import "expr/src/relation.proto";
+import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
 import "repr/src/proto.proto";
-import "expr/src/linear.proto";
-import "expr/src/relation.proto";
+
+import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.client;
 
@@ -24,4 +29,36 @@ message ProtoPeek {
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
+}
+
+message ProtoComputeCommand {
+    message ProtoCreateInstance {
+        mz_dataflow_types.logging.ProtoLoggingConfig logging = 1;
+    }
+
+    message ProtoCreateDataflows {
+        repeated mz_dataflow_types.types.ProtoDataflowDescription dataflows = 1;
+    }
+
+    message ProtoCompaction {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        mz_persist.gen.persist.ProtoU64Antichain frontier = 2;
+    }
+
+    message ProtoCompactions {
+        repeated ProtoCompaction collections = 1;
+    }
+
+    message ProtoCancelPeeks {
+        repeated mz_repr.proto.ProtoU128 uuids = 1;
+    }
+
+    oneof kind {
+        ProtoCreateInstance create_instance = 1;
+        google.protobuf.Empty drop_instance = 2;
+        ProtoCreateDataflows create_dataflows = 3;
+        ProtoCompactions allow_compaction = 4;
+        ProtoPeek peek = 5;
+        ProtoCancelPeeks cancel_peeks = 6;
+    }
 }
