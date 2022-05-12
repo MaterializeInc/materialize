@@ -303,8 +303,13 @@ where
     R: Serialize + fmt::Debug + Send + Unpin,
 {
     loop {
-        let (conn, _addr) = config.listener.accept().await?;
+        let (mut conn, _addr) = config.listener.accept().await?;
         info!("coordinator connection accepted");
+
+        use tokio_byteorder::{AsyncWriteBytesExt, NetworkEndian};
+        if conn.write_u64::<NetworkEndian>(0xDEADBEEF).await.is_err() {
+            continue;
+        }
 
         let mut conn = mz_dataflow_types::client::tcp::framed_server(conn);
         loop {

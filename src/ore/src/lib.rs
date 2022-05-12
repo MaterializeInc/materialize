@@ -39,6 +39,7 @@ pub mod fmt;
 #[cfg(feature = "network")]
 pub mod future;
 pub mod graph;
+pub mod guard;
 pub mod hash;
 pub mod hint;
 pub mod id_gen;

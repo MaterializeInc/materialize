@@ -125,6 +125,7 @@ mod boundary_hook {
     };
     use mz_dataflow_types::sources::SourceDesc;
     use mz_dataflow_types::{SourceInstanceDesc, SourceInstanceId, SourceInstanceRequest};
+    use mz_ore::guard::DropGuard;
     use mz_repr::GlobalId;
 
     /// A client wrapper that observes source instantiation requests and enqueues them as commands.
@@ -229,7 +230,8 @@ mod boundary_hook {
                                             arguments: request.arguments,
                                         })).collect(),
                                     }]);
-                                    self.client.send(command).await.unwrap()
+                                    let guard = DropGuard::new("BoundaryHook::recv");
+                                    guard.consume(self.client.send(command).await).unwrap();
                                 } else {
                                     self.pending.entry(request.source_id).or_insert(Vec::new()).push(request);
                                 }

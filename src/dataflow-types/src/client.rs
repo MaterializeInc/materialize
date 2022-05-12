@@ -758,6 +758,7 @@ pub mod tcp {
     enum TcpConn<C, R> {
         Disconnected,
         Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
+        Initializing(Option<TcpStream>),
         Backoff(Instant),
         Connected(FramedClient<TcpStream, C, R>),
     }
@@ -807,10 +808,11 @@ pub mod tcp {
                         let connecting = Box::pin(TcpStream::connect(self.addr.clone()));
                         self.connection = TcpConn::Connecting(connecting);
                     }
+
                     TcpConn::Connecting(connecting) => match connecting.await {
                         Ok(connection) => {
                             tracing::info!("Reconnected to {}", self.addr);
-                            self.connection = TcpConn::Connected(framed_client(connection));
+                            self.connection = TcpConn::Initializing(Some(connection));
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -823,6 +825,20 @@ pub mod tcp {
                             self.connection = TcpConn::Backoff(deadline);
                         }
                     },
+                    TcpConn::Initializing(connection) => {
+                        use tokio_byteorder::{AsyncReadBytesExt, NetworkEndian};
+                        let token = connection
+                            .as_mut()
+                            .unwrap()
+                            .read_u64::<NetworkEndian>()
+                            .await;
+                        if matches!(token, Ok(0xDEADBEEF)) {
+                            self.connection =
+                                TcpConn::Connected(framed_client(connection.take().unwrap()));
+                        } else {
+                            self.connection = TcpConn::Disconnected;
+                        }
+                    }
                     TcpConn::Backoff(deadline) => {
                         time::sleep_until(*deadline).await;
                         self.connection = TcpConn::Disconnected;

@@ -24,6 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use mz_ore::guard::DropGuard;
 use timely::progress::{frontier::MutableAntichain, Antichain};
 
 use crate::client::Peek;
@@ -298,8 +299,10 @@ where
                 drop(stream);
 
                 if let Some(replica_id) = &errored_replica {
+                    let guard = DropGuard::new("Replicated::recv hydrate_replica");
                     tracing::warn!("Rehydrating replica {:?}", replica_id);
                     self.hydrate_replica(replica_id).await;
+                    guard.consume(());
                 }
 
                 clean_recv = errored_replica.is_none();
