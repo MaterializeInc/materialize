@@ -17,7 +17,11 @@ DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
 DEFAULT_DEBEZIUM_VERSION = "1.9"
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
-DEFAULT_MZ_VOLUMES = ["mzdata:/share/mzdata", "tmp:/share/tmp"]
+DEFAULT_MZ_VOLUMES = [
+    "mzdata:/mzdata",
+    "postgres:/var/lib/postgresql",
+    "tmp:/share/tmp",
+]
 
 
 class Materialized(Service):
@@ -29,7 +33,7 @@ class Materialized(Service):
         port: Union[int, str] = 6875,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
-        data_directory: str = "/share/mzdata",
+        data_directory: str = "/mzdata",
         timestamp_frequency: str = "100ms",
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
@@ -551,7 +555,7 @@ class Testdrive(Service):
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
 
         if validate_data_dir:
-            entrypoint.append("--validate-data-dir=/share/mzdata")
+            entrypoint.append("--validate-data-dir=/mzdata")
 
         if validate_postgres_stash:
             entrypoint.append(

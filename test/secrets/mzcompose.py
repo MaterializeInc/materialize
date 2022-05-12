@@ -25,7 +25,7 @@ def workflow_default(c: Composition) -> None:
         "materialized",
         "bash",
         "-c",
-        "[[ `stat -c \"%a\" /share/mzdata/secrets` == '700' ]] && exit 0 || exit 1",
+        "[[ `stat -c \"%a\" /mzdata/secrets` == '700' ]] && exit 0 || exit 1",
     )
 
     c.sql("CREATE SECRET secret AS 's3cret'")
@@ -34,7 +34,7 @@ def workflow_default(c: Composition) -> None:
         "materialized",
         "bash",
         "-c",
-        "[[ `cat /share/mzdata/secrets/*` == 's3cret' ]] && exit 0 || exit 1",
+        "[[ `cat /mzdata/secrets/*` == 's3cret' ]] && exit 0 || exit 1",
     )
 
     # Check that the file permissions are restrictive
@@ -42,7 +42,7 @@ def workflow_default(c: Composition) -> None:
         "materialized",
         "bash",
         "-c",
-        "[[ `stat -c \"%a\" /share/mzdata/secrets/*` == '600' ]] && exit 0 || exit 1",
+        "[[ `stat -c \"%a\" /mzdata/secrets/*` == '600' ]] && exit 0 || exit 1",
     )
 
     # Check that alter secret gets reflected on disk
@@ -51,7 +51,7 @@ def workflow_default(c: Composition) -> None:
         "materialized",
         "bash",
         "-c",
-        "[[ `cat /share/mzdata/secrets/*` == 'tops3cret' ]] && exit 0 || exit 1",
+        "[[ `cat /mzdata/secrets/*` == 'tops3cret' ]] && exit 0 || exit 1",
     )
 
     # check that replacing the file did not change permissions
@@ -59,7 +59,7 @@ def workflow_default(c: Composition) -> None:
         "materialized",
         "bash",
         "-c",
-        "[[ `stat -c \"%a\" /share/mzdata/secrets/*` == '600' ]] && exit 0 || exit 1",
+        "[[ `stat -c \"%a\" /mzdata/secrets/*` == '600' ]] && exit 0 || exit 1",
     )
 
     # Rename should not change the contents on disk
@@ -70,7 +70,7 @@ def workflow_default(c: Composition) -> None:
         "materialized",
         "bash",
         "-c",
-        "[[ `cat /share/mzdata/secrets/*` == 'tops3cret' ]] && exit 0 || exit 1",
+        "[[ `cat /mzdata/secrets/*` == 'tops3cret' ]] && exit 0 || exit 1",
     )
 
     c.sql("DROP SECRET renamed_secret")
@@ -79,5 +79,5 @@ def workflow_default(c: Composition) -> None:
         "materialized",
         "bash",
         "-c",
-        "[[ -z `ls -A /share/mzdata/secrets` ]] && exit 0 || exit 1",
+        "[[ -z `ls -A /mzdata/secrets` ]] && exit 0 || exit 1",
     )

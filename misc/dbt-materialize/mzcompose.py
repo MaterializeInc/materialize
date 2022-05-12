@@ -72,8 +72,8 @@ test_cases = [
             "--tls-ca=/secrets/ca.crt",
         ],
         dbt_env={
-            "DBT_SSLCERT": "/secrets/materialized.crt",
-            "DBT_SSLKEY": "/secrets/materialized.key",
+            "DBT_SSLCERT": "/secrets/postgres.crt",
+            "DBT_SSLKEY": "/secrets/postgres.key",
             "DBT_SSLROOTCERT": "/secrets/ca.crt",
         },
     ),
