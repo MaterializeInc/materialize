@@ -61,7 +61,6 @@ where
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
     let async_stream = async_stream::try_stream! {
-
         // We are reading only from worker 0. We can split the work of reading from the snapshot to
         // multiple workers, but someone has to distribute the splits. Also, in the glorious
         // STORAGE future, we will use multiple persist shards to back a STORAGE collection. Then,
@@ -78,33 +77,41 @@ where
 
         let persist_client = persist_location.open().await?;
 
-        let (_write, read) =
-            persist_client.open::<Row, Row, Timestamp, Diff>(shard_id).await?;
+        let (_write, mut read) = persist_client
+            .open::<Row, Row, Timestamp, Diff>(shard_id)
+            .await?;
 
-            let mut snapshot_iter = read
-                .snapshot(as_of.clone())
-                .await
-                .expect("cannot serve requested as_of");
+        /// Aggressively downgrade `since`, to not hold back compaction.
+        read.downgrade_since(as_of.clone()).await;
 
+        let mut snapshot_iter = read
+            .snapshot(as_of.clone())
+            .await
+            .expect("cannot serve requested as_of");
 
-            // First, yield all the updates from the snapshot.
-            while let Some(next) = snapshot_iter.next().await {
-                yield ListenEvent::Updates(next);
-            }
+        // First, yield all the updates from the snapshot.
+        while let Some(next) = snapshot_iter.next().await {
+            yield ListenEvent::Updates(next);
+        }
 
-            // Then, listen continously and yield any new updates. This loop is expected to never
-            // finish.
-            let mut listen = read
-                .listen(as_of)
-                .await
-                .expect("cannot serve requested as_of");
+        // Then, listen continously and yield any new updates. This loop is expected to never
+        // finish.
+        let mut listen = read
+            .listen(as_of)
+            .await
+            .expect("cannot serve requested as_of");
 
-            loop {
-                let next = listen.next().await;
-                for event in next {
-                    yield event;
+        loop {
+            let next = listen.next().await;
+            for event in next {
+                // TODO(aljoscha): We should introduce a method that consumes a `ReadHandle` and
+                // returns a `Listen` that automatically downgrades `since` as early as possible.
+                if let ListenEvent::Progress(upper) = &event {
+                    read.downgrade_since(upper.clone()).await;
                 }
+                yield event;
             }
+        }
     };
 
     let mut pinned_stream = Box::pin(async_stream);
