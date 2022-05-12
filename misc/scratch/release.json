@@ -2,7 +2,7 @@
     "name": "chbench",
     "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find chbench run load-test",
     "instance_type": "r5a.4xlarge",
-    "ami": "ami-0b29b6e62f2343b46",
+    "ami": "ami-0aeb7c931a5a61206",
     "size_gb": 200,
     "tags": {
         "scrape_benchmark_numbers": "true",
@@ -18,7 +18,7 @@
     "name": "kinesis",
     "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find perf-kinesis run load-test",
     "instance_type": "r5a.4xlarge",
-    "ami": "ami-0b29b6e62f2343b46",
+    "ami": "ami-0aeb7c931a5a61206",
     "size_gb": 64,
     "tags": {
         "scrape_benchmark_numbers": "true",
@@ -34,7 +34,7 @@
     "name": "kafka-ingest-open-loop",
     "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find kafka-ingest-open-loop run default --num-seconds=86400 --records-per-second=1000",
     "instance_type": "r5a.4xlarge",
-    "ami": "ami-0b29b6e62f2343b46",
+    "ami": "ami-0aeb7c931a5a61206",
     "size_gb": 200,
     "tags": {
         "scrape_benchmark_numbers": "true",
@@ -49,7 +49,7 @@
     "name": "kafka-ingest-open-loop-persist",
     "launch_script": "MZ_WORKERS=4 bin/mzcompose --preserve-ports --find kafka-ingest-open-loop run default --num-seconds=86400 --records-per-second=1000 --enable-persistence --s3-storage=release-$(echo $RANDOM)",
     "instance_type": "r5a.4xlarge",
-    "ami": "ami-0b29b6e62f2343b46",
+    "ami": "ami-0aeb7c931a5a61206",
     "size_gb": 200,
     "tags": {
         "scrape_benchmark_numbers": "true",
