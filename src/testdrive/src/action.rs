@@ -721,11 +721,19 @@ pub async fn create_state(
 
     let (materialized_addr, materialized_user, pgclient, pgconn_task) = {
         let materialized_url = util::postgres::config_url(&config.materialized_pgconfig)?;
-        let (pgclient, pgconn) = config
-            .materialized_pgconfig
-            .connect(tokio_postgres::NoTls)
-            .await
-            .with_context(|| format!("opening SQL connection: {}", materialized_url))?;
+
+        let (pgclient, pgconn) = Retry::default()
+            .max_duration(config.default_timeout)
+            .retry_async_canceling(|_| async move {
+                config
+                    .materialized_pgconfig
+                    .clone()
+                    .connect_timeout(config.default_timeout)
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .map_err(|e| anyhow!(e))
+            })
+            .await?;
         let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
             join.expect("pgconn_task unexpectedly canceled")
                 .context("running SQL connection")
