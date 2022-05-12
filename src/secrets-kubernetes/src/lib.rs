@@ -179,4 +179,8 @@ impl SecretsReader for KubernetesSecretsController {
     fn read(&self, _id: mz_repr::GlobalId) -> Result<Vec<u8>, Error> {
         unreachable!()
     }
+
+    fn canonical_path(&self, _id: GlobalId) -> Result<std::path::PathBuf, anyhow::Error> {
+        unreachable!()
+    }
 }

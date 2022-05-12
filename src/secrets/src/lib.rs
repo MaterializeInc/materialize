@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
@@ -26,6 +28,7 @@ pub trait SecretsController: Send + Sync {
 
 pub trait SecretsReader: Send + Sync {
     fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error>;
+    fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error>;
 }
 
 /// An operation on a [`SecretsController`].

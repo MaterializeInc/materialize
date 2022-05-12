@@ -23,7 +23,7 @@ use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use tokio::task;
-use tracing::{debug, info};
+use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
@@ -396,12 +396,23 @@ async fn purify_csr_connector_avro(
                 .expect("CSR Connector must specify Registry URL"),
         }
         .parse()?;
+        let mut ccsr_client_options =
+            if let CsrConnector::Reference { with_options, .. } = connector {
+                with_options
+                    .as_ref()
+                    .expect("")
+                    .iter()
+                    .map(|(k, v)| (k.to_owned(), Value::String(v.to_string())))
+                    .collect::<BTreeMap<String, Value>>()
+            } else {
+                normalize::options(ccsr_options)
+            };
 
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(
                 url,
                 &connector_options,
-                &mut normalize::options(ccsr_options),
+                &mut ccsr_client_options,
             )
         })?;
 

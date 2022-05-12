@@ -148,12 +148,15 @@ contains:self signed certificate in certificate chain
 
 > CREATE SECRET client_cert AS '${arg.client-cert}'
 > CREATE SECRET client_key AS '${arg.client-key}'
+> CREATE SECRET ca_cert AS '${arg.ca-cert}'
+
 # Ensure that connectors work with SSL basic_auth
 > CREATE CONNECTOR kafka_ssl
-  FOR KAFKA BROKER 'kafka:9092'
+  FOR KAFKA BROKER '${testdrive.kafka-addr}'
   SECURITY SSL
   CERTIFICATE client_cert
   KEY client_key
+  AUTHORITY ca_cert
 
 > CREATE SECRET csr_pass AS 'sekurity'
 
@@ -161,26 +164,15 @@ contains:self signed certificate in certificate chain
   FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   USERNAME 'materialize'
   PASSWORD csr_pass
+  CERTIFICATE client_cert
+  KEY client_key
+  AUTHORITY ca_cert
 
 > CREATE MATERIALIZED SOURCE connector_source
   FROM KAFKA CONNECTOR kafka_ssl
   TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR schema_reg
   ENVELOPE DEBEZIUM
-
-#> CREATE MATERIALIZED SOURCE connector_source
-#  FROM KAFKA CONNECTOR kafka_ssl
-#  TOPIC 'testdrive-data-${testdrive.seed}'
-#  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-#  WITH (
-#      ssl_key_location = '/share/secrets/materialized.key',
-#      ssl_certificate_location = '/share/secrets/materialized.crt',
-#      ssl_ca_location = '/share/secrets/ca.crt',
-#      username = "materialize",
-#      password = "sekurity"
-#  )
-#  ENVELOPE DEBEZIUM
-
 
 > SELECT * FROM connector_source
 a

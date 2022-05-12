@@ -24,11 +24,12 @@ use mz_repr::ColumnName;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AstInfo, CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
-    KafkaConnector, KafkaSourceConnector, Op, Query, Statement, TableFactor, TableFunction,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
+    AstInfo, CreateConnector, CreateConnectorStatement, CreateIndexStatement,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, KafkaConnector, KafkaSecurityOptions, KafkaSourceConnector, Op, Query,
+    Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition, WithOption, WithOptionValue,
 };
 
 use crate::names::{
@@ -483,16 +484,35 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             match connector {
-                mz_sql_parser::ast::CreateConnector::CSR { password, .. } => {
+                // Because failing to exhaustively resolve names leads to catalog corruption
+                // we choose to explicitly ignore the values that do not require normalization
+                CreateConnector::CSR {
+                    password,
+                    registry: _registry,
+                    username: _username,
+                    certificate,
+                    key,
+                    authority,
+                } => {
                     if let Some(inner) = password {
                         *password = Some(allocate_name(inner)?);
                     };
+                    if let Some(inner) = authority {
+                        *authority = Some(allocate_name(inner)?);
+                    }
+                    if let Some(inner) = certificate {
+                        *certificate = Some(allocate_name(inner)?);
+                    }
+                    if let Some(inner) = key {
+                        *key = Some(allocate_name(inner)?);
+                    }
                 }
-                mz_sql_parser::ast::CreateConnector::Kafka { security, .. } => match security {
-                    mz_sql_parser::ast::KafkaSecurityOptions::SSL {
+                CreateConnector::Kafka { security, .. } => match security {
+                    KafkaSecurityOptions::SSL {
                         key,
                         certificate,
                         passphrase,
+                        authority,
                     } => {
                         if let Some(inner) = key {
                             *key = Some(allocate_name(inner)?);
@@ -503,8 +523,11 @@ pub fn create_statement(
                         if let Some(inner) = passphrase {
                             *passphrase = Some(allocate_name(inner)?);
                         };
+                        if let Some(inner) = authority {
+                            *authority = Some(allocate_name(inner)?);
+                        }
                     }
-                    mz_sql_parser::ast::KafkaSecurityOptions::SASL { password, .. } => {
+                    KafkaSecurityOptions::SASL { password, .. } => {
                         *password = allocate_name(password)?;
                     }
                 },

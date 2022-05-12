@@ -587,7 +587,7 @@ fn create_kafka_config(
 fn fixup_secrets(cfg: &mut ClientConfig) {
     fn secret_path(uuid: &str) -> PathBuf {
         //TODO: this should come from a config someplace
-        let secrets_dir = Path::new("/share/secrets/");
+        let secrets_dir = Path::new("/share/mzdata/secrets/");
         secrets_dir.with_file_name(uuid)
     }
     fn is_secret_path(maybe_path: &PathBuf) -> bool {
