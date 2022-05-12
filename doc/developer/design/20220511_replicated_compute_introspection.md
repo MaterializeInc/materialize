@@ -90,19 +90,24 @@ also contain the storage connection information mentioned above (details subject
 to bike-shedding):
 
 ```rust
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+
 pub struct LoggingConfig {
     pub granularity_ns: u128,
-    pub active_logs: HashMap<LogVariant, ActiveLog>,
     pub log_logging: bool,
-    pub blob_uri: String,
-    pub consensus_uri: String,
-}
-
-pub struct ActiveLog {
-    pub index_id: GlobalId,
-    pub shard_id: ShardId,
+    pub active_logs: HashMap<LogVariant, GlobalId>,
+    pub sink_logs: HashMap<LogVariant, CollectionMetadata>,
 }
 ```
+
+`sink_logs` communicates to the replica, which log variants should be sinked to
+which target storage collections. The set of log variants contained in this list
+should be either the same as in `active_log`, or empty, if logging to persist is
+disabled (see [Feature Flag](#feature-flag)).
+
+The `CollectionMetadata` type contains blob URI and consensus URI in its current
+definition. It needs to be extended to also contain the shard ID (or a list of
+shard IDs).
 
 The compute controller generally assumes that it can send the same commands to
 all replicas in a cluster. This will not be the case anymore with the updated
@@ -219,14 +224,13 @@ unbounded growth of the introspection collections. Therefore, logging to
 persist is disabled by default.
 
 We add a feature flag `--replicated-compute-introspection` to both
-`materialized` and `computed`, to opt into logging introspection data to
-persist. `materialized` passes the flag (if set) on to `computed`.
+`materialized`, to opt into logging introspection data to persist.
+`materialized` passes the flag (if set) on to `computed` through the
+`LoggingConfig::sink_logs` field of the `CreateInstance` command.
 
 If the flag is not set, the coordinator does not create the introspection
-sources and views described above. It may still generate shard IDs and pass
-them to the compute controller, as this is invisible to users.
-
-If the flag is not set, replicas don't sink introspection data to persist.
+sources and views described above, and replicas don't sink introspection data to
+persist.
 
 ## Future Improvements
 
