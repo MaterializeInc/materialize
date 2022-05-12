@@ -26,4 +26,5 @@ Plugin = AdapterPlugin(
     adapter=MaterializeAdapter,
     credentials=MaterializeCredentials,
     include_path=materialize.PACKAGE_PATH,
+    dependencies=["postgres"],
 )
