@@ -76,6 +76,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
+    if args.aws_region is None:
+        dependencies += ["localstack"]
+
     materialized = Materialized(
         options=["--persistent-user-tables"] if args.persistent_user_tables else [],
     )
@@ -98,16 +101,3 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ci_util.upload_junit_report(
                 "testdrive", Path(__file__).parent / junit_report
             )
-
-
-def workflow_testdrive_redpanda_ci(c: Composition) -> None:
-    """Run testdrive against files known to be supported by Redpanda."""
-
-    files = set(
-        # NOTE(benesch): invoking the shell like this to filter testdrive files is
-        # pretty gross. Let's not get into the habit of using this construction.
-        spawn.capture(
-            ["sh", "-c", "grep -lr '\$.*kafka-ingest' *.td"], cwd=Path(__file__).parent
-        ).split()
-    )
-    c.workflow("default", "--redpanda", *files)

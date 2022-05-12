@@ -99,18 +99,20 @@ steps:
     agents:
       queue: linux-x86_64
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-redpanda-ci
+          args: [--redpanda, --aws-region=us-east-2]
 
   - id: redpanda-testdrive-aarch64
     label: ":panda_face: :racing_car: testdrive aarch64"
     agents:
       queue: linux-aarch64
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-redpanda-ci
+          args: [--redpanda, --aws-region=us-east-2]
 
   - id: upgrade
     label: "Upgrade testing"
