@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 
 use timely::progress::{frontier::MutableAntichain, Antichain};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::client::Peek;
 use mz_repr::GlobalId;
@@ -34,8 +34,14 @@ use mz_repr::GlobalId;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
 
-// `Client` must have a cancelation-safe `recv` method.
-pub fn spawn_client_tasklet<
+/// Spawns a task that repeatedly sends messages back and forth
+/// between a client and its owner, and return channels to communicate with it.
+///
+/// This can be useful because sending to an `mpsc` is synchronous, eliminating
+/// cancelation-unsafety in some cases.
+///
+/// For this to be useful, `Client::recv` must itself be cancelation-safe.
+pub fn spawn_client_task<
     C: Send + 'static,
     R: Send + 'static,
     Client: GenericClient<C, R> + 'static,
@@ -45,55 +51,49 @@ pub fn spawn_client_tasklet<
     mut client: Client,
     nc: NameClosure,
 ) -> (
-    JoinHandle<()>,
     UnboundedSender<C>,
     UnboundedReceiver<Result<R, anyhow::Error>>,
 ) {
     let (cmd_tx, mut cmd_rx) = unbounded_channel();
     let (response_tx, response_rx) = unbounded_channel();
-    let handle = mz_ore::task::spawn(nc, async move {
+    mz_ore::task::spawn(nc, async move {
         loop {
             tokio::select! {
                 m = cmd_rx.recv() => {
                     match m {
                         Some(c) => {
                             // Issues should be detected, and
-                            // reconnect attempted, on the `recv` path.
+                            // reconnect attempted, on the `client.recv` path.
                             let _ = client.send(c).await;
                         },
                         None => break,
                     }
                 },
                 m = client.recv() => {
-                    match m {
-                        Ok(None) => break,
-                        Ok(Some(response)) => {
-                            if response_tx.send(Ok(response)).is_err() {
-                                break;
-                            };
-                        }
-                        Err(e) => {
-                            if response_tx.send(Err(e)).is_err() {
+                    match m.transpose() {
+                        Some(m) => {
+                            if response_tx.send(m).is_err() {
                                 break;
                             }
                         }
+                        None => break,
                     }
                 }
             }
         }
     });
-    (handle, cmd_tx, response_rx)
+    (cmd_tx, response_rx)
 }
 
 /// A client backed by multiple replicas.
 #[derive(Debug)]
-pub struct ActiveReplication<Cmd, Resp, T> {
+pub struct ActiveReplication<T> {
     /// Handles to the replicas themselves.
     replicas: HashMap<
         String,
         (
-            UnboundedSender<Cmd>,
-            UnboundedReceiver<Result<Resp, anyhow::Error>>,
+            UnboundedSender<ComputeCommand<T>>,
+            UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
         ),
     >,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
@@ -108,7 +108,7 @@ pub struct ActiveReplication<Cmd, Resp, T> {
     last_command_count: usize,
 }
 
-impl<Cmd, Resp, T> Default for ActiveReplication<Cmd, Resp, T> {
+impl<T> Default for ActiveReplication<T> {
     fn default() -> Self {
         Self {
             replicas: Default::default(),
@@ -121,7 +121,7 @@ impl<Cmd, Resp, T> Default for ActiveReplication<Cmd, Resp, T> {
     }
 }
 
-impl<T> ActiveReplication<ComputeCommand<T>, ComputeResponse<T>, T>
+impl<T> ActiveReplication<T>
 where
     T: timely::progress::Timestamp,
 {
@@ -140,9 +140,10 @@ where
                 frontier
             });
         }
-        let (_, cmd_tx, resp_rx) =
-            spawn_client_tasklet(client, || "ActiveReplication client message pump");
-        self.replicas.insert(identifier.clone(), (cmd_tx, resp_rx));
+        let (cmd_tx, resp_rx) =
+            spawn_client_task(client, || "ActiveReplication client message pump");
+        self.replicas
+            .insert(identifier.clone(), (cmd_tx, resp_rx.into()));
         self.hydrate_replica(&identifier);
     }
 
@@ -190,8 +191,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>>
-    for ActiveReplication<ComputeCommand<T>, ComputeResponse<T>, T>
+impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ActiveReplication<T>
 where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
@@ -264,19 +264,7 @@ where
                 let mut stream: tokio_stream::StreamMap<_, _> = self
                     .replicas
                     .iter_mut()
-                    .map(|(id, (_, rx))| {
-                        let rx_stream = Box::pin(async_stream::stream! {
-                            loop {
-                                match rx.recv().await {
-                                    Some(Ok(response)) => yield Ok(response),
-                                    Some(Err(error)) => yield Err(error),
-                                    None => { return; }
-                                }
-                            }
-                        });
-
-                        (id.clone(), rx_stream)
-                    })
+                    .map(|(id, (_, rx))| (id.clone(), rx))
                     .collect();
 
                 use futures::StreamExt;
