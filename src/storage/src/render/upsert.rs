@@ -24,7 +24,7 @@ use mz_dataflow_types::{
 };
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::result::ResultExt;
-use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
+use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowArena, Timestamp};
 use tracing::error;
 
 use crate::source::DecodeResult;
@@ -146,7 +146,6 @@ where
         predicates,
         position_or,
         as_of_frontier,
-        source_arity,
         upsert_envelope,
     );
     let (mut oks, mut errs) = upsert_output.ok_err(|(data, time, diff)| match data {
@@ -209,7 +208,6 @@ fn upsert_core<G>(
     predicates: Vec<MirScalarExpr>,
     position_or: Vec<Option<usize>>,
     as_of_frontier: Antichain<Timestamp>,
-    source_arity: usize,
     upsert_envelope: UpsertEnvelope,
 ) -> Stream<G, (Result<Row, DataflowError>, u64, Diff)>
 where
@@ -234,6 +232,7 @@ where
             // Intermediate structures re-used to limit allocations
             let mut scratch_vector = Vec::new();
             let mut row_packer = mz_repr::Row::default();
+            let mut dv = DatumVec::new();
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
@@ -262,8 +261,8 @@ where
                         map,
                         &mut current_values,
                         &mut row_packer,
+                        &mut dv,
                         &upsert_envelope,
-                        source_arity,
                         &predicates,
                         &position_or,
                         &mut removed_times,
@@ -355,9 +354,10 @@ fn process_pending_values_batch(
     current_values: &mut HashMap<Result<Row, DecodeError>, Result<Row, DataflowError>>,
     // A shared row used to pack new rows for evaluation and output
     row_packer: &mut Row,
+    // A shared row used to build a Vec<Datum<'_>> for evaluation
+    dv: &mut DatumVec,
     // Additional source properties used to correctly inter
     upsert_envelope: &UpsertEnvelope,
-    source_arity: usize,
     // Additional information used to pre-evaluate predicates that reduces the output
     // stream size
     predicates: &[MirScalarExpr],
@@ -400,8 +400,8 @@ fn process_pending_values_batch(
                     (Ok(decoded_key), Some(value)) => {
                         let decoded_value = value.and_then(|row| {
                             build_datum_vec_for_evaluation(
+                                dv,
                                 &upsert_envelope.style,
-                                source_arity,
                                 &row,
                                 &decoded_key,
                             )
@@ -478,15 +478,15 @@ fn process_pending_values_batch(
 }
 
 fn build_datum_vec_for_evaluation<'row>(
+    dv: &'row mut DatumVec,
     upsert_style: &UpsertStyle,
-    source_arity: usize,
     row: &'row Row,
     key: &'row Row,
-) -> Option<Vec<Datum<'row>>> {
+) -> Option<DatumVecBorrow<'row>> {
+    let mut datums = dv.borrow();
     match upsert_style {
         UpsertStyle::Debezium { after_idx } => match row.iter().nth(*after_idx).unwrap() {
             Datum::List(after) => {
-                let mut datums = Vec::with_capacity(source_arity);
                 datums.extend(after.iter());
                 Some(datums)
             }
@@ -494,7 +494,6 @@ fn build_datum_vec_for_evaluation<'row>(
             d => panic!("type error: expected record, found {:?}", d),
         },
         UpsertStyle::Default(_) => {
-            let mut datums = Vec::with_capacity(source_arity);
             datums.extend(key.iter());
             datums.extend(row.iter());
             Some(datums)
