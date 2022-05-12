@@ -11,11 +11,18 @@
 
 //! Driver for timely/differential dataflow.
 
-pub(crate) mod decode;
-pub(crate) mod render;
+#[cfg(feature = "server")]
+pub mod decode;
+#[cfg(feature = "server")]
+pub mod render;
+#[cfg(feature = "server")]
 pub(crate) mod server;
+#[cfg(feature = "server")]
 pub mod source;
+#[cfg(feature = "server")]
 pub mod storage_state;
 
+#[cfg(feature = "server")]
 pub use decode::metrics::DecodeMetrics;
+#[cfg(feature = "server")]
 pub use server::{serve, Config, Server};

@@ -104,8 +104,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_storage::source::persist_source;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
@@ -118,6 +116,7 @@ use mz_dataflow_types::*;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{GlobalId, Row};
+use mz_storage::source::persist_source;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -159,18 +158,9 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
-                let shard_id = match &source.description.connector {
-                    SourceConnector::External {
-                        connector: ExternalSourceConnector::Persist(persist_connector),
-                        ..
-                    } => persist_connector.shard_id,
-                    _ => source.storage_metadata.persist_shard,
-                };
-
                 let (ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
-                    compute_state.persist_client.clone(),
-                    shard_id,
+                    source.storage_metadata.clone(),
                     dataflow.as_of.clone().unwrap(),
                 );
 
