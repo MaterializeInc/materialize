@@ -12,8 +12,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use mz_persist_client::write::WriteHandle;
-use mz_persist_client::PersistLocation;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -29,6 +27,7 @@ use mz_dataflow_types::sources::AwsExternalId;
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, SourceDesc};
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
+use mz_persist_client::{write::WriteHandle, PersistLocation};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::decode::metrics::DecodeMetrics;

@@ -67,9 +67,17 @@ where
             return;
         }
 
-        let persist_client = storage_metadata.persist_location.open().await.unwrap();
-
-        let (_, read) = persist_client.open::<(), SourceData, mz_repr::Timestamp, mz_repr::Diff>(storage_metadata.persist_shard).await.expect("could not open persist shard");
+        let (_, read) = crate::persist_cache::open::<
+                (),
+                SourceData,
+                mz_repr::Timestamp,
+                mz_repr::Diff,
+            >(
+                storage_metadata.persist_location,
+                storage_metadata.persist_shard,
+            )
+            .await
+            .expect("could not open persist shard");
 
         let mut snapshot_iter = read
             .snapshot(as_of.clone())
