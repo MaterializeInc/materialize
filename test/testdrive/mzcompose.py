@@ -15,6 +15,7 @@ from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
+    Postgres,
     Redpanda,
     SchemaRegistry,
     Testdrive,
@@ -25,6 +26,7 @@ from materialize.xcompile import Arch
 SERVICES = [
     Zookeeper(),
     Kafka(),
+    Postgres(),
     SchemaRegistry(),
     Redpanda(),
     Localstack(),
@@ -74,7 +76,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["zookeeper", "kafka", "schema-registry", "postgres"]
 
     materialized = Materialized(
         options=["--persistent-user-tables"] if args.persistent_user_tables else [],
