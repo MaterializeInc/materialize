@@ -133,11 +133,6 @@ as the presence of multiple writers can lead to inconsistent/undefined shard
 contents. This issue will be resolved in the future by the use of storage
 renditions.
 
-#### Cleanup on Replica Drop
-
-When a replica receives a `DropInstance` command, it should drop all its
-introspection shards.
-
 ### ADAPTER
 
 #### Replica-specific Introspection Configuration
