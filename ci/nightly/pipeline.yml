@@ -27,7 +27,6 @@ steps:
           - { value: cluster-limits }
           - { value: limits-instance-size }
           - { value: cluster-testdrive }
-          - { value: proxy }
           - { value: testdrive-workers-1 }
           - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
@@ -165,17 +164,6 @@ steps:
           composition: cluster
           run: nightly
     timeout_in_minutes: 30
-
-  - id: proxy
-    label: ":squid: proxy"
-    depends_on: build-x86_64
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: proxy
-          args: [--aws-region=us-east-2]
 
   - id: testdrive-workers-1
     label: ":racing_car: testdrive with --workers 1"
