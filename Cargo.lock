@@ -3488,24 +3488,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-mzcloud-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "jsonwebtoken",
- "mz-ore",
- "mzcloud",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "urlencoding",
- "zip",
-]
-
-[[package]]
 name = "mz-npm"
 version = "0.0.0"
 dependencies = [
@@ -4207,18 +4189,6 @@ dependencies = [
  "quote",
  "syn",
  "tempfile",
-]
-
-[[package]]
-name = "mzcloud"
-version = "1.0.0"
-source = "git+https://github.com/MaterializeInc/cloud-sdks#824ee6e294e92a73184eb7eb7d6b072e7352f097"
-dependencies = [
- "reqwest",
- "serde",
- "serde_derive",
- "serde_json",
- "url",
 ]
 
 [[package]]
@@ -5393,7 +5363,6 @@ dependencies = [
  "lazy_static",
  "log",
  "mime",
- "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
@@ -6983,17 +6952,6 @@ name = "zeroize"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf68b08513768deaa790264a7fac27a58cbf2705cfcdc9448362229217d7e970"
-
-[[package]]
-name = "zip"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6fa4aa90e99fb8d701bda16fb040d8ed2f9c7176fb44de750e880a74b580315"
-dependencies = [
- "byteorder",
- "crc32fast",
- "flate2",
-]
 
 [[package]]
 name = "zstd-sys"
