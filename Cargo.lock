@@ -3892,6 +3892,7 @@ dependencies = [
  "async-trait",
  "mz-repr",
  "mz-secrets",
+ "tracing",
 ]
 
 [[package]]
@@ -3940,6 +3941,8 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-secrets",
+ "mz-secrets-filesystem",
+ "mz-secrets-kubernetes",
  "mz-sql-parser",
  "prost",
  "protobuf-native",

@@ -307,7 +307,7 @@ pub fn plan_create_source(
     stmt: CreateSourceStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let mut depends_on = vec![];
-    let stmt = connectors::populate_connectors(stmt, scx.catalog, &mut depends_on)?;
+    let stmt = connectors::populate_connectors(stmt, scx.catalog, &mut depends_on, None)?;
     let CreateSourceStatement {
         name,
         col_names,
@@ -3063,6 +3063,9 @@ pub fn plan_create_connector(
                         username,
                         password: password_id.to_string(),
                     }
+                }
+                mz_sql_parser::ast::KafkaSecurityOptions::PLAINTEXT => {
+                    KafkaSecurityOptions::PLAINTEXT
                 }
             },
         },

@@ -521,6 +521,8 @@ pub enum KafkaSecurityOptions {
         /// Mandatory password supplied as a catalog Secret
         password: UnresolvedObjectName,
     },
+    /// PLAINTEXT denotes no transport security and no credential based authentication
+    PLAINTEXT,
 }
 
 impl AstDisplay for KafkaSecurityOptions {
@@ -568,6 +570,7 @@ impl AstDisplay for KafkaSecurityOptions {
                 f.write_str(" PASSWORD ");
                 f.write_node(password);
             }
+            KafkaSecurityOptions::PLAINTEXT => {}
         }
     }
 }

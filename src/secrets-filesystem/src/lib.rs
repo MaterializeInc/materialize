@@ -76,6 +76,7 @@ impl SecretsReader for FilesystemSecretsController {
     }
 
     fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error> {
-        Ok(self.secrets_storage_path.join(id.to_string()))
+        let path = self.secrets_storage_path.join(id.to_string());
+        Ok(path)
     }
 }

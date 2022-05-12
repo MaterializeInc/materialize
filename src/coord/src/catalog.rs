@@ -3478,15 +3478,11 @@ impl mz_sql::catalog::CatalogConnector for Connector {
         self.connector.uri()
     }
 
-    fn options(&self) -> std::collections::BTreeMap<String, String> {
-        self.connector.options()
-    }
-
-    fn options_with_secrets(
+    fn options(
         &self,
         secret_reader: Arc<Box<dyn mz_secrets::SecretsReader>>,
     ) -> Result<BTreeMap<String, String>, anyhow::Error> {
-        self.connector.options_with_secret_contents(secret_reader)
+        self.connector.options(secret_reader)
     }
 }
 

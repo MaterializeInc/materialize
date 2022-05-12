@@ -665,7 +665,6 @@ impl TryFrom<ProtoDataflowDescription>
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, Deref, DerefMut};
-    use std::path::PathBuf;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1478,97 +1477,7 @@ pub mod sources {
             }
         }
 
-        pub fn options(&self) -> BTreeMap<String, String> {
-            // FIXME this is a lame hack to allow the rest of the code to work
-            let secrets_reader: Arc<Box<dyn SecretsReader>> = Arc::new(Box::new(
-                mz_secrets_filesystem::FilesystemSecretsController::new(
-                    PathBuf::new().join("/share/mzdata/secrets"),
-                ),
-            ));
-            self.options_with_secret_contents(secrets_reader).unwrap()
-            // const SECURITY_PROTOCOL: &str = "security.protocol";
-            // match self {
-            //     ConnectorInner::CSR {
-            //         username,
-            //         password,
-            //         registry: _registry,
-            //         certificate,
-            //         key,
-            //         authority,
-            //     } => {
-            //         let mut with_options = BTreeMap::new();
-            //         if let Some(username) = username {
-            //             with_options.insert("username".into(), username.to_owned());
-            //         }
-            //         if let Some(password) = password {
-            //             with_options.insert("password".into(), password.to_owned());
-            //         }
-            //         if let Some(authority) = authority {
-            //             with_options.insert("ssl_ca_location".into(), authority.to_owned());
-            //         }
-            //         if let Some(certificate) = certificate {
-            //             with_options
-            //                 .insert("ssl_certificate_location".into(), certificate.to_owned());
-            //         }
-            //         if let Some(key) = key {
-            //             with_options.insert("ssl_key_location".into(), key.to_owned());
-            //         }
-            //         with_options
-            //     }
-            //     // Initially we are just going to convert the new struct back into the old map so downstream code can stay unchanged
-            //     ConnectorInner::Kafka { security, .. } => match security {
-            //         KafkaSecurityOptions::PLAINTEXT => {
-            //             let mut with_options = BTreeMap::new();
-            //             with_options.insert(SECURITY_PROTOCOL.into(), "PLAINTEXT".to_string());
-            //             with_options
-            //         }
-            //         KafkaSecurityOptions::SSL {
-            //             key,
-            //             certificate,
-            //             passphrase,
-            //             authority,
-            //         } => {
-            //             let mut with_options = BTreeMap::new();
-            //             with_options.insert(SECURITY_PROTOCOL.into(), "SSL".to_string());
-            //             if let Some(uuid) = key {
-            //                 with_options.insert("ssl.key.location".into(), uuid.to_owned());
-            //             }
-            //             if let Some(uuid) = certificate {
-            //                 with_options.insert("ssl.certificate.location".into(), uuid.to_owned());
-            //             }
-            //             if let Some(uuid) = passphrase {
-            //                 with_options.insert("ssl.key.password".into(), uuid.to_owned());
-            //             }
-            //             if let Some(uuid) = authority {
-            //                 with_options.insert("ssl.ca.location".into(), uuid.to_owned());
-            //             }
-            //             with_options
-            //         }
-            //         KafkaSecurityOptions::SASL {
-            //             mechanism,
-            //             ssl,
-            //             username,
-            //             password,
-            //         } => {
-            //             let mut with_options = BTreeMap::new();
-            //             with_options.insert(
-            //                 SECURITY_PROTOCOL.into(),
-            //                 if *ssl {
-            //                     "SASL_SSL".into()
-            //                 } else {
-            //                     "SASL_PLAINTEXT".into()
-            //                 },
-            //             );
-            //             with_options.insert("sasl.mechanism".into(), mechanism.to_owned());
-            //             with_options.insert("sasl.username".into(), username.to_owned());
-            //             with_options.insert("sasl.password".into(), password.to_owned());
-            //             with_options
-            //         }
-            //     },
-            // }
-        }
-
-        pub fn options_with_secret_contents(
+        pub fn options(
             &self,
             secrets_reader: Arc<Box<dyn SecretsReader>>,
         ) -> Result<BTreeMap<String, String>, anyhow::Error> {

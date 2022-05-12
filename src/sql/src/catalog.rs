@@ -275,11 +275,8 @@ pub trait CatalogConnector {
     /// Returns the connection URI for this connector regardless of type
     fn uri(&self) -> String;
 
-    /// Returns the options associated with this connector, if the type does not support options or none were specified this will be empty
-    fn options(&self) -> std::collections::BTreeMap<String, String>;
-
     /// Returns the options associated with this connector with secret GlobalIds replaced with values
-    fn options_with_secrets(
+    fn options(
         &self,
         secret_reader: Arc<Box<dyn SecretsReader>>,
     ) -> Result<std::collections::BTreeMap<String, String>, anyhow::Error>;
