@@ -3273,7 +3273,6 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-secrets",
- "mz-secrets-filesystem",
  "mz-stash",
  "proptest",
  "proptest-derive",

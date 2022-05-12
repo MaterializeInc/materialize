@@ -530,6 +530,7 @@ pub fn create_statement(
                     KafkaSecurityOptions::SASL { password, .. } => {
                         *password = allocate_name(password)?;
                     }
+                    KafkaSecurityOptions::PLAINTEXT => {}
                 },
             }
         }

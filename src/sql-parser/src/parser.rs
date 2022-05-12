@@ -1896,8 +1896,12 @@ impl<'a> Parser<'a> {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
-                self.expect_keyword(SECURITY)?;
-                let security = self.parse_kafka_security()?;
+                let security = if self.peek_keyword(SECURITY) {
+                    self.expect_keyword(SECURITY)?;
+                    self.parse_kafka_security()?
+                } else {
+                    KafkaSecurityOptions::PLAINTEXT
+                };
                 CreateConnector::Kafka { broker, security }
             }
             Keyword::Confluent => {

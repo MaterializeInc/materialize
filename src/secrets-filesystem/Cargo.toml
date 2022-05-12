@@ -11,3 +11,4 @@ anyhow = "1.0.57"
 async-trait = "0.1.53"
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+tracing = "0.1.34"

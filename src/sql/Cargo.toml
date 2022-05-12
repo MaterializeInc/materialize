@@ -30,6 +30,8 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-secrets-filesystem = { path = "../secrets-filesystem" }
+mz-secrets-kubernetes = { path = "../secrets-kubernetes" }
 mz-sql-parser = { path = "../sql-parser" }
 protobuf-native = "0.2.1"
 prost = "0.10.3"
