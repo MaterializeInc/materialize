@@ -357,17 +357,17 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             Box::new(FilesystemSecretsController::new(secrets_storage))
         }
         Some(SecretsControllerConfig::Kubernetes {
-            context,
-            user_defined_secret,
-            user_defined_secret_mount_path,
-            refresh_pod_name,
+            ref context,
+            ref user_defined_secret,
+            ref user_defined_secret_mount_path,
+            ref refresh_pod_name,
         }) => Box::new(
             KubernetesSecretsController::new(
-                context,
+                context.to_owned(),
                 KubernetesSecretsControllerConfig {
-                    user_defined_secret,
-                    user_defined_secret_mount_path,
-                    refresh_pod_name,
+                    user_defined_secret: user_defined_secret.to_owned(),
+                    user_defined_secret_mount_path: user_defined_secret_mount_path.to_owned(),
+                    refresh_pod_name: refresh_pod_name.to_owned(),
                 },
             )
             .await
