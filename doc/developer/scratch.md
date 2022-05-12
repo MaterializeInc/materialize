@@ -34,7 +34,7 @@ This subcommand expects a series of JSON objects on standard input, each of whic
     "name": "chbench",
     "launch_script": "bin/mzcompose --find chbench run cloud-load-test",
     "instance_type": "r5a.4xlarge",
-    "ami": "ami-0b29b6e62f2343b46",
+    "ami": "ami-0aeb7c931a5a61206",
     "size_gb": 200,
     "tags": {
         "scrape_benchmark_numbers": "true",
