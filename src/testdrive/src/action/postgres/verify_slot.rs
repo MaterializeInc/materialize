@@ -56,7 +56,7 @@ impl Action for VerifySlotAction {
 
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
-            .max_duration(cmp::max(state.default_timeout, Duration::from_secs(3)))
+            .max_duration(cmp::max(state.default_timeout, Duration::from_secs(10)))
             .retry_async_canceling(|_| async {
                 println!(">> checking for postgres replication slot {}", &self.slot);
                 let rows = client

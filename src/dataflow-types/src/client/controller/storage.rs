@@ -25,9 +25,7 @@ use std::fmt;
 use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
-use std::time::Duration;
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use mz_repr::proto::TryFromProtoError;
@@ -40,11 +38,12 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
 use mz_expr::PartitionId;
-use mz_persist_client::{read::ReadHandle, write::WriteHandle, PersistLocation, PersistClient, ShardId};
+use mz_persist_client::{
+    read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
+};
 use mz_persist_types::Codec64;
 use mz_repr::Diff;
 use mz_repr::GlobalId;
-use mz_repr::Row;
 use mz_stash::{self, Stash, StashCollection, StashError};
 
 use crate::client::controller::ReadPolicy;
@@ -52,8 +51,8 @@ use crate::client::{
     CreateSourceCommand, MzOffset, StorageClient, StorageCommand, StorageResponse,
     TimestampBindingFeedback,
 };
-use crate::sources::SourceDesc;
-use crate::{DataflowError, Update};
+use crate::sources::{SourceData, SourceDesc};
+use crate::Update;
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -150,6 +149,7 @@ pub trait StorageController: Debug + Send {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
+    pub persist_shard: ShardId,
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
@@ -169,6 +169,7 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            persist_shard: ShardId::new(),
         })
     }
 }
@@ -185,6 +186,7 @@ impl Arbitrary for CollectionMetadata {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            persist_shard: ShardId::new(),
         })
         .boxed()
     }
@@ -219,7 +221,9 @@ impl<S: Stash> StorageStash<S> {
         &mut self,
         id: &GlobalId,
     ) -> Result<StashCollection<PartitionId, ()>, StashError> {
-        self.stash.collection(&format!("timestamp-bindings-{id}")).await
+        self.stash
+            .collection(&format!("timestamp-bindings-{id}"))
+            .await
     }
 }
 
@@ -342,9 +346,10 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn collection_metadata(&self, _id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError> {
         Ok(CollectionMetadata {
             persist_location: self.persist_location.clone(),
+            persist_shard: self.collection(id)?.persist_shard,
         })
     }
 
@@ -395,12 +400,11 @@ where
                 prev_offset.offset += diff;
             }
 
-            let timeout = Duration::from_secs(60);
             // TODO(petrosagg): durably record the persist shard we mint here
             let persist_shard = ShardId::new();
             let (write, read) = self
                 .persist_client
-                .open(timeout, persist_shard)
+                .open(persist_shard)
                 .await
                 .expect("TODO(petrosagg");
             self.state
@@ -412,17 +416,13 @@ where
 
             self.state.collections.insert(id, collection_state);
 
-            let storage_metadata = self.collection_metadata(id)?;
-
-            let command = CreateSourceCommand {
+            dataflow_commands.push(CreateSourceCommand {
                 id,
                 desc,
                 since,
                 ts_bindings,
-                storage_metadata,
-            };
-
-            dataflow_commands.push(command);
+                storage_metadata: self.collection_metadata(id)?,
+            });
         }
 
         self.state
@@ -448,12 +448,15 @@ where
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
-        for (id, updates, upper) in commands {
+        for (id, updates, new_upper) in commands {
             for update in &updates {
-                if !update.timestamp.less_than(&upper) {
-                    return Err(StorageError::UpdateBeyondUpper(*id));
+                if !update.timestamp.less_than(&new_upper) {
+                    return Err(StorageError::UpdateBeyondUpper(id));
                 }
             }
+            let upper = self.collection(id)?.write_frontier.frontier().to_owned();
+            let new_upper = Antichain::from_elem(new_upper);
+
             let handles = self
                 .state
                 .persist_handles
@@ -462,15 +465,20 @@ where
 
             let updates = updates
                 .into_iter()
-                .map(|u| (((), Ok(u.row)), u.timestamp, u.diff));
-            let timeout = Duration::from_secs(60);
+                .map(|u| (((), SourceData(Ok(u.row))), u.timestamp, u.diff));
+
             handles
                 .write
-                .append(timeout, updates, Antichain::from_elem(upper))
+                .append(updates, upper.clone(), new_upper.clone())
                 .await
                 .expect("cannot append updates")
                 .expect("cannot append updates")
                 .expect("invalid/outdated upper");
+
+            let mut change_batch = ChangeBatch::new();
+            change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
+            change_batch.extend(upper.iter().cloned().map(|t| (t, -1)));
+            self.update_write_frontiers(&[(id, change_batch)]).await?;
         }
         Ok(())
     }
@@ -688,14 +696,7 @@ where
 
                 let handles = self.state.persist_handles.get_mut(id).unwrap();
 
-                handles
-                    .read
-                    .downgrade_since(Duration::from_secs(60), frontier)
-                    .await
-                    .map_err(|e| {
-                        StorageError::ClientError(anyhow!("external persist error: {:?}", e))
-                    })?
-                    .expect("invalid usage");
+                handles.read.downgrade_since(frontier).await;
             }
         }
         self.state.stash.compact_batch(&stash_compactions).await?;
@@ -750,9 +751,7 @@ where
         state_dir: PathBuf,
         persist_location: PersistLocation,
     ) -> Self {
-        let timeout = Duration::from_secs(60);
-        let (blob, consensus) = config.persist_location.open(timeout).await.unwrap();
-        let persist_client = PersistClient::new(timeout, blob, consensus).await.unwrap();
+        let persist_client = persist_location.open().await.unwrap();
 
         Self {
             state: StorageControllerState::new(client, state_dir),
@@ -805,8 +804,8 @@ pub struct CollectionState<T> {
 pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
     /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
     /// since frontier and we need to downgrade that when the read capabilities change.
-    read: ReadHandle<(), Result<Row, DataflowError>, T, Diff>,
-    write: WriteHandle<(), Result<Row, DataflowError>, T, Diff>,
+    read: ReadHandle<(), SourceData, T, Diff>,
+    write: WriteHandle<(), SourceData, T, Diff>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -815,6 +814,7 @@ impl<T: Timestamp> CollectionState<T> {
         description: SourceDesc,
         since: Antichain<T>,
         last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
+        persist_shard: ShardId,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));

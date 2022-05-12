@@ -118,7 +118,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
                 aws_external_id: aws_external_id.clone(),
                 timely_worker_index,
                 timely_worker_peers,
-                persist_client: config.persist_client.clone(),
             },
             storage_response_tx,
         }

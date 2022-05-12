@@ -13,7 +13,6 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use futures_util::Stream as FuturesStream;
 use timely::dataflow::operators::OkErr;
@@ -21,10 +20,12 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tracing::trace;
 
-use mz_dataflow_types::DataflowError;
+use mz_dataflow_types::{
+    client::controller::storage::CollectionMetadata, sources::SourceData, DataflowError,
+};
 use mz_persist::location::ExternalError;
-use mz_persist_client::{read::ListenEvent, PersistClient, ShardId};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_persist_client::read::ListenEvent;
+use mz_repr::{Diff, Row, Timestamp};
 
 use crate::source::SourceStatus;
 
@@ -36,9 +37,7 @@ use crate::source::SourceStatus;
 // upper frontier from all shards.
 pub fn persist_source<G>(
     scope: &G,
-    source_id: GlobalId,
-    persist_client: PersistClient,
-    shard_id: ShardId,
+    storage_metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -68,40 +67,33 @@ where
             return;
         }
 
-        let persist_location = PersistLocation {
-            consensus_uri: consensus_uri,
-            blob_uri: blob_uri,
-        };
+        let persist_client = storage_metadata.persist_location.open().await.unwrap();
 
-        let persist_client = persist_location.open().await?;
+        let (_, read) = persist_client.open::<(), SourceData, mz_repr::Timestamp, mz_repr::Diff>(storage_metadata.persist_shard).await.expect("could not open persist shard");
 
-        let (_write, read) =
-            persist_client.open::<(), Result<Row, DataflowError>, Timestamp, Diff>(timeout, shard_id).await?;
+        let mut snapshot_iter = read
+            .snapshot(as_of.clone())
+            .await
+            .expect("cannot serve requested as_of");
 
-            let mut snapshot_iter = read
-                .snapshot(as_of.clone())
-                .await
-                .expect("cannot serve requested as_of");
+        // First, yield all the updates from the snapshot.
+        while let Some(next) = snapshot_iter.next().await {
+            yield ListenEvent::Updates(next);
+        }
 
+        // Then, listen continously and yield any new updates. This loop is expected to never
+        // finish.
+        let mut listen = read
+            .listen(as_of)
+            .await
+            .expect("cannot serve requested as_of");
 
-            // First, yield all the updates from the snapshot.
-            while let Some(next) = snapshot_iter.next().await {
-                yield ListenEvent::Updates(next);
+        loop {
+            let next = listen.next().await;
+            for event in next {
+                yield event;
             }
-
-            // Then, listen continously and yield any new updates. This loop is expected to never
-            // finish.
-            let mut listen = read
-                .listen(as_of)
-                .await
-                .expect("cannot serve requested as_of");
-
-            loop {
-                let next = listen.next().await;
-                for event in next {
-                    yield event;
-                }
-            }
+        }
     };
 
     let mut pinned_stream = Box::pin(async_stream);
@@ -127,22 +119,16 @@ where
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
                         Some(Ok(ListenEvent::Progress(upper))) => {
-                            // NOTE(aljoscha): Ideally, we would only get a CapabilitySet, that
-                            // we have to manage. Or the ability to drop the plain Capability
-                            // right at the start.
+                            if upper.elements().is_empty() {
+                                return SourceStatus::Done;
+                            }
                             if let Some(first_element) = upper.first() {
                                 current_ts = *first_element;
                                 cap.downgrade(first_element);
                             }
-                            ListenEvent::Updates(updates) => {
-                                let cap = cap_set.delayed(&current_ts);
-                                let mut session = output.session(&cap);
-                                for update in updates {
-                                    session.give(Ok(update));
-                                }
-                            }
-                        },
-                        Some(Err::<_, anyhow::Error>(e)) => {
+                            cap_set.downgrade(upper);
+                        }
+                        Some(Ok(ListenEvent::Updates(mut updates))) => {
                             let cap = cap_set.delayed(&current_ts);
                             let mut session = output.session(&cap);
                             session.give_vec(&mut updates);
@@ -163,8 +149,8 @@ where
     );
 
     let (ok_stream, err_stream) = timely_stream.ok_err(|x| match x {
-        ((Ok(()), Ok(Ok(row))), ts, diff) => Ok((row, ts, diff)),
-        ((Ok(()), Ok(Err(err))), ts, diff) => Err((err, ts, diff)),
+        ((Ok(()), Ok(SourceData(Ok(row)))), ts, diff) => Ok((row, ts, diff)),
+        ((Ok(()), Ok(SourceData(Err(err)))), ts, diff) => Err((err, ts, diff)),
         // TODO(petrosagg): error handling
         _ => panic!("decoding failed"),
     });

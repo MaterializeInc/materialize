@@ -27,7 +27,6 @@ use tokio::sync::mpsc;
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
-use mz_persist_client::PersistClient;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
@@ -63,8 +62,6 @@ pub struct ComputeState {
     pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub materialized_logger: Option<logging::materialized::Logger>,
-    /// A client to the persist library.
-    pub persist_client: PersistClient,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
