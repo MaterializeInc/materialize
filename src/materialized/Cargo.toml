@@ -95,7 +95,9 @@ tokio-stream = { version = "0.1.8", features = ["net"] }
 tower-http = { version = "0.2.5", features = ["cors"] }
 tracing = "0.1.34"
 url = "2.2.2"
+urlencoding = "2.1.0"
 uuid = "0.8.2"
+whoami = "1.2.1"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # According to jemalloc developers, `background_threads` should always be

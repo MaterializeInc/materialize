@@ -26,13 +26,13 @@ services:
         ipv4_address: 10.0.0.12
     command:
       --listen-addr 0.0.0.0:6875
-      --data-directory=/share/mzdata
+      --data-directory=/mzdata
       --experimental
       --timestamp-frequency 100ms
       --no-sigbus-sigsegv-backtraces
     image: antithesis-materialized:${ANT_IMAGE_TAG}
     volumes:
-      - mzdata:/share/mzdata:rw
+      - mzdata:/mzdata:rw
       - tmp:/share/tmp:rw
   atp-testdrive:
     hostname: atp-testdrive
@@ -63,7 +63,7 @@ services:
     image: antithesis-testdrive:${ANT_IMAGE_TAG}
     init: true
     volumes:
-      - mzdata:/share/mzdata:rw
+      - mzdata:/mzdata:rw
       - tmp:/share/tmp:rw
 
 volumes:

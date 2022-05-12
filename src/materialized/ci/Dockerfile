@@ -10,8 +10,23 @@
 MZFROM ubuntu-base
 
 # We install sqlite3 to allow debugging of the catalog file, if necessary.
-RUN apt-get update && apt-get -qy install ca-certificates curl sqlite3 tini
+RUN apt-get update \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
+        ca-certificates \
+        curl \
+        postgresql-14 \
+        sqlite3 \
+        tini \
+    && useradd --system --create-home materialize \
+    && pg_dropcluster 14 main \
+    && pg_createcluster 14 materialize --user=materialize \
+    && pg_ctlcluster 14 materialize start \
+    && su materialize -c "createdb materialize" \
+    && mkdir /mzdata \
+    && chown materialize /mzdata
 
-COPY storaged computed materialized /usr/local/bin/
+COPY storaged computed materialized entrypoint.sh /usr/local/bin/
 
-ENTRYPOINT ["tini", "--", "materialized", "--listen-addr=0.0.0.0:6875"]
+USER materialize
+
+ENTRYPOINT ["tini", "--", "entrypoint.sh"]

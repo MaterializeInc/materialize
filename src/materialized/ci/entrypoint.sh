@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -7,16 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+set -euo pipefail
 
-RUN apt-get update \
-    && apt-get -qy install ca-certificates tini \
-    && useradd --system --create-home materialize \
-    && mkdir /mzdata \
-    && chown materialize /mzdata
-
-COPY materialized /usr/local/bin/
-
-USER materialize
-
-ENTRYPOINT ["tini", "--", "materialized", "--listen-addr=0.0.0.0:6875"]
+pg_ctlcluster 14 materialize start
+exec materialized --listen-addr=0.0.0.0:6875 "$@"
