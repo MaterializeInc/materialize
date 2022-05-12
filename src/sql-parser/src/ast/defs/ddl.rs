@@ -578,7 +578,7 @@ impl_display!(KafkaSecurityOptions);
 #[enum_kind(ConnectorType)]
 pub enum CreateConnector {
     Kafka {
-        /// Kafka broker(s) as hostname:post[,host2:port2]
+        /// Kafka broker(s) as hostname:post\[,host2:port2\]
         broker: String,
         security: KafkaSecurityOptions,
     },
