@@ -59,10 +59,10 @@ name
 > CREATE DEFAULT INDEX on t
 
 > SHOW INDEXES FROM t
-cluster on_name  key_name       seq_in_index  column_name  expression  nullable enabled
----------------------------------------------------------------------------------------
-<CLUSTER_NAME> t        t_primary_idx  1             a            <null>      true     true
-<CLUSTER_NAME> t        t_primary_idx  2             b            <null>      false    true
+cluster on_name  key_name       seq_in_index  column_name  expression  nullable
+-----------------------------------------------------------------------------------
+<CLUSTER_NAME> t        t_primary_idx  1             a            <null>      true
+<CLUSTER_NAME> t        t_primary_idx  2             b            <null>      false
 
 > DROP INDEX t_primary_idx
 

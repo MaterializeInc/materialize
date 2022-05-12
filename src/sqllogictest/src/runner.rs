@@ -585,7 +585,6 @@ impl Runner {
             frontegg: None,
             cors_allowed_origin: Origin::list([]).into(),
             experimental_mode: true,
-            disable_user_indexes: false,
             safe_mode: false,
             metrics_registry: MetricsRegistry::new(),
             metrics_listen_addr: None,

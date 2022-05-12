@@ -105,9 +105,6 @@ pub struct Args {
     #[clap(long, hide = true)]
     safe: bool,
 
-    #[clap(long, env = "MZ_DISABLE_USER_INDEXES")]
-    disable_user_indexes: bool,
-
     /// The address on which Prometheus metrics get exposed.
     ///
     /// This address is never served TLS-encrypted or authenticated so care
@@ -777,7 +774,6 @@ max log level: {max_log_level}",
         orchestrator,
         secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
-        disable_user_indexes: args.disable_user_indexes,
         safe_mode: args.safe,
         aws_external_id: args
             .aws_external_id
@@ -803,20 +799,6 @@ to improve both our software and your queries! Please reach out at:
 =======================================================================
 "
     );
-
-    if args.disable_user_indexes {
-        eprintln!(
-            "************************************************************************
-                                NOTE!
-************************************************************************
-Starting Materialize with user indexes disabled.
-
-For more details, see
-    https://materialize.com/docs/cli#user-indexes-disabled
-************************************************************************
-"
-        );
-    }
 
     if args.experimental {
         eprintln!(

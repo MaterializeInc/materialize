@@ -363,7 +363,6 @@ impl ErrorResponse {
         // a various classes of uncategorized errors that use this error code
         // inappropriately.
         let code = match e {
-            CoordError::InvalidAlterOnDisabledIndex(_) => SqlState::INTERNAL_ERROR,
             CoordError::Catalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,

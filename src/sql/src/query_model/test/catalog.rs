@@ -46,7 +46,6 @@ lazy_static! {
         aws_external_id: AwsExternalId::NotProvided,
         timestamp_frequency: Duration::from_secs(1),
         now: NOW_ZERO.clone(),
-        disable_user_indexes: false,
     };
     static ref RTI: ReflectedTypeInfo = {
         let mut rti = ReflectedTypeInfo::default();

@@ -84,7 +84,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             workflow_kafka_sources(c, args)
             workflow_user_tables(c)
 
-    workflow_disable_user_indexes(c, args)
     workflow_compaction(c)
 
 
@@ -189,36 +188,6 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
-    c.rm_volumes("mzdata")
-
-
-def workflow_disable_user_indexes(
-    c: Composition, args_or_parser: Union[WorkflowArgumentParser, Namespace]
-) -> None:
-    start_deps(c, args_or_parser)
-    seed = round(time.time())
-
-    c.up("materialized")
-    c.wait_for_materialized()
-
-    c.run("testdrive", f"--seed={seed}", "disable-user-indexes/before.td")
-
-    c.kill("materialized")
-
-    with c.override(
-        Materialized(
-            options=f"{mz_options} --disable-user-indexes",
-        )
-    ):
-        c.up("materialized")
-        c.wait_for_materialized()
-
-        c.run("testdrive", f"--seed={seed}", "disable-user-indexes/after.td")
-
-        c.kill("materialized")
-
-    c.rm("materialized", "testdrive", destroy_volumes=True)
-
     c.rm_volumes("mzdata")
 
 

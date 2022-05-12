@@ -40,7 +40,6 @@ Field | Meaning
 **column_name** | The indexed column.
 **expression** | An expression used to generate the column in the index.
 **null** | Is the column nullable?
-**enabled** | Does the index represent an [arrangement](/overview/arrangements/)? `false` only in the case of [Disabling user indexes](/cli/#disable-user-indexes).
 
 {{< version-changed v0.5.0 >}}
 The output columns are renamed from `On_name`, `Key_name`, `Column_name`,

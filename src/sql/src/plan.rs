@@ -111,7 +111,6 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
-    AlterIndexEnable(AlterIndexEnablePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     Declare(DeclarePlan),
@@ -379,11 +378,6 @@ pub struct AlterIndexSetOptionsPlan {
 pub struct AlterIndexResetOptionsPlan {
     pub id: GlobalId,
     pub options: Vec<IndexOptionName>,
-}
-
-#[derive(Debug)]
-pub struct AlterIndexEnablePlan {
-    pub id: GlobalId,
 }
 
 #[derive(Debug)]

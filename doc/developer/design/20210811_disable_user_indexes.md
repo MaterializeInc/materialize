@@ -1,3 +1,5 @@
+This feature was implemented, but then removed in May 2022.
+
 # Disable user indexes mode
 
 ## Summary
