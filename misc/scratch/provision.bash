@@ -25,6 +25,13 @@ apt-get install -y \
     python3-venv \
     unzip
 
+# Update ec2-instance-connect scripts to a version that works with OpenSSL 3.
+# https://github.com/aws/aws-ec2-instance-connect-config/issues/38
+curl -L "https://github.com/aws/aws-ec2-instance-connect-config/archive/refs/tags/1.1.17.zip" > ec2-instance-connect.zip
+unzip ec2-instance-connect.zip
+cp aws-ec2-instance-connect-config-1.1.17/src/bin/* /usr/share/ec2-instance-connect/
+rm -r ec2-instance-connect.zip aws-ec2-instance-connect-config-1.1.17
+
 # Install Rust.
 sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y"
 
