@@ -14,16 +14,13 @@
 //! in testdrive, e.g., because they depend on the current time.
 
 use std::error::Error;
-use std::fs::File;
 use std::io::Read;
 use std::io::Write;
 use std::net::Shutdown;
 use std::net::TcpListener;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -908,102 +905,6 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 
     let err = client_b.query_one(query_temp_v, &[]).unwrap_db_error();
     assert_eq!(err.message(), "unknown catalog item \'temp_v\'");
-
-    Ok(())
-}
-
-// This test attempts to observe a linearizability violation by creating a set of
-// sources which are constantly being appended to, then creating a materialized
-// view of each of their sizes, then repeatedly reading from some subset of
-// those materialized views. If any of the sizes ever decrease from one read to
-// the next, linearizability has been violated.
-//
-// The sources are based off of n CSVs, each named in<i>.csv, a source for each
-// one named s<i> which tails the CSV, and a materialized view for each named
-// v<i>.
-//
-// N.B. this test currently fails and is ignored. TODO(justin): fix it.
-// N.B. this test also fails more reliably in release mode.
-#[test]
-#[ignore]
-fn test_linearizable() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-    let config = util::Config::default();
-    config.logical_compaction_window(Duration::from_secs(60));
-    let server = util::start_server(util::Config::default())?;
-    let mut client = server.connect(postgres::NoTls)?;
-
-    const NUM_FILES: usize = 5;
-    const NUM_READS: usize = 1000;
-    const NUM_WRITES: usize = 100000;
-
-    let temp_dir = tempfile::tempdir()?;
-
-    // For each source we want to create, we spawn a thread that is constantly appending to a CSV,
-    // which we tail for the source.
-    for i in 0..NUM_FILES {
-        let path = Path::join(temp_dir.path(), format!("in{}.csv", i));
-        thread::spawn({
-            let mut file = File::create(&path)?;
-            move || {
-                for _ in 0..NUM_WRITES {
-                    file.write_all(b"a\n").unwrap();
-                    file.sync_all().unwrap();
-                }
-            }
-        });
-
-        sleep(Duration::from_secs(3));
-
-        client.batch_execute(&*format!(
-            "CREATE MATERIALIZED SOURCE s{} FROM FILE '{}' WITH (tail = true)
-         FORMAT CSV WITH 1 COLUMNS",
-            i,
-            path.display()
-        ))?;
-        client.batch_execute(&*format!(
-            "CREATE MATERIALIZED VIEW v{} AS SELECT count(*) AS c FROM s{}",
-            i, i
-        ))?;
-    }
-
-    // TODO(justin): kind of hacky.
-    sleep(Duration::from_secs(1));
-
-    // largest[i] tracks the highest value seen for v<i>.
-    let mut largest = Vec::new();
-    for _ in 0..NUM_FILES {
-        largest.push(-1);
-    }
-
-    for _ in 0..NUM_READS {
-        // Construct a query that reads from a random subset of the views.
-        let mut query = String::from("SELECT ");
-        for i in 0..NUM_FILES {
-            if i > 0 {
-                query.push_str(", ");
-            }
-            if rand::random() {
-                query.push_str(format!("(SELECT c FROM v{})", i).as_str());
-            } else {
-                // If we opt not to read from the view, just to keep things
-                // lined up, we put a dummy -1 value which we know to ignore.
-                query.push_str(format!("-1::int8").as_str());
-            }
-        }
-        let result = client.query_one(query.as_str(), &[])?;
-        for i in 0..NUM_FILES {
-            let size: i64 = result.get(i);
-            if size != -1 {
-                if largest[i] > size {
-                    // If we hit this, then a value we saw went backwards, which
-                    // should be impossible.
-                    panic!("linearizability violation: {} {} {}", i, largest[i], size);
-                }
-                largest[i] = size;
-            }
-        }
-    }
 
     Ok(())
 }
