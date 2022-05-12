@@ -28,6 +28,9 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use mz_repr::proto::TryFromProtoError;
+use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
+use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -49,6 +52,11 @@ use crate::client::{
 };
 use crate::sources::SourceDesc;
 use crate::Update;
+
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_dataflow_types.client.controller.storage.rs"
+));
 
 #[async_trait]
 pub trait StorageController: Debug + Send {
@@ -142,6 +150,44 @@ pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
 }
 
+impl From<&CollectionMetadata> for ProtoCollectionMetadata {
+    // TODO: This is just a stub.
+    fn from(_: &CollectionMetadata) -> Self {
+        ProtoCollectionMetadata {}
+    }
+}
+
+impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
+    // TODO: This is just a stub.
+    type Error = TryFromProtoError;
+
+    fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
+        Ok(CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: "".to_string(),
+                consensus_uri: "".to_string(),
+            },
+        })
+    }
+}
+
+impl Arbitrary for CollectionMetadata {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        // TODO (#12359): derive Arbitrary after CollectionMetadata
+        // gains proper protobuf support.
+        Just(CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: "".to_string(),
+                consensus_uri: "".to_string(),
+            },
+        })
+        .boxed()
+    }
+}
+
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
@@ -169,7 +215,7 @@ pub enum StorageError {
     SourceIdReused(GlobalId),
     /// The source identifier is not present.
     IdentifierMissing(GlobalId),
-    /// The update contained in the appended batch was at a timestamp beyond the batche's upper
+    /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
@@ -199,7 +245,10 @@ impl fmt::Display for StorageError {
             ),
             Self::IdentifierMissing(id) => write!(f, "source identifier is not present: {id}"),
             Self::UpdateBeyondUpper(id) => {
-                write!(f, "append batch for {id} contained update beyond its upper")
+                write!(
+                    f,
+                    "append batch for {id} contained update at or beyond its upper"
+                )
             }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),

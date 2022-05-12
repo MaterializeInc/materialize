@@ -23,7 +23,6 @@ col_option ::=
 commit ::=
   'COMMIT'
 connector_spec ::=
-  'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')? |
   'KAFKA BROKER' host 'TOPIC' topic?
 copy_to ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
@@ -55,13 +54,6 @@ create_sink ::=
     ('FORMAT' sink_format_spec)?
     ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
     ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
-create_source_file ::=
-  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
-  'FROM' ('FILE' path
-  (compression)? with_options?
-  'FORMAT' format_spec)
-  ('ENVELOPE' ('NONE' | 'DEBEZIUM'))?
 create_source_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ( ',' key_constraint )? ')')?
@@ -179,23 +171,18 @@ format_spec ::=
         'USING CONFLUENT SCHEMA REGISTRY' url with_options
         ) |
   'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
 kinesis_format_spec ::=
   'PROTOBUF MESSAGE' message_name 'USING SCHEMA FILE' path |
   'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
 s3_format_spec ::=
   'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
-  'TEXT' |
-  'BYTES'
-file_format_spec ::=
-  'REGEX' regex |
-  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' )? | n 'COLUMNS') ('DELIMITED BY' char)? |
+  'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
 sink_format_spec ::=

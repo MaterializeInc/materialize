@@ -7,12 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ file-append path=deleted.csv
-id,present
-1,person
+# Test that Kafka sources with no format are disallowed.
 
-> CREATE SOURCE csv_upgrade_with_header_alias_missing_file
-  FROM FILE '${testdrive.temp-dir}/deleted.csv'
-  FORMAT CSV WITH HEADER
-
-$ file-delete path=deleted.csv
+! CREATE SOURCE s
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+exact:Source format must be specified

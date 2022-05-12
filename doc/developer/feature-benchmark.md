@@ -49,6 +49,12 @@ To compare specific Mz git revisions:
 ./mzcompose run default --this-tag unstable-42ad7432657d3e5c1a3492fa76985cd6b79fcab6 ...
 ```
 
+To start a 2-node computed cluster for `THIS`:
+
+```
+./mzcompose run default --this-nodes 2 ...
+```
+
 # Output
 
 The output of the benchmark is a table such as this:

@@ -63,11 +63,12 @@ contains:invalid input syntax for type double precision
 > SELECT * FROM t
 4 6 xy
 
-# Update subqueries can only reference other tables
 > CREATE MATERIALIZED VIEW v (a) AS SELECT 4;
 
-! UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM v);
-contains:invalid selection
+> UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM v);
+
+> SELECT * FROM t
+5 6 xy
 
 ! UPDATE v SET a = 1
 contains:cannot mutate view
@@ -110,6 +111,33 @@ contains:cannot be run inside a transaction block
 
 > ROLLBACK
 
+# Update subqueries cannot reference sources
+
+$ set schema={
+    "type": "record",
+    "name": "row",
+    "fields": [
+      {"name": "a", "type": "long"},
+      {"name": "b", "type": "float"},
+      {"name": "c", "type": "string"}
+    ]
+  }
+
+$ kafka-create-topic topic=data
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"a": 1, "b": 2, "c": "a"}
+
+> CREATE SOURCE source_data
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}'
+
+> CREATE MATERIALIZED VIEW source_data_mat_view AS
+  SELECT * FROM source_data;
+
+! UPDATE t SET i = i + 1 WHERE i IN (SELECT a FROM source_data_mat_view)
+contains:invalid selection
+
 # Verify that multiple inserts can be run in a transaction.
 > BEGIN
 
@@ -119,7 +147,7 @@ contains:cannot be run inside a transaction block
 > COMMIT
 
 > SELECT * FROM t ORDER BY i
-4 6 xy
+5 6 xy
 <null> <null> <null>
 <null> <null> <null>
 

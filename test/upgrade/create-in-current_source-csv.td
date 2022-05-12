@@ -7,22 +7,15 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ file-append path=csv.csv
+$ kafka-create-topic topic=csv
+$ kafka-ingest topic=csv format=bytes
 id,value
 1,person
 
-> CREATE MATERIALIZED SOURCE csv_upgrade_with_header
-  FROM FILE '${testdrive.temp-dir}/csv.csv'
-  FORMAT CSV WITH HEADER
-
-> CREATE MATERIALIZED SOURCE csv_upgrade_with_header_alias (al, sia)
-  FROM FILE '${testdrive.temp-dir}/csv.csv'
-  FORMAT CSV WITH HEADER
-
 > CREATE MATERIALIZED SOURCE csv_upgrade_no_header
-  FROM FILE '${testdrive.temp-dir}/csv.csv'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS
 
 > CREATE MATERIALIZED SOURCE csv_upgrade_no_header_alias (al, sia)
-  FROM FILE '${testdrive.temp-dir}/csv.csv'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csv-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS

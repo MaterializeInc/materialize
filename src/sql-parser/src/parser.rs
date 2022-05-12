@@ -1643,7 +1643,7 @@ impl<'a> Parser<'a> {
             self.expect_keyword(WITH)?;
             let columns = if self.parse_keyword(HEADER) || self.parse_keyword(HEADERS) {
                 CsvColumns::Header {
-                    names: self.parse_parenthesized_column_list(Optional)?,
+                    names: self.parse_parenthesized_column_list(Mandatory)?,
                 }
             } else {
                 let n_cols = self.parse_literal_uint()? as usize;
@@ -2077,9 +2077,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
-        match self
-            .expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, PERSIST, POSTGRES, PUBNUB])?
-        {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, PERSIST, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2132,15 +2130,6 @@ impl<'a> Parser<'a> {
                     collection_id: shard_id,
                     columns,
                 })
-            }
-            FILE => {
-                let path = self.parse_literal_string()?;
-                let compression = if self.parse_keyword(COMPRESSION) {
-                    self.parse_compression()?
-                } else {
-                    Compression::None
-                };
-                Ok(CreateSourceConnector::File { path, compression })
             }
             KAFKA => {
                 let connector = match self.expect_one_of_keywords(&[BROKER, CONNECTOR])? {
@@ -2604,7 +2593,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[REMOTE, SIZE])? {
+        match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
+            AVAILABILITY => {
+                self.expect_keyword(ZONE)?;
+                let _ = self.consume_token(&Token::Eq);
+                Ok(ReplicaOption::AvailabilityZone(
+                    self.parse_with_option_value()?,
+                ))
+            }
             REMOTE => {
                 self.expect_token(&Token::LParen)?;
                 let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
@@ -3089,20 +3085,12 @@ impl<'a> Parser<'a> {
                 })
             }
             SET => {
-                if self.parse_keyword(ENABLED) {
-                    Statement::AlterIndex(AlterIndexStatement {
-                        index_name: name,
-                        if_exists,
-                        action: AlterIndexAction::Enable,
-                    })
-                } else {
-                    let set_options = self.parse_with_options(true)?;
-                    Statement::AlterIndex(AlterIndexStatement {
-                        index_name: name,
-                        if_exists,
-                        action: AlterIndexAction::SetOptions(set_options),
-                    })
-                }
+                let set_options = self.parse_with_options(true)?;
+                Statement::AlterIndex(AlterIndexStatement {
+                    index_name: name,
+                    if_exists,
+                    action: AlterIndexAction::SetOptions(set_options),
+                })
             }
             RENAME => {
                 self.expect_keyword(TO)?;

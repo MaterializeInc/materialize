@@ -31,6 +31,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     gawk \
     g++ \
     gcc \
+    gnupg2 \
     help2man \
     libc-dev \
     libncurses-dev \
@@ -41,14 +42,18 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     unzip \
     xz-utils
 
-# TODO(benesch): switch back to an official crosstool-NG release when the
-# official releases support GCC 9.0.
+COPY crosstool.asc ./
 
-RUN mkdir crosstool \
-    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/archive/4dc9d643f94720bb11a7b4fa0c39729a684be5bb.tar.gz > crosstool.tar.gz \
-    && tar -xf crosstool.tar.gz -C crosstool --strip-components=1 \
-    && rm crosstool.tar.gz \
-    && (cd crosstool && ./bootstrap && ./configure && make install) \
+RUN gpg --import crosstool.asc \
+    && rm crosstool.asc \
+    && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
+    && mkdir crosstool \
+    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz > crosstool.tar.xz \
+    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.25.0.tar.xz.sig > crosstool.sig \
+    && gpg --verify crosstool.sig crosstool.tar.xz \
+    && tar -xf crosstool.tar.xz -C crosstool --strip-components=1 \
+    && rm crosstool.sig crosstool.tar.xz \
+    && (cd crosstool && ./configure && make install) \
     && rm -rf crosstool
 
 COPY crosstool-$ARCH_GCC.defconfig ./

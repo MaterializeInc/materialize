@@ -26,7 +26,7 @@
         <button type="submit" name="action" value="activate">Activate</button>
       </form>
   {% endmatch %}
-  <a href="prof?action=dump_stats">Download stats</a>
+  <a href="?action=dump_stats">Download stats</a>
 {% when crate::http::MemProfilingStatus::Disabled %}
     <p>Jemalloc profiling is not available.</p>
     {% if std::env::consts::OS == "macos" %}

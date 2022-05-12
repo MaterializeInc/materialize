@@ -7,83 +7,135 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::pin::Pin;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
 use pubnub_hyper::core::data::{channel, message::Type};
-use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport};
+use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport, PubNub};
+use timely::scheduling::SyncActivator;
 use tracing::info;
 
-use mz_dataflow_types::{sources::PubNubSourceConnector, SourceErrorDetails};
+use mz_dataflow_types::sources::{
+    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, MzOffset,
+};
+use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
-use crate::source::{SimpleSource, SourceError, Timestamper};
+use super::metrics::SourceBaseMetrics;
+use crate::source::{SourceMessage, SourceReader, SourceReaderError};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
-    source_id: GlobalId,
-    connector: PubNubSourceConnector,
+    channel: channel::Name,
+    pubnub: PubNub,
+    stream: Option<Pin<Box<pubnub_hyper::core::Subscription<DefaultRuntime>>>>,
 }
 
-impl PubNubSourceReader {
-    /// Constructs a new instance
-    pub fn new(source_id: GlobalId, connector: PubNubSourceConnector) -> Self {
-        Self {
-            source_id,
-            connector,
-        }
-    }
-}
+#[async_trait(?Send)]
+impl SourceReader for PubNubSourceReader {
+    type Key = ();
+    type Value = Row;
 
-#[async_trait]
-impl SimpleSource for PubNubSourceReader {
-    async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
+    fn new(
+        _source_name: String,
+        _source_id: GlobalId,
+        _worker_id: usize,
+        _worker_count: usize,
+        _consumer_activator: SyncActivator,
+        connector: ExternalSourceConnector,
+        _aws_external_id: AwsExternalId,
+        _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
+        _encoding: SourceDataEncoding,
+        _metrics: SourceBaseMetrics,
+    ) -> Result<Self, anyhow::Error> {
+        let pubnub_conn = match connector {
+            ExternalSourceConnector::PubNub(pubnub_conn) => pubnub_conn,
+            _ => {
+                panic!(
+                    "PubNub is the only legitimate ExternalSourceConnector for PubNubSourceReader"
+                )
+            }
+        };
         let transport = DefaultTransport::new()
             // we don't need a publish key for subscribing
             .publish_key("")
-            .subscribe_key(&self.connector.subscribe_key)
-            .build()
-            .map_err(|e| SourceError {
-                source_id: self.source_id,
-                error: SourceErrorDetails::Other(e.to_string()),
-            })?;
+            .subscribe_key(&pubnub_conn.subscribe_key)
+            .build()?;
 
-        let mut pubnub = Builder::new()
+        let pubnub = Builder::new()
             .transport(transport)
+            // TODO(guswynn): figure out if this or hyper spawns tasks
+            // here, and if we need to name them
             .runtime(DefaultRuntime)
             .build();
 
-        let channel = self.connector.channel;
-        let channel: channel::Name = channel.parse().or_else(|_| {
-            Err(SourceError {
-                source_id: self.source_id,
-                error: SourceErrorDetails::Other(format!("invalid pubnub channel: {}", channel)),
-            })
-        })?;
+        let channel = pubnub_conn.channel;
+        let channel: channel::Name = channel
+            .parse()
+            .or_else(|_| Err(anyhow::anyhow!("invalid pubnub channel: {}", channel)))?;
 
+        Ok(Self {
+            channel,
+            pubnub,
+            stream: None,
+        })
+    }
+
+    async fn next(
+        &mut self,
+        timestamp_frequency: Duration,
+    ) -> Option<Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>> {
         loop {
-            let stream = pubnub.subscribe(channel.clone()).await;
-            tokio::pin!(stream);
+            let stream = match &mut self.stream {
+                None => {
+                    self.stream = Some(Box::pin(self.pubnub.subscribe(self.channel.clone()).await));
+                    self.stream.as_mut().expect("we just created the stream")
+                }
+                Some(stream) => stream,
+            };
 
-            while let Some(msg) = stream.next().await {
-                if msg.message_type == Type::Publish {
-                    let s = msg.json.dump();
+            match stream.next().await {
+                Some(msg) => {
+                    if msg.message_type == Type::Publish {
+                        let s = msg.json.dump();
 
-                    let row = Row::pack_slice(&[Datum::String(&s)]);
+                        let row = Row::pack_slice(&[Datum::String(&s)]);
 
-                    timestamper.insert(row).await.map_err(|e| SourceError {
-                        source_id: self.source_id,
-                        error: SourceErrorDetails::Other(e.to_string()),
-                    })?;
+                        return Some(Ok(SourceMessage {
+                            partition: PartitionId::None,
+                            offset: MzOffset {
+                                // NOTE(guswynn):
+                                //
+                                // We convert the u64 timetoken that should
+                                // 10ns granularity to a u64. Hopefully,
+                                // this doesn't overflow, but we may convert
+                                // MzOffset to a u64.
+                                //
+                                // Also, we elect to skip the `region` part of
+                                // the timetoken structure, as I can't find
+                                // documentation on the pubnub website on
+                                // if it is required to produce monotonic
+                                // timetokens.
+                                offset: msg.timetoken.t.try_into().unwrap(),
+                            },
+                            upstream_time_millis: None,
+                            key: (),
+                            value: row,
+                            headers: None,
+                        }));
+                    }
+                }
+                None => {
+                    info!(
+                        "pubnub channel {:?} disconnected. reconnecting",
+                        self.channel.to_string()
+                    );
+                    self.stream.take();
+                    tokio::time::sleep(timestamp_frequency).await;
                 }
             }
-
-            info!(
-                "pubnub channel {:?} disconnected. reconnecting",
-                channel.to_string()
-            );
-            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     }
 }

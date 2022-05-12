@@ -19,43 +19,16 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, ExternalError, SeqNo};
+use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
 use mz_persist_types::{Codec, Codec64};
-use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tracing::trace;
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
 use crate::r#impl::state::Upper;
-
-/// An opaque identifier for a writer of a persist durable TVC (aka shard).
-///
-/// Unlike [crate::read::ReaderId], this is intentionally not Serialize and
-/// Deserialize. It's difficult to reason about the behavior if multiple writers
-/// accidentally end up concurrently using the same [WriterId] and we haven't
-/// (yet) found a need for it.
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct WriterId(pub(crate) [u8; 16]);
-
-impl std::fmt::Display for WriterId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "w{}", Uuid::from_bytes(self.0))
-    }
-}
-
-impl std::fmt::Debug for WriterId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WriterId({})", Uuid::from_bytes(self.0))
-    }
-}
-
-impl WriterId {
-    pub(crate) fn new() -> Self {
-        WriterId(*Uuid::new_v4().as_bytes())
-    }
-}
 
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
@@ -76,13 +49,7 @@ impl WriterId {
 pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
-    // TODO: Only the T bound should exist, the rest are a temporary artifact of
-    // the current implementation (the ones on Machine infect everything).
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64,
 {
-    pub(crate) writer_id: WriterId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
@@ -122,11 +89,10 @@ where
     /// upper. This is useful in cases where a timeout happens in between a
     /// successful write and returning that to the client.
     ///
-    /// In contrast to [Self::compare_and_append], multiple [WriteHandle]s (with
-    /// different [WriterId]s) may be used concurrently to write to the same
-    /// shard, but in this case, the data being written must be identical (in
-    /// the sense of "definite"-ness).  It's intended for replicated use by
-    /// source ingestion, sinks, etc.
+    /// In contrast to [Self::compare_and_append], multiple [WriteHandle]s may
+    /// be used concurrently to write to the same shard, but in this case, the
+    /// data being written must be identical (in the sense of "definite"-ness).
+    /// It's intended for replicated use by source ingestion, sinks, etc.
     ///
     /// All times in `updates` must be greater or equal to `self.upper()` and
     /// not greater or equal to `new_upper`. A `new_upper` of the empty
@@ -153,7 +119,8 @@ where
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
-        new_upper: Antichain<T>,
+        lower: Antichain<T>,
+        upper: Antichain<T>,
     ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
@@ -163,12 +130,11 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::append new_upper={:?}", new_upper);
+        trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
 
-        let lower = self.upper.clone();
-        let upper = new_upper;
+        let upper = upper;
         let since = Antichain::from_elem(T::minimum());
-        let desc = Description::new(lower, upper, since);
+        let mut desc = Description::new(lower.clone(), upper, since);
 
         // TODO: Instead construct a Vec of batches here so it can be bounded
         // memory usage (if updates is large).
@@ -196,15 +162,47 @@ where
             vec![]
         };
 
-        let res = self.machine.append(&self.writer_id, &keys, &desc).await?;
-        match res {
-            Ok(_seqno) => {
-                self.upper = desc.upper().clone();
-                Ok(Ok(Ok(())))
-            }
-            Err(current_upper) => {
-                self.upper = current_upper.0.clone();
-                return Ok(Ok(Err(current_upper)));
+        loop {
+            let res = self.machine.compare_and_append(&keys, &desc).await?;
+            match res {
+                Ok(Ok(_seqno)) => {
+                    self.upper = desc.upper().clone();
+                    return Ok(Ok(Ok(())));
+                }
+                // TODO(aljoscha): This seems useless now because we have to read from consensus to
+                // get an up-to-date version of the upper.
+                Ok(Err(_current_upper)) => {
+                    // If the state machine thinks that the shard upper is not far enough along, it
+                    // could be because the caller of this method has found out that it advanced
+                    // via some some side-channel that didn't update our local cache of the machine
+                    // state. So, fetch the latest state and try again if we indeed get something
+                    // different.
+                    self.machine.fetch_and_update_state().await;
+                    let current_upper = self.machine.upper();
+
+                    // We tried to to a non-contiguous append, that won't work.
+                    if PartialOrder::less_than(&current_upper, &lower) {
+                        self.upper = current_upper.clone();
+                        return Ok(Ok(Err(Upper(current_upper))));
+                    } else if PartialOrder::less_than(&current_upper, desc.upper()) {
+                        // Cut down the Description by advancing its lower to the current shard
+                        // upper and try again. IMPORTANT: We can only advance the lower, meaning
+                        // we cut updates away, we must not "extend" the batch by changing to a
+                        // lower that is not beyond the current lower. This invariant is checked by
+                        // the first if branch: if `!(current_upper < lower)` then it holds that
+                        // `lower <= current_upper`.
+                        desc = Description::new(
+                            current_upper,
+                            desc.upper().clone(),
+                            desc.since().clone(),
+                        );
+                    } else {
+                        // We already have updates past this batch's upper, the append is a no-op.
+                        self.upper = current_upper;
+                        return Ok(Ok(Ok(())));
+                    }
+                }
+                Err(err) => return Ok(Err(err)),
             }
         }
     }
@@ -258,9 +256,13 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
-        trace!("WriteHandle::write_batch new_upper={:?}", new_upper);
+        trace!(
+            "WriteHandle::compare_and_append expected_upper={:?} new_upper={:?}",
+            expected_upper,
+            new_upper
+        );
 
-        let lower = expected_upper;
+        let lower = expected_upper.clone();
         let upper = new_upper;
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
@@ -291,16 +293,36 @@ where
             vec![]
         };
 
-        let res = self
-            .machine
-            .compare_and_append(&self.writer_id, &keys, &desc)
-            .await?;
-        match res {
-            Ok(Ok(_seqno)) => self.upper = desc.upper().clone(),
-            Ok(Err(current_upper)) => return Ok(Ok(Err(current_upper))),
-            Err(err) => return Ok(Err(err)),
-        };
-        Ok(Ok(Ok(())))
+        loop {
+            let res = self.machine.compare_and_append(&keys, &desc).await?;
+            match res {
+                Ok(Ok(_seqno)) => {
+                    self.upper = desc.upper().clone();
+                    return Ok(Ok(Ok(())));
+                }
+                // TODO(aljoscha): This seems useless now because we have to read from consensus to
+                // get an up-to-date version of the upper.
+                Ok(Err(_current_upper)) => {
+                    // If the state machine thinks that the shard upper is not far enough along, it
+                    // could be because the caller of this method has found out that it advanced
+                    // via some some side-channel that didn't update our local cache of the machine
+                    // state. So, fetch the latest state and try again if we indeed get something
+                    // different.
+                    self.machine.fetch_and_update_state().await;
+                    let current_upper = self.machine.upper();
+
+                    // We tried to to a compare_and_append with the wrong expected upper, that
+                    // won't work.
+                    if current_upper != expected_upper {
+                        self.upper = current_upper.clone();
+                        return Ok(Ok(Err(Upper(current_upper))));
+                    } else {
+                        // The upper stored in state was outdated. Retry after updating.
+                    }
+                }
+                Err(err) => return Ok(Err(err)),
+            }
+        }
     }
 
     fn encode_batch<SB, KB, VB, TB, DB, I>(
@@ -393,15 +415,20 @@ where
     /// Test helper for an [Self::append] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_append(&mut self, updates: &[((K, V), T, D)], new_upper: T) {
+    pub async fn expect_append<L, U>(&mut self, updates: &[((K, V), T, D)], lower: L, new_upper: U)
+    where
+        L: Into<Antichain<T>>,
+        U: Into<Antichain<T>>,
+    {
         self.append(
             updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
-            Antichain::from_elem(new_upper),
+            lower.into(),
+            new_upper.into(),
         )
         .await
         .expect("external durability failed")
         .expect("invalid usage")
-        .expect("unexpected writer-local upper");
+        .expect("unexpected upper");
     }
 
     /// Test helper for a [Self::compare_and_append] call that is expected to
@@ -423,21 +450,6 @@ where
         .expect("external durability failed")
         .expect("invalid usage")
         .expect("unexpected upper")
-    }
-}
-
-impl<K, V, T, D> Drop for WriteHandle<K, V, T, D>
-where
-    T: Timestamp + Lattice + Codec64,
-    // TODO: Only the T bound should exist, the rest are a temporary artifact of
-    // the current implementation (the ones on Machine infect everything).
-    K: Debug + Codec,
-    V: Debug + Codec,
-    D: Semigroup + Codec64,
-{
-    fn drop(&mut self) {
-        // TODO: Use tokio instead of futures_executor.
-        let _: SeqNo = futures_executor::block_on(self.machine.expire_writer(&self.writer_id));
     }
 }
 
@@ -466,7 +478,7 @@ mod tests {
 
         // Write an initial batch.
         let mut upper = 3;
-        write.expect_append(&data[..2], upper).await;
+        write.expect_append(&data[..2], vec![0], vec![upper]).await;
 
         // Write a bunch of empty batches. This shouldn't write blobs, so the count should stay the same.
         let blob_count_before = blob

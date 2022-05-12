@@ -32,7 +32,6 @@ use mz_ore::now::NOW_ZERO;
 use mz_ore::now::SYSTEM_TIME;
 use postgres::Row;
 use regex::Regex;
-use tempfile::NamedTempFile;
 use tracing::info;
 
 use mz_ore::assert_contains;
@@ -257,6 +256,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         "BEGIN;
          DECLARE c CURSOR FOR TAIL t;",
     )?;
+    // Locks the timestamp of the TAIL to before any of the following INSERTs, which is required
+    // for mz_timestamp column to be accurate
+    let _ = client_reads.query_one("FETCH 0 c", &[]);
 
     let mut events = vec![];
 
@@ -267,6 +269,11 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(row.get::<_, i64>("mz_diff"), 1);
         assert_eq!(row.get::<_, String>("data"), data);
         events.push((row.get::<_, MzTimestamp>("mz_timestamp").0, data));
+
+        if i > 1 {
+            // write timestamps should all increase
+            assert!(events[i - 1].0 > events[i - 2].0);
+        }
     }
 
     // Now tail without a snapshot as of each timestamp, verifying that when we do
@@ -726,58 +733,6 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Test the TAIL SQL command on an unmaterialized, tailed file source. This is
-/// end-to-end tailing: changes to the file will propagate through Materialize
-/// and into the user's SQL console.
-#[test]
-fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging();
-
-    let config = util::Config::default();
-    let server = util::start_server(config)?;
-    let mut client = server.connect(postgres::NoTls)?;
-
-    let mut file = NamedTempFile::new()?;
-    client.batch_execute(&*format!(
-        "CREATE SOURCE f FROM FILE '{}' WITH (tail = true) FORMAT TEXT",
-        file.path().display()
-    ))?;
-    client.batch_execute(
-        "BEGIN;
-         DECLARE c CURSOR FOR TAIL f;",
-    )?;
-
-    let mut append = |data| -> Result<_, Box<dyn Error>> {
-        file.write_all(data)?;
-        file.as_file_mut().sync_all()?;
-        Ok(())
-    };
-
-    append(b"line 1\n")?;
-    let row = client.query_one("FETCH ALL c", &[])?;
-    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
-    assert_eq!(row.get::<_, String>("text"), "line 1");
-
-    append(b"line 2\n")?;
-    let row = client.query_one("FETCH ALL c", &[])?;
-    assert_eq!(row.get::<_, i64>("mz_diff"), 1);
-    assert_eq!(row.get::<_, String>("text"), "line 2");
-
-    // Wait a little bit to make sure no more new rows arrive.
-    let rows = client.query("FETCH ALL c WITH (timeout = '1s')", &[])?;
-    assert_eq!(rows.len(), 0);
-
-    // Check that writing to the tailed file after the source is dropped doesn't
-    // cause a crash (#1361).
-    client.batch_execute("COMMIT")?;
-    client.batch_execute("DROP SOURCE f")?;
-    thread::sleep(Duration::from_millis(100));
-    append(b"line 3\n")?;
-    thread::sleep(Duration::from_millis(100));
-
-    Ok(())
-}
-
 // Tests that a client that launches a non-terminating TAIL and disconnects
 // does not keep the server alive forever.
 #[test]
@@ -878,11 +833,15 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
 
     // Keep trying until you either panic or are able to verify the expected behavior.
     loop {
+        client_interactive.execute("BEGIN", &[])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"first".to_owned()])?;
+        client_interactive.execute("COMMIT", &[])?;
         let _ = client_interactive.query("SELECT * FROM T1", &[])?;
+        client_interactive.execute("BEGIN", &[])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
         client_interactive.execute("INSERT INTO t1 VALUES ($1)", &[&"second".to_owned()])?;
+        client_interactive.execute("COMMIT", &[])?;
 
         let first_rows = client_tail.query("FETCH ALL c1", &[])?;
         let first_rows_verified = verify_rw_pair(&first_rows, "first");
@@ -1070,14 +1029,14 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(
         explain,
-        "     timestamp:          1000
-         since:[         1000]
+        "     timestamp:          1036
+         since:[         1036]
          upper:[            0]
      has table: true
- table read ts:          1000
+ table read ts:          1036
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         1000]
+ read frontier:[         1036]
 write frontier:[            0]\n",
     );
 

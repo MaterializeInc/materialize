@@ -195,7 +195,10 @@ where
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 compute_instance.add_replica(replica_name, client).await;
             }
-            ConcreteComputeInstanceReplicaConfig::Managed { size_config } => {
+            ConcreteComputeInstanceReplicaConfig::Managed {
+                size_config,
+                availability_zone,
+            } => {
                 let OrchestratorConfig {
                     orchestrator,
                     computed_image,
@@ -219,8 +222,13 @@ where
                                             "--listen-addr={}:{}",
                                             default_listen_host, my_ports["controller"]
                                         ),
+                                        format!(
+                                            "--http-console-addr={}:{}",
+                                            default_listen_host, my_ports["http"]
+                                        ),
                                         format!("--processes={}", size_config.scale),
                                         format!("--workers={}", size_config.workers),
+                                        "--log-process-name".to_string(),
                                     ];
                                     compute_opts.extend(hosts_ports.iter().map(|(host, ports)| {
                                         format!("{host}:{}", ports["compute"])
@@ -242,6 +250,10 @@ where
                                         name: "compute".into(),
                                         port_hint: 2102,
                                     },
+                                    ServicePort {
+                                        name: "http".into(),
+                                        port_hint: 2103,
+                                    },
                                 ],
                                 cpu_limit: size_config.cpu_limit,
                                 memory_limit: size_config.memory_limit,
@@ -250,7 +262,7 @@ where
                                     "cluster-id".into() => instance_id.to_string(),
                                     "type".into() => "cluster".into(),
                                 },
-                                availability_zone: None,
+                                availability_zone,
                             },
                         )
                         .await?;
@@ -277,6 +289,7 @@ where
         let replica_name = generate_replica_service_name(instance_id, replica_id);
         if let ConcreteComputeInstanceReplicaConfig::Managed {
             size_config: _size_config,
+            availability_zone: _az,
         } = config
         {
             let OrchestratorConfig { orchestrator, .. } = &self.orchestrator;

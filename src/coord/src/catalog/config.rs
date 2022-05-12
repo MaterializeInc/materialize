@@ -22,8 +22,6 @@ pub struct Config<'a, S> {
     pub storage: storage::Connection<S>,
     /// Whether to enable experimental mode.
     pub experimental_mode: Option<bool>,
-    /// Whether to enable safe mode.
-    pub safe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// An [External ID][] to use for all AWS AssumeRole operations.
@@ -38,6 +36,4 @@ pub struct Config<'a, S> {
     pub skip_migrations: bool,
     /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
-    /// Whether or not to prevent user indexes from being considered for use.
-    pub disable_user_indexes: bool,
 }

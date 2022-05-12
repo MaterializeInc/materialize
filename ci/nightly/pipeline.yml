@@ -25,8 +25,8 @@ steps:
           - { value: upgrade }
           - { value: limits }
           - { value: cluster-limits }
+          - { value: limits-instance-size }
           - { value: cluster-testdrive }
-          - { value: proxy }
           - { value: testdrive-workers-1 }
           - { value: testdrive-workers-32 }
           - { value: testdrive-partitions-5 }
@@ -99,18 +99,20 @@ steps:
     agents:
       queue: linux-x86_64
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-redpanda-ci
+          args: [--redpanda, --aws-region=us-east-2]
 
   - id: redpanda-testdrive-aarch64
     label: ":panda_face: :racing_car: testdrive aarch64"
     agents:
       queue: linux-aarch64
     plugins:
+      - ./ci/plugins/scratch-aws-access: ~
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive-redpanda-ci
+          args: [--redpanda, --aws-region=us-east-2]
 
   - id: upgrade
     label: "Upgrade testing"
@@ -143,6 +145,17 @@ steps:
           run: cluster
     timeout_in_minutes: 50
 
+  - id: limits-instance-size
+    label: "Instance size limits"
+    depends_on: build-x86_64
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: limits
+          run: instance-size
+    timeout_in_minutes: 50
+
   - id: cluster-testdrive
     label: "Full testdrive against Cluster"
     depends_on: build-x86_64
@@ -153,17 +166,6 @@ steps:
           composition: cluster
           run: nightly
     timeout_in_minutes: 30
-
-  - id: proxy
-    label: ":squid: proxy"
-    depends_on: build-x86_64
-    agents:
-      queue: linux-x86_64
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: proxy
-          args: [--aws-region=us-east-2]
 
   - id: testdrive-workers-1
     label: ":racing_car: testdrive with --workers 1"

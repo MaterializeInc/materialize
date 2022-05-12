@@ -568,7 +568,7 @@ mod tests {
     use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::error::ErrorLog;
-    use crate::file::{FileBlob, FileLog};
+    use crate::file::FileBlob;
     use crate::location::Blob;
     use crate::mem::MemRegistry;
     use crate::nemesis::generator::GeneratorConfig;
@@ -594,8 +594,8 @@ mod tests {
 
     impl StartRuntime for TempDir {
         fn start_runtime(&mut self, unreliable: UnreliableHandle) -> Result<RuntimeClient, Error> {
-            let (log_dir, blob_dir) = (self.path().join("log"), self.path().join("blob"));
-            let log = FileLog::new(log_dir, ("reentrance0", "direct_file").into())?;
+            let blob_dir = self.path().join("blob");
+            let log = ErrorLog;
             let log = UnreliableLog::from_handle(log, unreliable.clone());
             let blob =
                 FileBlob::open_exclusive(blob_dir.into(), ("reentrance0", "direct_file").into())?;

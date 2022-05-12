@@ -271,7 +271,7 @@ CREATE MATERIALIZED SOURCE kafka_ssl
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081' WITH (
       ssl_key_location = '/secrets/materialized.key',
       ssl_certificate_location = '/secrets/materialized.crt',
-      ssl_ca_location = '/secrets/ca.crt',
+      ssl_ca_location = '/secrets/ca.crt'
   );
 ```
 
@@ -308,7 +308,7 @@ CREATE SOURCE kafka_sasl
       security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
       sasl_username = '<BROKER_USERNAME>',
-      sasl_password = '<BROKER_PASSWORD>',
+      sasl_password = '<BROKER_PASSWORD>'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld' WITH (
       username = '<SCHEMA_REGISTRY_USERNAME>',

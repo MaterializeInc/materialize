@@ -95,18 +95,6 @@ pub struct Args {
     /// [DANGEROUS] Enable experimental features.
     #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
-    /// Whether to run in safe mode.
-    ///
-    /// In safe mode, features that provide access to the underlying machine,
-    /// like file sources and sinks, are disabled.
-    ///
-    /// This option is intended for use by the cloud product
-    /// (cloud.materialize.com), but may be useful in other contexts as well.
-    #[clap(long, hide = true)]
-    safe: bool,
-
-    #[clap(long, env = "MZ_DISABLE_USER_INDEXES")]
-    disable_user_indexes: bool,
 
     /// The address on which Prometheus metrics get exposed.
     ///
@@ -141,6 +129,20 @@ pub struct Args {
     /// production cluster that happens to be the active Kubernetes context.)
     #[structopt(long, hide = true, default_value = "minikube")]
     kubernetes_context: String,
+    /// The name of this pod
+    #[clap(
+        long,
+        hide = true,
+        env = "MZ_POD_NAME",
+        required_if_eq("orchestrator", "kubernetes")
+    )]
+    pod_name: Option<String>,
+    /// The name of the Kubernetes secret object to use for storing user secrets
+    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
+    user_defined_secret: Option<String>,
+    /// The mount location of the Kubernetes secret object to use for storing user secrets
+    #[structopt(long, hide = true, required_if_eq("orchestrator", "kubernetes"))]
+    user_defined_secret_mount_path: Option<String>,
     /// The storaged image reference to use.
     #[structopt(
         long,
@@ -488,16 +490,15 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    let mut tracing_stream = runtime.block_on(mz_ore::tracing::configure(
-        mz_ore::tracing::TracingConfig {
+    let mut tracing_stream =
+        runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
             log_filter: &args.log_filter,
             opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
             opentelemetry_headers: args.opentelemetry_headers.as_deref(),
+            prefix: None,
             #[cfg(feature = "tokio-console")]
             tokio_console: args.tokio_console,
-        },
-        &metrics_registry,
-    ))?;
+        }))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
@@ -604,6 +605,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         .collect(),
                     service_account: args.kubernetes_service_account,
                     image_pull_policy: args.kubernetes_image_pull_policy,
+                    user_defined_secret: args.user_defined_secret.clone().unwrap_or_default(),
                 })
             }
             Orchestrator::Process => {
@@ -742,6 +744,9 @@ max log level: {max_log_level}",
     let secrets_controller = match args.orchestrator {
         Orchestrator::Kubernetes => SecretsControllerConfig::Kubernetes {
             context: args.kubernetes_context,
+            user_defined_secret: args.user_defined_secret.unwrap_or_default(),
+            user_defined_secret_mount_path: args.user_defined_secret_mount_path.unwrap_or_default(),
+            refresh_pod_name: args.pod_name.unwrap_or_default(),
         },
         Orchestrator::Process => SecretsControllerConfig::LocalFileSystem,
     };
@@ -760,8 +765,6 @@ max log level: {max_log_level}",
         orchestrator,
         secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
-        disable_user_indexes: args.disable_user_indexes,
-        safe_mode: args.safe,
         aws_external_id: args
             .aws_external_id
             .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
@@ -786,20 +789,6 @@ to improve both our software and your queries! Please reach out at:
 =======================================================================
 "
     );
-
-    if args.disable_user_indexes {
-        eprintln!(
-            "************************************************************************
-                                NOTE!
-************************************************************************
-Starting Materialize with user indexes disabled.
-
-For more details, see
-    https://materialize.com/docs/cli#user-indexes-disabled
-************************************************************************
-"
-        );
-    }
 
     if args.experimental {
         eprintln!(

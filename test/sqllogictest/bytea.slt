@@ -101,3 +101,39 @@ SELECT convert_from(b, 'invalid encoding') FROM test
 
 query error invalid utf-8 sequence of 1 bytes
 SELECT convert_from('\x00ff', 'utf-8')
+
+# get_byte
+
+statement ok
+CREATE TABLE test_value (v bytea);
+
+statement ok
+INSERT INTO test_value VALUES ('\x1234567890'::bytea);
+
+query error index -1 out of valid range, 0..4
+SELECT get_byte(v, -1) FROM test_value
+
+query error index 5 out of valid range, 0..4
+SELECT get_byte(v, 5) FROM test_value
+
+query error index 0 out of valid range, 0..-1
+SELECT get_byte('\x'::bytea, 0)
+
+query IIIIII
+SELECT
+    get_byte(v, 0),
+    get_byte(v, 1),
+    get_byte(v, 2),
+    get_byte(v, 3),
+    get_byte(v, 4),
+    get_byte(v, NULL)
+FROM test_value
+----
+18  52  86  120  144  NULL
+
+query II
+SELECT
+    get_byte(NULL, 0),
+    get_byte(NULL, 2);
+----
+NULL NULL

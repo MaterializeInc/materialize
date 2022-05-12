@@ -21,15 +21,13 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-# Pick a non-default port to make sure nothing is accidentally going around the proxy
-KAFKA_SINK_PORT = 9091
 SERVICES = [
     Zookeeper(),
-    Kafka(port=KAFKA_SINK_PORT),
-    SchemaRegistry(kafka_servers=[("kafka", f"{KAFKA_SINK_PORT}")]),
+    Kafka(),
+    SchemaRegistry(),
     Materialized(),
     Toxiproxy(),
-    Testdrive(kafka_url="toxiproxy:9093", default_timeout="120s"),
+    Testdrive(default_timeout="120s"),
 ]
 
 #

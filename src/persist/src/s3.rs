@@ -65,7 +65,7 @@ impl S3BlobConfig {
                 SharedCredentialsProvider::new(credentials::default_provider().await);
             loader = loader.credentials_provider(role_provider.build(default_provider));
         }
-        let client = mz_aws_util::s3::client(&loader.load().await);
+        let client = aws_sdk_s3::Client::new(&loader.load().await);
         Ok(S3BlobConfig {
             client,
             bucket,
@@ -928,6 +928,15 @@ impl MinElapsed {
         }
         *min
     }
+}
+
+// Make sure the "vendored" feature of the openssl_sys crate makes it into the
+// transitive dep graph of persist, so that we don't attempt to link against the
+// system OpenSSL library. Fake a usage of the crate here so that a good
+// samaritan doesn't remove our unused dep.
+#[allow(dead_code)]
+fn openssl_sys_hack() {
+    openssl_sys::init();
 }
 
 #[cfg(test)]

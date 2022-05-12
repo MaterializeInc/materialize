@@ -978,6 +978,8 @@ pub enum ReplicaOption<T: AstInfo> {
     },
     /// The `SIZE [[=] <size>]` option.
     Size(WithOptionValue<T>),
+    /// The `AVAILABILITY ZONE [[=] <size>]` option.
+    AvailabilityZone(WithOptionValue<T>),
 }
 
 impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
@@ -991,6 +993,10 @@ impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
             ReplicaOption::Size(size) => {
                 f.write_str("SIZE ");
                 f.write_node(size);
+            }
+            ReplicaOption::AvailabilityZone(az) => {
+                f.write_str("AVAILABILITY ZONE ");
+                f.write_node(az);
             }
         }
     }
@@ -1043,7 +1049,6 @@ impl_display_t!(AlterObjectRenameStatement);
 pub enum AlterIndexAction<T: AstInfo> {
     SetOptions(Vec<WithOption<T>>),
     ResetOptions(Vec<Ident>),
-    Enable,
 }
 
 /// `ALTER INDEX ... {RESET, SET}`
@@ -1074,7 +1079,6 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
                 f.write_node(&display::comma_separated(&options));
                 f.write_str(")");
             }
-            AlterIndexAction::Enable => f.write_str("SET ENABLED"),
         }
     }
 }

@@ -16,14 +16,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
+use proptest::prelude::{any, Arbitrary};
+use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_repr::proto::{any_uuid, FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
+use crate::client::controller::storage::CollectionMetadata;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
+use crate::Plan;
+
+include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.rs"));
 
 /// The response from a `Peek`.
 ///
@@ -79,10 +87,30 @@ pub struct Update<T = mz_repr::Timestamp> {
 pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
 /// An association of a global identifier to an expression.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc<P> {
     pub id: GlobalId,
     pub plan: P,
+}
+
+impl From<&BuildDesc<crate::plan::Plan>> for ProtoBuildDesc {
+    fn from(x: &BuildDesc<crate::plan::Plan>) -> Self {
+        ProtoBuildDesc {
+            id: Some((&x.id).into()),
+            plan: Some((&x.plan).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoBuildDesc) -> Result<Self, Self::Error> {
+        Ok(BuildDesc {
+            id: x.id.try_into_if_some("ProtoBuildDesc::id")?,
+            plan: x.plan.try_into_if_some("ProtoBuildDesc::plan")?,
+        })
+    }
 }
 
 /// A description of an instantiation of a source.
@@ -101,11 +129,73 @@ pub struct SourceInstanceDesc<M> {
     pub storage_metadata: M,
 }
 
+impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<SourceInstanceArguments>(),
+            any::<CollectionMetadata>(),
+        )
+            .prop_map(|(arguments, storage_metadata)| SourceInstanceDesc {
+                description: crate::sources::any_source_desc_stub(),
+                arguments,
+                storage_metadata,
+            })
+            .boxed()
+    }
+}
+
+impl From<&SourceInstanceDesc<CollectionMetadata>> for ProtoSourceInstanceDesc {
+    fn from(x: &SourceInstanceDesc<CollectionMetadata>) -> Self {
+        ProtoSourceInstanceDesc {
+            description: serde_json::to_string(&x.description).unwrap(),
+            arguments: Some((&x.arguments).into()),
+            storage_metadata: Some((&x.storage_metadata).into()),
+        }
+    }
+}
+
+impl TryFrom<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoSourceInstanceDesc) -> Result<Self, Self::Error> {
+        Ok(SourceInstanceDesc {
+            description: serde_json::from_str(&x.description).map_err(TryFromProtoError::from)?,
+            arguments: x
+                .arguments
+                .try_into_if_some("ProtoSourceInstanceDesc::arguments")?,
+            storage_metadata: x
+                .storage_metadata
+                .try_into_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
+        })
+    }
+}
+
 /// Per-source construction arguments.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
     /// Optional linear operators that can be applied record-by-record.
     pub operators: Option<crate::LinearOperator>,
+}
+
+impl From<&SourceInstanceArguments> for ProtoSourceInstanceArguments {
+    fn from(x: &SourceInstanceArguments) -> Self {
+        ProtoSourceInstanceArguments {
+            operators: x.operators.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<ProtoSourceInstanceArguments> for SourceInstanceArguments {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoSourceInstanceArguments) -> Result<Self, Self::Error> {
+        Ok(SourceInstanceArguments {
+            operators: x.operators.map(TryInto::try_into).transpose()?,
+        })
+    }
 }
 
 /// Type alias for source subscriptions, (dataflow_id, source_id).
@@ -158,6 +248,66 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub debug_name: String,
     /// Unique ID of the dataflow
     pub id: uuid::Uuid,
+}
+
+fn any_source_import() -> impl Strategy<Value = (GlobalId, SourceInstanceDesc<CollectionMetadata>)>
+{
+    (
+        any::<GlobalId>(),
+        any::<SourceInstanceDesc<CollectionMetadata>>(),
+    )
+}
+
+proptest::prop_compose! {
+    fn any_dataflow_index()(
+        id in any::<GlobalId>(),
+        index in any::<IndexDesc>(),
+        typ in any::<RelationType>()
+    ) -> (GlobalId, (IndexDesc, RelationType)) {
+        (id, (index, typ))
+    }
+}
+
+proptest::prop_compose! {
+    fn any_dataflow_description()(
+        source_imports in proptest::collection::vec(any_source_import(), 1..3),
+        index_imports in proptest::collection::vec(any_dataflow_index(), 1..3),
+        objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
+        index_exports in proptest::collection::vec(any_dataflow_index(), 1..3),
+        sink_ids in proptest::collection::vec(any::<GlobalId>(), 1..3),
+        as_of_some in any::<bool>(),
+        as_of in proptest::collection::vec(any::<u64>(), 1..5),
+        debug_name in ".*",
+        id in any_uuid(),
+    ) -> DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
+        DataflowDescription {
+            source_imports: BTreeMap::from_iter(source_imports.into_iter()),
+            index_imports: BTreeMap::from_iter(index_imports.into_iter()),
+            objects_to_build,
+            index_exports: BTreeMap::from_iter(index_exports.into_iter()),
+            sink_exports: BTreeMap::from_iter(
+                sink_ids
+                    .into_iter()
+                    .map(|id| (id, crate::sinks::any_sink_desc_stub())),
+            ),
+            as_of: if as_of_some {
+                Some(Antichain::from(as_of))
+            } else {
+                None
+            },
+            debug_name,
+            id,
+        }
+    }
+}
+
+impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        any_dataflow_description().boxed()
+    }
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
@@ -392,11 +542,129 @@ impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P,
     }
 }
 
+impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
+    for ProtoDataflowDescription
+{
+    fn from(x: &DataflowDescription<crate::plan::Plan, CollectionMetadata>) -> Self {
+        use proto_dataflow_description::*;
+        ProtoDataflowDescription {
+            source_imports: x
+                .source_imports
+                .iter()
+                .map(|(id, source_instance_desc)| ProtoSourceImport {
+                    id: Some(id.into()),
+                    source_instance_desc: Some(source_instance_desc.into()),
+                })
+                .collect(),
+            index_imports: x
+                .index_imports
+                .iter()
+                .map(|(id, (index_desc, typ))| ProtoIndex {
+                    id: Some(id.into()),
+                    index_desc: Some(index_desc.into()),
+                    typ: Some(typ.into()),
+                })
+                .collect(),
+            objects_to_build: x.objects_to_build.iter().map(Into::into).collect(),
+            index_exports: x
+                .index_exports
+                .iter()
+                .map(|(id, (index_desc, typ))| ProtoIndex {
+                    id: Some(id.into()),
+                    index_desc: Some(index_desc.into()),
+                    typ: Some(typ.into()),
+                })
+                .collect(),
+            sink_exports: x
+                .sink_exports
+                .iter()
+                .map(|(id, sink_desc)| ProtoSinkExport {
+                    id: Some(id.into()),
+                    sink_desc: serde_json::to_string(sink_desc).unwrap(),
+                })
+                .collect(),
+            as_of: x.as_of.as_ref().map(Into::into),
+            debug_name: x.debug_name.clone(),
+            id: Some(x.id.into_proto()),
+        }
+    }
+}
+
+impl TryFrom<ProtoDataflowDescription>
+    for DataflowDescription<crate::plan::Plan, CollectionMetadata>
+{
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoDataflowDescription) -> Result<Self, Self::Error> {
+        Ok(DataflowDescription {
+            source_imports: x
+                .source_imports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoSourceImport::id")?,
+                        inner
+                            .source_instance_desc
+                            .try_into_if_some("ProtoSourceImport::source_instance_desc")?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            index_imports: x
+                .index_imports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoIndex::id")?,
+                        (
+                            inner
+                                .index_desc
+                                .try_into_if_some("ProtoIndex::index_desc")?,
+                            inner.typ.try_into_if_some("ProtoIndex::typ")?,
+                        ),
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            objects_to_build: x
+                .objects_to_build
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            index_exports: x
+                .index_exports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoIndex::id")?,
+                        (
+                            inner
+                                .index_desc
+                                .try_into_if_some("ProtoIndex::index_desc")?,
+                            inner.typ.try_into_if_some("ProtoIndex::typ")?,
+                        ),
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            sink_exports: x
+                .sink_exports
+                .into_iter()
+                .map(|inner| {
+                    Ok((
+                        inner.id.try_into_if_some("ProtoSinkExport::id")?,
+                        serde_json::from_str(&inner.sink_desc).map_err(TryFromProtoError::from)?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
+            as_of: x.as_of.map(Into::into),
+            debug_name: x.debug_name,
+            id: x.id.from_proto_if_some("ProtoDataflowDescription::id")?,
+        })
+    }
+}
+
 /// Types and traits related to the introduction of changing collections into `dataflow`.
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, Deref, DerefMut};
-    use std::path::PathBuf;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -1196,6 +1464,17 @@ pub mod sources {
         pub desc: RelationDesc,
     }
 
+    /// A stub for generating arbitrary [SourceDesc].
+    /// Currently only produces the simplest instance of one.
+    pub(super) fn any_source_desc_stub() -> SourceDesc {
+        SourceDesc {
+            connector: SourceConnector::Local {
+                timeline: Timeline::EpochMilliseconds,
+            },
+            desc: RelationDesc::empty(),
+        }
+    }
+
     /// A `SourceConnector` describes how data is produced for a source, be
     /// it from a local table, or some upstream service. It is the first
     /// step of _rendering_ of a source, and describes only how to produce
@@ -1226,7 +1505,7 @@ pub mod sources {
                 // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
                 match connector {
                     // TODO(guswynn): does postgres count here as well?
-                    ExternalSourceConnector::Kafka(_) | ExternalSourceConnector::File(_) => true,
+                    ExternalSourceConnector::Kafka(_) => true,
                     // Currently, the Kinesis connector assigns "offsets" by counting the message in the order it was received
                     // and this order is not replayable across different reads of the same Kinesis stream.
                     ExternalSourceConnector::Kinesis(_) => false,
@@ -1295,7 +1574,6 @@ pub mod sources {
     pub enum ExternalSourceConnector {
         Kafka(KafkaSourceConnector),
         Kinesis(KinesisSourceConnector),
-        File(FileSourceConnector),
         S3(S3SourceConnector),
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
@@ -1368,12 +1646,6 @@ pub mod sources {
 
                     items.into_values().collect()
                 }
-                Self::File(_) => {
-                    if include_defaults {
-                        columns.push(default_col("mz_line_no"));
-                    }
-                    columns
-                }
                 Self::Kinesis(_) => {
                     if include_defaults {
                         columns.push(default_col("mz_offset"))
@@ -1398,7 +1670,6 @@ pub mod sources {
             match self {
                 ExternalSourceConnector::Kafka(_) => Some("mz_offset"),
                 ExternalSourceConnector::Kinesis(_) => Some("mz_offset"),
-                ExternalSourceConnector::File(_) => Some("mz_line_no"),
                 ExternalSourceConnector::S3(_) => Some("mz_record"),
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
@@ -1438,9 +1709,7 @@ pub mod sources {
                     items.into_values().collect()
                 }
 
-                ExternalSourceConnector::Kinesis(_)
-                | ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::S3(_) => {
+                ExternalSourceConnector::Kinesis(_) | ExternalSourceConnector::S3(_) => {
                     if include_defaults {
                         vec![IncludedColumnSource::DefaultPosition]
                     } else {
@@ -1458,7 +1727,6 @@ pub mod sources {
             match self {
                 ExternalSourceConnector::Kafka(_) => "kafka",
                 ExternalSourceConnector::Kinesis(_) => "kinesis",
-                ExternalSourceConnector::File(_) => "file",
                 ExternalSourceConnector::S3(_) => "s3",
                 ExternalSourceConnector::Postgres(_) => "postgres",
                 ExternalSourceConnector::PubNub(_) => "pubnub",
@@ -1477,7 +1745,6 @@ pub mod sources {
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                     stream_name, ..
                 }) => Some(stream_name.as_str()),
-                ExternalSourceConnector::File(_) => None,
                 ExternalSourceConnector::S3(_) => None,
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
@@ -1492,7 +1759,6 @@ pub mod sources {
 
                 ExternalSourceConnector::Kafka(_)
                 | ExternalSourceConnector::Kinesis(_)
-                | ExternalSourceConnector::File(_)
                 | ExternalSourceConnector::PubNub(_)
                 | ExternalSourceConnector::Persist(_) => false,
             }
@@ -1503,13 +1769,6 @@ pub mod sources {
     pub struct KinesisSourceConnector {
         pub stream_name: String,
         pub aws: AwsConfig,
-    }
-
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct FileSourceConnector {
-        pub path: PathBuf,
-        pub tail: bool,
-        pub compression: Compression,
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1793,6 +2052,21 @@ pub mod sinks {
         pub as_of: SinkAsOf<T>,
     }
 
+    /// A stub for generating arbitrary [SinkDesc].
+    /// Currently only produces the simplest instance of one.
+    pub(super) fn any_sink_desc_stub() -> SinkDesc<mz_repr::Timestamp> {
+        SinkDesc {
+            from: GlobalId::Explain,
+            from_desc: RelationDesc::empty(),
+            connector: SinkConnector::Tail(TailSinkConnector {}),
+            envelope: None,
+            as_of: SinkAsOf {
+                frontier: Antichain::new(),
+                strict: false,
+            },
+        }
+    }
+
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum SinkEnvelope {
         Debezium,
@@ -1960,12 +2234,37 @@ pub mod sinks {
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
+    #[proptest(strategy = "proptest::collection::vec(any::<MirScalarExpr>(), 1..3)")]
     pub key: Vec<MirScalarExpr>,
+}
+
+impl From<&IndexDesc> for ProtoIndexDesc {
+    fn from(x: &IndexDesc) -> Self {
+        ProtoIndexDesc {
+            on_id: Some((&x.on_id).into()),
+            key: x.key.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoIndexDesc> for IndexDesc {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoIndexDesc) -> Result<Self, Self::Error> {
+        Ok(IndexDesc {
+            on_id: x.on_id.try_into_if_some("ProtoIndexDesc::on_id")?,
+            key: x
+                .key
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
 }
 
 // TODO: change contract to ensure that the operator is always applied to
@@ -1981,13 +2280,42 @@ pub struct IndexDesc {
 /// applied, and columns not in projection can then be overwritten with
 /// default values. This allows the projection to avoid capturing columns
 /// used by the predicates but not otherwise required.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub struct LinearOperator {
     /// Rows that do not pass all predicates may be discarded.
+    #[proptest(strategy = "proptest::collection::vec(any::<MirScalarExpr>(), 0..2)")]
     pub predicates: Vec<MirScalarExpr>,
     /// Columns not present in `projection` may be replaced with
     /// default values.
     pub projection: Vec<usize>,
+}
+
+impl From<&LinearOperator> for ProtoLinearOperator {
+    fn from(x: &LinearOperator) -> Self {
+        ProtoLinearOperator {
+            predicates: x.predicates.iter().map(Into::into).collect(),
+            projection: x.projection.iter().map(|x| x.into_proto()).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoLinearOperator> for LinearOperator {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoLinearOperator) -> Result<Self, Self::Error> {
+        Ok(LinearOperator {
+            predicates: x
+                .predicates
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+            projection: x
+                .projection
+                .into_iter()
+                .map(usize::from_proto)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
 }
 
 impl LinearOperator {
@@ -1995,5 +2323,23 @@ impl LinearOperator {
     /// input of the specified arity.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_repr::proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>()) {
+            let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

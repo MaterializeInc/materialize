@@ -7,13 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use csv::Writer;
+use anyhow::{bail, Result};
 use mz_ore::retry::Retry;
-use rand::Rng;
 use tokio_postgres::Client;
 use tracing::debug;
 
@@ -83,47 +80,36 @@ pub async fn create_kafka_sink(
     Ok(row.get("topic"))
 }
 
-pub async fn create_csv_source(
+pub async fn create_price_table(
     mz_client: &Client,
-    file_name: &str,
     source_name: &str,
-    num_clients: u32,
     seed: u64,
+    num_clients: u32,
 ) -> Result<()> {
-    let path = PathBuf::from(file_name);
-    let mut writer = Writer::from_path(path.clone())
-        .with_context(|| format!("failed to initialize csv writer for {}", path.display()))?;
-    use rand::SeedableRng;
-    let rng = &mut rand::rngs::StdRng::seed_from_u64(seed);
-
-    for i in 1..num_clients {
-        writer
-            .write_record(&[
-                i.to_string(),
-                rng.gen_range(1..10).to_string(),
-                rng.gen_range(1..10).to_string(),
-            ])
-            .with_context(|| format!("failed to write data to {}", path.display()))?;
-    }
-
-    writer
-        .flush()
-        .with_context(|| format!("failed to flush data to {}", path.display()))?;
-
-    let absolute_path = if path.is_absolute() {
-        path
-    } else {
-        path.canonicalize()
-            .with_context(|| format!("failed to convert {} to an absolute path", path.display()))?
-    };
     let query = format!(
-        "CREATE SOURCE {source} FROM FILE '{file}' FORMAT CSV WITH 3 COLUMNS",
-        source = source_name,
-        file = absolute_path.display(),
+        "CREATE TABLE {source_name} (client_id text, price_per_cpu_ms text, price_per_gb_ms text)",
+        source_name = source_name,
     );
 
-    debug!("creating csv source=> {}", query);
+    debug!("creating price table=> {}", query);
     mz_client::execute(&mz_client, &query).await?;
+
+    use rand::{Rng, SeedableRng};
+    let rng = &mut rand::rngs::StdRng::seed_from_u64(seed);
+    debug!("filling price table");
+    for i in 1..num_clients {
+        mz_client::execute(
+            &mz_client,
+            &format!(
+                "INSERT into {} VALUES ('{}', '{}', '{}')",
+                source_name,
+                i,
+                rng.gen_range(1..10),
+                rng.gen_range(1..10),
+            ),
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -209,7 +195,7 @@ unit = unit)
 pub async fn init_views(
     client: &Client,
     kafka_source_name: &str,
-    csv_source_name: &str,
+    price_table_name: &str,
 ) -> Result<()> {
     let billing_raw_data = format!(
         "CREATE MATERIALIZED VIEW billing_raw_data AS
@@ -223,12 +209,12 @@ pub async fn init_views(
     let billing_prices = format!(
         "CREATE MATERIALIZED VIEW billing_prices AS
         SELECT
-        column1::int AS client_id,
-        ((column2::float) / 1000.0) AS price_per_cpu_ms,
-        ((column3::float) / 1000.0) AS price_per_gb_ms
+        client_id::int AS client_id,
+        ((price_per_cpu_ms::float) / 1000.0) AS price_per_cpu_ms,
+        ((price_per_gb_ms::float) / 1000.0) AS price_per_gb_ms
         FROM
         {}",
-        csv_source_name
+        price_table_name
     );
 
     let billing_batches = r#"CREATE MATERIALIZED VIEW billing_batches AS

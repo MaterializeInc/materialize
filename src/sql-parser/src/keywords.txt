@@ -33,6 +33,7 @@ Array
 As
 Asc
 At
+Availability
 Avro
 Begin
 Between
@@ -100,7 +101,6 @@ Distinct
 Double
 Drop
 Else
-Enabled
 End
 Enforced
 Envelope

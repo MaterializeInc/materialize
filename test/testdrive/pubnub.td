@@ -42,12 +42,13 @@ nonvol   nonvolatile
 depends_vol_nonvol   volatile
 $ file-append path=test
 ignored
-> CREATE MATERIALIZED SOURCE file_src FROM FILE '${testdrive.temp-dir}/test' FORMAT BYTES
-> SELECT name, volatility FROM mz_sources WHERE name = 'file_src'
-file_src  unknown
-> CREATE MATERIALIZED VIEW depends_nonvol_unknown AS SELECT * FROM nonvol, file_src
+> CREATE MATERIALIZED SOURCE kafka_src
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored' FORMAT BYTES
+> SELECT name, volatility FROM mz_sources WHERE name = 'kafka_src'
+kafka_src  unknown
+> CREATE MATERIALIZED VIEW depends_nonvol_unknown AS SELECT * FROM nonvol, kafka_src
 > SELECT name, volatility from mz_views WHERE name = 'depends_nonvol_unknown'
 depends_nonvol_unknown   unknown
-> CREATE MATERIALIZED VIEW depends_vol_unknown AS SELECT * FROM avg_bid, file_src
+> CREATE MATERIALIZED VIEW depends_vol_unknown AS SELECT * FROM avg_bid, kafka_src
 > SELECT name, volatility from mz_views WHERE name = 'depends_vol_unknown'
 depends_vol_unknown   volatile

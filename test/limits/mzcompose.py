@@ -12,8 +12,9 @@ import inspect
 import os
 import sys
 import tempfile
+from textwrap import dedent
 
-from materialize.mzcompose import Composition
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Computed,
     Kafka,
@@ -1025,17 +1026,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Computed(
-        name="computed_1",
-        options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
-        ports=[2100, 2102],
-    ),
-    Computed(
-        name="computed_2",
-        options="--workers 2 --processes 2 --process 1 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
-        ports=[2100, 2102],
-    ),
-    Materialized(memory="8G", extra_ports=[2101]),
+    Materialized(memory="8G"),
     Testdrive(),
 ]
 
@@ -1055,26 +1046,210 @@ def workflow_default(c: Composition) -> None:
             c.exec("testdrive", os.path.basename(tmp.name))
 
 
-def workflow_cluster(c: Composition) -> None:
+def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Run all the limits tests against a multi-node, multi-replica cluster"""
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        metavar="N",
+        default=2,
+        help="set the default number of workers",
+    )
+    args = parser.parse_args()
+
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
 
-    c.up("computed_1")
-    c.up("computed_2")
-    c.sql(
-        "CREATE CLUSTER cluster1 REMOTE replica1 ('computed_1:2100', 'computed_2:2100');"
+    nodes = [
+        Computed(
+            name="computed_1_1",
+            workers=args.workers,
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_1_2",
+            workers=args.workers,
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_2_1",
+            workers=args.workers,
+            peers=["computed_2_1", "computed_2_2"],
+        ),
+        Computed(
+            name="computed_2_2",
+            workers=args.workers,
+            peers=["computed_2_1", "computed_2_2"],
+        ),
+    ]
+    with c.override(*nodes):
+        c.up(*[n.name for n in nodes])
+
+        c.sql(
+            """
+            CREATE CLUSTER cluster1
+            REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100')),
+            REPLICA replica2 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'))
+        """
+        )
+
+        c.up("testdrive", persistent=True)
+
+        with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
+            with contextlib.redirect_stdout(tmp):
+                [cls.generate() for cls in Generator.__subclasses__()]
+                sys.stdout.flush()
+                c.exec(
+                    "testdrive",
+                    "--materialized-param=cluster=cluster1",
+                    os.path.basename(tmp.name),
+                )
+
+
+def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Create multiple clusters with multiple nodes and replicas each"""
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        metavar="N",
+        default=2,
+        help="set the default number of workers",
     )
 
-    c.up("testdrive", persistent=True)
+    parser.add_argument(
+        "--clusters",
+        type=int,
+        metavar="N",
+        default=16,
+        help="set the number of clusters to create",
+    )
+    parser.add_argument(
+        "--nodes",
+        type=int,
+        metavar="N",
+        default=4,
+        help="set the number of nodes per cluster",
+    )
+    parser.add_argument(
+        "--replicas",
+        type=int,
+        metavar="N",
+        default=4,
+        help="set the number of replicas per cluster",
+    )
+    args = parser.parse_args()
 
-    with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
-        with contextlib.redirect_stdout(tmp):
-            [cls.generate() for cls in Generator.__subclasses__()]
-            sys.stdout.flush()
-            c.exec(
-                "testdrive",
-                "--materialized-param=cluster=cluster1",
-                os.path.basename(tmp.name),
+    c.up("testdrive", persistent=True)
+    c.up("materialized")
+    c.wait_for_materialized(service="materialized")
+
+    # Construct the requied Computed instances and peer them into clusters
+    computeds = []
+    for cluster_id in range(0, args.clusters):
+        for replica_id in range(0, args.replicas):
+            nodes = []
+            for node_id in range(0, args.nodes):
+                node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                nodes.append(node_name)
+
+            for node_id in range(0, args.nodes):
+                computeds.append(
+                    Computed(name=nodes[node_id], peers=nodes, workers=args.workers)
+                )
+
+    with c.override(*computeds):
+        with c.override(Testdrive(seed=1, no_reset=True)):
+
+            for n in computeds:
+                c.up(n.name)
+
+            # Create some input data
+            c.testdrive(
+                dedent(
+                    """
+                    > CREATE TABLE ten (f1 INTEGER);
+                    > INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+
+                    $ set schema={
+                        "type" : "record",
+                        "name" : "test",
+                        "fields" : [
+                            {"name":"f1", "type":"string"}
+                        ]
+                      }
+
+                    $ kafka-create-topic topic=instance-size
+
+                    $ kafka-ingest format=avro topic=instance-size schema=${schema} publish=true repeat=10000
+                    {"f1": "fish"}
+                    """
+                )
             )
+
+            # Construct the required CREATE CLUSTER statements
+            for cluster_id in range(0, args.clusters):
+                replica_definitions = []
+                for replica_id in range(0, args.replicas):
+                    nodes = []
+                    for node_id in range(0, args.nodes):
+                        node_name = f"computed_{cluster_id}_{replica_id}_{node_id}"
+                        nodes.append(node_name)
+
+                    replica_name = f"replica_{cluster_id}_{replica_id}"
+
+                    replica_definitions.append(
+                        f"REPLICA {replica_name} (REMOTE ("
+                        + ", ".join(f'"{n}:2100"' for n in nodes)
+                        + "))"
+                    )
+
+                c.sql(
+                    f"CREATE CLUSTER cluster_{cluster_id} "
+                    + ",".join(replica_definitions)
+                )
+
+            # Construct some dataflows in each cluster
+            for cluster_id in range(0, args.clusters):
+                cluster_name = f"cluster_{cluster_id}"
+
+                c.testdrive(
+                    dedent(
+                        f"""
+                         > SET cluster={cluster_name}
+
+                         > CREATE DEFAULT INDEX ON ten;
+
+                         > CREATE MATERIALIZED VIEW v_{cluster_name} AS
+                           SELECT COUNT(*) AS c1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4;
+
+                         > CREATE MATERIALIZED SOURCE s_{cluster_name}
+                           FROM KAFKA BROKER '${{testdrive.kafka-addr}}' TOPIC
+                           'testdrive-instance-size-${{testdrive.seed}}'
+                           FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${{testdrive.schema-registry-url}}'
+                           ENVELOPE NONE
+                     """
+                    )
+                )
+
+            # Validate that each individual cluster is operating properly
+            for cluster_id in range(0, args.clusters):
+                cluster_name = f"cluster_{cluster_id}"
+
+                c.testdrive(
+                    dedent(
+                        f"""
+                         > SET cluster={cluster_name}
+
+                         > SELECT c1 FROM v_{cluster_name};
+                         10000
+
+                         > SELECT COUNT(*) FROM s_{cluster_name}
+                         10000
+                     """
+                    )
+                )

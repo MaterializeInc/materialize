@@ -39,10 +39,9 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    FileSourceConnector, IncludedColumnPos, KafkaSourceConnector, KeyEnvelope,
-    KinesisSourceConnector, PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector,
-    S3SourceConnector, SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope,
-    UpsertStyle,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
+    PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
+    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -89,9 +88,9 @@ use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    plan_utils, query, AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig,
-    Connector, CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
+    plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
+    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, Connector,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
@@ -518,27 +517,6 @@ pub fn plan_create_source(
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
             let encoding = get_encoding(format, &envelope, with_options_original)?;
-            (connector, encoding)
-        }
-        CreateSourceConnector::File { path, compression } => {
-            let tail = match with_options.remove("tail") {
-                None => false,
-                Some(Value::Boolean(b)) => b,
-                Some(_) => bail!("tail must be a boolean"),
-            };
-
-            let connector = ExternalSourceConnector::File(FileSourceConnector {
-                path: path.clone().into(),
-                compression: match compression {
-                    Compression::Gzip => mz_dataflow_types::sources::Compression::Gzip,
-                    Compression::None => mz_dataflow_types::sources::Compression::None,
-                },
-                tail,
-            });
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                bail!("File sources do not support key decoding");
-            }
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -2884,6 +2862,7 @@ fn plan_cluster_options(
 fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig, anyhow::Error> {
     let mut remote_replicas = BTreeSet::new();
     let mut size = None;
+    let mut availability_zone = None;
 
     for option in options {
         match option {
@@ -2898,14 +2877,28 @@ fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig
                 }
                 size = Some(with_option_type!(Some(s), String));
             }
+            ReplicaOption::AvailabilityZone(s) => {
+                if availability_zone.is_some() {
+                    bail!("AVAILABILITY ZONE specified more than once");
+                }
+                availability_zone = Some(with_option_type!(Some(s), String));
+            }
         }
     }
 
     match (remote_replicas.len() > 0, size) {
-        (true, None) => Ok(ReplicaConfig::Remote {
-            replicas: remote_replicas,
+        (true, None) => {
+            if availability_zone.is_some() {
+                bail!("cannot specify AVAILABILITY ZONE and REMOTE");
+            }
+            Ok(ReplicaConfig::Remote {
+                replicas: remote_replicas,
+            })
+        }
+        (false, Some(size)) => Ok(ReplicaConfig::Managed {
+            size,
+            availability_zone,
         }),
-        (false, Some(size)) => Ok(ReplicaConfig::Managed { size }),
         (false, None) => {
             bail!("one of REMOTE or SIZE must be specified")
         }
@@ -3457,7 +3450,6 @@ pub fn plan_alter_index_options(
                 options,
             }))
         }
-        AlterIndexAction::Enable => Ok(Plan::AlterIndexEnable(AlterIndexEnablePlan { id })),
     }
 }
 

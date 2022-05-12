@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 use std::{env, fs};
 
@@ -36,7 +37,6 @@ use mz_persist_client::PersistLocation;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio_postgres::{self, NoTls};
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::{AnyOr, Origin};
 
@@ -48,7 +48,7 @@ use mz_ore::task;
 use mz_pid_file::PidFile;
 use mz_secrets::SecretsController;
 use mz_secrets_filesystem::FilesystemSecretsController;
-use mz_secrets_kubernetes::KubernetesSecretsController;
+use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
 
 use crate::mux::Mux;
 
@@ -115,10 +115,6 @@ pub struct Config {
     // === Mode switches. ===
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
-    /// Whether to enable catalog-only mode.
-    pub disable_user_indexes: bool,
-    /// Whether to run in safe mode.
-    pub safe_mode: bool,
     /// The place where the server's metrics will be reported from.
     pub metrics_registry: MetricsRegistry,
     /// Now generation function.
@@ -193,6 +189,9 @@ pub enum SecretsControllerConfig {
         /// The name of a Kubernetes context to use, if the Kubernetes configuration
         /// is loaded from the local kubeconfig.
         context: String,
+        user_defined_secret: String,
+        user_defined_secret_mount_path: String,
+        refresh_pod_name: String,
     },
 }
 
@@ -200,13 +199,8 @@ pub enum SecretsControllerConfig {
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     match &config.catalog_postgres_stash {
         Some(s) => {
-            let (client, connection) = tokio_postgres::connect(s, NoTls).await?;
-            mz_ore::task::spawn(|| "tokio-postgres stash connection", async move {
-                if let Err(e) = connection.await {
-                    panic!("postgres stash connection error: {}", e);
-                }
-            });
-            let stash = mz_stash::Postgres::open(client).await?;
+            let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(s)?)?;
+            let stash = mz_stash::Postgres::new(s.to_string(), tls).await?;
             serve_stash(config, stash).await
         }
         None => {
@@ -308,6 +302,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
                         ),
+                        "--log-process-name".to_string(),
                     ];
                     if config.orchestrator.linger {
                         storage_opts.push(format!("--linger"))
@@ -351,10 +346,22 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             fs::set_permissions(secrets_storage.clone(), permissions)?;
             Box::new(FilesystemSecretsController::new(secrets_storage))
         }
-        Some(SecretsControllerConfig::Kubernetes { context }) => Box::new(
-            KubernetesSecretsController::new(context)
-                .await
-                .context("connecting to kubernetes")?,
+        Some(SecretsControllerConfig::Kubernetes {
+            context,
+            user_defined_secret,
+            user_defined_secret_mount_path,
+            refresh_pod_name,
+        }) => Box::new(
+            KubernetesSecretsController::new(
+                context,
+                KubernetesSecretsControllerConfig {
+                    user_defined_secret,
+                    user_defined_secret_mount_path,
+                    refresh_pod_name,
+                },
+            )
+            .await
+            .context("connecting to kubernetes")?,
         ),
     };
 
@@ -380,8 +387,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
-        disable_user_indexes: config.disable_user_indexes,
-        safe_mode: config.safe_mode,
         build_info: &BUILD_INFO,
         aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),

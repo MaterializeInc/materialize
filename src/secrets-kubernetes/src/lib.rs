@@ -7,37 +7,43 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{bail, Error};
+use anyhow::{anyhow, bail, Error};
 use async_trait::async_trait;
-use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+use k8s_openapi::api::core::v1::{Pod, Secret};
 use k8s_openapi::ByteString;
-use kube::api::{Patch, PatchParams, PostParams};
+use kube::api::{Patch, PatchParams};
 use kube::config::KubeConfigOptions;
-use kube::{Api, Client, Config};
+use kube::{Api, Client, Config, ResourceExt};
+use mz_ore::retry::Retry;
 use mz_secrets::{SecretOp, SecretsController};
+use rand::random;
 use std::collections::BTreeMap;
-use tracing::{error, info};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::io;
+use tracing::info;
 
 const FIELD_MANAGER: &str = "materialized";
-pub const SECRET_NAME: &str = "user-managed-secrets";
+const POD_ANNOTATION: &str = "materialized.materialize.cloud/secret-refresh";
+const POLL_TIMEOUT: u64 = 120;
+
+pub struct KubernetesSecretsControllerConfig {
+    pub user_defined_secret: String,
+    pub user_defined_secret_mount_path: String,
+    pub refresh_pod_name: String,
+}
 
 pub struct KubernetesSecretsController {
     secret_api: Api<Secret>,
+    pod_api: Api<Pod>,
+    config: KubernetesSecretsControllerConfig,
 }
 
 impl KubernetesSecretsController {
-    fn make_secret_with_name(name: String) -> Secret {
-        Secret {
-            metadata: ObjectMeta {
-                name: Some(name),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    pub async fn new(context: String) -> Result<KubernetesSecretsController, anyhow::Error> {
+    pub async fn new(
+        context: String,
+        config: KubernetesSecretsControllerConfig,
+    ) -> Result<KubernetesSecretsController, anyhow::Error> {
         let kubeconfig_options = KubeConfigOptions {
             context: Some(context),
             ..Default::default()
@@ -53,29 +59,60 @@ impl KubernetesSecretsController {
             },
         };
         let client = Client::try_from(kubeconfig)?;
-        let secret_api: Api<Secret> = Api::default_namespaced(client);
+        let secret_api: Api<Secret> = Api::default_namespaced(client.clone());
+        let pod_api: Api<Pod> = Api::default_namespaced(client);
 
-        let secret = KubernetesSecretsController::make_secret_with_name(SECRET_NAME.to_string());
-        match secret_api.create(&PostParams::default(), &secret).await {
-            Ok(_) => Ok(()),
-            Err(kube::Error::Api(e)) if e.code == 409 => {
-                info!("Secret {} already exists", SECRET_NAME.to_string());
-                Ok(())
-            }
-            Err(e) => {
-                error!("creating secret failed: {}", e);
-                Err(e)
-            }
-        }?;
+        // ensure that the secret has been created in this environment
+        secret_api.get(&*config.user_defined_secret).await?;
 
-        Ok(KubernetesSecretsController { secret_api })
+        if !Path::new(&config.user_defined_secret_mount_path).is_dir() {
+            bail!(
+                "Configured secrets location could not be found on filesystem: ({})",
+                config.user_defined_secret_mount_path
+            );
+        }
+
+        Ok(KubernetesSecretsController {
+            secret_api,
+            pod_api,
+            config,
+        })
+    }
+
+    async fn trigger_resync(&mut self) -> Result<(), Error> {
+        let mut pod = Pod::default();
+        pod.annotations_mut().insert(
+            String::from(POD_ANNOTATION),
+            format!("{:x}", random::<u64>()),
+        );
+
+        self.pod_api
+            .patch(
+                &self.config.refresh_pod_name,
+                &PatchParams::apply(FIELD_MANAGER).force(),
+                &Patch::Apply(pod),
+            )
+            .await?;
+
+        return Ok(());
+    }
+
+    async fn try_exists(path: PathBuf) -> Result<bool, Error> {
+        match tokio::fs::metadata(path).await {
+            Ok(_) => Ok(true),
+            Err(x) if x.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(x) => Err(Error::from(x)),
+        }
     }
 }
 
 #[async_trait]
 impl SecretsController for KubernetesSecretsController {
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), Error> {
-        let mut secret: Secret = self.secret_api.get(&*SECRET_NAME.to_string()).await?;
+        let mut secret: Secret = self
+            .secret_api
+            .get(&*self.config.user_defined_secret)
+            .await?;
 
         let mut data = secret.data.map_or_else(BTreeMap::new, |m| m);
 
@@ -100,11 +137,39 @@ impl SecretsController for KubernetesSecretsController {
 
         self.secret_api
             .patch(
-                &SECRET_NAME,
+                &self.config.user_defined_secret,
                 &PatchParams::apply(FIELD_MANAGER).force(),
                 &Patch::Apply(secret),
             )
             .await?;
+
+        self.trigger_resync().await?;
+
+        // guarantee that all new secrets are reflected on our local filesystem
+        let secrets_storage_path =
+            PathBuf::from(self.config.user_defined_secret_mount_path.clone());
+        for op in ops.iter() {
+            match op {
+                SecretOp::Ensure { id, .. } => {
+                    Retry::default()
+                        .max_duration(Duration::from_secs(POLL_TIMEOUT))
+                        .retry_async(|_| async {
+                            let file_path = secrets_storage_path.join(format!("{}", id));
+                            match KubernetesSecretsController::try_exists(file_path).await {
+                                Ok(result) => {
+                                    if result {
+                                        Ok(())
+                                    } else {
+                                        Err(anyhow!("Secret write operation has timed out. Secret with id {} could not be written", id))
+                                    }
+                                }
+                                Err(e) => Err(e)
+                            }
+                        }).await?
+                }
+                _ => {}
+            }
+        }
 
         return Ok(());
     }

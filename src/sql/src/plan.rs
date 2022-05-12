@@ -111,7 +111,6 @@ pub enum Plan {
     AlterNoop(AlterNoopPlan),
     AlterIndexSetOptions(AlterIndexSetOptionsPlan),
     AlterIndexResetOptions(AlterIndexResetOptionsPlan),
-    AlterIndexEnable(AlterIndexEnablePlan),
     AlterItemRename(AlterItemRenamePlan),
     AlterSecret(AlterSecretPlan),
     Declare(DeclarePlan),
@@ -172,8 +171,13 @@ pub struct ComputeInstanceIntrospectionConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaConfig {
-    Remote { replicas: BTreeSet<String> },
-    Managed { size: String },
+    Remote {
+        replicas: BTreeSet<String>,
+    },
+    Managed {
+        size: String,
+        availability_zone: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -374,11 +378,6 @@ pub struct AlterIndexSetOptionsPlan {
 pub struct AlterIndexResetOptionsPlan {
     pub id: GlobalId,
     pub options: Vec<IndexOptionName>,
-}
-
-#[derive(Debug)]
-pub struct AlterIndexEnablePlan {
-    pub id: GlobalId,
 }
 
 #[derive(Debug)]

@@ -43,9 +43,9 @@ body:
       required: true
   - type: textarea
     attributes:
-      label: What was the issue?
+      label: What is the issue?
       description: |
-        Describe what you expected to happen vs. what actually happened.
+        Describe what you expect to happen vs. what actually happens.
 
         If the issue is reproducible, **please provide reproduction instructions.** A precise set of instructions that demonstrates the issue vastly increases the likelihood that we will be able to find and fix it.
     validations:

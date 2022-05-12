@@ -71,20 +71,28 @@ impl ProtoRepr for NaiveDateTime {
 
     fn into_proto(self: Self) -> Self::Repr {
         ProtoNaiveDateTime {
-            date: Some(self.date().into_proto()),
-            time: Some(self.time().into_proto()),
+            year: self.year(),
+            ordinal: self.ordinal(),
+            secs: self.num_seconds_from_midnight(),
+            frac: self.nanosecond(),
         }
     }
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        let date = NaiveDate::from_proto(
-            repr.date
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoNaiveDateTime::date"))?,
-        )?;
+        let date = NaiveDate::from_yo_opt(repr.year, repr.ordinal).ok_or_else(|| {
+            TryFromProtoError::DateConversionError(format!(
+                "NaiveDate::from_yo_opt({},{}) failed",
+                repr.year, repr.ordinal
+            ))
+        })?;
 
-        let time = NaiveTime::from_proto(
-            repr.time
-                .ok_or_else(|| TryFromProtoError::missing_field("ProtoNaiveDateTime::time"))?,
+        let time = NaiveTime::from_num_seconds_from_midnight_opt(repr.secs, repr.frac).ok_or_else(
+            || {
+                TryFromProtoError::DateConversionError(format!(
+                    "NaiveTime::from_num_seconds_from_midnight_opt({},{}) failed",
+                    repr.secs, repr.frac
+                ))
+            },
         )?;
 
         Ok(NaiveDateTime::new(date, time))

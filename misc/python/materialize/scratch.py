@@ -213,10 +213,10 @@ async def setup(
         )
 
     done = False
-    async for remaining in ui.async_timeout_loop(180, 5):
+    async for remaining in ui.async_timeout_loop(300, 5):
         say(f"Checking whether setup has completed: {remaining}s remaining")
         try:
-            mssh(i, "[[ -f /opt/provision/docker-installed ]]")
+            mssh(i, "[[ -f /opt/provision/done ]]")
             done = True
             break
         except CalledProcessError:

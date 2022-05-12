@@ -74,7 +74,7 @@ async fn run() -> Result<()> {
     let check_sink = mz_config.check_sink;
 
     create_kafka_messages(k_config).await?;
-    create_materialized_source(mz_config).await?;
+    create_mz_objects(mz_config).await?;
 
     if check_sink {
         mz::validate_sink(
@@ -147,26 +147,26 @@ async fn create_kafka_messages(config: KafkaConfig) -> Result<()> {
 
         backoff.await;
     }
+
     Ok(())
 }
 
-async fn create_materialized_source(config: MzConfig) -> Result<()> {
+async fn create_mz_objects(config: MzConfig) -> Result<()> {
     let client = mz_client::client(&config.host, config.port).await?;
 
     if !config.preserve_source {
         mz_client::drop_source(&client, config::KAFKA_SOURCE_NAME).await?;
-        mz_client::drop_source(&client, config::CSV_SOURCE_NAME).await?;
+        mz_client::drop_table(&client, config::PRICE_TABLE_NAME).await?;
         mz_client::drop_source(&client, config::REINGESTED_SINK_SOURCE_NAME).await?;
     }
 
     let sources = mz_client::show_sources(&client).await?;
     if !any_matches(&sources, config::KAFKA_SOURCE_NAME) {
-        mz::create_csv_source(
+        mz::create_price_table(
             &client,
-            &config.csv_file_name,
-            config::CSV_SOURCE_NAME,
-            randomizer::NUM_CLIENTS,
+            config::PRICE_TABLE_NAME,
             config.seed,
+            randomizer::NUM_CLIENTS,
         )
         .await?;
 
@@ -181,7 +181,7 @@ async fn create_materialized_source(config: MzConfig) -> Result<()> {
         )
         .await?;
 
-        mz::init_views(&client, config::KAFKA_SOURCE_NAME, config::CSV_SOURCE_NAME).await?;
+        mz::init_views(&client, config::KAFKA_SOURCE_NAME, config::PRICE_TABLE_NAME).await?;
 
         if config.low_memory {
             mz::drop_indexes(&client).await?;

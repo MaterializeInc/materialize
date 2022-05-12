@@ -328,7 +328,12 @@ impl CatalogState {
         item: CatalogItem,
     ) {
         if !id.is_system() && !item.is_placeholder() {
-            info!("create {} {} ({})", item.typ(), name, id);
+            info!(
+                "create {} {} ({})",
+                item.typ(),
+                self.resolve_full_name(&name, None),
+                id
+            );
         }
 
         if !id.is_system() {
@@ -441,7 +446,6 @@ impl CatalogState {
                             ),
                             conn_id: None,
                             depends_on: vec![log_id],
-                            enabled: true,
                             compute_instance: id,
                         }),
                     );
@@ -824,11 +828,6 @@ pub struct Index {
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
-    // TODO(benesch): we'd ideally delete this field and instead derive it from
-    // whether the index is present in the compute controller or not. But it is
-    // presently hard to have an `enabled` field in `mz_indexes` if this field
-    // does not exist in the catalog.
-    pub enabled: bool,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -876,7 +875,7 @@ impl Volatility {
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
-    fn typ(&self) -> mz_sql::catalog::CatalogItemType {
+    pub(crate) fn typ(&self) -> mz_sql::catalog::CatalogItemType {
         match self {
             CatalogItem::Table(_) => mz_sql::catalog::CatalogItemType::Table,
             CatalogItem::Source(_) => mz_sql::catalog::CatalogItemType::Source,
@@ -1184,14 +1183,12 @@ impl Catalog<Sqlite> {
         let (catalog, _) = Self::open(Config {
             storage,
             experimental_mode,
-            safe_mode: false,
             build_info: &DUMMY_BUILD_INFO,
             aws_external_id: AwsExternalId::NotProvided,
             timestamp_frequency: Duration::from_secs(1),
             now,
             skip_migrations: true,
             metrics_registry,
-            disable_user_indexes: false,
         })
         .await?;
         Ok(catalog)
@@ -1222,14 +1219,12 @@ impl<S: Append> Catalog<S> {
                     start_instant: Instant::now(),
                     nonce: rand::random(),
                     experimental_mode: config.storage.experimental_mode(),
-                    safe_mode: config.safe_mode,
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
                     aws_external_id: config.aws_external_id.clone(),
                     timestamp_frequency: config.timestamp_frequency,
                     now: config.now.clone(),
-                    disable_user_indexes: config.disable_user_indexes,
                 },
                 oid_counter: FIRST_USER_OID,
             },
@@ -1377,7 +1372,6 @@ impl<S: Append> Catalog<S> {
                 Builtin::View(view) => {
                     let item = catalog
                         .parse_item(
-                            id,
                             view.sql.into(),
                             None,
                         )
@@ -1730,7 +1724,7 @@ impl<S: Append> Catalog<S> {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match c.deserialize_item(id, def) {
+            let item = match c.deserialize_item(def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -2647,7 +2641,11 @@ impl<S: Append> Catalog<S> {
                     database_id,
                     schema_name,
                 } => {
-                    info!("create schema {}.{}", database_id, schema_name);
+                    info!(
+                        "create schema {}.{}",
+                        state.get_database(&database_id).name,
+                        schema_name
+                    );
                     let db = state.database_by_id.get_mut(&database_id).unwrap();
                     db.schemas_by_id.insert(
                         id.clone(),
@@ -2909,18 +2907,17 @@ impl<S: Append> Catalog<S> {
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
 
-    fn deserialize_item(&self, id: GlobalId, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
+    fn deserialize_item(&self, bytes: Vec<u8>) -> Result<CatalogItem, anyhow::Error> {
         let SerializedCatalogItem::V1 {
             create_sql,
             eval_env: _,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(id, create_sql, Some(&PlanContext::zero()))
+        self.parse_item(create_sql, Some(&PlanContext::zero()))
     }
 
     // Parses the given SQL string into a `CatalogItem`.
     fn parse_item(
         &self,
-        id: GlobalId,
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
@@ -2958,7 +2955,6 @@ impl<S: Append> Catalog<S> {
                 keys: index.keys,
                 conn_id: None,
                 depends_on: index.depends_on,
-                enabled: self.index_enabled_by_default(&id),
                 compute_instance: index.compute_instance,
             }),
             Plan::CreateSink(CreateSinkPlan {
@@ -2993,26 +2989,6 @@ impl<S: Append> Catalog<S> {
             }
             _ => bail!("catalog entry generated inappropriate plan"),
         })
-    }
-
-    /// Returns the default value for an [`Index`]'s `enabled` field.
-    ///
-    /// Note that it is the caller's responsibility to ensure that the `id` is
-    /// used for an `Index`.
-    pub fn index_enabled_by_default(&self, id: &GlobalId) -> bool {
-        !self.config().disable_user_indexes || !id.is_user()
-    }
-
-    /// Returns whether or not an index is enabled.
-    ///
-    /// # Panics
-    /// Panics if `id` does not belong to a [`CatalogItem::Index`].
-    pub fn is_index_enabled(&self, id: &GlobalId) -> bool {
-        let index_entry = self.get_entry(&id);
-        match index_entry.item() {
-            CatalogItem::Index(index) => index.enabled,
-            _ => unreachable!("cannot call is_index_enabled on non-idex"),
-        }
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {

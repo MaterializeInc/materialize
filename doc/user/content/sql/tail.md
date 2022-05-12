@@ -115,9 +115,7 @@ the nature of the update:
 ### Duration
 
 `TAIL` will continue to run until canceled, session ends, or until all updates have been presented. The latter case typically occurs when
-tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`) or
-[file sources](/sql/create-source/file) that were created in non-tailing
-mode (`tail = false`).
+tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`).
 
 {{< warning >}}
 

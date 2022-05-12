@@ -292,24 +292,9 @@ impl TryFrom<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr
 impl From<&AccumulablePlan> for ProtoAccumulablePlan {
     fn from(x: &AccumulablePlan) -> Self {
         Self {
-            full_agrs: x
-                .full_aggrs
-                .clone()
-                .into_iter()
-                .map(|x| (&x).into())
-                .collect(),
-            simple_aggrs: x
-                .simple_aggrs
-                .clone()
-                .into_iter()
-                .map(|x| (&x).into())
-                .collect(),
-            distinct_aggrs: x
-                .distinct_aggrs
-                .clone()
-                .into_iter()
-                .map(|x| (&x).into())
-                .collect(),
+            full_aggrs: x.full_aggrs.iter().map(Into::into).collect(),
+            simple_aggrs: x.simple_aggrs.iter().map(Into::into).collect(),
+            distinct_aggrs: x.distinct_aggrs.iter().map(Into::into).collect(),
         }
     }
 }
@@ -320,20 +305,20 @@ impl TryFrom<ProtoAccumulablePlan> for AccumulablePlan {
     fn try_from(x: ProtoAccumulablePlan) -> Result<Self, Self::Error> {
         Ok(Self {
             full_aggrs: x
-                .full_agrs
+                .full_aggrs
                 .into_iter()
-                .map(|x| x.try_into())
+                .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             simple_aggrs: x
                 .simple_aggrs
                 .into_iter()
-                .map(|x| x.try_into())
+                .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
 
             distinct_aggrs: x
                 .distinct_aggrs
                 .into_iter()
-                .map(|x| x.try_into())
+                .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -401,12 +386,7 @@ impl From<&MonotonicPlan> for ProtoMonotonicPlan {
     fn from(x: &MonotonicPlan) -> Self {
         Self {
             aggr_funcs: x.aggr_funcs.iter().map(Into::into).collect(),
-            skips: x
-                .skips
-                .clone()
-                .into_iter()
-                .map(|x| x.into_proto())
-                .collect(),
+            skips: x.skips.iter().map(|x| x.into_proto()).collect(),
         }
     }
 }
@@ -602,9 +582,9 @@ pub struct CollationPlan {
 impl From<&CollationPlan> for ProtoCollationPlan {
     fn from(x: &CollationPlan) -> Self {
         Self {
-            accumulable: x.accumulable.clone().map(|x| (&x).into()),
-            hierarchical: x.hierarchical.clone().map(|x| (&x).into()),
-            basic: x.basic.clone().map(|x| (&x).into()),
+            accumulable: x.accumulable.as_ref().map(Into::into),
+            hierarchical: x.hierarchical.as_ref().map(Into::into),
+            basic: x.basic.as_ref().map(Into::into),
             aggregate_types: x.aggregate_types.iter().map(Into::into).collect(),
         }
     }

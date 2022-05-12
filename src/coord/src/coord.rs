@@ -108,6 +108,7 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -121,27 +122,25 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceConnector, CreateSourceStatement,
-    ExplainStage, FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, RawIdent, SetExpr,
-    Statement,
+    CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident, InsertSource,
+    ObjectType, Query, Raw, RawIdent, SetExpr, Statement,
 };
 use mz_sql::catalog::{
-    CatalogComputeInstance, CatalogError, CatalogTypeDetails, SessionCatalog as _,
+    CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
 };
 use mz_sql::names::{
     FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use mz_sql::plan::{
-    AlterIndexEnablePlan, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
-    AlterItemRenamePlan, AlterSecretPlan, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
-    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan, HirRelationExpr,
-    IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, SendDiffsPlan, SetVariablePlan,
-    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
+    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
+    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
+    HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig,
+    Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -233,8 +232,6 @@ pub struct Config<S> {
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
-    pub disable_user_indexes: bool,
-    pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub aws_external_id: AwsExternalId,
     pub metrics_registry: MetricsRegistry,
@@ -269,12 +266,16 @@ pub struct CatalogTxn<'a, T> {
 fn concretize_replica_config(
     config: ReplicaConfig,
     replica_sizes: &ClusterReplicaSizeMap,
+    availability_zones: &[String],
 ) -> Result<ConcreteComputeInstanceReplicaConfig, CoordError> {
     let config = match config {
         ReplicaConfig::Remote { replicas } => {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas }
         }
-        ReplicaConfig::Managed { size } => {
+        ReplicaConfig::Managed {
+            size,
+            availability_zone,
+        } => {
             let size_config = replica_sizes.0.get(&size).ok_or_else(|| {
                 let mut entries = replica_sizes.0.iter().collect::<Vec<_>>();
                 entries.sort_by_key(
@@ -286,10 +287,20 @@ fn concretize_replica_config(
                     )| (*scale, *cpu_limit),
                 );
                 let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                CoordError::InvalidReplicaSize { size, expected }
+                CoordError::InvalidClusterReplicaSize { size, expected }
             })?;
+
+            if let Some(az) = &availability_zone {
+                if !availability_zones.contains(az) {
+                    return Err(CoordError::InvalidClusterReplicaAz {
+                        az: az.to_string(),
+                        expected: availability_zones.to_vec(),
+                    });
+                }
+            }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config: *size_config,
+                availability_zone,
             }
         }
     };
@@ -303,9 +314,6 @@ pub struct Coordinator<S> {
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog<S>,
-    /// An in-memory WAL that stages writes before publishing them to Storage
-    // TODO: this must be backed by some durable medium, e.g a STORAGE collection
-    volatile_updates: HashMap<GlobalId, Vec<Update<Timestamp>>>,
 
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
@@ -353,6 +361,8 @@ pub struct Coordinator<S> {
     secrets_controller: Box<dyn SecretsController>,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
+    /// Valid availability zones for replicas.
+    availability_zones: Vec<String>,
 }
 
 /// Metadata about an active connection.
@@ -416,11 +426,29 @@ impl<S: Append + 'static> Coordinator<S> {
         self.global_timeline.read_ts()
     }
 
-    /// Assign a timestamp for a write to a local input. Writes following reads
+    /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
     fn get_local_write_ts(&mut self) -> Timestamp {
         self.global_timeline.write_ts()
+    }
+
+    /// Assign a timestamp for a write to a local input and increase the local ts.
+    /// Writes following reads must ensure that they are assigned a strictly larger
+    /// timestamp to ensure they are not visible to any real-time earlier reads.
+    fn get_and_step_local_write_ts(&mut self) -> (Timestamp, Timestamp) {
+        let ts = self.global_timeline.write_ts();
+        /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
+         * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
+         * timestamp will go up for the next write.
+         * The timestamp must be increased for every write because each call to APPEND will close
+         * the provided timestamp, meaning no more writes can happen at that timestamp.
+         * If we add an ADAPTER side durable WAL, then consecutive writes could all happen at the
+         * same timestamp as long as they're written to the WAL first.
+         */
+        let _ = self.global_timeline.read_ts();
+        let advance_to = ts.step_forward();
+        (ts, advance_to)
     }
 
     fn now(&self) -> EpochMillis {
@@ -582,9 +610,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         let df = self
                             .dataflow_builder(idx.compute_instance)
                             .build_index_dataflow(entry.id())?;
-                        if let Some(df) = df {
-                            self.ship_dataflow(df, idx.compute_instance).await;
-                        }
+                        self.ship_dataflow(df, idx.compute_instance).await;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -767,30 +793,12 @@ impl<S: Append + 'static> Coordinator<S> {
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
     async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
-        let mut appends = vec![];
-        // First advance the timestamp of untouched tables by appending an empty batch
-        for table in self.catalog.entries().filter(|e| e.is_table()) {
-            let id = table.id();
-            if !self.volatile_updates.contains_key(&id) {
-                appends.push((id, vec![], advance_to));
-            }
-        }
-
-        // Scratch vector holding all updates that happen at `t < advance_to`
-        let mut scratch = vec![];
-        // Then drain all pending writes and prepare append commands
-        for (id, updates) in self.volatile_updates.iter_mut() {
-            // TODO(petrosagg): replace with `drain_filter` once it stabilizes
-            let mut cursor = 0;
-            while let Some(update) = updates.get(cursor) {
-                if update.timestamp < advance_to {
-                    scratch.push(updates.swap_remove(cursor));
-                } else {
-                    cursor += 1;
-                }
-            }
-            appends.push((*id, scratch.split_off(0), advance_to));
-        }
+        let appends = self
+            .catalog
+            .entries()
+            .filter(|e| e.is_table())
+            .map(|table| (table.id(), vec![], advance_to))
+            .collect();
         self.dataflow_client
             .storage_mut()
             .append(appends)
@@ -1387,12 +1395,6 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        if self.catalog.config().safe_mode {
-            if let Err(e) = check_statement_safety(&stmt) {
-                return tx.send(Err(e), session);
-            }
-        }
-
         let stmt = stmt.clone();
         let params = portal.parameters.clone();
         match stmt {
@@ -1639,7 +1641,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(&session, plan).await, session);
+                tx.send(self.sequence_create_index(plan).await, session);
             }
             Plan::CreateType(plan) => {
                 tx.send(self.sequence_create_type(plan).await, session);
@@ -1737,20 +1739,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_alter_item_rename(plan).await, session);
             }
             Plan::AlterIndexSetOptions(plan) => {
-                tx.send(
-                    self.sequence_alter_index_set_options(&session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_alter_index_set_options(plan).await, session);
             }
             Plan::AlterIndexResetOptions(plan) => {
-                tx.send(
-                    self.sequence_alter_index_reset_options(&session, plan)
-                        .await,
-                    session,
-                );
-            }
-            Plan::AlterIndexEnable(plan) => {
-                tx.send(self.sequence_alter_index_enable(plan).await, session);
+                tx.send(self.sequence_alter_index_reset_options(plan).await, session);
             }
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
@@ -1972,7 +1964,8 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
 
         for (replica_name, config) in replicas {
-            let config = concretize_replica_config(config, &self.replica_sizes)?;
+            let config =
+                concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config,
@@ -2005,7 +1998,8 @@ impl<S: Append + 'static> Coordinator<S> {
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let config = concretize_replica_config(config, &self.replica_sizes)?;
+        let config =
+            concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
@@ -2192,7 +2186,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 &source.desc,
                 None,
                 vec![source_id],
-                self.catalog.index_enabled_by_default(&index_id),
             );
             let index_oid = self.catalog.allocate_oid().await?;
             ops.push(catalog::Op::CreateItem {
@@ -2209,9 +2202,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(ops, move |txn| {
                 if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
-                    Ok(builder
-                        .build_index_dataflow(index_id)?
-                        .map(|df| (df, compute_instance)))
+                    Ok(Some((
+                        builder.build_index_dataflow(index_id)?,
+                        compute_instance,
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -2436,7 +2430,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 &view.desc,
                 view.conn_id,
                 vec![view_id],
-                self.catalog.index_enabled_by_default(&index_id),
             );
             let index_oid = self.catalog.allocate_oid().await?;
             ops.push(catalog::Op::CreateItem {
@@ -2472,9 +2465,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog_transact(ops, |txn| {
                 if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
-                    Ok(builder
-                        .build_index_dataflow(index_id)?
-                        .map(|df| (df, compute_instance)))
+                    Ok(Some((
+                        builder.build_index_dataflow(index_id)?,
+                        compute_instance,
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -2518,7 +2512,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let df = builder.build_index_dataflow(index_id)?;
                     dfs.entry(compute_instance)
                         .or_insert_with(Vec::new)
-                        .extend(df);
+                        .push(df);
                 }
                 Ok(dfs)
             })
@@ -2539,7 +2533,6 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_index(
         &mut self,
-        session: &Session,
         plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
@@ -2559,7 +2552,6 @@ impl<S: Append + 'static> Coordinator<S> {
             on: index.on,
             conn_id: None,
             depends_on: index.depends_on,
-            enabled: self.catalog.index_enabled_by_default(&id),
             compute_instance,
         };
         let oid = self.catalog.allocate_oid().await?;
@@ -2578,12 +2570,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
         {
             Ok(df) => {
-                if let Some(df) = df {
-                    self.ship_dataflow(df, compute_instance).await;
-                    self.set_index_options(id, options, session)
-                        .await
-                        .expect("index enabled");
-                }
+                self.ship_dataflow(df, compute_instance).await;
+                self.set_index_options(id, options)
+                    .await
+                    .expect("index enabled");
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2866,7 +2856,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         // Although the transaction has a wall_time in its pcx, we use a new
                         // coordinator timestamp here to provide linearizability. The wall_time does
                         // not have to relate to the write time.
-                        let timestamp = self.get_local_write_ts();
+                        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
+                        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
 
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
@@ -2885,7 +2876,20 @@ impl<S: Append + 'static> Coordinator<S> {
                                     timestamp,
                                 })
                                 .collect::<Vec<_>>();
-                            self.volatile_updates.entry(id).or_default().extend(updates);
+                            appends.entry(id).or_default().extend(updates);
+                        }
+
+                        match appends.len() {
+                            1 => {
+                                let (id, updates) = appends.into_element();
+                                self.dataflow_client
+                                    .storage_mut()
+                                    .append(vec![(id, updates, advance_to)])
+                                    .await
+                                    .unwrap();
+                            },
+                            0 => {},
+                            _ => unreachable!("multi-table write transaction should fail immediately when the second table is added to the transaction"),
                         }
                     }
                     _ => {}
@@ -2991,7 +2995,6 @@ impl<S: Append + 'static> Coordinator<S> {
             session: &Session,
         ) -> Result<(), CoordError> {
             let mut unmaterialized = vec![];
-            let mut disabled_indexes = vec![];
             for id in &id_bundle.storage_ids {
                 let entry = catalog.get_entry(id);
                 if entry.is_table() {
@@ -3004,31 +3007,12 @@ impl<S: Append + 'static> Coordinator<S> {
                             .resolve_full_name(entry.name(), Some(session.conn_id()))
                             .to_string(),
                     );
-                } else {
-                    let disabled_index_names = indexes
-                        .filter(|(_id, idx)| !idx.enabled)
-                        .map(|(id, _idx)| catalog.get_entry(&id).name())
-                        .map(|name| {
-                            catalog
-                                .resolve_full_name(name, Some(session.conn_id()))
-                                .to_string()
-                        })
-                        .collect();
-                    disabled_indexes.push((
-                        catalog
-                            .resolve_full_name(entry.name(), Some(session.conn_id()))
-                            .to_string(),
-                        disabled_index_names,
-                    ));
                 }
             }
-            if unmaterialized.is_empty() && disabled_indexes.is_empty() {
+            if unmaterialized.is_empty() {
                 Ok(())
             } else {
-                Err(CoordError::AutomaticTimestampFailure {
-                    unmaterialized,
-                    disabled_indexes,
-                })
+                Err(CoordError::AutomaticTimestampFailure { unmaterialized })
             }
         }
 
@@ -3044,7 +3028,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .resolve_compute_instance(session.vars().cluster())?;
 
         if compute_instance.replicas_by_id.is_empty() {
-            return Err(CoordError::NoReplicasAvailable(
+            return Err(CoordError::NoClusterReplicasAvailable(
                 compute_instance.name.clone(),
             ));
         }
@@ -4031,15 +4015,46 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        // Ensure selection targets are valid, i.e. user-defined tables, or
-        // objects local to the dataflow.
+        // Ensure all objects `selection` depends on are valid for
+        // `ReadThenWrite` operations, i.e. they do not refer to any objects
+        // whose notion of time moves differently than that of user tables.
+        // `true` indicates they're all valid; `false` there are > 0 invalid
+        // dependencies.
+        //
+        // This limitation is meant to ensure no writes occur between this read
+        // and the subsequent write.
+        fn validate_read_dependencies<S>(catalog: &Catalog<S>, id: &GlobalId) -> bool
+        where
+            S: mz_stash::Append,
+        {
+            use CatalogItemType::*;
+            match catalog.try_get_entry(id) {
+                Some(entry) => match entry.item().typ() {
+                    typ @ (Func | View) => {
+                        let valid_id = id.is_user() || matches!(typ, Func);
+                        valid_id
+                            && (
+                                // empty `uses` indicates either system func or
+                                // view created from constants
+                                entry.uses().is_empty()
+                                    || entry
+                                        .uses()
+                                        .iter()
+                                        .all(|id| validate_read_dependencies(catalog, id))
+                            )
+                    }
+                    Source | Secret | Connector => false,
+                    // Cannot select from sinks or indexes
+                    Sink | Index => unreachable!(),
+                    Table => id.is_user(),
+                    Type => true,
+                },
+                None => false,
+            }
+        }
+
         for id in selection.depends_on() {
-            let valid = match self.catalog.try_get_entry(&id) {
-                // TODO: Widen this check when supporting temporary tables.
-                Some(entry) if id.is_user() => entry.is_table(),
-                _ => false,
-            };
-            if !valid {
+            if !validate_read_dependencies(&self.catalog, &id) {
                 tx.send(Err(CoordError::InvalidTableMutationSelection), session);
                 return;
             }
@@ -4154,17 +4169,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_alter_index_set_options(
         &mut self,
-        session: &Session,
         plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(plan.id, plan.options, session)
-            .await?;
+        self.set_index_options(plan.id, plan.options).await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
     async fn sequence_alter_index_reset_options(
         &mut self,
-        session: &Session,
         plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let options = plan
@@ -4176,39 +4188,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 ),
             })
             .collect();
-        self.set_index_options(plan.id, options, session).await?;
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
-    }
-
-    async fn sequence_alter_index_enable(
-        &mut self,
-        plan: AlterIndexEnablePlan,
-    ) -> Result<ExecuteResponse, CoordError> {
-        let index = self
-            .catalog
-            .get_entry(&plan.id)
-            .index()
-            .expect("cannot enable non-indexes");
-        if !index.enabled {
-            let compute_instance = index.compute_instance;
-            let ops = vec![catalog::Op::UpdateItem {
-                id: plan.id,
-                to_item: CatalogItem::Index(catalog::Index {
-                    enabled: true,
-                    ..index.clone()
-                }),
-            }];
-            let df = self
-                .catalog_transact(ops, |txn| {
-                    let df = txn
-                        .dataflow_builder(compute_instance)
-                        .build_index_dataflow(plan.id)?
-                        .expect("index enabled");
-                    Ok(df)
-                })
-                .await?;
-            self.ship_dataflow(df, compute_instance).await;
-        }
+        self.set_index_options(plan.id, options).await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -4356,7 +4336,6 @@ impl<S: Append + 'static> Coordinator<S> {
             if !tables_to_drop.is_empty() {
                 for id in &tables_to_drop {
                     self.read_capability.remove(id);
-                    self.volatile_updates.remove(id);
                 }
                 self.dataflow_client
                     .storage_mut()
@@ -4400,14 +4379,24 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let timestamp = self.get_local_write_ts();
+        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         for u in updates {
-            self.volatile_updates.entry(u.id).or_default().push(Update {
+            appends.entry(u.id).or_default().push(Update {
                 row: u.row,
                 diff: u.diff,
                 timestamp,
             });
         }
+        let appends = appends
+            .into_iter()
+            .map(|(id, updates)| (id, updates, advance_to))
+            .collect();
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
@@ -4454,25 +4443,11 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         id: GlobalId,
         options: Vec<IndexOption>,
-        session: &Session,
     ) -> Result<(), CoordError> {
-        let needs = match self.read_capability.get_mut(&id) {
-            Some(needs) => needs,
-            None => {
-                if !self.catalog.is_index_enabled(&id) {
-                    return Err(CoordError::InvalidAlterOnDisabledIndex(
-                        self.catalog
-                            .resolve_full_name(
-                                self.catalog.get_entry(&id).name(),
-                                Some(session.conn_id()),
-                            )
-                            .to_string(),
-                    ));
-                } else {
-                    panic!("coord indexes out of sync")
-                }
-            }
-        };
+        let needs = self
+            .read_capability
+            .get_mut(&id)
+            .expect("coord indexes out of sync");
 
         for o in options {
             match o {
@@ -4734,15 +4709,13 @@ pub async fn serve<S: Append + 'static>(
         timestamp_frequency,
         logical_compaction_window,
         experimental_mode,
-        disable_user_indexes,
-        safe_mode,
         build_info,
         aws_external_id,
         metrics_registry,
         now,
         secrets_controller,
         replica_sizes,
-        availability_zones: _,
+        availability_zones,
     }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4751,14 +4724,12 @@ pub async fn serve<S: Append + 'static>(
     let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
         storage,
         experimental_mode: Some(experimental_mode),
-        safe_mode,
         build_info,
         aws_external_id,
         timestamp_frequency,
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
-        disable_user_indexes,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -4778,7 +4749,6 @@ pub async fn serve<S: Append + 'static>(
                 dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
-                volatile_updates: HashMap::new(),
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
                 internal_cmd_tx,
@@ -4794,6 +4764,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 secrets_controller,
                 replica_sizes,
+                availability_zones,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -4833,7 +4804,6 @@ fn auto_generate_primary_idx(
     on_desc: &RelationDesc,
     conn_id: Option<u32>,
     depends_on: Vec<GlobalId>,
-    enabled: bool,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
     catalog::Index {
@@ -4851,7 +4821,6 @@ fn auto_generate_primary_idx(
             .collect(),
         conn_id,
         depends_on,
-        enabled,
         compute_instance,
     }
 }
@@ -4933,23 +4902,6 @@ pub fn describe<S: Append>(
             )?)
         }
     }
-}
-
-fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
-    match stmt {
-        Statement::CreateSource(CreateSourceStatement { connector, .. }) => match connector {
-            CreateSourceConnector::File { .. } => {
-                return Err(CoordError::SafeModeViolation(format!("file source",)));
-            }
-            _ => (),
-        },
-        Statement::CreateSink(CreateSinkStatement { connector, .. }) => match connector {
-            _ => (),
-        },
-        _ => (),
-    };
-
-    Ok(())
 }
 
 /// Logic and types for fast-path determination for dataflow execution.

@@ -128,16 +128,16 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                 self.storage_state.now.clone(),
             );
             match connector {
-                ExternalSourceConnector::File(_)
-                | ExternalSourceConnector::Kinesis(_)
-                | ExternalSourceConnector::S3(_) => {
+                ExternalSourceConnector::Kinesis(_) | ExternalSourceConnector::S3(_) => {
+                    rt_default.add_partition(PartitionId::None, None);
+                    Some(rt_default)
+                }
+                ExternalSourceConnector::PubNub(_) => {
                     rt_default.add_partition(PartitionId::None, None);
                     Some(rt_default)
                 }
                 ExternalSourceConnector::Kafka(_) => Some(rt_default),
-                ExternalSourceConnector::Postgres(_)
-                | ExternalSourceConnector::PubNub(_)
-                | ExternalSourceConnector::Persist(_) => None,
+                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::Persist(_) => None,
             }
         } else {
             debug!(

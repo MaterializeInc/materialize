@@ -7,15 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! AWS SQS client and utilities.
+// See https://developers.google.com/protocol-buffers for what's going on here.
 
-use aws_sdk_sqs::Client;
-use aws_types::SdkConfig;
+syntax = "proto3";
 
-use crate::util;
+package mz_dataflow_types.client.controller.storage;
 
-/// Constructs a new AWS SQS client that respects the
-/// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
-pub fn client(config: &SdkConfig) -> Client {
-    Client::from_conf_conn(config.into(), util::connector())
+message ProtoCollectionMetadata {
+    // TODO fill this out
 }

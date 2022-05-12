@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
 use crate::adt::numeric::{DecimalLike, Numeric};
+use crate::proto::TryFromProtoError;
+
+include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 
 /// An interval of time meant to express SQL intervals.
 ///
@@ -45,6 +48,28 @@ impl Default for Interval {
             days: 0,
             micros: 0,
         }
+    }
+}
+
+impl From<&Interval> for ProtoInterval {
+    fn from(x: &Interval) -> Self {
+        ProtoInterval {
+            months: x.months,
+            days: x.days,
+            micros: x.micros,
+        }
+    }
+}
+
+impl TryFrom<ProtoInterval> for Interval {
+    type Error = TryFromProtoError;
+
+    fn try_from(repr: ProtoInterval) -> Result<Self, Self::Error> {
+        Ok(Interval {
+            months: repr.months,
+            days: repr.days,
+            micros: repr.micros,
+        })
     }
 }
 

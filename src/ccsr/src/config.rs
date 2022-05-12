@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::client::Client;
 use crate::tls::{Certificate, Identity};
@@ -65,7 +65,7 @@ impl ClientConfig {
 
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
-        let mut builder = mz_http_proxy::reqwest::client_builder();
+        let mut builder = reqwest::ClientBuilder::new();
 
         for root_cert in self.root_certs {
             builder = builder.add_root_certificate(root_cert.into());

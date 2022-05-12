@@ -987,7 +987,6 @@ lazy_static! {
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("on_id", ScalarType::String.nullable(false))
             .with_column("volatility", ScalarType::String.nullable(false))
-            .with_column("enabled", ScalarType::Bool.nullable(false))
             .with_column("cluster_id", ScalarType::Int64.nullable(false)),
     };
     pub static ref MZ_INDEX_COLUMNS: BuiltinTable = BuiltinTable {
@@ -1140,7 +1139,8 @@ lazy_static! {
             .with_column("cluster_id", ScalarType::Int64.nullable(false))
             .with_column("id", ScalarType::Int64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("size", ScalarType::String.nullable(true)),
+            .with_column("size", ScalarType::String.nullable(true))
+            .with_column("availability_zone", ScalarType::String.nullable(true)),
     };
 }
 

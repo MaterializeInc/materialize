@@ -41,12 +41,10 @@ lazy_static! {
         cluster_id: Uuid::from_u128(0),
         session_id: Uuid::from_u128(0),
         experimental_mode: false,
-        safe_mode: false,
         build_info: &DUMMY_BUILD_INFO,
         aws_external_id: AwsExternalId::NotProvided,
         timestamp_frequency: Duration::from_secs(1),
         now: NOW_ZERO.clone(),
-        disable_user_indexes: false,
     };
     static ref RTI: ReflectedTypeInfo = {
         let mut rti = ReflectedTypeInfo::default();

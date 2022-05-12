@@ -40,52 +40,6 @@
 7 8 d
 9 10 e
 
-! INSERT INTO t SELECT * FROM (
-    VALUES ('11', '12', 'f')
-  );
-contains:column "i" is of type integer but expression is of type text
-
-> BEGIN
-
-> INSERT INTO t VALUES (11, 12, 'f')
-
-! INSERT INTO t SELECT * FROM (
-    VALUES (13, 14, 'g')
-  );
-contains:cannot be run inside a transaction block
-
-> COMMIT
-
-> SELECT * FROM t ORDER BY i
-1 2 a
-3 4 b
-5 6 c
-7 8 d
-9 10 e
-
-> BEGIN
-
-! INSERT INTO t SELECT * FROM (
-    VALUES (11, 12, 'f')
-  );
-contains:cannot be run inside a transaction block
-
-> COMMIT
-
-> CREATE MATERIALIZED VIEW v (a, b, c) AS SELECT 11, 12::real, 'f';
-
-! INSERT INTO t SELECT * FROM v;
-contains:invalid selection
-
-# Table check descends into select targets
-! INSERT INTO t (i, f, t) SELECT column1, column2, column3
-    FROM ( VALUES (11, 12, 'f') )
-    LEFT JOIN (
-        SELECT a, b, c FROM v
-    ) AS y
-    ON y.a = column1
-contains:invalid selection
-
 # Multiple connections
 
 > CREATE TABLE c (a int);

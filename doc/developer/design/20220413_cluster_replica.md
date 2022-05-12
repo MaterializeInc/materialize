@@ -20,10 +20,10 @@ create_cluster_stmt ::=
     [<inline_replica> [, <inline_replica> ...]]
 
 create_cluster_replica_stmt ::=
-  CREATE CLUSTER REPLICA <name> FOR <cluster>
+  CREATE CLUSTER REPLICA <cluster_name>.<replica_name>
     [<replica_option> [, <replica_option> ...]]
 
-inline_replica ::= REPLICA <name> [<replica_option> [, <replica_option> ...]]
+inline_replica ::= REPLICA <name> [(<replica_option> [, <replica_option> ...])]
 
 replica_option ::=
     | SIZE '<size>'
@@ -49,7 +49,7 @@ command line option.
 The `DROP CLUSTER REPLICA` statement will be added:
 
 ```
-DROP CLUSTER REPLICA [IF EXISTS] <name>
+DROP CLUSTER REPLICA [IF EXISTS] <cluster-name>.<replica-name>
 ```
 
 It will have the usual semantics for a `DROP` operation.

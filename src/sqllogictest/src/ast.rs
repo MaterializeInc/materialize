@@ -136,6 +136,11 @@ pub enum Record<'a> {
     HashThreshold { threshold: u64 },
     /// A `halt` directive.
     Halt,
+    /// A `copy` directive.
+    Copy {
+        table_name: &'a str,
+        tsv_path: &'a str,
+    },
 }
 
 /// Specifies the dialect of a sqllogictest file. Different sqllogictest runners

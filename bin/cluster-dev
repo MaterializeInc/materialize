@@ -52,6 +52,13 @@ spec:
   selector:
     app: materialized
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: user-managed-secrets
+  labels:
+    app: materialized
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -79,6 +86,8 @@ spec:
             - --orchestrator-service-label=materialize.cloud/example1=label1
             - --orchestrator-service-label=materialize.cloud/example2=label2
             - --kubernetes-image-pull-policy=never
+            - --user-defined-secret=user-managed-secrets
+            - --user-defined-secret-mount-path=/secrets
             - --experimental
         ports:
         - containerPort: 6875
@@ -86,6 +95,18 @@ spec:
         volumeMounts:
         - name: data
           mountPath: /data
+        - mountPath: /secrets
+          name: secrets-mount
+        env:
+        - name: MZ_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+      volumes:
+      - name: secrets-mount
+        secret:
+          defaultMode: 400
+          secretName: user-managed-secrets
   volumeClaimTemplates:
   - metadata:
       name: data

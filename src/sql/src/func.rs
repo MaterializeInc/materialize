@@ -1912,6 +1912,9 @@ lazy_static! {
                     END"
                 ) => String, 1081;
             },
+            "get_byte" => Scalar {
+                params!(Bytes, Int32) => BinaryFunc::GetByte, 721;
+            },
             "hmac" => Scalar {
                 params!(String, String, String) => VariadicFunc::HmacString, 44156;
                 params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157;
@@ -2955,7 +2958,7 @@ lazy_static! {
                 params!(Any, String) => VariadicFunc::ErrorIfNull => Any, oid::FUNC_MZ_ERROR_IF_NULL_OID;
             },
             "mz_is_materialized" => Scalar {
-                params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_catalog.mz_indexes WHERE on_id = $1 AND enabled)") => Bool,
+                params!(String) => sql_impl_func("EXISTS (SELECT 1 FROM mz_catalog.mz_indexes WHERE on_id = $1)") => Bool,
                     oid::FUNC_MZ_IS_MATERIALIZED_OID;
             },
             "mz_render_typmod" => Scalar {

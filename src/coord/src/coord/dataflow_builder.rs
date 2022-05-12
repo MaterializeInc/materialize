@@ -202,24 +202,12 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     }
 
     /// Builds a dataflow description for the index with the specified ID.
-    ///
-    /// Returns `None` if the index is not enabled.
-    ///
-    /// TODO(benesch): The `DataflowBuilder` shouldn't be in charge of checking
-    /// whether the index is enabled, but it will be easier to clean that up
-    /// when the concept of a "cluster" has been plumbed a bit further.
-    pub fn build_index_dataflow(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<Option<DataflowDesc>, CoordError> {
+    pub fn build_index_dataflow(&mut self, id: GlobalId) -> Result<DataflowDesc, CoordError> {
         let index_entry = self.catalog.get_entry(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
             _ => unreachable!("cannot create index dataflow on non-index"),
         };
-        if !index.enabled {
-            return Ok(None);
-        }
         let on_entry = self.catalog.get_entry(&index.on);
         let on_type = on_entry
             .desc(
@@ -248,7 +236,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         // Optimize the dataflow across views, and any other ways that appeal.
         mz_transform::optimize_dataflow(&mut dataflow, &self.index_oracle())?;
 
-        Ok(Some(dataflow))
+        Ok(dataflow)
     }
 
     /// Builds a dataflow description for the sink with the specified name,

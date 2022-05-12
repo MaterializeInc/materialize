@@ -88,52 +88,40 @@ pub fn construct<A: Allocate>(
                         match datum {
                             DifferentialEvent::Batch(event) => {
                                 arrangement_batches_session
-                                    .give(&cap, ((event.operator, worker), time_ms, Diff::from(1)));
-                                arrangement_records_session.give(
-                                    &cap,
-                                    (
-                                        (event.operator, worker),
-                                        time_ms,
-                                        Diff::try_from(event.length).unwrap(),
-                                    ),
-                                );
-                            }
-                            DifferentialEvent::Merge(event) => {
-                                if let Some(done) = event.complete {
-                                    arrangement_batches_session.give(
-                                        &cap,
-                                        ((event.operator, worker), time_ms, Diff::from(-1)),
-                                    );
-                                    let diff = Diff::try_from(done).unwrap()
-                                        - Diff::try_from(event.length1 + event.length2).unwrap();
+                                    .give(&cap, ((event.operator, worker), time_ms, 1));
+                                let diff = Diff::try_from(event.length).unwrap();
+                                if diff != 0 {
                                     arrangement_records_session
                                         .give(&cap, ((event.operator, worker), time_ms, diff));
                                 }
                             }
+                            DifferentialEvent::Merge(event) => {
+                                if let Some(done) = event.complete {
+                                    arrangement_batches_session
+                                        .give(&cap, ((event.operator, worker), time_ms, -1));
+                                    let diff = Diff::try_from(done).unwrap()
+                                        - Diff::try_from(event.length1 + event.length2).unwrap();
+                                    if diff != 0 {
+                                        arrangement_records_session
+                                            .give(&cap, ((event.operator, worker), time_ms, diff));
+                                    }
+                                }
+                            }
                             DifferentialEvent::Drop(event) => {
-                                arrangement_batches_session.give(
-                                    &cap,
-                                    ((event.operator, worker), time_ms, Diff::from(-1)),
-                                );
-                                arrangement_records_session.give(
-                                    &cap,
-                                    (
-                                        (event.operator, worker),
-                                        time_ms,
-                                        -Diff::try_from(event.length).unwrap(),
-                                    ),
-                                );
+                                arrangement_batches_session
+                                    .give(&cap, ((event.operator, worker), time_ms, -1));
+                                let diff = -Diff::try_from(event.length).unwrap();
+                                if diff != 0 {
+                                    arrangement_records_session
+                                        .give(&cap, ((event.operator, worker), time_ms, diff));
+                                }
                             }
                             DifferentialEvent::MergeShortfall(_) => {}
                             DifferentialEvent::TraceShare(event) => {
-                                sharing_session.give(
-                                    &cap,
-                                    (
-                                        (event.operator, worker),
-                                        time_ms,
-                                        Diff::try_from(event.diff).unwrap(),
-                                    ),
-                                );
+                                let diff = Diff::try_from(event.diff).unwrap();
+                                assert!(diff != 0);
+                                sharing_session
+                                    .give(&cap, ((event.operator, worker), time_ms, diff));
                             }
                         }
                     }

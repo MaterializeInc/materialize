@@ -7,15 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! AWS S3 client and utilities.
+syntax = "proto3";
 
-use aws_sdk_s3::Client;
-use aws_types::SdkConfig;
+package mz_repr.adt.interval;
 
-use crate::util;
-
-/// Constructs a new AWS S3 client that respects the
-/// [system proxy configuration](mz_http_proxy#system-proxy-configuration).
-pub fn client(config: &SdkConfig) -> Client {
-    Client::from_conf_conn(config.into(), util::connector())
+message ProtoInterval {
+    // A possibly negative number of months.
+    int32 months = 1;
+    int32 days = 2;
+    int64 micros = 3;
 }

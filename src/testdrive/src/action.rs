@@ -772,9 +772,9 @@ pub async fn create_state(
         )
     };
 
-    let kinesis_client = mz_aws_util::kinesis::client(&config.aws_config);
-    let s3_client = mz_aws_util::s3::client(&config.aws_config);
-    let sqs_client = mz_aws_util::sqs::client(&config.aws_config);
+    let kinesis_client = aws_sdk_kinesis::Client::new(&config.aws_config);
+    let s3_client = aws_sdk_s3::Client::new(&config.aws_config);
+    let sqs_client = aws_sdk_sqs::Client::new(&config.aws_config);
 
     let state = State {
         // === Testdrive state. ===

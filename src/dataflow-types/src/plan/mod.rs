@@ -360,7 +360,14 @@ impl Arbitrary for Plan {
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let row_diff = prop::collection::vec(<(Row, mz_repr::Timestamp, Diff)>::arbitrary(), 0..2);
+        let row_diff = prop::collection::vec(
+            (
+                Row::arbitrary_with((1..5).into()),
+                mz_repr::Timestamp::arbitrary(),
+                Diff::arbitrary(),
+            ),
+            0..2,
+        );
         let constant = prop::result::maybe_ok(row_diff, EvalError::arbitrary())
             .prop_map(|rows| Plan::Constant { rows });
 

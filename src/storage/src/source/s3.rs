@@ -132,7 +132,7 @@ async fn download_objects_task(
     metrics: SourceBaseMetrics,
 ) {
     let config = aws_config.load(aws_external_id).await;
-    let client = mz_aws_util::s3::client(&config);
+    let client = aws_sdk_s3::Client::new(&config);
 
     struct BucketInfo {
         keys: HashSet<String>,
@@ -244,7 +244,7 @@ async fn scan_bucket_task(
     base_metrics: SourceBaseMetrics,
 ) {
     let config = aws_config.load(aws_external_id).await;
-    let client = mz_aws_util::s3::client(&config);
+    let client = aws_sdk_s3::Client::new(&config);
 
     let glob = glob.as_ref();
     let prefix = glob.map(|g| find_prefix(g.glob().glob()));
@@ -363,7 +363,7 @@ async fn read_sqs_task(
     );
 
     let config = aws_config.load(aws_external_id).await;
-    let client = mz_aws_util::sqs::client(&config);
+    let client = aws_sdk_sqs::Client::new(&config);
 
     let glob = glob.as_ref();
 

@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.57"
 aws-arn = "0.2.0"
+aws-sdk-sts = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"] }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 csv = "1.1.6"
@@ -17,7 +18,6 @@ globset = "0.4.8"
 hex = "0.4.3"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
-mz-aws-util = { path = "../aws-util", features = ["sts"] }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-dataflow-types = { path = "../dataflow-types" }

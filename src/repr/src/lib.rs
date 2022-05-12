@@ -38,14 +38,17 @@ pub mod util;
 pub use datum_vec::{DatumVec, DatumVecBorrow};
 pub use global_id::GlobalId;
 pub use relation::{
-    ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, RelationDesc,
-    RelationType,
+    ColumnName, ColumnType, NotNullViolation, ProtoColumnName, ProtoColumnType, ProtoRelationType,
+    RelationDesc, RelationType,
 };
 pub use row::{
     datum_list_size, datum_size, datums_size, row_size, DatumList, DatumMap, ProtoRow, Row,
     RowArena, RowPacker, RowRef,
 };
-pub use scalar::{AsColumnType, Datum, DatumType, ProtoScalarType, ScalarBaseType, ScalarType};
+pub use scalar::{
+    arb_datum, AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList,
+    ProtoScalarType, ScalarBaseType, ScalarType,
+};
 
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.
 /// System-wide timestamp type.

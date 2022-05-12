@@ -116,11 +116,15 @@ impl CatalogState {
         let id = instance.replica_id_by_name[name];
         let config = &instance.replicas_by_id[&id];
 
-        let size = match config {
-            ConcreteComputeInstanceReplicaConfig::Managed { size_config } => {
-                Some(format!("{}-{}", size_config.scale, size_config.workers))
-            }
-            ConcreteComputeInstanceReplicaConfig::Remote { .. } => None,
+        let (size, az) = match config {
+            ConcreteComputeInstanceReplicaConfig::Managed {
+                size_config,
+                availability_zone,
+            } => (
+                Some(format!("{}-{}", size_config.scale, size_config.workers)),
+                availability_zone.as_deref(),
+            ),
+            ConcreteComputeInstanceReplicaConfig::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {
@@ -130,6 +134,7 @@ impl CatalogState {
                 Datum::Int64(id),
                 Datum::String(&name),
                 Datum::from(size.as_deref()),
+                Datum::from(az),
             ]),
             diff,
         }
@@ -378,7 +383,6 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
-                Datum::from(index.enabled),
                 Datum::Int64(index.compute_instance),
             ]),
             diff,

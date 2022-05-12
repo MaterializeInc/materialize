@@ -7,6 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ file-append path=dynamic.csv
+$ kafka-ingest topic=input format=bytes
 San Francisco,CA,94114
 Brooklyn,NY,11217

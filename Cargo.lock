@@ -547,6 +547,8 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "pin-project",
+ "tokio",
+ "tokio-util 0.6.9",
  "tracing",
 ]
 
@@ -1056,9 +1058,9 @@ dependencies = [
 
 [[package]]
 name = "const_format"
-version = "0.2.22"
+version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22bc6cd49b0ec407b680c3e380182b6ac63b73991cb7602de350352fc309b614"
+checksum = "0936ffe6d0c8d6a51b3b0a73b2acbe925d786f346cf45bfddc8341d79fb7dc8a"
 dependencies = [
  "const_format_proc_macros",
 ]
@@ -2835,7 +2837,6 @@ dependencies = [
  "mz-coord",
  "mz-dataflow-types",
  "mz-frontegg-auth",
- "mz-http-proxy",
  "mz-http-util",
  "mz-kafka-util",
  "mz-npm",
@@ -2848,6 +2849,7 @@ dependencies = [
  "mz-pgtest",
  "mz-pgwire",
  "mz-pid-file",
+ "mz-postgres-util",
  "mz-prof",
  "mz-repr",
  "mz-secrets",
@@ -3091,27 +3093,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-aws-util"
-version = "0.0.0"
-dependencies = [
- "aws-sdk-kinesis",
- "aws-sdk-s3",
- "aws-sdk-sqs",
- "aws-sdk-sts",
- "aws-smithy-client",
- "aws-types",
- "hyper-tls",
- "mz-http-proxy",
-]
-
-[[package]]
 name = "mz-billing-demo"
 version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "csv",
  "hex",
  "mz-ore",
  "mz-test-util",
@@ -3142,7 +3129,6 @@ dependencies = [
  "anyhow",
  "hyper",
  "lazy_static",
- "mz-http-proxy",
  "mz-ore",
  "native-tls",
  "openssl",
@@ -3151,6 +3137,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -3391,18 +3378,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mz-http-proxy"
-version = "0.1.0"
-dependencies = [
- "http",
- "hyper-proxy",
- "ipnet",
- "lazy_static",
- "reqwest",
- "tracing",
-]
-
-[[package]]
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
@@ -3459,6 +3434,13 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "mz-kinesis-util"
+version = "0.0.0"
+dependencies = [
+ "aws-sdk-kinesis",
 ]
 
 [[package]]
@@ -3587,6 +3569,7 @@ dependencies = [
 name = "mz-ore"
 version = "0.0.0"
 dependencies = [
+ "ansi_term",
  "anyhow",
  "async-trait",
  "atty",
@@ -3601,7 +3584,6 @@ dependencies = [
  "hyper-proxy",
  "hyper-tls",
  "lazy_static",
- "mz-http-proxy",
  "native-tls",
  "openssl",
  "opentelemetry",
@@ -3630,7 +3612,7 @@ dependencies = [
  "bytes",
  "clap",
  "futures",
- "mz-aws-util",
+ "mz-kinesis-util",
  "mz-ore",
  "mz-test-util",
  "rand",
@@ -3660,10 +3642,10 @@ dependencies = [
  "futures-util",
  "lazy_static",
  "md-5",
- "mz-aws-util",
  "mz-build-info",
  "mz-ore",
  "mz-persist-types",
+ "openssl-sys",
  "prost",
  "prost-build",
  "rand",
@@ -3689,14 +3671,17 @@ dependencies = [
  "bincode",
  "bytes",
  "clap",
+ "criterion",
  "differential-dataflow",
- "futures",
- "futures-executor",
  "futures-task",
+ "futures-util",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
+ "num_cpus",
+ "rand",
  "serde",
+ "tempfile",
  "timely",
  "tokio",
  "tracing",
@@ -3882,7 +3867,6 @@ dependencies = [
  "clap",
  "futures",
  "indicatif",
- "mz-aws-util",
  "mz-ore",
  "tokio",
  "tracing",
@@ -3915,7 +3899,10 @@ dependencies = [
  "async-trait",
  "k8s-openapi",
  "kube",
+ "mz-ore",
  "mz-secrets",
+ "rand",
+ "tokio",
  "tracing",
 ]
 
@@ -3925,6 +3912,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "aws-arn",
+ "aws-sdk-sts",
  "bytes",
  "chrono",
  "csv",
@@ -3934,7 +3922,6 @@ dependencies = [
  "hex",
  "itertools",
  "lazy_static",
- "mz-aws-util",
  "mz-build-info",
  "mz-ccsr",
  "mz-dataflow-types",
@@ -3990,6 +3977,7 @@ dependencies = [
  "chrono",
  "clap",
  "fallible-iterator",
+ "futures",
  "junit-report",
  "lazy_static",
  "materialized",
@@ -4023,12 +4011,16 @@ dependencies = [
  "futures",
  "mz-ore",
  "mz-persist-types",
+ "mz-postgres-util",
  "num",
+ "postgres-openssl",
+ "rand",
  "rusqlite",
  "tempfile",
  "timely",
  "tokio",
  "tokio-postgres",
+ "tracing",
 ]
 
 [[package]]
@@ -4057,12 +4049,12 @@ dependencies = [
  "lazy_static",
  "log",
  "mz-avro",
- "mz-aws-util",
  "mz-ccsr",
  "mz-dataflow-types",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
+ "mz-kinesis-util",
  "mz-ore",
  "mz-persist",
  "mz-persist-client",
@@ -4119,6 +4111,7 @@ dependencies = [
  "aws-sdk-kinesis",
  "aws-sdk-s3",
  "aws-sdk-sqs",
+ "aws-sdk-sts",
  "aws-smithy-http",
  "aws-types",
  "byteorder",
@@ -4136,13 +4129,13 @@ dependencies = [
  "md-5",
  "mysql_async",
  "mz-avro",
- "mz-aws-util",
  "mz-ccsr",
  "mz-coord",
  "mz-dataflow-types",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
+ "mz-kinesis-util",
  "mz-ore",
  "mz-pgrepr",
  "mz-repr",

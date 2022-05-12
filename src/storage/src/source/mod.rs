@@ -67,7 +67,6 @@ use crate::source::metrics::SourceBaseMetrics;
 use crate::source::timestamp::TimestampBindingRc;
 use crate::source::util::source;
 
-mod file;
 mod kafka;
 mod kinesis;
 pub mod metrics;
@@ -79,9 +78,6 @@ pub mod util;
 
 pub mod timestamp;
 
-pub use file::read_file_task;
-pub use file::FileReadStyle;
-pub use file::FileSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
 pub use postgres::PostgresSourceReader;
@@ -319,17 +315,11 @@ pub enum SourceStatus {
 pub trait MaybeLength {
     /// Returns the size of the object
     fn len(&self) -> Option<usize>;
-    /// Returns true if the object is empty
-    fn is_empty(&self) -> bool;
 }
 
 impl MaybeLength for () {
     fn len(&self) -> Option<usize> {
         None
-    }
-
-    fn is_empty(&self) -> bool {
-        true
     }
 }
 
@@ -337,9 +327,11 @@ impl MaybeLength for Vec<u8> {
     fn len(&self) -> Option<usize> {
         Some(self.len())
     }
+}
 
-    fn is_empty(&self) -> bool {
-        self.is_empty()
+impl MaybeLength for mz_repr::Row {
+    fn len(&self) -> Option<usize> {
+        Some(self.data().len())
     }
 }
 
@@ -348,19 +340,11 @@ impl MaybeLength for Value {
     fn len(&self) -> Option<usize> {
         None
     }
-
-    fn is_empty(&self) -> bool {
-        false
-    }
 }
 
 impl<T: MaybeLength> MaybeLength for Option<T> {
     fn len(&self) -> Option<usize> {
         self.as_ref().and_then(|v| v.len())
-    }
-
-    fn is_empty(&self) -> bool {
-        self.as_ref().map(|v| v.is_empty()).unwrap_or_default()
     }
 }
 

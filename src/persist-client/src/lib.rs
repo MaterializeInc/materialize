@@ -7,14 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! An abstraction presenting as a durable time-varying collection (aka shard)
+
+#![doc = include_str!("../README.md")]
 #![warn(missing_docs, missing_debug_implementations)]
 #![warn(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
-
-//! An abstraction presenting as a durable time-varying collection (aka shard)
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -32,7 +33,7 @@ use uuid::Uuid;
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::Machine;
 use crate::read::{ReadHandle, ReaderId};
-use crate::write::{WriteHandle, WriterId};
+use crate::write::WriteHandle;
 
 pub mod error;
 mod examples;
@@ -46,37 +47,6 @@ pub(crate) mod r#impl {
     pub mod machine;
     pub mod state;
 }
-
-// Notes
-// - Pretend that everything marked with Serialize and Deserialize instead has
-//   some sort of encode/decode API that uses byte slices, Buf+BufMut, or proto,
-//   depending on what we decide.
-
-// TODOs
-// - Decide if the inner and outer error of the two-level errors should be
-//   swapped.
-// - Split errors into definitely failed vs maybe failed variants. More
-//   generally, possibly we just overhaul our errors.
-// - Figure out how to communicate that a lease expired.
-// - Add a cache around location usage.
-// - Crate mz_persist_client shouldn't depend on mz_persist. Pull common code
-//   out into mz_persist_types or a new crate.
-// - Hook up timeouts into various location impls.
-// - Incremental state
-// - After incremental state, state roll-ups and truncation
-// - Permanent storage format for State
-// - Non-polling listener
-// - Impls and tests for setting upper to empty antichain (no more writes)
-// - Impls and tests for setting since to empty antichain (no more reads)
-// - Idempotence and retries + tests
-// - Leasing
-// - Physical and logical compaction
-// - Garbage collection of blob and consensus data
-// - Nemesis
-// - Benchmarks
-// - Logging
-// - Tests, tests, tests
-// - Test coverage of every `PartialOrder::less_*` call
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
@@ -237,19 +207,19 @@ impl PersistClient {
     {
         trace!("Client::open shard_id={:?}", shard_id);
         let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
-        let (writer_id, reader_id) = (WriterId::new(), ReaderId::new());
-        let (write_cap, read_cap) = machine.register(&writer_id, &reader_id).await;
+        let reader_id = ReaderId::new();
+        let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
-            writer_id,
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
-            upper: write_cap.upper,
+            upper: shard_upper.0,
         };
         let reader = ReadHandle {
             reader_id,
             machine,
             blob: Arc::clone(&self.blob),
             since: read_cap.since,
+            explicitly_expired: false,
         };
 
         Ok((writer, reader))
@@ -338,7 +308,9 @@ mod tests {
         assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
-        write.expect_append(&data[..2], 3).await;
+        write
+            .expect_append(&data[..2], write.upper().clone(), vec![3])
+            .await;
         assert_eq!(write.upper(), &Antichain::from_elem(3));
 
         // Grab a snapshot and listener as_of 1.
@@ -349,7 +321,9 @@ mod tests {
         assert_eq!(snap.read_all().await, all_ok(&data[..1], 1));
 
         // Write a [3,4) batch.
-        write.expect_append(&data[2..], 4).await;
+        write
+            .expect_append(&data[2..], write.upper().clone(), vec![4])
+            .await;
         assert_eq!(write.upper(), &Antichain::from_elem(4));
 
         // Listen should have part of the initial write plus the new one.
@@ -425,7 +399,9 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
-        write1.expect_append(&data[..], 3).await;
+        write1
+            .expect_append(&data[..], write1.upper().clone(), vec![3])
+            .await;
 
         // The shard-global upper does advance, even if this writer didn't advance its local upper.
         assert_eq!(write2.fetch_recent_upper().await, Antichain::from_elem(3));
@@ -451,10 +427,21 @@ mod tests {
             .expect_open::<String, String, u64, i64>(shard_id)
             .await;
 
-        write.expect_append(&data[..], 3).await;
+        write
+            .expect_append(&data[..], write.upper().clone(), vec![3])
+            .await;
 
-        write.upper = Antichain::from_elem(0);
-        let res = write.append(data.iter(), Antichain::from_elem(3)).await;
+        let data = vec![
+            (("5".to_owned(), "fünf".to_owned()), 5, 1),
+            (("6".to_owned(), "sechs".to_owned()), 6, 1),
+        ];
+        let res = write
+            .append(
+                data.iter(),
+                Antichain::from_elem(5),
+                Antichain::from_elem(7),
+            )
+            .await;
         assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
@@ -511,7 +498,7 @@ mod tests {
         let mut snap = read.expect_snapshot(2).await;
         assert_eq!(snap.read_all().await, all_ok(&data[..2], 2));
 
-        // Try and write with the expected upper.
+        // Try and write with a wrong expected upper.
         let res = write2
             .compare_and_append(
                 &data[..2],
@@ -521,9 +508,8 @@ mod tests {
             .await;
         assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
 
-        // TODO(aljoscha): Should a writer forward its upper to the global upper on a failed
-        // compare_and_append?
-        assert_eq!(write2.upper(), &Antichain::from_elem(0));
+        // A failed write updates our local cache of the shard upper.
+        assert_eq!(write2.upper(), &Antichain::from_elem(3));
 
         // Try again with a good expected upper.
         write2.expect_compare_and_append(&data[2..], 3, 4).await;
@@ -557,15 +543,21 @@ mod tests {
         let mut listen = read.expect_listen(0).await;
 
         // Write a [0,3) batch.
-        write1.expect_append(&data[..2], 3).await;
+        write1
+            .expect_append(&data[..2], write1.upper().clone(), vec![3])
+            .await;
         assert_eq!(write1.upper(), &Antichain::from_elem(3));
 
         // Write a [0,5) batch with the second writer.
-        write2.expect_append(&data[..4], 5).await;
+        write2
+            .expect_append(&data[..4], write2.upper().clone(), vec![5])
+            .await;
         assert_eq!(write2.upper(), &Antichain::from_elem(5));
 
         // Write a [3,6) batch with the first writer.
-        write1.expect_append(&data[2..5], 6).await;
+        write1
+            .expect_append(&data[2..5], write1.upper().clone(), vec![6])
+            .await;
         assert_eq!(write1.upper(), &Antichain::from_elem(6));
 
         let mut snap = read.expect_snapshot(5).await;
@@ -582,6 +574,177 @@ mod tests {
         assert_eq!(listen.read_until(&6).await, expected_events);
     }
 
+    // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
+    // be in advance of the current shard upper.
+    #[tokio::test]
+    async fn contiguous_append() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch.
+        write
+            .expect_append(&data[..2], write.upper().clone(), vec![3])
+            .await;
+        assert_eq!(write.upper(), &Antichain::from_elem(3));
+
+        // Appending a non-contiguous batch should fail.
+        // Write a [5,6) batch with the second writer.
+        let result = write
+            .append(
+                &data[4..5],
+                Antichain::from_elem(5),
+                Antichain::from_elem(6),
+            )
+            .await
+            .expect("external error");
+        assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
+
+        // Fixing the lower to make the write contiguous should make the append succeed.
+        write.expect_append(&data[2..5], vec![3], vec![6]).await;
+        assert_eq!(write.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
+    }
+
+    // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
+    // combined are contiguous.
+    #[tokio::test]
+    async fn noncontiguous_append_per_writer() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write1, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch with writer 1.
+        write1
+            .expect_append(&data[..2], write1.upper().clone(), vec![3])
+            .await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(3));
+
+        // Write a [3,5) batch with writer 2.
+        write2.upper = Antichain::from_elem(3);
+        write2
+            .expect_append(&data[2..4], write2.upper().clone(), vec![5])
+            .await;
+        assert_eq!(write2.upper(), &Antichain::from_elem(5));
+
+        // Write a [5,6) batch with writer 1.
+        write1.upper = Antichain::from_elem(5);
+        write1
+            .expect_append(&data[4..5], write1.upper().clone(), vec![6])
+            .await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
+    }
+
+    // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
+    // batch needs to match the current shard upper.
+    #[tokio::test]
+    async fn contiguous_compare_and_append() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch.
+        write.expect_compare_and_append(&data[..2], 0, 3).await;
+        assert_eq!(write.upper(), &Antichain::from_elem(3));
+
+        // Appending a non-contiguous batch should fail.
+        // Write a [5,6) batch with the second writer.
+        let result = write
+            .compare_and_append(
+                &data[4..5],
+                Antichain::from_elem(5),
+                Antichain::from_elem(6),
+            )
+            .await
+            .expect("external error");
+        assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
+
+        // Writing with the correct expected upper to make the write contiguous should make the
+        // append succeed.
+        write.expect_compare_and_append(&data[2..5], 3, 6).await;
+        assert_eq!(write.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
+    }
+
+    // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
+    // all writers combined are contiguous.
+    #[tokio::test]
+    async fn noncontiguous_compare_and_append_per_writer() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+            (("4".to_owned(), "vier".to_owned()), 4, 1),
+            (("5".to_owned(), "cinque".to_owned()), 5, 1),
+        ];
+
+        let id = ShardId::new();
+        let client = new_test_client().await;
+
+        let (mut write1, read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+
+        // Write a [0,3) batch with writer 1.
+        write1.expect_compare_and_append(&data[..2], 0, 3).await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(3));
+
+        // Write a [3,5) batch with writer 2.
+        write2.expect_compare_and_append(&data[2..4], 3, 5).await;
+        assert_eq!(write2.upper(), &Antichain::from_elem(5));
+
+        // Write a [5,6) batch with writer 1.
+        write1.expect_compare_and_append(&data[4..5], 5, 6).await;
+        assert_eq!(write1.upper(), &Antichain::from_elem(6));
+
+        let mut snap = read.expect_snapshot(5).await;
+        assert_eq!(snap.read_all().await, all_ok(&data, 5));
+    }
+
     #[test]
     fn fmt_ids() {
         assert_eq!(
@@ -591,14 +754,6 @@ mod tests {
         assert_eq!(
             format!("{:?}", ShardId([0u8; 16])),
             "ShardId(00000000-0000-0000-0000-000000000000)"
-        );
-        assert_eq!(
-            format!("{}", WriterId([0u8; 16])),
-            "w00000000-0000-0000-0000-000000000000"
-        );
-        assert_eq!(
-            format!("{:?}", WriterId([0u8; 16])),
-            "WriterId(00000000-0000-0000-0000-000000000000)"
         );
         assert_eq!(
             format!("{}", ReaderId([0u8; 16])),
@@ -674,7 +829,9 @@ mod tests {
                         .iter()
                         .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
                         .collect::<Vec<_>>();
-                    write.expect_append(&updates, new_upper).await;
+                    write
+                        .expect_append(&updates, write.upper().clone(), vec![new_upper])
+                        .await;
                 }
             });
             handles.push(handle);

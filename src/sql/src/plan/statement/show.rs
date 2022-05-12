@@ -610,8 +610,7 @@ pub fn show_indexes<'a>(
             idx_cols.index_position AS seq_in_index,
             obj_cols.name AS column_name,
             idx_cols.on_expression AS expression,
-            idx_cols.nullable AS nullable,
-            idxs.enabled AS enabled
+            idx_cols.nullable AS nullable
         FROM
             mz_catalog.mz_indexes AS idxs
             JOIN mz_catalog.mz_index_columns AS idx_cols ON idxs.id = idx_cols.index_id

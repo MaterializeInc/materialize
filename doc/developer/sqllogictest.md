@@ -106,6 +106,21 @@ connections.
 The output is one line per row, one "COMPLETE X" (where X is the
 number of affected rows) per statement, or an error message.
 
+### `copy` extension
+
+The `copy` directive executes a [`COPY FROM`](https://materialize.com/docs/sql/copy-from/)
+statement. For example, the following directive
+
+```
+copy table path/to/file.csv
+```
+
+pipes the contents of file.csv to the following SQL statement:
+
+```
+COPY table FROM STDIN
+```
+
 ### modes
 
 We have extended sqllogictest to have the concept of the "mode." There are two
