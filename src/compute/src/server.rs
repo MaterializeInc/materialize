@@ -98,7 +98,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
             compute_state: None,
             compute_response_tx,
             metrics_bundle: metrics_bundle.clone(),
-            persist_client: config.persist_client.clone(),
         }
         .run()
     })
@@ -130,8 +129,6 @@ struct Worker<'w, A: Allocate> {
     compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
     metrics_bundle: (SinkBaseMetrics, TraceMetrics),
-    /// A client to the persist library.
-    persist_client: PersistClient,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -186,7 +183,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             reported_frontiers: HashMap::new(),
                             sink_metrics: self.metrics_bundle.0.clone(),
                             materialized_logger: None,
-                            persist_client: self.persist_client.clone(),
                         });
                     }
                     ComputeCommand::DropInstance => {
