@@ -507,6 +507,8 @@ pub enum KafkaSecurityOptions {
         key: Option<UnresolvedObjectName>,
         /// Optional Private key passphrase supplied as a catalog Secret
         passphrase: Option<UnresolvedObjectName>,
+        /// Optional CA Certificate for validating custom signing chains
+        authority: Option<UnresolvedObjectName>,
     },
     /// SASL denotes one of a set of authentication options and may include transport security
     SASL {
@@ -528,6 +530,7 @@ impl AstDisplay for KafkaSecurityOptions {
                 key,
                 certificate,
                 passphrase,
+                authority,
             } => {
                 f.write_str(" SSL");
                 if let Some(secret_name) = key {
@@ -541,6 +544,10 @@ impl AstDisplay for KafkaSecurityOptions {
                 if let Some(secret_name) = passphrase {
                     f.write_str(" PASSPHRASE ");
                     f.write_node(secret_name);
+                }
+                if let Some(authority_name) = authority {
+                    f.write_str(" AUTHORITY ");
+                    f.write_node(authority_name);
                 }
             }
             KafkaSecurityOptions::SASL {
@@ -582,6 +589,12 @@ pub enum CreateConnector {
         username: Option<String>,
         /// Optional password for auth supplied through a Secret in the catalog
         password: Option<UnresolvedObjectName>,
+        // Optional certificate authority for validating
+        authority: Option<UnresolvedObjectName>,
+        // Optional client certificate for authentication
+        certificate: Option<UnresolvedObjectName>,
+        // Optional client private key for certificate authentication
+        key: Option<UnresolvedObjectName>,
     },
 }
 
@@ -599,6 +612,9 @@ impl AstDisplay for CreateConnector {
                 registry,
                 username,
                 password,
+                authority,
+                certificate,
+                key,
             } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY '");
                 f.write_node(&display::escape_single_quote_string(registry));
@@ -611,6 +627,18 @@ impl AstDisplay for CreateConnector {
                 if let Some(password) = password {
                     f.write_str(" PASSWORD ");
                     f.write_node(password);
+                }
+                if let Some(authority) = authority {
+                    f.write_str(" AUTHORITY ");
+                    f.write_node(authority);
+                }
+                if let Some(certificate) = certificate {
+                    f.write_str(" CERTIFICATE ");
+                    f.write_node(certificate);
+                }
+                if let Some(key) = key {
+                    f.write_str(" KEY ");
+                    f.write_node(key);
                 }
             }
         }

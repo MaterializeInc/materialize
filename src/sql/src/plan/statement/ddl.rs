@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail, Context, Error};
 use aws_arn::ARN;
 use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
@@ -76,7 +76,7 @@ use crate::ast::{
     Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
-use crate::connectors::populate_connectors;
+use crate::connectors;
 use crate::kafka_util;
 use crate::names::{
     resolve_names_data_type, resolve_object_name, Aug, FullSchemaName, QualifiedObjectName,
@@ -307,7 +307,7 @@ pub fn plan_create_source(
     stmt: CreateSourceStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let mut depends_on = vec![];
-    let stmt = populate_connectors(stmt, scx.catalog, &mut depends_on)?;
+    let stmt = connectors::populate_connectors(stmt, scx.catalog, &mut depends_on)?;
     let CreateSourceStatement {
         name,
         col_names,
@@ -2987,6 +2987,12 @@ pub fn plan_create_connector(
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("CREATE CONNECTOR")?;
     let mut depends_on = vec![];
+    fn name_to_id(scx: &StatementContext, name: &UnresolvedObjectName) -> Result<GlobalId, Error> {
+        Ok(scx
+            .catalog
+            .resolve_item(&normalize::unresolved_object_name(name.clone())?)?
+            .id())
+    }
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
     let CreateConnectorStatement {
@@ -3003,41 +3009,41 @@ pub fn plan_create_connector(
                     key,
                     certificate,
                     passphrase,
+                    authority,
                 } => {
                     let key_id = if let Some(key) = key.as_ref() {
-                        let key_id = scx
-                            .catalog
-                            .resolve_item(&normalize::unresolved_object_name(key.clone())?)?
-                            .id();
+                        let key_id = name_to_id(scx, key)?;
                         depends_on.push(key_id);
                         Some(key_id)
                     } else {
                         None
                     };
                     let certificate_id = if let Some(certificate) = certificate.as_ref() {
-                        let certificate_id = scx
-                            .catalog
-                            .resolve_item(&normalize::unresolved_object_name(certificate.clone())?)?
-                            .id();
+                        let certificate_id = name_to_id(scx, certificate)?;
                         depends_on.push(certificate_id);
                         Some(certificate_id)
                     } else {
                         None
                     };
                     let passphrase_id = if let Some(passphrase) = passphrase.as_ref() {
-                        let passphrase_id = scx
-                            .catalog
-                            .resolve_item(&normalize::unresolved_object_name(passphrase.clone())?)?
-                            .id();
+                        let passphrase_id = name_to_id(scx, passphrase)?;
                         depends_on.push(passphrase_id);
                         Some(passphrase_id)
                     } else {
                         None
                     };
+                    let authority_id = if let Some(authority) = authority.as_ref() {
+                        let authority_id = name_to_id(scx, authority)?;
+                        depends_on.push(authority_id);
+                        Some(authority_id)
+                    } else {
+                        None
+                    };
                     KafkaSecurityOptions::SSL {
-                        key: key_id.map_or_else(|| None, |f| Some(f.to_string())),
-                        certificate: certificate_id.map_or_else(|| None, |f| Some(f.to_string())),
-                        passphrase: passphrase_id.map_or_else(|| None, |f| Some(f.to_string())),
+                        key: key_id.map_or_else(|| None, |i| Some(i.to_string())),
+                        certificate: certificate_id.map_or_else(|| None, |i| Some(i.to_string())),
+                        passphrase: passphrase_id.map_or_else(|| None, |i| Some(i.to_string())),
+                        authority: authority_id.map_or_else(|| None, |i| Some(i.to_string())),
                     }
                 }
                 mz_sql_parser::ast::KafkaSecurityOptions::SASL {
@@ -3048,7 +3054,7 @@ pub fn plan_create_connector(
                 } => {
                     let password_id = scx
                         .catalog
-                        .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
+                        .resolve_item(&normalize::unresolved_object_name(password)?)?
                         .id();
                     depends_on.push(password_id);
                     KafkaSecurityOptions::SASL {
@@ -3064,6 +3070,9 @@ pub fn plan_create_connector(
             registry,
             username,
             password,
+            key,
+            certificate,
+            authority,
         } => {
             let password_id = if let Some(password) = password.as_ref() {
                 let password_id = scx
@@ -3075,10 +3084,43 @@ pub fn plan_create_connector(
             } else {
                 None
             };
+            let authority_id = if let Some(authority) = authority.as_ref() {
+                let authority_id = scx
+                    .catalog
+                    .resolve_item(&normalize::unresolved_object_name(authority.clone())?)?
+                    .id();
+                depends_on.push(authority_id);
+                Some(authority_id)
+            } else {
+                None
+            };
+            let certificate_id = if let Some(certificate) = certificate.as_ref() {
+                let certificate_id = scx
+                    .catalog
+                    .resolve_item(&normalize::unresolved_object_name(certificate.clone())?)?
+                    .id();
+                depends_on.push(certificate_id);
+                Some(certificate_id)
+            } else {
+                None
+            };
+            let key_id = if let Some(key) = key.as_ref() {
+                let key_id = scx
+                    .catalog
+                    .resolve_item(&normalize::unresolved_object_name(key.clone())?)?
+                    .id();
+                depends_on.push(key_id);
+                Some(key_id)
+            } else {
+                None
+            };
             ConnectorInner::CSR {
                 registry,
                 username,
                 password: password_id.map_or_else(|| None, |p| Some(p.to_string())),
+                authority: authority_id.map_or_else(|| None, |a| Some(a.to_string())),
+                certificate: certificate_id.map_or_else(|| None, |c| Some(c.to_string())),
+                key: key_id.map_or_else(|| None, |c| Some(c.to_string())),
             }
         }
     };

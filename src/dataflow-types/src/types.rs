@@ -2061,6 +2061,8 @@ pub mod sources {
             certificate: Option<String>,
             /// Passphrase for client private key
             passphrase: Option<String>,
+            /// Certificate Authority for validating custom signing chains
+            authority: Option<String>,
         },
         SASL {
             /// Must be one of: PLAIN, SCRAMSHA256, SCRAMSHA512
@@ -2084,6 +2086,9 @@ pub mod sources {
             registry: String,
             username: Option<String>,
             password: Option<String>,
+            certificate: Option<String>,
+            key: Option<String>,
+            authority: Option<String>,
         },
     }
 
@@ -2096,71 +2101,93 @@ pub mod sources {
         }
 
         pub fn options(&self) -> BTreeMap<String, String> {
-            const SECURITY_PROTOCOL: &str = "security.protocol";
-            match self {
-                ConnectorInner::CSR {
-                    username, password, ..
-                } => {
-                    let mut with_options = BTreeMap::new();
-                    if let Some(username) = username {
-                        with_options.insert("username".to_string(), username.to_owned());
-                    }
-                    if let Some(password) = password {
-                        with_options.insert("password".to_string(), password.to_owned());
-                    }
-                    with_options
-                }
-                // Initially we are just going to convert the new struct back into the old map so downstream code can stay unchanged
-                ConnectorInner::Kafka { security, .. } => match security {
-                    KafkaSecurityOptions::PLAINTEXT => {
-                        let mut with_options = BTreeMap::new();
-                        with_options.insert(SECURITY_PROTOCOL.to_string(), "PLAINTEXT".to_string());
-                        with_options
-                    }
-                    KafkaSecurityOptions::SSL {
-                        key,
-                        certificate,
-                        passphrase,
-                    } => {
-                        let mut with_options = BTreeMap::new();
-                        with_options.insert(SECURITY_PROTOCOL.to_string(), "SSL".to_string());
-                        if let Some(uuid) = key {
-                            with_options.insert("ssl.key.location".to_string(), uuid.to_owned());
-                        }
-                        if let Some(uuid) = certificate {
-                            with_options
-                                .insert("ssl.certificate.location".to_string(), uuid.to_owned());
-                        }
-                        if let Some(uuid) = passphrase {
-                            with_options.insert("ssl.key.password".to_string(), uuid.to_owned());
-                        }
-                        with_options
-                    }
-                    KafkaSecurityOptions::SASL {
-                        mechanism,
-                        ssl,
-                        username,
-                        password,
-                    } => {
-                        let mut with_options = BTreeMap::new();
-                        with_options.insert(
-                            SECURITY_PROTOCOL.to_string(),
-                            if *ssl {
-                                "SASL_SSL".to_string()
-                            } else {
-                                "SASL_PLAINTEXT".to_string()
-                            },
-                        );
-                        with_options.insert("sasl.mechanism".to_string(), mechanism.to_owned());
-                        with_options.insert("sasl.username".to_string(), username.to_owned());
-                        with_options.insert(
-                            "sasl.password".to_string(),
-                            format!("mzdata/secrets/{}", password),
-                        );
-                        with_options
-                    }
-                },
-            }
+            // FIXME this is a lame hack to allow the rest of the code to work
+            let secrets_reader: Arc<Box<dyn SecretsReader>> = Arc::new(Box::new(
+                mz_secrets_filesystem::FilesystemSecretsController::new(
+                    PathBuf::new().join("/share/mzdata/secrets"),
+                ),
+            ));
+            self.options_with_secret_contents(secrets_reader).unwrap()
+            // const SECURITY_PROTOCOL: &str = "security.protocol";
+            // match self {
+            //     ConnectorInner::CSR {
+            //         username,
+            //         password,
+            //         registry: _registry,
+            //         certificate,
+            //         key,
+            //         authority,
+            //     } => {
+            //         let mut with_options = BTreeMap::new();
+            //         if let Some(username) = username {
+            //             with_options.insert("username".into(), username.to_owned());
+            //         }
+            //         if let Some(password) = password {
+            //             with_options.insert("password".into(), password.to_owned());
+            //         }
+            //         if let Some(authority) = authority {
+            //             with_options.insert("ssl_ca_location".into(), authority.to_owned());
+            //         }
+            //         if let Some(certificate) = certificate {
+            //             with_options
+            //                 .insert("ssl_certificate_location".into(), certificate.to_owned());
+            //         }
+            //         if let Some(key) = key {
+            //             with_options.insert("ssl_key_location".into(), key.to_owned());
+            //         }
+            //         with_options
+            //     }
+            //     // Initially we are just going to convert the new struct back into the old map so downstream code can stay unchanged
+            //     ConnectorInner::Kafka { security, .. } => match security {
+            //         KafkaSecurityOptions::PLAINTEXT => {
+            //             let mut with_options = BTreeMap::new();
+            //             with_options.insert(SECURITY_PROTOCOL.into(), "PLAINTEXT".to_string());
+            //             with_options
+            //         }
+            //         KafkaSecurityOptions::SSL {
+            //             key,
+            //             certificate,
+            //             passphrase,
+            //             authority,
+            //         } => {
+            //             let mut with_options = BTreeMap::new();
+            //             with_options.insert(SECURITY_PROTOCOL.into(), "SSL".to_string());
+            //             if let Some(uuid) = key {
+            //                 with_options.insert("ssl.key.location".into(), uuid.to_owned());
+            //             }
+            //             if let Some(uuid) = certificate {
+            //                 with_options.insert("ssl.certificate.location".into(), uuid.to_owned());
+            //             }
+            //             if let Some(uuid) = passphrase {
+            //                 with_options.insert("ssl.key.password".into(), uuid.to_owned());
+            //             }
+            //             if let Some(uuid) = authority {
+            //                 with_options.insert("ssl.ca.location".into(), uuid.to_owned());
+            //             }
+            //             with_options
+            //         }
+            //         KafkaSecurityOptions::SASL {
+            //             mechanism,
+            //             ssl,
+            //             username,
+            //             password,
+            //         } => {
+            //             let mut with_options = BTreeMap::new();
+            //             with_options.insert(
+            //                 SECURITY_PROTOCOL.into(),
+            //                 if *ssl {
+            //                     "SASL_SSL".into()
+            //                 } else {
+            //                     "SASL_PLAINTEXT".into()
+            //                 },
+            //             );
+            //             with_options.insert("sasl.mechanism".into(), mechanism.to_owned());
+            //             with_options.insert("sasl.username".into(), username.to_owned());
+            //             with_options.insert("sasl.password".into(), password.to_owned());
+            //             with_options
+            //         }
+            //     },
+            // }
         }
 
         pub fn options_with_secret_contents(
@@ -2172,32 +2199,48 @@ pub mod sources {
             match self {
                 ConnectorInner::Kafka { security, .. } => match security {
                     KafkaSecurityOptions::PLAINTEXT => {
-                        with_options.insert(SECURITY_PROTOCOL.to_string(), "PLAINTEXT".to_string());
+                        with_options.insert(SECURITY_PROTOCOL.into(), "PLAINTEXT".into());
                     }
                     KafkaSecurityOptions::SSL {
                         key,
                         certificate,
                         passphrase,
+                        authority,
                     } => {
-                        with_options.insert(SECURITY_PROTOCOL.to_string(), "SSL".to_string());
+                        with_options.insert(SECURITY_PROTOCOL.into(), "SSL".into());
                         if let Some(secret_id) = key {
                             with_options.insert(
-                                "ssl.key.location".to_string(),
-                                format!("secrets/{}", secret_id),
+                                "ssl.key.location".into(),
+                                secrets_reader
+                                    .canonical_path(GlobalId::from_str(secret_id)?)?
+                                    .display()
+                                    .to_string(),
                             );
                         };
                         if let Some(secret_id) = certificate {
                             with_options.insert(
-                                "ssl.certificate.location".to_string(),
-                                format!("mzdata/secrets/{}", secret_id),
+                                "ssl.certificate.location".into(),
+                                secrets_reader
+                                    .canonical_path(GlobalId::from_str(secret_id)?)?
+                                    .display()
+                                    .to_string(),
                             );
                         }
                         if let Some(secret_id) = passphrase {
                             with_options.insert(
-                                "ssl.key.password".to_string(),
+                                "ssl.key.password".into(),
                                 String::from_utf8(
                                     secrets_reader.read(GlobalId::from_str(secret_id)?)?,
                                 )?,
+                            );
+                        }
+                        if let Some(secret_id) = authority {
+                            with_options.insert(
+                                "ssl.ca.location".into(),
+                                secrets_reader
+                                    .canonical_path(GlobalId::from_str(secret_id)?)?
+                                    .display()
+                                    .to_string(),
                             );
                         }
                     }
@@ -2224,15 +2267,47 @@ pub mod sources {
                     }
                 },
                 ConnectorInner::CSR {
-                    username, password, ..
+                    username,
+                    password,
+                    registry: _registry,
+                    certificate,
+                    key,
+                    authority,
                 } => {
                     if let Some(username) = username {
-                        with_options.insert("username".to_string(), username.to_owned());
+                        with_options.insert("username".into(), username.to_owned());
                     }
                     if let Some(password) = password {
                         with_options.insert(
-                            "password".to_string(),
+                            "password".into(),
                             String::from_utf8(secrets_reader.read(GlobalId::from_str(password)?)?)?,
+                        );
+                    }
+                    if let Some(authority) = authority {
+                        with_options.insert(
+                            "ssl_ca_location".into(),
+                            secrets_reader
+                                .canonical_path(GlobalId::from_str(authority)?)?
+                                .display()
+                                .to_string(),
+                        );
+                    }
+                    if let Some(certificate) = certificate {
+                        with_options.insert(
+                            "ssl_certificate_location".into(),
+                            secrets_reader
+                                .canonical_path(GlobalId::from_str(certificate)?)?
+                                .display()
+                                .to_string(),
+                        );
+                    }
+                    if let Some(key) = key {
+                        with_options.insert(
+                            "ssl_key_location".into(),
+                            secrets_reader
+                                .canonical_path(GlobalId::from_str(key)?)?
+                                .display()
+                                .to_string(),
                         );
                     }
                 }

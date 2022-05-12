@@ -1420,7 +1420,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     stmt,
                     &catalog,
                     &mut vec![],
-                    self.secrets_reader.clone(),
+                    Arc::clone(&self.secrets_reader),
                 ) {
                     Ok(stmt) => mz_sql::pure::purify_create_source(
                         self.now(),

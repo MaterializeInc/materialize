@@ -1903,22 +1903,70 @@ impl<'a> Parser<'a> {
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
-                let username = if self.peek_keyword(USERNAME) {
-                    self.expect_keyword(USERNAME)?;
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
-                let password = if self.peek_keyword(PASSWORD) {
-                    self.expect_keyword(PASSWORD)?;
-                    Some(self.parse_object_name()?)
-                } else {
-                    None
-                };
+                let (mut username, mut password, mut authority, mut key, mut certificate) =
+                    (None, None, None, None, None);
+                while let Ok(keyword) =
+                    self.expect_one_of_keywords(&[USERNAME, PASSWORD, AUTHORITY, CERTIFICATE, KEY])
+                {
+                    match keyword {
+                        Keyword::Username => {
+                            if username.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property USERNAME twice!".into(),
+                                );
+                            }
+                            username = Some(self.parse_literal_string()?);
+                        }
+                        Keyword::Password => {
+                            if password.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property PASSWORD twice!".into(),
+                                );
+                            }
+                            password = Some(self.parse_object_name()?);
+                        }
+                        Keyword::Key => {
+                            if key.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property KEY twice!".into(),
+                                );
+                            }
+                            let _ = self.consume_token(&Token::Eq);
+                            key = Some(self.parse_object_name()?);
+                        }
+                        Keyword::Certificate => {
+                            if certificate.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property CERTIFICATE twice!".into(),
+                                );
+                            }
+                            let _ = self.consume_token(&Token::Eq);
+                            certificate = Some(self.parse_object_name()?);
+                        }
+                        Keyword::Authority => {
+                            if authority.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property AUTHORITY twice!".into(),
+                                );
+                            }
+                            let _ = self.consume_token(&Token::Eq);
+                            authority = Some(self.parse_object_name()?);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 CreateConnector::CSR {
                     registry,
                     username,
                     password,
+                    authority,
+                    key,
+                    certificate,
                 }
             }
             _ => unreachable!(),
@@ -1933,20 +1981,51 @@ impl<'a> Parser<'a> {
     fn parse_kafka_security(&mut self) -> Result<KafkaSecurityOptions, ParserError> {
         Ok(match self.expect_one_of_keywords(&[SSL, SASL, SASLSSL])? {
             Keyword::Ssl => {
-                let (mut key, mut certificate, mut passphrase) = (None, None, None);
-                while let Ok(keyword) = self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD]) {
+                let (mut key, mut certificate, mut passphrase, mut authority) =
+                    (None, None, None, None);
+                while let Ok(keyword) =
+                    self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD, AUTHORITY])
+                {
                     match keyword {
                         Keyword::Key => {
+                            if key.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property KEY twice!".into(),
+                                );
+                            }
                             let _ = self.consume_token(&Token::Eq);
                             key = Some(self.parse_object_name()?);
                         }
                         Keyword::Certificate => {
+                            if certificate.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property CERTIFICATE twice!".into(),
+                                );
+                            }
                             let _ = self.consume_token(&Token::Eq);
                             certificate = Some(self.parse_object_name()?);
                         }
                         Keyword::Password => {
+                            if passphrase.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property PASSWORD twice!".into(),
+                                );
+                            }
                             let _ = self.consume_token(&Token::Eq);
                             passphrase = Some(self.parse_object_name()?);
+                        }
+                        Keyword::Authority => {
+                            if authority.is_some() {
+                                self.error(
+                                    self.peek_pos(),
+                                    "Cannot set property AUTHORITY twice!".into(),
+                                );
+                            }
+                            let _ = self.consume_token(&Token::Eq);
+                            authority = Some(self.parse_object_name()?);
                         }
                         _ => unreachable!(),
                     }
@@ -1955,6 +2034,7 @@ impl<'a> Parser<'a> {
                     key,
                     certificate,
                     passphrase,
+                    authority,
                 }
             }
             Keyword::Sasl => self.parse_kafka_sasl(false)?,

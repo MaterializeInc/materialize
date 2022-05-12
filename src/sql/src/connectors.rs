@@ -109,7 +109,7 @@ pub fn populate_connectors_with_secrets<T: AstInfo>(
             connector: name.to_owned(),
             broker: Some(resolved_source_connector.uri()),
             with_options: Some(
-                resolved_source_connector.options_with_secrets(secrets_reader.clone())?,
+                resolved_source_connector.options_with_secrets(Arc::clone(&secrets_reader))?,
             ),
         };
     };
@@ -119,7 +119,12 @@ pub fn populate_connectors_with_secrets<T: AstInfo>(
         ..
     } = stmt
     {
-        populate_connector_for_format_with_secrets(format, catalog, depends_on, secrets_reader)?;
+        populate_connector_for_format_with_secrets(
+            format,
+            catalog,
+            depends_on,
+            Arc::clone(&secrets_reader),
+        )?;
         return Ok(stmt);
     };
     if let CreateSourceStatement {
@@ -135,13 +140,13 @@ pub fn populate_connectors_with_secrets<T: AstInfo>(
             key,
             catalog,
             depends_on,
-            secrets_reader.clone(),
+            Arc::clone(&secrets_reader),
         )?;
         populate_connector_for_format_with_secrets(
             value,
             catalog,
             depends_on,
-            secrets_reader.clone(),
+            Arc::clone(&secrets_reader),
         )?;
     };
     Ok(stmt)
@@ -209,8 +214,12 @@ fn populate_connector_for_format_with_secrets<T: AstInfo>(
                     CsrConnector::Reference { connector, .. } => connector,
                     _ => unreachable!(),
                 };
-                *csr_connector =
-                    populate_csr_connector_with_secrets(name, catalog, depends_on, secrets_reader)?;
+                *csr_connector = populate_csr_connector_with_secrets(
+                    name,
+                    catalog,
+                    depends_on,
+                    Arc::clone(&secrets_reader),
+                )?;
             }
             _ => {}
         },
@@ -226,8 +235,12 @@ fn populate_connector_for_format_with_secrets<T: AstInfo>(
                     CsrConnector::Reference { connector, .. } => connector,
                     _ => unreachable!(),
                 };
-                *csr_connector =
-                    populate_csr_connector_with_secrets(name, catalog, depends_on, secrets_reader)?;
+                *csr_connector = populate_csr_connector_with_secrets(
+                    name,
+                    catalog,
+                    depends_on,
+                    Arc::clone(&secrets_reader),
+                )?;
             }
             _ => {}
         },
@@ -266,7 +279,7 @@ fn populate_csr_connector_with_secrets(
     Ok(CsrConnector::Reference {
         connector: name.to_owned(),
         url: Some(resolved_csr_connector.uri()),
-        with_options: Some(resolved_csr_connector.options_with_secrets(secrets_reader.clone())?),
+        with_options: Some(resolved_csr_connector.options_with_secrets(secrets_reader)?),
     })
 }
 
