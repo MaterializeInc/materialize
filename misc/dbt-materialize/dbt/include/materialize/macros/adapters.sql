@@ -77,14 +77,3 @@
   {%- endif %}
   ({{ comma_separated_columns }});
 {%- endmacro %}
-
-{% macro materialize__list_schemas(database) %}
-  {% if database -%}
-    {{ adapter.verify_database(database) }}
-  {%- endif -%}
-  {% call statement('list_schemas', fetch_result=True) %}
-    show schemas from {{ database }}
-  {% endcall %}
-  {{ return(load_result('list_schemas').table) }}
-{% endmacro %}
-
