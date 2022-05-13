@@ -220,7 +220,7 @@ The level of support for these tools will improve as we extend the coverage of `
 
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
-| Cube.js | {{< supportLevel alpha >}} | The Cube.js PostgreSQL driver [can be modified](https://github.com/rongfengliang/cubejs-materialize-driver) to work with Materialize. A Cube.js driver for Materialize is in [active development](https://github.com/cube-js/cube.js/pull/4320). | [](#notify) |
+| Cube.js | {{< supportLevel alpha >}} | Connect using the [Materialize driver](https://cube.dev/docs/config/databases). | [](#notify) |
 
 ### Reverse ETL
 
