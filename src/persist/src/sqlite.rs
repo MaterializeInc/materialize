@@ -261,7 +261,12 @@ impl Consensus for SqliteConsensus {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use tracing::info;
+
     use crate::location::tests::consensus_impl_test;
+    use crate::location::Indeterminate;
 
     use super::*;
 
@@ -273,5 +278,76 @@ mod tests {
             SqliteConsensus::open(&path)
         })
         .await
+    }
+
+    pub async fn retry_determinate<R, F, WorkFn>(
+        name: &str,
+        mut work_fn: WorkFn,
+    ) -> Result<R, Indeterminate>
+    where
+        F: std::future::Future<Output = Result<R, ExternalError>>,
+        WorkFn: FnMut() -> F,
+    {
+        loop {
+            match work_fn().await {
+                Ok(x) => return Ok(x),
+                Err(ExternalError::Determinate(err)) => {
+                    info!("external operation {} failed, retrying: {}", name, err);
+                    continue;
+                }
+                Err(ExternalError::Indeterminate(x)) => return Err(x),
+            }
+        }
+    }
+
+    // WIP delete before merge
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn sqlite_stress() {
+        mz_ore::test::init_logging();
+        const KEY: &str = "foo";
+        const NUM_WRITES: u64 = 100000;
+        const NUM_WRITERS: usize = 100;
+
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        let temp_dir = tempfile::tempdir().expect("failed to create temp_dir");
+
+        let mut handles = Vec::new();
+        for idx in 0..NUM_WRITERS {
+            let c = SqliteConsensus::open(temp_dir.path().join("db"))
+                .expect("failed to open sqlite consensus");
+            let mut seqno: Option<SeqNo> = None;
+            let handle = mz_ore::task::spawn(|| format!("sqlite_stress-{}", idx), async move {
+                while seqno.map_or(0, |x| x.0) < NUM_WRITES {
+                    let new = seqno.map_or_else(SeqNo::minimum, |x| x.next());
+                    let res = retry_determinate("sqlite_stress::cas", || async {
+                        c.compare_and_set(
+                            deadline,
+                            KEY,
+                            seqno,
+                            VersionedData {
+                                seqno: new,
+                                data: vec![0u8; 1024],
+                            },
+                        )
+                        .await
+                    })
+                    .await;
+                    let res = match res {
+                        Ok(x) => x,
+                        Err(err) => panic!("external durability failed {:?}", err),
+                    };
+                    match res {
+                        Ok(()) => seqno = Some(new),
+                        Err(current) => seqno = current.map(|x| x.seqno),
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.await.expect("writer failed");
+        }
     }
 }
