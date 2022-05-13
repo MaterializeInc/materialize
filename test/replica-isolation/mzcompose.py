@@ -28,7 +28,7 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Materialized(extra_ports=[2101]),
-    Testdrive(),
+    Testdrive(default_timeout="300s"),
 ]
 
 
@@ -94,6 +94,8 @@ def validate(c: Composition) -> None:
         dedent(
             """
             # Dataflows
+
+            $ set-sql-timeout duration=180s
 
             > SELECT * FROM v1;
             10

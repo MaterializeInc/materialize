@@ -501,7 +501,7 @@ class Testdrive(Service):
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
         no_reset: bool = False,
-        default_timeout: str = "30s",
+        default_timeout: str = "120s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
         validate_data_dir: bool = True,
