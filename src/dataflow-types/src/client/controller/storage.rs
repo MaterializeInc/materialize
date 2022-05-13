@@ -23,6 +23,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -146,12 +147,13 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
     type Error = TryFromProtoError;
 
     fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
+        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
-            timestamp_shard_id: ShardId::new(),
+            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
             tx_timestamp_shard_id: None,
         })
     }
@@ -164,12 +166,13 @@ impl Arbitrary for CollectionMetadata {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // TODO (#12359): derive Arbitrary after CollectionMetadata
         // gains proper protobuf support.
+        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
         Just(CollectionMetadata {
             persist_location: PersistLocation {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
-            timestamp_shard_id: ShardId::new(),
+            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
             tx_timestamp_shard_id: None,
         })
         .boxed()
