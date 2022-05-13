@@ -313,8 +313,8 @@ results. This, again, causes issues if replicas are slow to respond or don’t
 respond at all.
 
 It is also not clear how introspection query capabilities should be made
-accessible to the user. We might need a new SQL construct like
-`SELECT … AT <replica>`.
+accessible to the user. We might need a to add a new session variable akin to
+`SET CLUSTER = ...`.
 
 ## Open questions
 
