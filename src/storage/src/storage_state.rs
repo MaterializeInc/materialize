@@ -286,9 +286,6 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                 }
             }
 
-            // Nothing to do
-            StorageCommand::Append(_appends) => {}
-
             StorageCommand::DurabilityFrontierUpdates(list) => {
                 for (id, frontier) in list {
                     if let Some(ts_history) = self.storage_state.ts_histories.get_mut(&id) {
