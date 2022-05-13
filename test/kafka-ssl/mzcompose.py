@@ -124,7 +124,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # The smoketest.td connector tests must be able to create secrets which contain these certificate related values
     # so we read them from the filesystem and inject them as testdrive vars to be substituted into queries
     ca_cert = c.exec("materialized", "cat", "/share/secrets/ca.crt", capture=True)
-    client_cert = c.exec("materialized", "cat", "/share/secrets/materialized.crt", capture=True)
-    client_key = c.exec("materialized", "cat", "/share/secrets/materialized.key", capture=True)
-    test_args = [f"--var=ca-cert={ca_cert.stdout}", f"--var=client-cert={client_cert.stdout}", f"--var=client-key={client_key.stdout}", *args.files]
+    client_cert = c.exec(
+        "materialized", "cat", "/share/secrets/materialized.crt", capture=True
+    )
+    client_key = c.exec(
+        "materialized", "cat", "/share/secrets/materialized.key", capture=True
+    )
+    test_args = [
+        f"--var=ca-cert={ca_cert.stdout}",
+        f"--var=client-cert={client_cert.stdout}",
+        f"--var=client-key={client_key.stdout}",
+        *args.files,
+    ]
     c.run("testdrive", *test_args)

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
@@ -10,6 +8,7 @@ use std::path::PathBuf;
 // by the Apache License, Version 2.0.
 use async_trait::async_trait;
 use mz_repr::GlobalId;
+use std::path::PathBuf;
 
 /// Securely stores secrets.
 #[async_trait]
