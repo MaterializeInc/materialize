@@ -11,11 +11,11 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
+use std::error::Error as StdError;
 use std::iter;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::error::Error as StdError;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
@@ -482,7 +482,6 @@ impl StdError for GetSchemaError {
         }
     }
 }
-
 
 async fn get_schema_with_strategy(
     client: &Client,

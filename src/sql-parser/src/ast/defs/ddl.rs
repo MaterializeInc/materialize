@@ -158,7 +158,7 @@ pub enum CsrConnection<T: AstInfo> {
 pub enum ReaderSchemaSelectionStrategy {
     Latest,
     Inline(String),
-    ById(i32)
+    ById(i32),
 }
 
 impl Default for ReaderSchemaSelectionStrategy {
