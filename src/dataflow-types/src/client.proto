@@ -45,7 +45,7 @@ message ProtoComputeCommand {
         mz_persist.gen.persist.ProtoU64Antichain frontier = 2;
     }
 
-    message ProtoCompactions {
+    message ProtoAllowCompaction {
         repeated ProtoCompaction collections = 1;
     }
 
@@ -57,7 +57,7 @@ message ProtoComputeCommand {
         ProtoCreateInstance create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
-        ProtoCompactions allow_compaction = 4;
+        ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
     }

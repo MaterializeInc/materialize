@@ -191,15 +191,17 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
                         dataflows: dataflows.iter().map(Into::into).collect(),
                     })
                 }
-                ComputeCommand::AllowCompaction(collections) => AllowCompaction(ProtoCompactions {
-                    collections: collections
-                        .iter()
-                        .map(|(id, frontier)| ProtoCompaction {
-                            id: Some(id.into()),
-                            frontier: Some(frontier.into()),
-                        })
-                        .collect(),
-                }),
+                ComputeCommand::AllowCompaction(collections) => {
+                    AllowCompaction(ProtoAllowCompaction {
+                        collections: collections
+                            .iter()
+                            .map(|(id, frontier)| ProtoCompaction {
+                                id: Some(id.into()),
+                                frontier: Some(frontier.into()),
+                            })
+                            .collect(),
+                    })
+                }
                 ComputeCommand::Peek(peek) => Peek(peek.into()),
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
                     uuids: uuids.into_iter().map(|id| id.into_proto()).collect(),
@@ -228,7 +230,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                         .collect::<Result<Vec<_>, _>>()?,
                 ))
             }
-            Some(AllowCompaction(ProtoCompactions { collections })) => {
+            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(ComputeCommand::AllowCompaction(
                     collections
                         .into_iter()
@@ -263,14 +265,13 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            any::<Option<LoggingConfig>>()
-                .prop_map(|logging| ComputeCommand::CreateInstance(logging)),
+            any::<Option<LoggingConfig>>().prop_map(ComputeCommand::CreateInstance),
             Just(ComputeCommand::DropInstance),
             proptest::collection::vec(
                 any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>(),
                 1..4
             )
-            .prop_map(|dataflows| ComputeCommand::CreateDataflows(dataflows)),
+            .prop_map(ComputeCommand::CreateDataflows),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
@@ -284,7 +285,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                     .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
                     .collect()
             )),
-            any::<Peek>().prop_map(|peek| ComputeCommand::Peek(peek)),
+            any::<Peek>().prop_map(ComputeCommand::Peek),
             proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
                 ComputeCommand::CancelPeeks {
                     uuids: BTreeSet::from_iter(uuids.into_iter()),
