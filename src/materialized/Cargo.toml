@@ -31,7 +31,7 @@ anyhow = "1.0.57"
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.53"
 atty = "0.2.14"
-axum = { version = "0.5.3", features = ["headers"] }
+axum = { version = "0.5.5", features = ["headers"] }
 backtrace = "0.3.64"
 base64 = "0.13.0"
 bytes = "1.1.0"
