@@ -608,8 +608,10 @@ impl AstDisplay for CreateConnector {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
-                f.write_str(" SECURITY");
-                f.write_node(security);
+                if *security != KafkaSecurityOptions::PLAINTEXT {
+                    f.write_str(" SECURITY");
+                    f.write_node(security);
+                }
             }
             Self::CSR {
                 registry,
