@@ -14,6 +14,7 @@ from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Computed,
     Kafka,
+    Localstack,
     Materialized,
     SchemaRegistry,
     Testdrive,
@@ -24,6 +25,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Localstack(),
     Computed(
         name="computed_1",
         options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
@@ -63,7 +65,9 @@ def workflow_default(c: Composition) -> None:
 
 def workflow_nightly(c: Composition) -> None:
     """Run cluster testdrive"""
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "localstack"]
+    )
     # Skip tests that use features that are not supported yet.
     files = spawn.capture(
         [
