@@ -3891,7 +3891,6 @@ dependencies = [
  "async-trait",
  "mz-repr",
  "mz-secrets",
- "tracing",
 ]
 
 [[package]]
