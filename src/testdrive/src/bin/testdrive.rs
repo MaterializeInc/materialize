@@ -123,6 +123,9 @@ struct Args {
     /// Validate the on-disk state of the specified materialized data directory.
     #[clap(long, value_name = "PATH")]
     validate_data_dir: Option<PathBuf>,
+    /// Validate the stash state of the specified postgres connection string.
+    #[clap(long, value_name = "POSTGRES_URL")]
+    validate_postgres_stash: Option<String>,
 
     // === Confluent options. ===
     /// Address of the Kafka broker that testdrive will interact with.
@@ -272,6 +275,7 @@ async fn main() {
         materialized_pgconfig: args.materialized_url,
         materialized_params: args.materialized_param,
         materialized_data_path: args.validate_data_dir,
+        materialized_catalog_postgres_stash: args.validate_postgres_stash,
 
         // === Confluent options. ===
         kafka_addr: args.kafka_addr,

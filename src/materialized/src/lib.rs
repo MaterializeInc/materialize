@@ -200,7 +200,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     match &config.catalog_postgres_stash {
         Some(s) => {
             let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(s)?)?;
-            let stash = mz_stash::Postgres::new(s.to_string(), tls).await?;
+            let stash = mz_stash::Postgres::new(s.to_string(), None, tls).await?;
             serve_stash(config, stash).await
         }
         None => {

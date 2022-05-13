@@ -26,10 +26,14 @@ use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_coord::catalog::{Catalog, ConnCatalog};
+use mz_coord::session::Session;
 use mz_kafka_util::client::MzClientContext;
+use mz_ore::now::NOW_ZERO;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
+use tokio_postgres::NoTls;
 use url::Url;
 
 use mz_ore::display::DisplayExt;
@@ -39,6 +43,7 @@ use mz_ore::task;
 use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
+use crate::util::mz_data::catalog_copy;
 
 mod file;
 mod http;
@@ -97,6 +102,8 @@ pub struct Config {
     pub materialized_params: Vec<(String, String)>,
     /// An optional path to the data directory for the materialized instance.
     pub materialized_data_path: Option<PathBuf>,
+    /// An optional Postgres connection string to the catalog stash.
+    pub materialized_catalog_postgres_stash: Option<String>,
 
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
@@ -146,6 +153,7 @@ pub struct State {
 
     // === Materialize state. ===
     materialized_data_path: Option<PathBuf>,
+    materialized_catalog_postgres_stash: Option<String>,
     materialized_addr: String,
     materialized_user: String,
     pgclient: tokio_postgres::Client,
@@ -179,6 +187,58 @@ pub struct State {
 }
 
 impl State {
+    /// Makes of copy of the stash's catalog and runs a function on its
+    /// state. Returns `None` if there's no catalog information in the State.
+    pub async fn with_catalog_copy<F, T>(&self, f: F) -> Result<Option<T>, anyhow::Error>
+    where
+        F: FnOnce(ConnCatalog) -> T,
+    {
+        if let Some(url) = &self.materialized_catalog_postgres_stash {
+            let schema = format!("mz_stash_copy_{}", self.seed);
+
+            let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
+            mz_ore::task::spawn(|| "tokio-postgres testdrive connection", async move {
+                if let Err(e) = connection.await {
+                    panic!("postgres stash connection error: {}", e);
+                }
+            });
+
+            client
+                .execute(format!("CREATE SCHEMA {schema}").as_str(), &[])
+                .await?;
+            client
+                .execute(format!("SET search_path TO {schema}").as_str(), &[])
+                .await?;
+            client
+                .batch_execute(
+                    "
+                                CREATE TABLE fence AS SELECT * FROM public.fence;
+                                CREATE TABLE collections AS SELECT * FROM public.collections;
+                                CREATE TABLE data AS SELECT * FROM public.data;
+                                CREATE TABLE sinces AS SELECT * FROM public.sinces;
+                                CREATE TABLE uppers AS SELECT * FROM public.uppers;
+                            ",
+                )
+                .await?;
+
+            let catalog =
+                Catalog::open_debug_postgres(url.clone(), Some(schema.clone()), NOW_ZERO.clone())
+                    .await?;
+            let res = f(catalog.for_session(&Session::dummy()));
+            client
+                .execute(format!("DROP SCHEMA {schema} CASCADE").as_str(), &[])
+                .await?;
+            Ok(Some(res))
+        } else if let Some(path) = &self.materialized_data_path {
+            let temp_mzdata = catalog_copy(path)?;
+            let path = temp_mzdata.path();
+            let catalog = Catalog::open_debug_sqlite(&path, NOW_ZERO.clone()).await?;
+            Ok(Some(f(catalog.for_session(&Session::dummy()))))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn aws_endpoint(&self) -> String {
         match (
             self.aws_config.endpoint_resolver(),
@@ -676,6 +736,8 @@ pub async fn create_state(
         None => None,
     };
 
+    let materialized_catalog_postgres_stash = config.materialized_catalog_postgres_stash.clone();
+
     let (materialized_addr, materialized_user, pgclient, pgconn_task) = {
         let materialized_url = util::postgres::config_url(&config.materialized_pgconfig)?;
         let (pgclient, pgconn) = config
@@ -793,6 +855,7 @@ pub async fn create_state(
 
         // === Materialize state. ===
         materialized_data_path,
+        materialized_catalog_postgres_stash,
         materialized_addr,
         materialized_user,
         pgclient,

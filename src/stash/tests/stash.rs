@@ -40,7 +40,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
 
     {
         // Verify invalid URLs fail on connect.
-        assert!(Postgres::new("host=invalid".into(), tls.clone())
+        assert!(Postgres::new("host=invalid".into(), None, tls.clone())
             .await
             .unwrap_err()
             .to_string()
@@ -77,7 +77,7 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
                 .await
                 .unwrap();
         }
-        Postgres::new(connstr.to_string(), tls).await.unwrap()
+        Postgres::new(connstr.to_string(), None, tls).await.unwrap()
     }
     {
         let mut conn = connect(&connstr, tls.clone(), true).await;

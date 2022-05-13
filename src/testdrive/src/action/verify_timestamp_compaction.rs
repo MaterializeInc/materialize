@@ -14,11 +14,8 @@ use std::time::Duration;
 use anyhow::bail;
 use async_trait::async_trait;
 
-use mz_coord::catalog::Catalog;
-use mz_coord::session::Session;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::PartitionId;
-use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::PartialObjectName;
@@ -56,7 +53,28 @@ impl Action for VerifyTimestampCompactionAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        if let Some(path) = &state.materialized_data_path {
+        let item_id = state
+            .with_catalog_copy(|catalog| {
+                catalog
+                    .resolve_item(&PartialObjectName {
+                        database: None,
+                        schema: None,
+                        item: self.source.clone(),
+                    })
+                    .map(|item| item.id())
+            })
+            .await?;
+        // Skip if we don't know where the timestamp stash is or the catalog is.
+        if item_id.is_none() || state.materialized_data_path.is_none() {
+            println!(
+                "Skipping timestamp binding compaction verification for {:?}.",
+                self.source
+            );
+            Ok(ControlFlow::Continue)
+        } else {
+            // Unwrap is safe because this is known to be Some.
+            let item_id = item_id.unwrap()?;
+            let path = state.materialized_data_path.as_ref().unwrap();
             let temp_mzdata = mzdata_copy(path)?;
             let path = temp_mzdata.path();
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));
@@ -66,17 +84,6 @@ impl Action for VerifyTimestampCompactionAction {
                 .retry_async_canceling(|retry_state| {
                     let initial_highest = Arc::clone(&initial_highest_base);
                     async move {
-                        let catalog = Catalog::open_debug(&path, NOW_ZERO.clone())
-                            .await?;
-                        let item_id = catalog
-                            .for_session(&Session::dummy())
-                            .resolve_item(&PartialObjectName {
-                                database: None,
-                                schema: None,
-                                item: self.source.clone(),
-                            })?
-                            .id();
-
                         let mut stash = mz_stash::Sqlite::open(&path.join("storage"))?;
                         let collection = stash
                             .collection::<PartitionId, ()>(&format!("timestamp-bindings-{item_id}")).await?;
@@ -127,12 +134,6 @@ impl Action for VerifyTimestampCompactionAction {
                         }
                     }
                 }).await?;
-            Ok(ControlFlow::Continue)
-        } else {
-            println!(
-                "Skipping timestamp binding compaction verification for {:?}.",
-                self.source
-            );
             Ok(ControlFlow::Continue)
         }
     }

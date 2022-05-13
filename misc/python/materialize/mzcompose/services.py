@@ -501,6 +501,7 @@ class Testdrive(Service):
         seed: Optional[int] = None,
         consistent_seed: bool = False,
         validate_data_dir: bool = True,
+        validate_postgres_stash: bool = False,
         entrypoint: Optional[List[str]] = None,
         entrypoint_extra: List[str] = [],
         environment: Optional[List[str]] = None,
@@ -551,6 +552,11 @@ class Testdrive(Service):
 
         if validate_data_dir:
             entrypoint.append("--validate-data-dir=/share/mzdata")
+
+        if validate_postgres_stash:
+            entrypoint.append(
+                "--validate-postgres-stash=postgres://postgres:postgres@postgres/postgres"
+            )
 
         if no_reset:
             entrypoint.append("--no-reset")

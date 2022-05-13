@@ -22,9 +22,7 @@ use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{FromSql, Type};
 
-use mz_coord::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
-use mz_ore::now::NOW_ZERO;
 use mz_ore::retry::Retry;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
@@ -35,7 +33,6 @@ use mz_sql_parser::ast::{
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
-use crate::util::mz_data::catalog_copy;
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -211,19 +208,19 @@ impl Action for SqlAction {
             return Err(e);
         }
 
-        if let Some(path) = &state.materialized_data_path {
-            match self.stmt {
-                Statement::CreateDatabase { .. }
-                | Statement::CreateIndex { .. }
-                | Statement::CreateSchema { .. }
-                | Statement::CreateSource { .. }
-                | Statement::CreateTable { .. }
-                | Statement::CreateView { .. }
-                | Statement::DropDatabase { .. }
-                | Statement::DropObjects { .. } => {
-                    let temp_mzdata = catalog_copy(path)?;
-                    let path = temp_mzdata.path();
-                    let disk_state = Catalog::open_debug(&path, NOW_ZERO.clone()).await?.dump();
+        match self.stmt {
+            Statement::CreateDatabase { .. }
+            | Statement::CreateIndex { .. }
+            | Statement::CreateSchema { .. }
+            | Statement::CreateSource { .. }
+            | Statement::CreateTable { .. }
+            | Statement::CreateView { .. }
+            | Statement::DropDatabase { .. }
+            | Statement::DropObjects { .. } => {
+                let disk_state = state
+                    .with_catalog_copy(|catalog| catalog.state().dump())
+                    .await?;
+                if let Some(disk_state) = disk_state {
                     let mem_state = reqwest::get(&format!(
                         "http://{}/api/internal/catalog",
                         state.materialized_addr,
@@ -241,8 +238,8 @@ impl Action for SqlAction {
                         );
                     }
                 }
-                _ => (),
             }
+            _ => {}
         }
 
         Ok(ControlFlow::Continue)

@@ -68,6 +68,7 @@ CREATE TABLE uppers (
 /// stability. Any changes to the table schemas will be accompanied by a clear
 pub struct Postgres {
     url: String,
+    schema: Option<String>,
     tls: MakeTlsConnector,
     client: Option<Client>,
     epoch: i64,
@@ -86,9 +87,14 @@ impl std::fmt::Debug for Postgres {
 
 impl Postgres {
     /// Opens the stash stored at the specified path.
-    pub async fn new(url: String, tls: MakeTlsConnector) -> Result<Postgres, StashError> {
+    pub async fn new(
+        url: String,
+        schema: Option<String>,
+        tls: MakeTlsConnector,
+    ) -> Result<Postgres, StashError> {
         let mut conn = Postgres {
             url,
+            schema,
             tls,
             client: None,
             epoch: 0,
@@ -138,6 +144,11 @@ impl Postgres {
         client
             .batch_execute("SET default_transaction_isolation = serializable")
             .await?;
+        if let Some(schema) = &self.schema {
+            client
+                .execute(format!("SET search_path TO {schema}").as_str(), &[])
+                .await?;
+        }
         self.client = Some(client);
         Ok(())
     }
