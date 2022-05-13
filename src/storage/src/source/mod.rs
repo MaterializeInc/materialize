@@ -29,7 +29,6 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -37,6 +36,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
+use futures::stream::LocalBoxStream;
 use futures::{Stream, StreamExt as _};
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -46,6 +46,7 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Capability, Event};
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 use timely::Data;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
@@ -120,6 +121,8 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub aws_external_id: AwsExternalId,
     /// Storage Metadata
     pub storage_metadata: CollectionMetadata,
+    /// As Of
+    pub as_of: Antichain<Timestamp>,
 }
 
 /// A record produced by a source
@@ -361,17 +364,6 @@ impl From<anyhow::Error> for SourceReaderError {
     }
 }
 
-pub(crate) type SourceReaderStream<S> = Pin<
-    Box<
-        dyn Stream<
-            Item = Result<
-                SourceMessage<<S as SourceReader>::Key, <S as SourceReader>::Value>,
-                SourceReaderError,
-            >,
-        >,
-    >,
->;
-
 /// This trait defines the interface between Materialize and external sources, and
 /// must be implemented for every new kind of source.
 ///
@@ -447,7 +439,10 @@ pub trait SourceReader {
     /// Returns an adapter that treats the source as a stream.
     ///
     /// The stream produces the messages that would be produced by repeated calls to `next`.
-    fn into_stream(mut self, timestamp_frequency: Duration) -> SourceReaderStream<Self>
+    fn into_stream<'a>(
+        mut self,
+        timestamp_frequency: Duration,
+    ) -> LocalBoxStream<'a, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>>
     where
         Self: Sized + 'static,
     {
@@ -459,12 +454,7 @@ pub trait SourceReader {
     }
 }
 
-#[derive(Clone)]
-pub enum NextMessage<Key, Value>
-where
-    Key: Data,
-    Value: Data,
-{
+pub enum NextMessage<Key, Value> {
     Ready(SourceMessage<Key, Value>),
     Pending,
     TransientDelay,
@@ -473,12 +463,7 @@ where
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SourceMessage<Key, Value>
-where
-    Key: Data,
-    Value: Data,
-{
+pub struct SourceMessage<Key, Value> {
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -947,7 +932,7 @@ where
         timestamp_frequency,
         encoding,
         storage_metadata,
-        //as_of,
+        as_of,
         base_metrics,
         now,
         ..
@@ -957,8 +942,7 @@ where
 
     let (stream, capability) = source(scope, name.clone(), move |info| {
         let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-        let waker = futures::task::waker(Arc::clone(&waker_activator));
-        let ts_waker = futures::task::waker(waker_activator);
+        let waker = futures::task::waker(waker_activator);
 
         let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
         let mut source_metrics =
@@ -969,12 +953,8 @@ where
         let source_connector = source_connector.clone();
         let name = name.clone();
         let mut source_reader = Box::pin(async_stream::stream! {
-            let mut timestamper = match CreateSourceTimestamper::initialize(name.clone(), storage_metadata, now, ts_waker).await {
-                Ok(Some(t)) => t,
-                Ok(None) => {
-                    error!("Failed to create source {} timestamper", name);
-                    return;
-                }
+            let mut timestamper = match CreateSourceTimestamper::new(name.clone(), storage_metadata, now, as_of.clone()).await {
+                Ok(t) => t,
                 Err(e) => {
                     error!("Failed to create source {} timestamper: {}", name, e);
                     return;
@@ -982,7 +962,10 @@ where
             };
 
             // TODO(petrosagg): What is the purpose of an partition offset being None?
-            let start_offsets = timestamper.partition_cursors().into_iter().map(|(p, o)| (p, Some(o))).collect();
+            //let start_offsets = timestamper.partition_cursors().into_iter().map(|(p, o)| (p, Some(o))).collect();
+            // XXX: Providing these causes some tests to fail: seems like they were NOT being provided before for whatever reason.
+            //      I checked and on main, we pass empty start_offsets in tests like materializations.td
+            let start_offsets = vec![];
 
             let source_reader = S::new(
                 name.clone(),
@@ -1010,7 +993,8 @@ where
             let mut pending_messages = vec![];
             loop {
                 tokio::select! {
-                    item = source_stream.next(), if !source_stream.is_done() => {
+                    // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
+                    item = source_stream.next() => {
                         match item {
                             Some(Ok(message)) => pending_messages.push(Ok(message)),
                             // TODO: make errors definite
@@ -1044,6 +1028,7 @@ where
                                     yield Event::Message(ts, Ok(message));
                                 },
                                 Err(e) => {
+                                    // TODO: make errors definite
                                     yield Event::Message(0, Err(e));
                                 },
                             }
@@ -1101,6 +1086,7 @@ where
                             &mut metric_updates,
                             ts,
                         ),
+                        // TODO: make errors definite
                         Err(e) => {
                             output.session(&cap).give(Err(SourceError {
                                 source_id: id,

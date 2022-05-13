@@ -9,10 +9,10 @@
 
 //! Timestamper using persistent collection
 use std::collections::{HashMap, VecDeque};
-use std::task::{Context, Waker};
 
-use anyhow::Context as _;
-use futures::{FutureExt, StreamExt};
+use anyhow::{bail, Context as _};
+use differential_dataflow::lattice::Lattice;
+use futures::StreamExt;
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
@@ -24,21 +24,22 @@ use mz_persist_client::read::{ListenEvent, ListenStream, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::{Diff, Timestamp};
+use tracing::error;
 
 pub struct CreateSourceTimestamper {
     name: String,
     read_progress: Antichain<Timestamp>,
     write_upper: Antichain<Timestamp>,
     persisted_timestamp_bindings: HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>,
+    read_cursors: HashMap<PartitionId, MzOffset>,
     write_handle: WriteHandle<(), PartitionId, Timestamp, Diff>,
     read_handle: ReadHandle<(), PartitionId, Timestamp, Diff>,
     timestamp_bindings_listener: ListenStream<(), PartitionId, Timestamp, Diff>,
     now: NowFn,
-    waker: Waker,
 }
 
 impl CreateSourceTimestamper {
-    pub async fn initialize(
+    pub async fn new(
         name: String,
         CollectionMetadata {
             persist_location,
@@ -46,44 +47,23 @@ impl CreateSourceTimestamper {
             tx_timestamp_shard_id: _,
         }: CollectionMetadata,
         now: NowFn,
-        waker: Waker,
-    ) -> anyhow::Result<Option<Self>> {
+        mut as_of: Antichain<Timestamp>,
+    ) -> anyhow::Result<Self> {
         let persist_client = persist_location
             .open()
             .await
             .with_context(|| "error creating persist client")?;
 
-        let mut persisted_timestamp_bindings = HashMap::new();
 
-        let (mut write_handle, read_handle) = persist_client
+        let (write_handle, read_handle) = persist_client
             .open(timestamp_shard_id)
             .await
             .expect("persist handles open err");
 
-        // Collection is closed.  No source to run
-        if read_handle.since().is_empty() || write_handle.upper().is_empty() {
-            return Ok(None);
-        }
-
         let read_progress = read_handle.since().clone();
+        let write_upper = write_handle.upper().clone();
 
-        // If this is the initialization of the persist collection, allow a read at Timestamp::minimum().  Else fetch
-        // the current upper.
-        let min_plus_one = Antichain::from_elem(Timestamp::minimum() + 1);
-        let empty: [(((), PartitionId), Timestamp, Diff); 0] = [];
-        let write_upper = write_handle
-            .compare_and_append(
-                empty,
-                Antichain::from_elem(Timestamp::minimum()),
-                min_plus_one.clone(),
-            )
-            .await
-            .expect("Initial CAA")
-            .with_context(|| "Initial compare and append")?
-            .err()
-            .map(|Upper(actual_upper)| actual_upper)
-            .unwrap_or(min_plus_one);
-
+        // This is an invariant of the persist collection.
         assert!(
             timely::PartialOrder::less_equal(&read_progress, &write_upper),
             "{:?} PARTIAL ORDER: {:?} {:?}",
@@ -92,45 +72,75 @@ impl CreateSourceTimestamper {
             write_upper,
         );
 
-        let mut snap_iter = read_handle
-            .snapshot(read_progress.clone())
-            .await
-            .unwrap_or_else(|e| panic!("{:?} Read snapshot at handle.since ts {:?}", name, e));
-
-        loop {
-            match snap_iter.next().await {
-                None => break,
-                Some(v) => {
-                    for ((key, value), timestamp, diff) in v {
-                        let _: () = key.unwrap();
-                        let partition = value.unwrap();
-                        // We can't compact yet because we don't know what offsets we'll need to serve
-                        persisted_timestamp_bindings
-                            .entry(partition)
-                            .or_insert_with(VecDeque::new)
-                            .push_back((timestamp, MzOffset { offset: diff }));
-                    }
-                }
-            };
+        if timely::PartialOrder::less_than(&as_of, &read_progress) {
+            bail!(
+                "Source AS OF must not be less than since: {:?} vs {:?}",
+                as_of,
+                read_progress
+            );
         }
 
+        // XXX: what do we do if the write_upper is less than the as of? e.g. if we get a non-zero as of on a new source?
+        // - Should that get special-cased and just CAA with empty up to the AS OF??
+        // - Is it possible in general for a non-new source to have an AS OF that's not between since and upper? What to do?
+        if timely::PartialOrder::less_than(&write_upper, &as_of) {
+            error!(
+                "Source upper must not be less than AS OF: {:?} vs {:?}.  Since: {:?}",
+                write_upper, as_of, read_progress,
+            );
+            as_of.meet_assign(&write_upper);
+        }
+
+        let persisted_timestamp_bindings = if read_progress != write_upper {
+            let mut snapshot_map = HashMap::new();
+            let mut snap_iter = read_handle
+                .snapshot(as_of.clone())
+                .await
+                .unwrap_or_else(|e| panic!("{:?} Read snapshot at handle.since ts {:?}", name, e));
+
+            while let Some(v) = snap_iter.next().await {
+                for ((key, value), timestamp, diff) in v {
+                    let _: () = key.unwrap();
+                    let partition = value.unwrap();
+                    let (current_ts, current_offset) = snapshot_map
+                        .entry(partition)
+                        .or_insert((0, MzOffset::default()));
+                    *current_offset += diff;
+                    *current_ts = timestamp;
+                }
+            }
+
+            snapshot_map
+                .into_iter()
+                .map(|(partition, (ts, offset))| {
+                    (
+                        partition,
+                        VecDeque::from_iter(std::iter::once((ts, offset))),
+                    )
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let read_cursors = HashMap::new();
+
         let timestamp_bindings_listener = read_handle
-            .listen(read_progress.clone())
+            .listen(as_of)
             .await
             .expect("Initial listen at handle.since ts")
             .into_stream();
 
-        Ok(Some(Self {
+        Ok(Self {
             name,
             read_progress,
             write_upper,
             persisted_timestamp_bindings,
+            read_cursors,
             write_handle,
             read_handle,
             timestamp_bindings_listener,
             now,
-            waker,
-        }))
+        })
     }
 
     pub fn partition_cursors(&self) -> HashMap<PartitionId, MzOffset> {
@@ -148,8 +158,39 @@ impl CreateSourceTimestamper {
             .collect()
     }
 
-    // return value: whether to continue
-    pub async fn timestamp_offsets<'a>(
+    // XXX: actually use this before merging.  Less granularity in ts seems to make it easier to catch bugs so I'll wait
+    fn get_time(&self) -> Timestamp {
+        let update_interval = 100;
+        let new_ts = (self.now)();
+
+        // Mod and then round up
+        let remainder = new_ts % update_interval;
+        if remainder == 0 {
+            new_ts
+        } else {
+            new_ts - remainder + update_interval
+        }
+    }
+
+    fn validate_persisted_bindings(&self) -> bool {
+        for (partition, bindings) in self.persisted_timestamp_bindings.iter() {
+            let mut last_ts = Timestamp::minimum();
+            for (ts, _) in bindings.iter() {
+                assert!(
+                    *ts > last_ts,
+                    "TS GOES BACKWARDS: {:?} -> {:?} in PART {:?}; BINDINGS: {:?}",
+                    last_ts,
+                    ts,
+                    partition,
+                    self.persisted_timestamp_bindings
+                );
+                last_ts = *ts;
+            }
+        }
+        true
+    }
+
+    pub async fn timestamp_offsets(
         &mut self,
         observed_max_offsets: HashMap<PartitionId, MzOffset>,
     ) -> anyhow::Result<
@@ -158,8 +199,9 @@ impl CreateSourceTimestamper {
             Antichain<Timestamp>,
         )>,
     > {
+        // XXX: make handling empty better: want to CAA once before returning
+        let mut empty_flag = observed_max_offsets.is_empty();
         let mut matched_offsets = HashMap::new();
-        let mut context = Context::from_waker(&self.waker);
         loop {
             if self.write_upper.is_empty() || self.read_handle.since().is_empty() {
                 if !self.write_upper.is_empty() {
@@ -171,15 +213,9 @@ impl CreateSourceTimestamper {
                 return Ok(None);
             }
 
-            // See how much we can read in from the collection
-            //while let Poll::Ready(Some(event)) = self
-            //    .timestamp_bindings_listener
-            //    .as_mut()
-            //    .poll_next(&mut context)
-            // XXX: this or while let Poll::Ready(Some(event)) = self.timestamp_bindings_listener.as_mut().poll_next(&mut context_from_timely_activator)??
-            while let Some(Some(event)) = self.timestamp_bindings_listener.next().now_or_never() {
-                match event {
-                    ListenEvent::Progress(progress) => {
+            while PartialOrder::less_than(&self.read_progress, &self.write_upper) {
+                match self.timestamp_bindings_listener.next().await {
+                    Some(ListenEvent::Progress(progress)) => {
                         assert!(
                             timely::PartialOrder::less_equal(&self.read_progress, &progress),
                             "{:?} PARTIAL ORDER: {:?} {:?}",
@@ -189,7 +225,9 @@ impl CreateSourceTimestamper {
                         );
                         self.read_progress = progress;
                     }
-                    ListenEvent::Updates(updates) => {
+                    Some(ListenEvent::Updates(mut updates)) => {
+                        // XXX: I don't think this is necessary but didn't have time to check before pushing
+                        updates.sort_by_key(|a| a.1);
                         for ((_, value), timestamp, diff) in updates {
                             let partition = value.expect("Unable to decode partition id");
                             self.persisted_timestamp_bindings
@@ -198,28 +236,15 @@ impl CreateSourceTimestamper {
                                 .push_back((timestamp, MzOffset { offset: diff }));
                         }
                     }
+                    None => {
+                        // time to shut down!
+                        self.write_upper = Antichain::new();
+                        return Ok(None);
+                    }
                 }
             }
 
-            // Decide if we're up to date enough to attempt to persist new bindings!  If not, don't bother trying and shortcut to reading in again
-            if !PartialOrder::less_equal(&self.write_upper, &self.read_progress) {
-                // Use intentionally wrong value of `expected_upper` in order to update the upper for next iteration.
-                let empty: [(((), PartitionId), Timestamp, Diff); 0] = [];
-                self.write_upper = self
-                    .write_handle
-                    .compare_and_append(
-                        empty,
-                        Antichain::from_elem(Timestamp::minimum()),
-                        Antichain::from_elem(Timestamp::minimum() + 1),
-                    )
-                    .await
-                    .expect("Timestamper upper update CAA")
-                    .with_context(|| "Timestamper upper update compare and append")?
-                    .map_err(|Upper(actual_upper)| actual_upper)
-                    .expect_err("Antichain was advanced past min on initialization");
-
-                continue;
-            }
+            debug_assert!(self.validate_persisted_bindings());
 
             // Compact bindings we've read in and see if we're able to assert a timestamp for any of the input offsets
             for (partition, offset) in observed_max_offsets.iter() {
@@ -230,9 +255,11 @@ impl CreateSourceTimestamper {
                     Some(bindings) => bindings,
                     None => continue,
                 };
-                if bindings.is_empty() {
-                    continue;
-                }
+
+                // XXX rewrite (??)
+                // let compaction_point = bindings.partition_point(|b| b.1 < *offset);
+                // let compacted_offset = bindings .drain(0..compaction_point) .map(|b| b.1.offset) .sum::<i64>();
+                // bindings.front_mut().expect("compacted beyond upper").1 += compacted_offset;
 
                 // Compact as able, relying on all messages being in ascending offset order
                 while bindings.len() > 1
@@ -251,9 +278,27 @@ impl CreateSourceTimestamper {
                     .front()
                     .expect("always at least one binding per partition");
                 if *offset <= *max_offset {
+                    let old_offset = self.read_cursors.insert(partition.clone(), offset.clone());
+                    match old_offset {
+                        Some(old_offset) if old_offset > *offset => bail!(
+                            "Offset shouldn't go backwards {:?} -> {:?}",
+                            old_offset,
+                            offset
+                        ),
+                        _ => {}
+                    }
                     let old_value =
                         matched_offsets.insert(partition.clone(), (*timestamp, *offset));
                     assert_eq!(old_value, None);
+
+                    // Compact offsets we've matched before determining the progress to make that logic easier.  In particular, it's quite
+                    // convenient to know if there is only one bindings and we've previouly returned or are about to return that max offset.
+                    // N.B. It's only useful for _subsequent calls_ because for the current call, we just use the timestamp from `matched_offsets`
+                    if *offset == *max_offset && bindings.len() > 1 {
+                        let (_old_timestamp, old_max_offset) = bindings.pop_front().unwrap();
+                        let (_timestamp, incremental_offset) = bindings.front_mut().unwrap();
+                        *incremental_offset += old_max_offset;
+                    }
                 } else {
                     assert_eq!(bindings.len(), 1);
                     // Unable to match any more from this partition
@@ -261,9 +306,11 @@ impl CreateSourceTimestamper {
                 }
             }
 
+            debug_assert!(self.validate_persisted_bindings());
+
             // TODO(#12267): Properly downgrade `since` of the timestamp collection based on the source data collection.
 
-            // XXX: should clamp to round timestamp_frequency??
+            // XXX: should clamp to round timestamp_frequency?? Also make sure it doesn't go backwards??
             let new_ts = (self.now)();
             let new_upper = Antichain::from_elem(new_ts + 1);
 
@@ -274,10 +321,9 @@ impl CreateSourceTimestamper {
                     // Attempt to commit up to max offsets at current timestamp
                     let current_offset = self
                         .persisted_timestamp_bindings
-                        .entry(partition.clone())
-                        .or_insert_with(VecDeque::new)
-                        .back()
-                        .map(|(_ts, offset)| *offset)
+                        .get(partition)
+                        .map(|v| v.back().map(|(_ts, offset)| *offset))
+                        .flatten()
                         .unwrap_or_default();
                     let diff = *new_max_offset - current_offset;
                     assert!(
@@ -289,12 +335,43 @@ impl CreateSourceTimestamper {
                 })
                 .collect();
 
-            if new_bindings.is_empty() {
+            // XXX: make sure we progress if we get an empty `observed_max_offsets`
+            if new_bindings.is_empty() && !empty_flag {
                 assert_eq!(matched_offsets.len(), observed_max_offsets.len());
                 // This should be a sensible value for the source to downgrade its capability to after emitting the messages that we return
-                let progress = matched_offsets
-                    .values()
-                    .map(|(ts, _offset)| *ts)
+
+                /*
+                XXX: rewrite this comment
+                MIN OF:
+                - if partition in request: use ts of the output.  We know we CAN'T go backwards bceause caller must make requests with non-decreasing offsets
+                - if partition NOT in request: use ts for offset of read_cursor.  Highest message written out
+                    - if offset of read cursor MATCHES highest offset of partition bindings, we've written everything we know about in that partition so disregard in calculation
+                      (equiv to using `read_progress` for this partition)
+                - Should be read_progress because anything will come after that
+                */
+                let progress = self
+                    .persisted_timestamp_bindings
+                    .iter()
+                    .filter_map(|(partition, bindings)| {
+                        if let Some((ts, _offset)) = matched_offsets.get(partition) {
+                            return Some(*ts);
+                        }
+
+                        let (lo_binding_ts, lo_binding_offset) = bindings
+                            .get(0)
+                            .expect("Always have at least one binding per existing partition");
+                        if let Some(read_cursor_offset) = self.read_cursors.get(partition) {
+                            if bindings.len() == 1 {
+                                assert!(read_cursor_offset <= lo_binding_offset);
+                                if read_cursor_offset == lo_binding_offset {
+                                    // We've already sent a timestamp for the max offset we have so don't consider
+                                    // this in the computation.
+                                    return None;
+                                }
+                            }
+                        }
+                        Some(*lo_binding_ts)
+                    })
                     .chain(std::iter::once(
                         *self.read_progress.elements().first().unwrap_or(&u64::MAX),
                     ))
@@ -302,6 +379,7 @@ impl CreateSourceTimestamper {
                     .unwrap_or_else(Timestamp::minimum);
                 return Ok(Some((matched_offsets, Antichain::from_elem(progress))));
             }
+            empty_flag = false;
 
             let compare_and_append_result = self
                 .write_handle
@@ -316,6 +394,7 @@ impl CreateSourceTimestamper {
                 .expect("Timestamper CAA")
                 .expect("Timestamper CAA 2");
 
+            // XXX: comment here about why not just return
             self.write_upper = match compare_and_append_result {
                 Ok(()) => new_upper,
                 Err(Upper(actual_upper)) => actual_upper,
