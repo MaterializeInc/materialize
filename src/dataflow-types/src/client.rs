@@ -36,7 +36,7 @@ use mz_repr::{GlobalId, Row};
 use crate::logging::LoggingConfig;
 use crate::{
     sources::{MzOffset, SourceDesc},
-    DataflowDescription, PeekResponse, TailResponse, Update,
+    DataflowDescription, PeekResponse, TailResponse,
 };
 
 pub mod controller;
@@ -321,12 +321,6 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-    /// Append data and advance the frontier of the enumerated collections
-    ///
-    /// Each entry in the vector names a collection and provides a list of updates to insert and a
-    /// frontier that the collection must be advanced to. The times of the updates not be beyond
-    /// the given frontier.
-    Append(Vec<(GlobalId, Vec<Update<T>>, T)>),
     /// Update durability information for sources.
     ///
     /// Each entry names a source and provides a frontier before which the source can
