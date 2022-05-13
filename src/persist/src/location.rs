@@ -269,6 +269,14 @@ impl From<tokio_postgres::Error> for ExternalError {
     }
 }
 
+impl From<tokio::task::JoinError> for ExternalError {
+    fn from(x: tokio::task::JoinError) -> Self {
+        ExternalError::Indeterminate(Indeterminate {
+            inner: anyhow::Error::new(x),
+        })
+    }
+}
+
 /// An abstraction over an append-only bytes log.
 ///
 /// Each written entry is assigned a unique, incrementing SeqNo, which can be
@@ -947,10 +955,10 @@ pub mod tests {
 
     pub async fn blob_multi_impl_test<
         B: BlobMulti,
-        C: Future<Output = Result<B, ExternalError>>,
-        F: Fn(&'static str) -> C,
+        F: Future<Output = Result<B, ExternalError>>,
+        NewFn: Fn(&'static str) -> F,
     >(
-        new_fn: F,
+        new_fn: NewFn,
     ) -> Result<(), ExternalError> {
         let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
@@ -1059,10 +1067,14 @@ pub mod tests {
         Ok(())
     }
 
-    pub async fn consensus_impl_test<C: Consensus, F: FnMut() -> Result<C, ExternalError>>(
-        mut new_fn: F,
+    pub async fn consensus_impl_test<
+        C: Consensus,
+        F: Future<Output = Result<C, ExternalError>>,
+        NewFn: FnMut() -> F,
+    >(
+        mut new_fn: NewFn,
     ) -> Result<(), ExternalError> {
-        let consensus = new_fn()?;
+        let consensus = new_fn().await?;
 
         // Use a random key so independent runs of this test don't interfere
         // with each other.

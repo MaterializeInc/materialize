@@ -351,7 +351,6 @@ mod tests {
             }
         };
 
-        consensus_impl_test(|| futures_executor::block_on(PostgresConsensus::open(config.clone())))
-            .await
+        consensus_impl_test(|| PostgresConsensus::open(config.clone())).await
     }
 }

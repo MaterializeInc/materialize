@@ -112,7 +112,8 @@ pub fn bench_consensus_compare_and_set(
     // Create a directory that will automatically be dropped after the test finishes.
     {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-        let sqlite_consensus = SqliteConsensus::open(temp_dir.path().join("db"))
+        let sqlite_consensus = runtime
+            .block_on(SqliteConsensus::open(temp_dir.path().join("db")))
             .expect("creating a SqliteConsensus cannot fail");
         let sqlite_consensus = Arc::new(sqlite_consensus);
         g.bench_with_input(
@@ -131,7 +132,8 @@ pub fn bench_consensus_compare_and_set(
     }
 
     // Only run Postgres benchmarks if the magic env vars are set.
-    if let Some(config) = futures_executor::block_on(PostgresConsensusConfig::new_for_test())
+    if let Some(config) = runtime
+        .block_on(PostgresConsensusConfig::new_for_test())
         .expect("failed to load postgres config")
     {
         let postgres_consensus = runtime
