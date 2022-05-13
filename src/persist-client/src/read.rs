@@ -23,7 +23,7 @@ use mz_persist::retry::Retry;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -617,7 +617,7 @@ where
                 self.reader_id
             );
         } else {
-            info!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+            warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
         }
     }
 }
