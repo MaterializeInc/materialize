@@ -213,40 +213,7 @@ impl CreateSourceTimestamper {
                 return Ok(None);
             }
 
-            while PartialOrder::less_than(&self.read_progress, &self.write_upper) {
-                match self.timestamp_bindings_listener.next().await {
-                    Some(ListenEvent::Progress(progress)) => {
-                        assert!(
-                            timely::PartialOrder::less_equal(&self.read_progress, &progress),
-                            "{:?} PARTIAL ORDER: {:?} {:?}",
-                            self.name,
-                            self.read_progress,
-                            progress
-                        );
-                        self.read_progress = progress;
-                    }
-                    Some(ListenEvent::Updates(mut updates)) => {
-                        // XXX: I don't think this is necessary but didn't have time to check before pushing
-                        updates.sort_by_key(|a| a.1);
-                        for ((_, value), timestamp, diff) in updates {
-                            let partition = value.expect("Unable to decode partition id");
-                            self.persisted_timestamp_bindings
-                                .entry(partition)
-                                .or_insert_with(VecDeque::new)
-                                .push_back((timestamp, MzOffset { offset: diff }));
-                        }
-                    }
-                    None => {
-                        // time to shut down!
-                        self.write_upper = Antichain::new();
-                        return Ok(None);
-                    }
-                }
-            }
-
-            debug_assert!(self.validate_persisted_bindings());
-
-            // Compact bindings we've read in and see if we're able to assert a timestamp for any of the input offsets
+            // See if we're able to assert a timestamp for any of the input offsets
             for (partition, offset) in observed_max_offsets.iter() {
                 if matched_offsets.contains_key(partition) {
                     continue;
@@ -255,11 +222,6 @@ impl CreateSourceTimestamper {
                     Some(bindings) => bindings,
                     None => continue,
                 };
-
-                // XXX rewrite (??)
-                // let compaction_point = bindings.partition_point(|b| b.1 < *offset);
-                // let compacted_offset = bindings .drain(0..compaction_point) .map(|b| b.1.offset) .sum::<i64>();
-                // bindings.front_mut().expect("compacted beyond upper").1 += compacted_offset;
 
                 // Compact as able, relying on all messages being in ascending offset order
                 while bindings.len() > 1
@@ -287,18 +249,9 @@ impl CreateSourceTimestamper {
                         ),
                         _ => {}
                     }
-                    let old_value =
+                    let old_match =
                         matched_offsets.insert(partition.clone(), (*timestamp, *offset));
-                    assert_eq!(old_value, None);
-
-                    // Compact offsets we've matched before determining the progress to make that logic easier.  In particular, it's quite
-                    // convenient to know if there is only one bindings and we've previouly returned or are about to return that max offset.
-                    // N.B. It's only useful for _subsequent calls_ because for the current call, we just use the timestamp from `matched_offsets`
-                    if *offset == *max_offset && bindings.len() > 1 {
-                        let (_old_timestamp, old_max_offset) = bindings.pop_front().unwrap();
-                        let (_timestamp, incremental_offset) = bindings.front_mut().unwrap();
-                        *incremental_offset += old_max_offset;
-                    }
+                    assert_eq!(old_match, None);
                 } else {
                     assert_eq!(bindings.len(), 1);
                     // Unable to match any more from this partition
@@ -331,22 +284,23 @@ impl CreateSourceTimestamper {
                 })
                 .collect();
 
-            // XXX: make sure we progress if we get an empty `observed_max_offsets`
+            // If we have nothing new to propose, figure out the progress we ought to communicate and return.
+            // N.B. If this was called with no new offsets, we need to do have at least one invocation of
+            // `compare_and_append` to drive progress so we can't return immediately.
             if new_bindings.is_empty() && !empty_flag {
                 assert_eq!(matched_offsets.len(), observed_max_offsets.len());
-                // This should be a sensible value for the source to downgrade its capability to after emitting the messages that we return
 
-                /*
-                XXX: rewrite this comment
-                MIN OF:
-                - if partition in request: use ts of the output.  We know we CAN'T go backwards bceause caller must make requests with non-decreasing offsets
-                - if partition NOT in request: use ts for offset of read_cursor.  Highest message written out
-                    - if offset of read cursors MATCHES lowest offset AND there's a second binding, return the timestamp for the second binding -- as it'll eventually get compacted
-                    - if offset of read cursors MATCHES lowest offset AND there's NOT a second binding, we've written everything we know about in that partition so disregard in
-                      calculation (equiv to using `read_progress` for this partition)
-                    - if offset of read cursors is LESS THAN lowest offset, return that timestamp as we could still return a message
-                - Read_progress because anything will come after that
-                */
+                // XXX: rewrite this comment (??)
+                // Progress is min of:
+                // - if partition in request: use ts of the output.  We know we CAN'T go backwards bceause caller must make requests with non-decreasing offsets
+                // - if partition NOT in request: use ts for offset of read_cursor.  Highest message written out
+                //     - if offset of read cursors MATCHES lowest offset AND there's a second binding, return the timestamp for the second binding -- as it'll eventually get compacted
+                //     - if offset of read cursors MATCHES lowest offset AND there's NOT a second binding, we've written everything we know about in that partition so disregard in
+                //       calculation (equiv to using `read_progress` for this partition)
+                //     - if offset of read cursors is LESS THAN lowest offset, return that timestamp as we could still return a message
+                // - Read_progress because anything will come after that
+
+                // This should be a sensible value for the source to downgrade its capability to after emitting the messages that we return
                 let progress = self
                     .persisted_timestamp_bindings
                     .iter()
@@ -402,11 +356,43 @@ impl CreateSourceTimestamper {
                 .expect("Timestamper CAA")
                 .expect("Timestamper CAA 2");
 
-            // XXX: comment here about why not just return
+            // We don't just return here on success because the logic to determine what progress to return is complex
+            // and should be in one place only.
             self.write_upper = match compare_and_append_result {
                 Ok(()) => new_upper,
                 Err(Upper(actual_upper)) => actual_upper,
+            };
+
+            while PartialOrder::less_than(&self.read_progress, &self.write_upper) {
+                match self.timestamp_bindings_listener.next().await {
+                    Some(ListenEvent::Progress(progress)) => {
+                        assert!(
+                            timely::PartialOrder::less_equal(&self.read_progress, &progress),
+                            "{:?} PARTIAL ORDER: {:?} {:?}",
+                            self.name,
+                            self.read_progress,
+                            progress
+                        );
+                        self.read_progress = progress;
+                    }
+                    Some(ListenEvent::Updates(updates)) => {
+                        for ((_, value), timestamp, diff) in updates {
+                            let partition = value.expect("Unable to decode partition id");
+                            self.persisted_timestamp_bindings
+                                .entry(partition)
+                                .or_insert_with(VecDeque::new)
+                                .push_back((timestamp, MzOffset { offset: diff }));
+                        }
+                    }
+                    None => {
+                        // time to shut down!
+                        self.write_upper = Antichain::new();
+                        return Ok(None);
+                    }
+                }
             }
+
+            debug_assert!(self.validate_persisted_bindings());
         }
     }
 }
