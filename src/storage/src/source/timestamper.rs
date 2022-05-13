@@ -9,6 +9,7 @@
 
 //! Timestamper using persistent collection
 use std::collections::{HashMap, VecDeque};
+use std::time::Duration;
 
 use anyhow::{bail, Context as _};
 use differential_dataflow::lattice::Lattice;
@@ -24,7 +25,7 @@ use mz_persist_client::read::{ListenEvent, ListenStream, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::{Diff, Timestamp};
-use tracing::error;
+use tracing::{error, info};
 
 pub struct CreateSourceTimestamper {
     name: String,
@@ -53,7 +54,6 @@ impl CreateSourceTimestamper {
             .open()
             .await
             .with_context(|| "error creating persist client")?;
-
 
         let (write_handle, read_handle) = persist_client
             .open(timestamp_shard_id)
@@ -310,10 +310,6 @@ impl CreateSourceTimestamper {
 
             // TODO(#12267): Properly downgrade `since` of the timestamp collection based on the source data collection.
 
-            // XXX: should clamp to round timestamp_frequency?? Also make sure it doesn't go backwards??
-            let new_ts = (self.now)();
-            let new_upper = Antichain::from_elem(new_ts + 1);
-
             let new_bindings: Vec<_> = observed_max_offsets
                 .iter()
                 .filter(|(partition, _offset)| !matched_offsets.contains_key(partition))
@@ -345,9 +341,11 @@ impl CreateSourceTimestamper {
                 MIN OF:
                 - if partition in request: use ts of the output.  We know we CAN'T go backwards bceause caller must make requests with non-decreasing offsets
                 - if partition NOT in request: use ts for offset of read_cursor.  Highest message written out
-                    - if offset of read cursor MATCHES highest offset of partition bindings, we've written everything we know about in that partition so disregard in calculation
-                      (equiv to using `read_progress` for this partition)
-                - Should be read_progress because anything will come after that
+                    - if offset of read cursors MATCHES lowest offset AND there's a second binding, return the timestamp for the second binding -- as it'll eventually get compacted
+                    - if offset of read cursors MATCHES lowest offset AND there's NOT a second binding, we've written everything we know about in that partition so disregard in
+                      calculation (equiv to using `read_progress` for this partition)
+                    - if offset of read cursors is LESS THAN lowest offset, return that timestamp as we could still return a message
+                - Read_progress because anything will come after that
                 */
                 let progress = self
                     .persisted_timestamp_bindings
@@ -361,13 +359,9 @@ impl CreateSourceTimestamper {
                             .get(0)
                             .expect("Always have at least one binding per existing partition");
                         if let Some(read_cursor_offset) = self.read_cursors.get(partition) {
-                            if bindings.len() == 1 {
-                                assert!(read_cursor_offset <= lo_binding_offset);
-                                if read_cursor_offset == lo_binding_offset {
-                                    // We've already sent a timestamp for the max offset we have so don't consider
-                                    // this in the computation.
-                                    return None;
-                                }
+                            assert!(read_cursor_offset <= lo_binding_offset);
+                            if read_cursor_offset == lo_binding_offset {
+                                return bindings.get(1).map(|(ts, _offset)| *ts);
                             }
                         }
                         Some(*lo_binding_ts)
@@ -381,6 +375,20 @@ impl CreateSourceTimestamper {
             }
             empty_flag = false;
 
+            // XXX: should clamp to round timestamp_frequency?? Also make sure it doesn't go backwards??
+            let new_ts = (self.now)();
+            let new_upper = Antichain::from_elem(new_ts + 1);
+
+            // Can happen if clock skew between replicas.
+            // TODO: push handling this into ts generation and remove sleep
+            if PartialOrder::less_equal(&new_upper, &self.write_upper) {
+                info!(
+                    "Current write upper is not less than new upper: {:?} {:?}",
+                    self.write_upper, new_upper
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
             let compare_and_append_result = self
                 .write_handle
                 .compare_and_append(

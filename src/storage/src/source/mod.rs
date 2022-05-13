@@ -31,7 +31,7 @@ use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -951,7 +951,6 @@ where
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
         let source_connector = source_connector.clone();
-        let name = name.clone();
         let mut source_reader = Box::pin(async_stream::stream! {
             let mut timestamper = match CreateSourceTimestamper::new(name.clone(), storage_metadata, now, as_of.clone()).await {
                 Ok(t) => t,
@@ -1047,6 +1046,7 @@ where
             }
         });
 
+        let activator = scope.activator_for(&info.address[..]);
         move |cap, output| {
             if !active {
                 return SourceStatus::Done;
@@ -1061,6 +1061,8 @@ where
 
             let mut context = Context::from_waker(&waker);
             let mut source_status = SourceStatus::Alive;
+
+            let timer = Instant::now();
 
             while let Poll::Ready(Some(event)) = source_reader.as_mut().poll_next(&mut context) {
                 match event {
@@ -1094,6 +1096,10 @@ where
                             }));
                         }
                     },
+                }
+                if timer.elapsed() > YIELD_INTERVAL {
+                    let _ = activator.activate();
+                    break;
                 }
             }
 
