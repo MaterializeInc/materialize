@@ -105,6 +105,7 @@ impl ConsensusConfig {
     pub async fn open(self) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
         match self {
             ConsensusConfig::Sqlite(config) => SqliteConsensus::open(config)
+                .await
                 .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
             ConsensusConfig::Postgres(config) => PostgresConsensus::open(config)
                 .await

@@ -30,8 +30,7 @@ CREATE TABLE consensus (
     sequence_number bigint NOT NULL,
     data blob NOT NULL,
     PRIMARY KEY(shard, sequence_number)
-);
-";
+);";
 
 impl ToSql for SeqNo {
     fn to_sql(&self) -> Result<ToSqlOutput<'_>, SqliteError> {
@@ -62,32 +61,42 @@ impl FromSql for SeqNo {
 /// Implementation of [Consensus] over a sqlite database.
 #[derive(Debug)]
 pub struct SqliteConsensus {
-    // N.B. tokio::sync::mutex seems to cause deadlocks.  See #12231.
+    // Intentionally a std::sync::Mutex instead of a tokio one because we don't
+    // hold it across await points (ha! there are no await points with
+    // rusqlite).
     conn: Arc<Mutex<Connection>>,
 }
 
 impl SqliteConsensus {
     /// Open a sqlite-backed [Consensus] instance at `path`.
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, ExternalError> {
-        let mut conn = Connection::open(path)?;
-        let tx = conn.transaction()?;
-        let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
-        if app_id == 0 {
-            tx.execute_batch(&format!(
-                "PRAGMA application_id = {APPLICATION_ID};
-                 PRAGMA user_version = 1;"
-            ))?;
-            tx.execute_batch(SCHEMA)?;
-        } else if app_id != APPLICATION_ID {
-            return Err(ExternalError::from(anyhow!(
-                "invalid application id: {}",
-                app_id
-            )));
-        }
-        tx.commit()?;
-        Ok(SqliteConsensus {
-            conn: Arc::new(Mutex::new(conn)),
-        })
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, ExternalError> {
+        let path = path.as_ref().to_path_buf();
+        mz_ore::task::spawn_blocking(
+            || "sqlite::open",
+            move || {
+                let mut conn = Connection::open(path)?;
+                let tx = conn.transaction()?;
+                const Q: &str = "PRAGMA application_id";
+                let app_id: i32 = tx.query_row(Q, params![], |row| row.get(0))?;
+                if app_id == 0 {
+                    let q = format!(
+                        "PRAGMA application_id = {}; PRAGMA user_version = 1; {}",
+                        APPLICATION_ID, SCHEMA
+                    );
+                    tx.execute_batch(&q)?;
+                } else if app_id != APPLICATION_ID {
+                    return Err(ExternalError::from(anyhow!(
+                        "invalid application id: {}",
+                        app_id
+                    )));
+                }
+                tx.commit()?;
+                Ok(SqliteConsensus {
+                    conn: Arc::new(Mutex::new(conn)),
+                })
+            },
+        )
+        .await?
     }
 }
 
@@ -98,18 +107,26 @@ impl Consensus for SqliteConsensus {
         _deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        let conn = self.conn.lock().map_err(PersistError::from)?;
-        let mut stmt = conn.prepare(
-            "SELECT sequence_number, data FROM consensus
-                 WHERE shard = $shard ORDER BY sequence_number DESC LIMIT 1",
-        )?;
-        stmt.query_row(named_params! {"$shard": key}, |row| {
-            let seqno = row.get("sequence_number")?;
-            let data: Vec<_> = row.get("data")?;
-            Ok(VersionedData { seqno, data })
-        })
-        .optional()
-        .map_err(|e| e.into())
+        let shard = key.to_owned();
+        let conn = Arc::clone(&self.conn);
+        mz_ore::task::spawn_blocking(
+            || "sqlite::head",
+            move || {
+                let conn = conn.lock().map_err(PersistError::from)?;
+                const Q: &str = "
+SELECT sequence_number, data FROM consensus
+WHERE shard = $shard ORDER BY sequence_number DESC LIMIT 1";
+                let mut stmt = conn.prepare(Q)?;
+                stmt.query_row(named_params! {"$shard": shard}, |row| {
+                    let seqno = row.get("sequence_number")?;
+                    let data: Vec<_> = row.get("data")?;
+                    Ok(VersionedData { seqno, data })
+                })
+                .optional()
+                .map_err(|e| e.into())
+            },
+        )
+        .await?
     }
 
     async fn compare_and_set(
@@ -127,49 +144,53 @@ impl Consensus for SqliteConsensus {
             }
         }
 
-        let result = if let Some(expected) = expected {
-            let conn = self.conn.lock().map_err(PersistError::from)?;
-
-            // Only insert the new row if:
-            // - sequence number expected is already present
-            // - expected corresponds to the most recent sequence number
-            //   i.e. there is no other sequence number > expected already
-            //   present.
-            let mut stmt = conn
-                .prepare_cached(
-                    "INSERT INTO consensus SELECT $shard, $sequence_number, $data WHERE
-                     EXISTS (
-                        SELECT * FROM consensus WHERE shard = $shard AND sequence_number = $expected
-                     )
-                     AND NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $shard AND sequence_number > $expected
-                     )
-                     ON CONFLICT DO NOTHING",
-                )?;
-
-            stmt.execute(named_params! {
-                "$shard": key,
-                "$sequence_number": new.seqno,
-                "$data": new.data,
-                "$expected": expected,
-            })?
-        } else {
-            let conn = self.conn.lock().map_err(PersistError::from)?;
-
-            // Insert the new row as long as no other row exists for the same shard.
-            let mut stmt = conn.prepare_cached(
-                "INSERT INTO consensus SELECT $shard, $sequence_number, $data WHERE
-                     NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $shard
-                     )
-                     ON CONFLICT DO NOTHING",
-            )?;
-            stmt.execute(named_params! {
-                "$shard": key,
-                "$sequence_number": new.seqno,
-                "$data": new.data,
-            })?
-        };
+        let shard = key.to_owned();
+        let conn = Arc::clone(&self.conn);
+        let result = mz_ore::task::spawn_blocking(
+            || "sqlite::compare_and_set",
+            move || -> Result<usize, ExternalError> {
+                let conn = conn.lock().map_err(PersistError::from)?;
+                let result = if let Some(expected) = expected {
+                    // Only insert the new row if:
+                    // - sequence number expected is already present
+                    // - expected corresponds to the most recent sequence number
+                    //   i.e. there is no other sequence number > expected already
+                    //   present.
+                    const Q: &str = "
+INSERT INTO consensus SELECT $shard, $sequence_number, $data WHERE
+EXISTS (
+   SELECT * FROM consensus WHERE shard = $shard AND sequence_number = $expected
+)
+AND NOT EXISTS (
+    SELECT * FROM consensus WHERE shard = $shard AND sequence_number > $expected
+)
+ON CONFLICT DO NOTHING";
+                    let mut stmt = conn.prepare_cached(Q)?;
+                    stmt.execute(named_params! {
+                        "$shard": shard,
+                        "$sequence_number": new.seqno,
+                        "$data": new.data,
+                        "$expected": expected,
+                    })?
+                } else {
+                    // Insert the new row as long as no other row exists for the same shard.
+                    const Q: &str = "
+INSERT INTO consensus SELECT $shard, $sequence_number, $data WHERE
+NOT EXISTS (
+    SELECT * FROM consensus WHERE shard = $shard
+)
+ON CONFLICT DO NOTHING";
+                    let mut stmt = conn.prepare_cached(Q)?;
+                    stmt.execute(named_params! {
+                        "$shard": shard,
+                        "$sequence_number": new.seqno,
+                        "$data": new.data,
+                    })?
+                };
+                Ok(result)
+            },
+        )
+        .await??;
 
         if result == 1 {
             Ok(Ok(()))
@@ -191,19 +212,29 @@ impl Consensus for SqliteConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let conn = self.conn.lock().map_err(PersistError::from)?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT sequence_number, data FROM consensus
-                 WHERE shard = $shard AND sequence_number >= $from
-                 ORDER BY sequence_number",
-        )?;
-        let rows = stmt.query_map(named_params! {"$shard": key, "$from": from}, |row| {
-            let seqno = row.get("sequence_number")?;
-            let data: Vec<_> = row.get("data")?;
-            Ok(VersionedData { seqno, data })
-        })?;
+        let shard = key.to_owned();
+        let conn = Arc::clone(&self.conn);
+        let rows = mz_ore::task::spawn_blocking(
+            || "sqlite::scan",
+            move || -> Result<Vec<VersionedData>, ExternalError> {
+                let conn = conn.lock().map_err(PersistError::from)?;
+                const Q: &str = "
+SELECT sequence_number, data FROM consensus
+WHERE shard = $shard AND sequence_number >= $from
+ORDER BY sequence_number";
+                let mut stmt = conn.prepare_cached(Q)?;
+                let params = named_params! {"$shard": shard, "$from": from};
+                let rows = stmt.query_map(params, |row| {
+                    let seqno = row.get("sequence_number")?;
+                    let data: Vec<_> = row.get("data")?;
+                    Ok(VersionedData { seqno, data })
+                })?;
 
-        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+                let rows = rows.collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            },
+        )
+        .await??;
 
         if rows.is_empty() {
             Err(ExternalError::from(anyhow!(
@@ -221,18 +252,25 @@ impl Consensus for SqliteConsensus {
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
-        let result = {
-            let conn = self.conn.lock().map_err(PersistError::from)?;
-            let mut stmt = conn.prepare_cached(
-            "DELETE FROM consensus
-             WHERE shard = $shard AND sequence_number < $sequence_number AND
-             EXISTS(
-                 SELECT * FROM consensus WHERE shard = $shard AND sequence_number >= $sequence_number
-             )"
-        )?;
-
-            stmt.execute(named_params! {"$shard": key, "$sequence_number": seqno})?
-        };
+        let shard = key.to_owned();
+        let conn = Arc::clone(&self.conn);
+        let result = mz_ore::task::spawn_blocking(
+            || "sqlite::truncate",
+            move || -> Result<usize, ExternalError> {
+                let conn = conn.lock().map_err(PersistError::from)?;
+                const Q: &str = "
+DELETE FROM consensus
+WHERE shard = $shard AND sequence_number < $sequence_number AND
+EXISTS(
+    SELECT * FROM consensus WHERE shard = $shard AND sequence_number >= $sequence_number
+)";
+                let mut stmt = conn.prepare_cached(Q)?;
+                let result =
+                    stmt.execute(named_params! {"$shard": shard, "$sequence_number": seqno})?;
+                Ok(result)
+            },
+        )
+        .await??;
 
         if result == 0 {
             // We weren't able to successfully truncate any rows. Inspect head to
@@ -268,9 +306,8 @@ mod tests {
     #[tokio::test]
     async fn sqlite_consensus() -> Result<(), ExternalError> {
         let temp_dir = tempfile::tempdir()?;
-        consensus_impl_test(|| {
-            let path = temp_dir.path().join("sqlite_consensus");
-            SqliteConsensus::open(&path)
+        consensus_impl_test(|| async {
+            SqliteConsensus::open(temp_dir.path().join("sqlite_consensus")).await
         })
         .await
     }

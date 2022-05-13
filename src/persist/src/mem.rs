@@ -839,7 +839,7 @@ mod tests {
 
     #[tokio::test]
     async fn mem_consensus() -> Result<(), ExternalError> {
-        consensus_impl_test(|| Ok(MemConsensus::default())).await
+        consensus_impl_test(|| async { Ok(MemConsensus::default()) }).await
     }
 
     // This test covers a regression that was affecting the nemesis tests where
