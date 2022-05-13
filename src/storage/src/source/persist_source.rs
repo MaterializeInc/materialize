@@ -114,10 +114,8 @@ where
 
     let mut pinned_stream = Box::pin(async_stream);
 
-    let (timely_stream, token) = crate::source::util::source(
-        scope,
-        "persist_source".to_string(),
-        move |info| {
+    let (timely_stream, token) =
+        crate::source::util::source(scope, "persist_source".to_string(), move |info| {
             let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
             let waker = futures_util::task::waker(activator);
 
@@ -162,16 +160,13 @@ where
                             // TODO(petrosagg): error handling
                             panic!("unexpected error from persist {e}");
                         }
-                        None => {
-                            unreachable!("We poll from persist continuously, the Stream should therefore never be exhausted.")
-                        }
+                        None => return SourceStatus::Done,
                     }
                 }
 
                 SourceStatus::Alive
             }
-        },
-    );
+        });
 
     let (ok_stream, err_stream) = timely_stream.ok_err(|x| match x {
         ((Ok(()), Ok(Ok(row))), ts, diff) => Ok((row, ts, diff)),

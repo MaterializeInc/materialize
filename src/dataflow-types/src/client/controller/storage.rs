@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -136,24 +137,27 @@ pub struct CollectionMetadata {
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
-    // TODO: This is just a stub.
-    fn from(_: &CollectionMetadata) -> Self {
-        ProtoCollectionMetadata {}
+    fn from(f: &CollectionMetadata) -> Self {
+        ProtoCollectionMetadata {
+            blob_uri: f.persist_location.blob_uri.clone(),
+            consensus_uri: f.persist_location.consensus_uri.clone(),
+            shard_id: f.persist_shard.to_string(),
+        }
     }
 }
 
 impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
-    // TODO: This is just a stub.
     type Error = TryFromProtoError;
 
-    fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
-        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
+    fn try_from(value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
-                blob_uri: "".to_string(),
-                consensus_uri: "".to_string(),
+                blob_uri: value.blob_uri,
+                consensus_uri: value.consensus_uri,
             },
-            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
+            //TODO(petrosagg): error handling
+            timestamp_shard_id: value.timestamp_shard_id.parse().unwrap(),
+            persist_shard: value.shard_id.parse().unwrap(),
         })
     }
 }
@@ -188,40 +192,6 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64, S = mz_stash
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) stash: S,
     pub(super) persist_handles: BTreeMap<GlobalId, PersistHandles<T>>,
-}
-
-/// Storage specific wrapper over a stash that provides type safety for the various types of
-/// collections stored in the inner Stash.
-#[derive(Debug)]
-pub struct StorageStash<S> {
-    stash: S,
-}
-
-impl<S: Stash> StorageStash<S> {
-    fn new(stash: S) -> Self {
-        Self { stash }
-    }
-
-    async fn timestamp_bindings(
-        &mut self,
-        id: &GlobalId,
-    ) -> Result<StashCollection<PartitionId, ()>, StashError> {
-        self.stash.collection(&format!("timestamp-bindings-{id}")).await
-    }
-}
-
-impl<S: Stash> Deref for StorageStash<S> {
-    type Target = S;
-    fn deref(&self) -> &Self::Target {
-        &self.stash
-    }
-}
-
-impl<S: Stash> DerefMut for StorageStash<S> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.stash
-    }
->>>>>>> d93000da5 (transit table data through persist)
 }
 
 /// A storage controller for a storage instance.
