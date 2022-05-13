@@ -180,7 +180,7 @@ When a replica is dropped, the coordinator removes all associated introspection
 sources.
 
 Introspection data being exposed as unmaterialized sources means that they have
-worse ergonomics than the existing arrangement-backed introspection tables. To
+worse ergonomics than the existing arrangement-backed introspection sources. To
 query them, users must either specify an explicit `AS OF` or create an index.
 We consider this loss in ergonomics acceptable.
 
@@ -206,9 +206,9 @@ CREATE VIEW <mz-log-variant>_persist AS
 ```
 
 Note that the `_persist` (or some other) suffix to the view name is required
-because the old arrangement-based introspection tables already occupy the plain
-`<mz-log-variant>` names. Once we remove the arrangement-based introspection
-tables, we can also drop the suffix.
+because the old arrangement-based introspection sources already occupy the
+plain `<mz-log-variant>` names. Once we remove the arrangement-based
+introspection sources, we can also drop the suffix.
 
 When a new replica is created, the coordinator adds its introspection sources
 to the respective introspection views.
@@ -236,7 +236,7 @@ persist.
 
 Once persist supports compaction, the risk of unbounded storage usage is
 mitigated and we can enable replicated compute introspection by default. At that
-point, we can also drop the old arrangement-based introspection tables.
+point, we can also drop the old arrangement-based introspection sources.
 
 Once a STORAGE client that abstracts persist is available, replicas should sink
 introspection data using this client instead of invoking `persist` directly. We
@@ -283,8 +283,8 @@ way, the collected introspection data is complete.
 
 The compute controller needs to decide which queries require a "peek-all"
 instead of the usual "peek-one", based on whether they read from introspection
-tables or not. However, "peek-all" queries will often return wrong results. For
-example:
+sources or not. However, "peek-all" queries will often return wrong results.
+For example:
 
 ```sql
 SELECT count(*) FROM mz_materializations
