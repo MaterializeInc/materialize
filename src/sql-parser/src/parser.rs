@@ -1915,48 +1915,48 @@ impl<'a> Parser<'a> {
                     match keyword {
                         Keyword::Username => {
                             if username.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property USERNAME twice!".into(),
-                                );
+                                Err(self.error(
+                                    self.peek_prev_pos(),
+                                    "Cannot set property USERNAME more than once".into(),
+                                ))?;
                             }
                             username = Some(self.parse_literal_string()?);
                         }
                         Keyword::Password => {
                             if password.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property PASSWORD twice!".into(),
-                                );
+                                Err(self.error(
+                                    self.peek_prev_pos(),
+                                    "Cannot set property PASSWORD more than once".into(),
+                                ))?;
                             }
                             password = Some(self.parse_object_name()?);
                         }
                         Keyword::Key => {
                             if key.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property KEY twice!".into(),
-                                );
+                                Err(self.error(
+                                    self.peek_prev_pos(),
+                                    "Cannot set property KEY more than once".into(),
+                                ))?;
                             }
                             let _ = self.consume_token(&Token::Eq);
                             key = Some(self.parse_object_name()?);
                         }
                         Keyword::Certificate => {
                             if certificate.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property CERTIFICATE twice!".into(),
-                                );
+                                Err(self.error(
+                                    self.peek_prev_pos(),
+                                    "Cannot set property CERTIFICATE more than once".into(),
+                                ))?;
                             }
                             let _ = self.consume_token(&Token::Eq);
                             certificate = Some(self.parse_object_name()?);
                         }
                         Keyword::Authority => {
                             if authority.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property AUTHORITY twice!".into(),
-                                );
+                                Err(self.error(
+                                    self.peek_prev_pos(),
+                                    "Cannot set property AUTHORITY more than once".into(),
+                                ))?;
                             }
                             let _ = self.consume_token(&Token::Eq);
                             authority = Some(self.parse_object_name()?);
