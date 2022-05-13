@@ -30,21 +30,29 @@ SERVICES = [
         name="computed_1",
         options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
         ports=[2100, 2102],
+        # Temporary shared mount until persist uses postgres and S3 for its storage location
+        volumes=["mzdata:/share/mzdata"],
     ),
     Computed(
         name="computed_2",
         options="--workers 2 --processes 2 --process 1 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
         ports=[2100, 2102],
+        # Temporary shared mount until persist uses postgres and S3 for its storage location
+        volumes=["mzdata:/share/mzdata"],
     ),
     Computed(
         name="computed_3",
         options="--workers 2 --processes 2 --process 0 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
         ports=[2100, 2102],
+        # Temporary shared mount until persist uses postgres and S3 for its storage location
+        volumes=["mzdata:/share/mzdata"],
     ),
     Computed(
         name="computed_4",
         options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
         ports=[2100, 2102],
+        # Temporary shared mount until persist uses postgres and S3 for its storage location
+        volumes=["mzdata:/share/mzdata"],
     ),
     Materialized(extra_ports=[2101]),
     Testdrive(
