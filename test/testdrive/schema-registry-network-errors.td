@@ -41,23 +41,3 @@ contains:URL scheme is not allowed
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}/no-such-path'
   ENVELOPE NONE
 contains:fetching latest schema for subject 'foo-value' from registry: subject not found
-
-#
-# HTTP connection to a non-HTTP port port
-#
-
-! CREATE MATERIALIZED SOURCE foo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'foo'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://${testdrive.kafka-addr}'
-  ENVELOPE NONE
-contains:error sending request for url
-
-#
-# HTTPS connection to a non-HTTPS port
-#
-
-! CREATE MATERIALIZED SOURCE foo
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'foo'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://${testdrive.kafka-addr}'
-  ENVELOPE NONE
-contains:error sending request for url
