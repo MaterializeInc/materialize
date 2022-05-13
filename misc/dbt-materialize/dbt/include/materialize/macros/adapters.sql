@@ -35,24 +35,6 @@
     {{ sql }}
 {%- endmacro %}
 
-{% macro materialize__create_schema(relation) -%}
-  {% if relation.database -%}
-    {{ adapter.verify_database(relation.database) }}
-  {%- endif -%}
-  {%- call statement('create_schema') -%}
-    create schema if not exists {{ relation.without_identifier().include(database=False) }}
-  {%- endcall -%}
-{% endmacro %}
-
-{% macro materialize__drop_schema(relation) -%}
-  {% if relation.database -%}
-    {{ adapter.verify_database(relation.database) }}
-  {%- endif -%}
-  {%- call statement('drop_schema') -%}
-    drop schema if exists {{ relation.without_identifier().include(database=False) }} cascade
-  {%- endcall -%}
-{% endmacro %}
-
 {% macro materialize__rename_relation(from_relation, to_relation) -%}
   {% set target_name = adapter.quote_as_configured(to_relation.identifier, 'identifier') %}
   {% call statement('rename_relation') -%}
@@ -84,27 +66,6 @@
   {%- endcall %}
 {% endmacro %}
 
-{% macro materialize__get_columns_in_relation(relation) -%}
-  {% call statement('get_columns_in_relation', fetch_result=True) %}
-      select
-          column_name,
-          data_type,
-          character_maximum_length,
-          numeric_precision,
-          numeric_scale
-
-      from {{ relation.information_schema('columns') }}
-      where table_name = '{{ relation.identifier }}'
-        {% if relation.schema %}
-        and table_schema = '{{ relation.schema }}'
-        {% endif %}
-      order by ordinal_position
-
-  {% endcall %}
-  {% set table = load_result('get_columns_in_relation').table %}
-  {{ return(sql_convert_columns_in_relation(table)) }}
-{% endmacro %}
-
 {% macro materialize__get_create_index_sql(relation, index_dict) -%}
   {%- set index_config = adapter.parse_index(index_dict) -%}
   {%- set comma_separated_columns = ", ".join(index_config.columns) -%}
@@ -115,43 +76,4 @@
         using {{ index_config.type }}
   {%- endif %}
   ({{ comma_separated_columns }});
-{%- endmacro %}
-
-{% macro materialize__list_relations_without_caching(schema_relation) %}
-  {% call statement('list_relations_without_caching', fetch_result=True) -%}
-    select
-      '{{ schema_relation.database }}' as database,
-      tablename as name,
-      schemaname as schema,
-      'table' as type
-    from pg_tables
-    where schemaname ilike '{{ schema_relation.schema }}'
-    union all
-    select
-      '{{ schema_relation.database }}' as database,
-      viewname as name,
-      schemaname as schema,
-      'view' as type
-    from pg_views
-    where schemaname ilike '{{ schema_relation.schema }}'
-  {% endcall %}
-  {{ return(load_result('list_relations_without_caching').table) }}
-{% endmacro %}
-
-{% macro materialize__list_schemas(database) %}
-  {% if database -%}
-    {{ adapter.verify_database(database) }}
-  {%- endif -%}
-  {% call statement('list_schemas', fetch_result=True) %}
-    show schemas from {{ database }}
-  {% endcall %}
-  {{ return(load_result('list_schemas').table) }}
-{% endmacro %}
-
-{% macro materialize__current_timestamp() -%}
-  now()
-{%- endmacro %}
-
-{% macro materialize__snapshot_get_time() -%}
-  {{ current_timestamp() }}::timestamp without time zone
 {%- endmacro %}
