@@ -146,6 +146,10 @@ impl ProtoRepr for chrono_tz::Tz {
     }
 }
 
+pub fn any_naive_date() -> impl Strategy<Value = NaiveDate> {
+    (0..1000000).prop_map(NaiveDate::from_num_days_from_ce)
+}
+
 pub fn any_naive_datetime() -> impl Strategy<Value = NaiveDateTime> {
     use ::chrono::naive::{MAX_DATETIME, MIN_DATETIME};
     (0..(MAX_DATETIME.nanosecond() - MIN_DATETIME.nanosecond()))
@@ -175,22 +179,29 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
         #[test]
+        fn naive_date_protobuf_roundtrip(expect in any_naive_date() ) {
+            let actual = protobuf_repr_roundtrip(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
         fn naive_date_time_protobuf_roundtrip(expect in any_naive_datetime() ) {
-            let actual =  protobuf_repr_roundtrip(&expect);
+            let actual = protobuf_repr_roundtrip(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[test]
         fn date_time_protobuf_roundtrip(expect in any_datetime() ) {
-            let actual =  protobuf_repr_roundtrip(&expect);
+            let actual = protobuf_repr_roundtrip(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[test]
         fn fixed_offset_protobuf_roundtrip(expect in any_fixed_offset() ) {
-            let actual =  protobuf_repr_roundtrip(&expect);
+            let actual = protobuf_repr_roundtrip(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
