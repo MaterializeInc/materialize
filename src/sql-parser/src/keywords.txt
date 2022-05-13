@@ -140,6 +140,7 @@ Headers
 Hold
 Hour
 Hours
+Id
 If
 Ilike
 In
@@ -147,6 +148,7 @@ Include
 Index
 Indexes
 Info
+Inline
 Inner
 Insert
 Int
@@ -166,6 +168,7 @@ Keys
 Kinesis
 Last
 Lateral
+Latest
 Leading
 Least
 Left
@@ -285,6 +288,7 @@ Ssl
 Start
 Stdin
 Stdout
+Strategy
 String
 Subscribe
 Substring
