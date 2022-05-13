@@ -18,11 +18,13 @@ from materialize.mzcompose.services import (
 )
 
 CONFLUENT_PLATFORM_VERSIONS = [
-    "4.0.0",
-    "5.0.0",
-    "6.0.2",
-    "6.1.2",
-    "6.2.0",
+    "4.1.4",
+    "5.5.0",
+    "6.0.6",
+    "6.1.5",
+    "6.2.4",
+    "7.0.3",
+    "7.1.1",
     "latest",
 ]
 
