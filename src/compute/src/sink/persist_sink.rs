@@ -85,8 +85,8 @@ where
         let persist_client = futures_executor::block_on(persist_location.open())
             .expect("cannot open persist client");
 
-        let (write, _read) = futures_executor::block_on(
-            persist_client.open::<Row, Row, Timestamp, Diff>(self.shard_id),
+        let write = futures_executor::block_on(
+            persist_client.open_writer::<Row, Row, Timestamp, Diff>(self.shard_id),
         )
         .expect("could not open persist shard");
 

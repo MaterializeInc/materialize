@@ -225,10 +225,11 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                             let persist_client =
                                 futures_executor::block_on(location.open()).unwrap();
 
-                            let (write, _read) = futures_executor::block_on(
-                                persist_client.open::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(
-                                    persist_connector.shard_id,
-                                ),
+                            let write = futures_executor::block_on(
+                                persist_client
+                                    .open_writer::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(
+                                        persist_connector.shard_id,
+                                    ),
                             )
                             .unwrap();
 

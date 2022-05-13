@@ -77,8 +77,8 @@ where
 
         let persist_client = persist_location.open().await?;
 
-        let (_write, mut read) = persist_client
-            .open::<Row, Row, Timestamp, Diff>(shard_id)
+        let mut read = persist_client
+            .open_reader::<Row, Row, Timestamp, Diff>(shard_id)
             .await?;
 
         /// Aggressively downgrade `since`, to not hold back compaction.
