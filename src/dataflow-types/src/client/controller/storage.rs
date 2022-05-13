@@ -153,23 +153,25 @@ pub struct CollectionMetadata {
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
-    // TODO: This is just a stub.
-    fn from(_: &CollectionMetadata) -> Self {
-        ProtoCollectionMetadata {}
+    fn from(f: &CollectionMetadata) -> Self {
+        ProtoCollectionMetadata {
+            blob_uri: f.persist_location.blob_uri.clone(),
+            consensus_uri: f.persist_location.consensus_uri.clone(),
+            shard_id: f.persist_shard.to_string(),
+        }
     }
 }
 
 impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
-    // TODO: This is just a stub.
     type Error = TryFromProtoError;
 
-    fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
+    fn try_from(value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
-                blob_uri: "".to_string(),
-                consensus_uri: "".to_string(),
+                blob_uri: value.blob_uri,
+                consensus_uri: value.consensus_uri,
             },
-            persist_shard: ShardId::new(),
+            persist_shard: value.shard_id.parse().unwrap(),
         })
     }
 }

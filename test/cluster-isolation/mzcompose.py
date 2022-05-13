@@ -194,10 +194,30 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.wait_for_materialized(service="materialized")
 
     nodes = [
-        Computed(name="computed_1_1", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_1_2", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_2_1", peers=["computed_2_1", "computed_2_2"]),
-        Computed(name="computed_2_2", peers=["computed_2_1", "computed_2_2"]),
+        Computed(
+            name="computed_1_1",
+            peers=["computed_1_1", "computed_1_2"],
+            # Temporary shared mount until persist uses postgres and S3 for its storage location
+            volumes=["mzdata:/share/mzdata"],
+        ),
+        Computed(
+            name="computed_1_2",
+            peers=["computed_1_1", "computed_1_2"],
+            # Temporary shared mount until persist uses postgres and S3 for its storage location
+            volumes=["mzdata:/share/mzdata"],
+        ),
+        Computed(
+            name="computed_2_1",
+            peers=["computed_2_1", "computed_2_2"],
+            # Temporary shared mount until persist uses postgres and S3 for its storage location
+            volumes=["mzdata:/share/mzdata"],
+        ),
+        Computed(
+            name="computed_2_2",
+            peers=["computed_2_1", "computed_2_2"],
+            # Temporary shared mount until persist uses postgres and S3 for its storage location
+            volumes=["mzdata:/share/mzdata"],
+        ),
     ]
 
     with c.override(*nodes):
