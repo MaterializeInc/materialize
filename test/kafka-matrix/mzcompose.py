@@ -10,6 +10,7 @@
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Kafka,
+    Localstack,
     Materialized,
     SchemaRegistry,
     Testdrive,
@@ -31,10 +32,13 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
+    Localstack(),
 ]
 
 
 def workflow_default(c: Composition) -> None:
+    c.start_and_wait_for_tcp(services=["localstack"])
+
     for version in CONFLUENT_PLATFORM_VERSIONS:
         print(f"==> Testing Confluent Platform {version}")
         confluent_platform_services = [
