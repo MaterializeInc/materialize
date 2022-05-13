@@ -101,7 +101,7 @@ const SYSTEM_USER: &str = "mz_system";
 /// unambiguously specifies the item, or a [`PartialObjectName`], which can omit the
 /// database name and/or the schema name. Partial names can be converted into
 /// full names via a complicated resolution process documented by the
-/// [`Catalog::resolve`] method.
+/// [`CatalogState::resolve`] method.
 ///
 /// The catalog also maintains special "ambient schemas": virtual schemas,
 /// implicitly present in all databases, that house various system views.
@@ -497,8 +497,8 @@ impl CatalogState {
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
         conn_id: u32,
-    ) -> Option<&Schema> {
-        match database_spec {
+    ) -> Result<&Schema, SqlCatalogError> {
+        let schema = match database_spec {
             ResolvedDatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
                 self.temporary_schemas.get(&conn_id)
             }
@@ -511,7 +511,8 @@ impl CatalogState {
                     .get(schema_name)
                     .and_then(|id| db.schemas_by_id.get(id))
             }),
-        }
+        };
+        schema.ok_or_else(|| SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
     fn get_schema(
@@ -651,11 +652,165 @@ impl CatalogState {
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
+
+    pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
+        match self.database_by_name.get(database_name) {
+            Some(id) => Ok(&self.database_by_id[id]),
+            None => Err(SqlCatalogError::UnknownDatabase(database_name.into())),
+        }
+    }
+
+    pub fn resolve_schema(
+        &self,
+        current_database: Option<&DatabaseId>,
+        database_name: Option<&str>,
+        schema_name: &str,
+        conn_id: u32,
+    ) -> Result<&Schema, SqlCatalogError> {
+        let database_spec = match database_name {
+            // If a database is explicitly specified, validate it. Note that we
+            // intentionally do not validate `current_database` to permit
+            // querying `mz_catalog` with an invalid session database, e.g., so
+            // that you can run `SHOW DATABASES` to *find* a valid database.
+            Some(database) => Some(ResolvedDatabaseSpecifier::Id(
+                self.resolve_database(database)?.id().clone(),
+            )),
+            None => current_database.map(|id| ResolvedDatabaseSpecifier::Id(id.clone())),
+        };
+
+        // First try to find the schema in the named database.
+        if let Some(database_spec) = database_spec {
+            if let Ok(schema) =
+                self.resolve_schema_in_database(&database_spec, schema_name, conn_id)
+            {
+                return Ok(schema);
+            }
+        }
+
+        // Then fall back to the ambient database.
+        if let Ok(schema) = self.resolve_schema_in_database(
+            &ResolvedDatabaseSpecifier::Ambient,
+            schema_name,
+            conn_id,
+        ) {
+            return Ok(schema);
+        }
+
+        Err(SqlCatalogError::UnknownSchema(schema_name.into()))
+    }
+
+    pub fn resolve_compute_instance(
+        &self,
+        name: &str,
+    ) -> Result<&ComputeInstance, SqlCatalogError> {
+        let id = self
+            .compute_instances_by_name
+            .get(name)
+            .ok_or_else(|| SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
+        Ok(&self.compute_instances_by_id[id])
+    }
+
+    /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
+    ///
+    /// If `name` does not specify a database, the `current_database` is used.
+    /// If `name` does not specify a schema, then the schemas in `search_path`
+    /// are searched in order.
+    #[allow(clippy::useless_let_if_seq)]
+    pub fn resolve(
+        &self,
+        get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
+        current_database: Option<&DatabaseId>,
+        search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
+        name: &PartialObjectName,
+        conn_id: u32,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        // If a schema name was specified, just try to find the item in that
+        // schema. If no schema was specified, try to find the item in the connection's
+        // temporary schema. If the item is not found, try to find the item in every
+        // schema in the search path.
+        let schemas = match &name.schema {
+            Some(schema_name) => {
+                match self.resolve_schema(
+                    current_database,
+                    name.database.as_deref(),
+                    schema_name,
+                    conn_id,
+                ) {
+                    Ok(schema) => vec![(schema.name.database.clone(), schema.id.clone())],
+                    Err(e) => return Err(e),
+                }
+            }
+            None => match self
+                .get_schema(
+                    &ResolvedDatabaseSpecifier::Ambient,
+                    &SchemaSpecifier::Temporary,
+                    conn_id,
+                )
+                .items
+                .get(&name.item)
+            {
+                Some(id) => return Ok(&self.get_entry(id)),
+                None => search_path.to_vec(),
+            },
+        };
+
+        for (database_spec, schema_spec) in schemas {
+            let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
+
+            if let Some(id) = get_schema_entries(schema).get(&name.item) {
+                return Ok(&self.entry_by_id[id]);
+            }
+        }
+        Err(SqlCatalogError::UnknownItem(name.to_string()))
+    }
+
+    /// Resolves `name` to a non-function [`CatalogEntry`].
+    pub fn resolve_entry(
+        &self,
+        current_database: Option<&DatabaseId>,
+        search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
+        name: &PartialObjectName,
+        conn_id: u32,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.resolve(
+            |schema| &schema.items,
+            current_database,
+            search_path,
+            name,
+            conn_id,
+        )
+    }
+
+    /// Resolves `name` to a function [`CatalogEntry`].
+    pub fn resolve_function(
+        &self,
+        current_database: Option<&DatabaseId>,
+        search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
+        name: &PartialObjectName,
+        conn_id: u32,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.resolve(
+            |schema| &schema.functions,
+            current_database,
+            search_path,
+            name,
+            conn_id,
+        )
+    }
+
+    /// Serializes the catalog's in-memory state.
+    ///
+    /// There are no guarantees about the format of the serialized state, except
+    /// that the serialized state for two identical catalogs will compare
+    /// identically.
+    pub fn dump(&self) -> String {
+        serde_json::to_string(&self.database_by_id).expect("serialization cannot fail")
+    }
 }
 
 #[derive(Debug)]
-pub struct ConnCatalog<'a, S> {
-    catalog: &'a Catalog<S>,
+pub struct ConnCatalog<'a> {
+    state: &'a CatalogState,
     conn_id: u32,
     compute_instance: String,
     database: Option<DatabaseId>,
@@ -664,7 +819,7 @@ pub struct ConnCatalog<'a, S> {
     prepared_statements: Option<&'a HashMap<String, PreparedStatement>>,
 }
 
-impl<S> ConnCatalog<'_, S> {
+impl ConnCatalog<'_> {
     pub fn conn_id(&self) -> u32 {
         self.conn_id
     }
@@ -685,11 +840,11 @@ impl<S> ConnCatalog<'_, S> {
         let default_schemas = [
             (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.catalog.state.get_mz_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(self.state.get_mz_catalog_schema_id().clone()),
             ),
             (
                 ResolvedDatabaseSpecifier::Ambient,
-                SchemaSpecifier::Id(self.catalog.state.get_pg_catalog_schema_id().clone()),
+                SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id().clone()),
             ),
         ];
         for schema in default_schemas.into_iter() {
@@ -1744,7 +1899,7 @@ impl<S: Append> Catalog<S> {
         Ok(c)
     }
 
-    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a, S> {
+    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
         let database = self
             .state
             .database_by_name
@@ -1759,7 +1914,7 @@ impl<S: Append> Catalog<S> {
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
         ConnCatalog {
-            catalog: self,
+            state: &self.state,
             conn_id: session.conn_id(),
             compute_instance: session.vars().cluster().into(),
             database,
@@ -1769,9 +1924,9 @@ impl<S: Append> Catalog<S> {
         }
     }
 
-    pub fn for_sessionless_user(&self, user: String) -> ConnCatalog<S> {
+    pub fn for_sessionless_user(&self, user: String) -> ConnCatalog {
         ConnCatalog {
-            catalog: self,
+            state: &self.state,
             conn_id: SYSTEM_CONN_ID,
             compute_instance: "default".into(),
             database: self
@@ -1786,7 +1941,7 @@ impl<S: Append> Catalog<S> {
 
     // Leaving the system's search path empty allows us to catch issues
     // where catalog object names have not been normalized correctly.
-    pub fn for_system_session(&self) -> ConnCatalog<S> {
+    pub fn for_system_session(&self) -> ConnCatalog {
         self.for_sessionless_user(SYSTEM_USER.into())
     }
 
@@ -1856,10 +2011,7 @@ impl<S: Append> Catalog<S> {
     }
 
     pub fn resolve_database(&self, database_name: &str) -> Result<&Database, SqlCatalogError> {
-        match self.state.database_by_name.get(database_name) {
-            Some(id) => Ok(&self.state.database_by_id[id]),
-            None => Err(SqlCatalogError::UnknownDatabase(database_name.into())),
-        }
+        self.state.resolve_database(database_name)
     }
 
     pub fn resolve_schema(
@@ -1869,36 +2021,8 @@ impl<S: Append> Catalog<S> {
         schema_name: &str,
         conn_id: u32,
     ) -> Result<&Schema, SqlCatalogError> {
-        let database_spec = match database_name {
-            // If a database is explicitly specified, validate it. Note that we
-            // intentionally do not validate `current_database` to permit
-            // querying `mz_catalog` with an invalid session database, e.g., so
-            // that you can run `SHOW DATABASES` to *find* a valid database.
-            Some(database) => Some(ResolvedDatabaseSpecifier::Id(
-                self.resolve_database(database)?.id().clone(),
-            )),
-            None => current_database.map(|id| ResolvedDatabaseSpecifier::Id(id.clone())),
-        };
-
-        // First try to find the schema in the named database.
-        if let Some(database_spec) = database_spec {
-            if let Ok(schema) =
-                self.resolve_schema_in_database(&database_spec, schema_name, conn_id)
-            {
-                return Ok(schema);
-            }
-        }
-
-        // Then fall back to the ambient database.
-        if let Ok(schema) = self.resolve_schema_in_database(
-            &ResolvedDatabaseSpecifier::Ambient,
-            schema_name,
-            conn_id,
-        ) {
-            return Ok(schema);
-        }
-
-        Err(SqlCatalogError::UnknownSchema(schema_name.into()))
+        self.state
+            .resolve_schema(current_database, database_name, schema_name, conn_id)
     }
 
     pub fn resolve_schema_in_database(
@@ -1909,7 +2033,6 @@ impl<S: Append> Catalog<S> {
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
-            .ok_or_else(|| SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
     /// Resolves `name` to a non-function [`CatalogEntry`].
@@ -1920,13 +2043,8 @@ impl<S: Append> Catalog<S> {
         name: &PartialObjectName,
         conn_id: u32,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
-        self.resolve(
-            |schema| &schema.items,
-            current_database,
-            search_path,
-            name,
-            conn_id,
-        )
+        self.state
+            .resolve_entry(current_database, search_path, name, conn_id)
     }
 
     /// Resolves a `BuiltinTable`.
@@ -1947,79 +2065,15 @@ impl<S: Append> Catalog<S> {
         name: &PartialObjectName,
         conn_id: u32,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
-        self.resolve(
-            |schema| &schema.functions,
-            current_database,
-            search_path,
-            name,
-            conn_id,
-        )
+        self.state
+            .resolve_function(current_database, search_path, name, conn_id)
     }
 
     pub fn resolve_compute_instance(
         &self,
         name: &str,
     ) -> Result<&ComputeInstance, SqlCatalogError> {
-        let id = self
-            .state
-            .compute_instances_by_name
-            .get(name)
-            .ok_or_else(|| SqlCatalogError::UnknownComputeInstance(name.to_string()))?;
-        Ok(&self.state.compute_instances_by_id[id])
-    }
-
-    /// Resolves [`PartialObjectName`] into a [`CatalogEntry`].
-    ///
-    /// If `name` does not specify a database, the `current_database` is used.
-    /// If `name` does not specify a schema, then the schemas in `search_path`
-    /// are searched in order.
-    #[allow(clippy::useless_let_if_seq)]
-    pub fn resolve(
-        &self,
-        get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
-        current_database: Option<&DatabaseId>,
-        search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
-        name: &PartialObjectName,
-        conn_id: u32,
-    ) -> Result<&CatalogEntry, SqlCatalogError> {
-        // If a schema name was specified, just try to find the item in that
-        // schema. If no schema was specified, try to find the item in the connection's
-        // temporary schema. If the item is not found, try to find the item in every
-        // schema in the search path.
-        let schemas = match &name.schema {
-            Some(schema_name) => {
-                match self.resolve_schema(
-                    current_database,
-                    name.database.as_deref(),
-                    schema_name,
-                    conn_id,
-                ) {
-                    Ok(schema) => vec![(schema.name.database.clone(), schema.id.clone())],
-                    Err(e) => return Err(e),
-                }
-            }
-            None => match self
-                .get_schema(
-                    &ResolvedDatabaseSpecifier::Ambient,
-                    &SchemaSpecifier::Temporary,
-                    conn_id,
-                )
-                .items
-                .get(&name.item)
-            {
-                Some(id) => return Ok(&self.get_entry(id)),
-                None => search_path.to_vec(),
-            },
-        };
-
-        for (database_spec, schema_spec) in schemas {
-            let schema = self.get_schema(&database_spec, &schema_spec, conn_id);
-
-            if let Some(id) = get_schema_entries(schema).get(&name.item) {
-                return Ok(&self.state.entry_by_id[id]);
-            }
-        }
-        Err(SqlCatalogError::UnknownItem(name.to_string()))
+        self.state.resolve_compute_instance(name)
     }
 
     pub fn state(&self) -> &CatalogState {
@@ -2045,10 +2099,6 @@ impl<S: Append> Catalog<S> {
 
     pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
         self.state.item_exists(name, conn_id)
-    }
-
-    fn find_available_name(&self, name: QualifiedObjectName, conn_id: u32) -> QualifiedObjectName {
-        self.state.find_available_name(name, conn_id)
     }
 
     pub fn try_get_entry(&self, id: &GlobalId) -> Option<&CatalogEntry> {
@@ -3001,7 +3051,7 @@ impl<S: Append> Catalog<S> {
     /// that the serialized state for two identical catalogs will compare
     /// identically.
     pub fn dump(&self) -> String {
-        serde_json::to_string(&self.state.database_by_id).expect("serialization cannot fail")
+        self.state.dump()
     }
 
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -3135,7 +3185,7 @@ impl From<PlanContext> for SerializedPlanContext {
     }
 }
 
-impl<S: Append> ConnCatalog<'_, S> {
+impl ConnCatalog<'_> {
     fn resolve_item_name(
         &self,
         name: &PartialObjectName,
@@ -3185,10 +3235,9 @@ impl<S: Append> ConnCatalog<'_, S> {
     }
 }
 
-impl<S: Append> ExprHumanizer for ConnCatalog<'_, S> {
+impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        self.catalog
-            .state
+        self.state
             .entry_by_id
             .get(&id)
             .map(|entry| entry.name())
@@ -3237,7 +3286,7 @@ impl<S: Append> ExprHumanizer for ConnCatalog<'_, S> {
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
                 let pg_catalog_schema =
-                    SchemaSpecifier::Id(self.catalog.get_pg_catalog_schema_id().clone());
+                    SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id().clone());
 
                 let res = if self
                     .effective_search_path(true)
@@ -3263,7 +3312,7 @@ impl<S: Append> ExprHumanizer for ConnCatalog<'_, S> {
     }
 }
 
-impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
+impl SessionCatalog for ConnCatalog<'_> {
     fn active_user(&self) -> &str {
         &self.user
     }
@@ -3286,12 +3335,11 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
         &self,
         database_name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogDatabase, SqlCatalogError> {
-        Ok(self.catalog.resolve_database(database_name)?)
+        Ok(self.state.resolve_database(database_name)?)
     }
 
     fn get_database(&self, id: &DatabaseId) -> &dyn mz_sql::catalog::CatalogDatabase {
-        self.catalog
-            .state
+        self.state
             .database_by_id
             .get(id)
             .expect("database doesn't exist")
@@ -3302,7 +3350,7 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
         database_name: Option<&str>,
         schema_name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogSchema, SqlCatalogError> {
-        Ok(self.catalog.resolve_schema(
+        Ok(self.state.resolve_schema(
             self.database.as_ref(),
             database_name,
             schema_name,
@@ -3316,7 +3364,7 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
         schema_name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogSchema, SqlCatalogError> {
         Ok(self
-            .catalog
+            .state
             .resolve_schema_in_database(database_spec, schema_name, self.conn_id)?)
     }
 
@@ -3325,19 +3373,19 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
     ) -> &dyn CatalogSchema {
-        self.catalog
+        self.state
             .get_schema(database_spec, schema_spec, self.conn_id)
     }
 
     fn is_system_schema(&self, schema: &str) -> bool {
-        self.catalog.state.is_system_schema(schema)
+        self.state.is_system_schema(schema)
     }
 
     fn resolve_role(
         &self,
         role_name: &str,
     ) -> Result<&dyn mz_sql::catalog::CatalogRole, SqlCatalogError> {
-        match self.catalog.state.roles.get(role_name) {
+        match self.state.roles.get(role_name) {
             Some(role) => Ok(role),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
@@ -3347,7 +3395,7 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
         &self,
         compute_instance_name: Option<&str>,
     ) -> Result<&dyn mz_sql::catalog::CatalogComputeInstance, SqlCatalogError> {
-        self.catalog
+        self.state
             .resolve_compute_instance(
                 compute_instance_name.unwrap_or_else(|| self.active_compute_instance()),
             )
@@ -3360,7 +3408,7 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
         &self,
         name: &PartialObjectName,
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
-        Ok(self.catalog.resolve_entry(
+        Ok(self.state.resolve_entry(
             self.database.as_ref(),
             &self.effective_search_path(true),
             name,
@@ -3372,7 +3420,7 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
         &self,
         name: &PartialObjectName,
     ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
-        Ok(self.catalog.resolve_function(
+        Ok(self.state.resolve_function(
             self.database.as_ref(),
             &self.effective_search_path(false),
             name,
@@ -3381,33 +3429,33 @@ impl<S: Append> SessionCatalog for ConnCatalog<'_, S> {
     }
 
     fn try_get_item(&self, id: &GlobalId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
-        self.catalog
+        self.state
             .try_get_entry(id)
             .map(|item| item as &dyn mz_sql::catalog::CatalogItem)
     }
 
     fn get_item(&self, id: &GlobalId) -> &dyn mz_sql::catalog::CatalogItem {
-        self.catalog.get_entry(id)
+        self.state.get_entry(id)
     }
 
     fn item_exists(&self, name: &QualifiedObjectName) -> bool {
-        self.catalog.item_exists(name, self.conn_id)
+        self.state.item_exists(name, self.conn_id)
     }
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
-        self.catalog.find_available_name(name, self.conn_id)
+        self.state.find_available_name(name, self.conn_id)
     }
 
     fn resolve_full_name(&self, name: &QualifiedObjectName) -> FullObjectName {
-        self.catalog.resolve_full_name(name, Some(self.conn_id))
+        self.state.resolve_full_name(name, Some(self.conn_id))
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
-        &self.catalog.config()
+        &self.state.config()
     }
 
     fn now(&self) -> EpochMillis {
-        (self.catalog.config().now)()
+        (self.state.config().now)()
     }
 }
 
