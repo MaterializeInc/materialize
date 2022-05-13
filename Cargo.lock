@@ -3929,6 +3929,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-secrets",
+ "mz-secrets-filesystem",
  "mz-sql-parser",
  "prost",
  "protobuf-native",
