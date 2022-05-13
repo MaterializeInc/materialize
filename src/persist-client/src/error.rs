@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 
-use mz_persist::location::ExternalError;
+use mz_persist::location::{Determinate, ExternalError, Indeterminate};
 use timely::progress::Antichain;
 
 use crate::ShardId;
@@ -33,9 +33,16 @@ pub trait Determinacy {
     const DETERMINANT: bool;
 }
 
-// TODO: Some ExternalErrors actually are determinate (e.g. Postgres errors on
-// txn conflict). We should split it so that these operations can be retried in
-// more places.
+impl Determinacy for Determinate {
+    const DETERMINANT: bool = true;
+}
+
+impl Determinacy for Indeterminate {
+    const DETERMINANT: bool = false;
+}
+
+// An external error's variant declares whether it's determinate, but at the
+// type level we have to fall back to indeterminate.
 impl Determinacy for ExternalError {
     const DETERMINANT: bool = false;
 }

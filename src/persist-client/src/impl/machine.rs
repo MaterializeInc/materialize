@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::location::{Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -94,7 +94,7 @@ where
         &mut self,
         keys: &[String],
         desc: &Description<T>,
-    ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, ExternalError> {
+    ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
         let (seqno, res) = self
             .apply_unbatched_cmd(|_, state| state.compare_and_append(keys, desc))
             .await?;
@@ -191,7 +191,7 @@ where
                     Ok(x) => return (seqno, x),
                     Err(infallible) => match infallible {},
                 },
-                Err(err @ ExternalError { .. }) => {
+                Err(err) => {
                     debug!(
                         "apply_unbatched_idempotent_cmd received an indeterminate error, retrying in {:?}: {}", retry.next_sleep(), err);
                     retry = retry.sleep().await;
@@ -208,7 +208,7 @@ where
     >(
         &mut self,
         mut work_fn: WorkFn,
-    ) -> Result<(SeqNo, Result<R, E>), ExternalError> {
+    ) -> Result<(SeqNo, Result<R, E>), Indeterminate> {
         let path = self.shard_id().to_string();
 
         loop {
@@ -224,23 +224,27 @@ where
 
             let new = VersionedData::from((new_state.seqno(), &new_state));
             // SUBTLE! Unlike the other consensus and blob uses, we can't
-            // automatically retry here, because ExternalError is indeterminate.
-            // However, if the state change itself is _idempotent_, then we're
-            // free to retry even indeterminate errors. See
+            // automatically retry indeterminate ExternalErrors here. However,
+            // if the state change itself is _idempotent_, then we're free to
+            // retry even indeterminate errors. See
             // [Self::apply_unbatched_idempotent_cmd].
-            let cas_res = self
-                .consensus
-                .compare_and_set(
-                    Instant::now() + FOREVER,
-                    &path,
-                    Some(self.state.seqno()),
-                    new,
-                )
-                .await
-                .map_err(|err| {
-                    debug!("apply_unbatched_cmd errored: {}", err);
-                    err
-                })?;
+            let cas_res = retry_determinate("apply_unbatched_cmd::cas", || async {
+                // If Consensus::compare_and_set took new as a ref, then we
+                // wouldn't have to clone here.
+                self.consensus
+                    .compare_and_set(
+                        Instant::now() + FOREVER,
+                        &path,
+                        Some(self.state.seqno()),
+                        new.clone(),
+                    )
+                    .await
+            })
+            .await
+            .map_err(|err| {
+                debug!("apply_unbatched_cmd errored: {}", err);
+                err
+            })?;
             match cas_res {
                 Ok(()) => {
                     trace!(
@@ -387,7 +391,7 @@ where
     loop {
         match work_fn().await {
             Ok(x) => return x,
-            Err(err @ ExternalError { .. }) => {
+            Err(err) => {
                 info!(
                     "external operation {} failed, retrying in {:?}: {}",
                     name,
@@ -396,6 +400,33 @@ where
                 );
                 retry = retry.sleep().await;
             }
+        }
+    }
+}
+
+pub async fn retry_determinate<R, F, WorkFn>(
+    name: &str,
+    mut work_fn: WorkFn,
+) -> Result<R, Indeterminate>
+where
+    F: std::future::Future<Output = Result<R, ExternalError>>,
+    WorkFn: FnMut() -> F,
+{
+    let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+    loop {
+        match work_fn().await {
+            Ok(x) => return Ok(x),
+            Err(ExternalError::Determinate(err)) => {
+                info!(
+                    "external operation {} failed, retrying in {:?}: {}",
+                    name,
+                    retry.next_sleep(),
+                    err
+                );
+                retry = retry.sleep().await;
+                continue;
+            }
+            Err(ExternalError::Indeterminate(x)) => return Err(x),
         }
     }
 }
