@@ -19,7 +19,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
-use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::de::DeserializeOwned;
@@ -570,7 +570,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
@@ -578,6 +578,107 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     PeekResponse(Uuid, PeekResponse),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
+}
+
+impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
+    fn from(x: &ComputeResponse<mz_repr::Timestamp>) -> Self {
+        use proto_compute_response::Kind::*;
+        use proto_compute_response::*;
+        ProtoComputeResponse {
+            kind: Some(match x {
+                ComputeResponse::FrontierUppers(traces) => {
+                    FrontierUppers(ProtoFrontierUppersEnum {
+                        traces: traces
+                            .iter()
+                            .map(|(id, trace)| ProtoTrace {
+                                id: Some(id.into()),
+                                updates: trace
+                                    .clone()
+                                    .iter()
+                                    .map(|(t, d)| ProtoUpdate {
+                                        timestamp: *t,
+                                        diff: *d,
+                                    })
+                                    .collect(),
+                            })
+                            .collect(),
+                    })
+                }
+                ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseEnum {
+                    id: Some(id.into_proto()),
+                    resp: Some(resp.into()),
+                }),
+                ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseEnum {
+                    id: Some(id.into()),
+                    resp: Some(resp.into()),
+                }),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoComputeResponse) -> Result<Self, Self::Error> {
+        use proto_compute_response::Kind::*;
+        match x.kind {
+            Some(FrontierUppers(traces)) => Ok(ComputeResponse::FrontierUppers(
+                traces
+                    .traces
+                    .into_iter()
+                    .map(|trace| {
+                        let mut batch = ChangeBatch::new();
+                        batch.extend(
+                            trace
+                                .updates
+                                .into_iter()
+                                .map(|update| (update.timestamp, update.diff)),
+                        );
+                        Ok((trace.id.try_into_if_some("ProtoTrace::id")?, batch))
+                    })
+                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+            )),
+            Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
+                resp.id.from_proto_if_some("ProtoPeekResponseEnum::id")?,
+                resp.resp.try_into_if_some("ProtoPeekResponseEnum::resp")?,
+            )),
+            Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
+                resp.id.try_into_if_some("ProtoTailResponseEnum::id")?,
+                resp.resp.try_into_if_some("ProtoTailResponseEnum::resp")?,
+            )),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoComputeResponse::kind",
+            )),
+        }
+    }
+}
+
+fn any_change_batch() -> impl Strategy<Value = ChangeBatch<u64>> {
+    proptest::collection::vec((any::<mz_repr::Timestamp>(), any::<i64>()), 1..11).prop_map(
+        |changes| {
+            let mut batch = ChangeBatch::new();
+            batch.extend(changes.into_iter());
+            batch
+        },
+    )
+}
+
+impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
+                .prop_map(ComputeResponse::FrontierUppers),
+            (any_uuid(), any::<PeekResponse>())
+                .prop_map(|(id, resp)| ComputeResponse::PeekResponse(id, resp)),
+            (any::<GlobalId>(), any::<TailResponse>())
+                .prop_map(|(id, resp)| ComputeResponse::TailResponse(id, resp)),
+        ]
+        .boxed()
+    }
 }
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
@@ -1064,6 +1165,31 @@ mod tests {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
+            assert!(actual.is_ok());
+            let actual = actual.unwrap();
+            if let ComputeResponse::FrontierUppers(expected_traces) = expect {
+                if let ComputeResponse::FrontierUppers(actual_traces) = actual {
+                    assert_eq!(actual_traces.len(), expected_traces.len());
+                    for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
+                        assert_eq!(actual_id, expected_id);
+                        // `ChangeBatch`es representing equivalent sets of
+                        // changes could have different internal
+                        // representations, so they need to be compacted before comparing.
+                        actual_changes.compact();
+                        expected_changes.compact();
+                        assert_eq!(actual_changes, expected_changes);
+                    }
+                } else {
+                    assert_eq!(actual, ComputeResponse::FrontierUppers(expected_traces));
+                }
+            } else {
+                assert_eq!(actual, expect);
+            }
         }
     }
 }

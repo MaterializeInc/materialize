@@ -17,7 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::prop_oneof;
+use proptest::strategy::{BoxedStrategy, Just, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -55,6 +56,73 @@ impl PeekResponse {
     }
 }
 
+impl From<&PeekResponse> for ProtoPeekResponse {
+    fn from(x: &PeekResponse) -> Self {
+        use proto_peek_response::Kind::*;
+        use proto_peek_response::*;
+        ProtoPeekResponse {
+            kind: Some(match x {
+                PeekResponse::Rows(rows) => Rows(ProtoRows {
+                    rows: rows
+                        .iter()
+                        .map(|(r, d)| ProtoRow {
+                            row: Some(r.into()),
+                            diff: usize::from(*d).into_proto(),
+                        })
+                        .collect(),
+                }),
+                PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
+                PeekResponse::Canceled => Canceled(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoPeekResponse> for PeekResponse {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
+        use proto_peek_response::Kind::*;
+        match x.kind {
+            Some(Rows(rows)) => Ok(PeekResponse::Rows(
+                rows.rows
+                    .into_iter()
+                    .map(|row| {
+                        Ok((
+                            row.row.try_into_if_some("ProtoRow::row")?,
+                            usize::from_proto(row.diff)?.try_into()?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+            )),
+            Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
+            Some(Canceled(())) => Ok(PeekResponse::Canceled),
+            None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
+        }
+    }
+}
+
+impl Arbitrary for PeekResponse {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec(
+                (
+                    any::<Row>(),
+                    (1..usize::MAX).prop_map(|u| NonZeroUsize::try_from(u).unwrap())
+                ),
+                1..11
+            )
+            .prop_map(PeekResponse::Rows),
+            ".*".prop_map(PeekResponse::Error),
+            Just(PeekResponse::Canceled),
+        ]
+        .boxed()
+    }
+}
+
 /// Various responses that can be communicated about the progress of a TAIL command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TailResponse<T = mz_repr::Timestamp> {
@@ -62,6 +130,45 @@ pub enum TailResponse<T = mz_repr::Timestamp> {
     Batch(TailBatch<T>),
     /// The TAIL dataflow was dropped, leaving updates from this frontier onward unspecified.
     DroppedAt(Antichain<T>),
+}
+
+impl From<&TailResponse<mz_repr::Timestamp>> for ProtoTailResponse {
+    fn from(x: &TailResponse<mz_repr::Timestamp>) -> Self {
+        use proto_tail_response::Kind::*;
+        ProtoTailResponse {
+            kind: Some(match x {
+                TailResponse::Batch(tail_batch) => Batch(tail_batch.into()),
+                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoTailResponse) -> Result<Self, Self::Error> {
+        use proto_tail_response::Kind::*;
+        match x.kind {
+            Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.try_into()?)),
+            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into())),
+            None => Err(TryFromProtoError::missing_field("ProtoTailResponse::kind")),
+        }
+    }
+}
+
+impl Arbitrary for TailResponse<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            any::<TailBatch<mz_repr::Timestamp>>().prop_map(TailResponse::Batch),
+            proptest::collection::vec(any::<u64>(), 1..4)
+                .prop_map(|antichain| TailResponse::DroppedAt(Antichain::from(antichain)))
+        ]
+        .boxed()
+    }
 }
 
 /// A batch of updates for the interval `[lower, upper)`.
@@ -73,6 +180,75 @@ pub struct TailBatch<T> {
     pub upper: Antichain<T>,
     /// All updates greater than `lower` and not greater than `upper`.
     pub updates: Vec<(T, Row, Diff)>,
+}
+
+impl From<&TailBatch<mz_repr::Timestamp>> for ProtoTailBatch {
+    fn from(x: &TailBatch<mz_repr::Timestamp>) -> Self {
+        use proto_tail_batch::ProtoUpdate;
+        ProtoTailBatch {
+            lower: Some((&x.lower).into()),
+            upper: Some((&x.upper).into()),
+            updates: x
+                .updates
+                .iter()
+                .map(|(t, r, d)| ProtoUpdate {
+                    timestamp: *t,
+                    row: Some(r.into()),
+                    diff: *d,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoTailBatch) -> Result<Self, Self::Error> {
+        Ok(TailBatch {
+            lower: x
+                .lower
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::lower"))?,
+            upper: x
+                .upper
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::upper"))?,
+            updates: x
+                .updates
+                .into_iter()
+                .map(|update| {
+                    Ok((
+                        update.timestamp,
+                        update.row.try_into_if_some("ProtoUpdate::row")?,
+                        update.diff,
+                    ))
+                })
+                .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+        })
+    }
+}
+
+impl Arbitrary for TailBatch<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            proptest::collection::vec(any::<u64>(), 1..4),
+            proptest::collection::vec(any::<u64>(), 1..4),
+            proptest::collection::vec(
+                (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
+                1..4,
+            ),
+        )
+            .prop_map(|(lower, upper, updates)| TailBatch {
+                lower: Antichain::from(lower),
+                upper: Antichain::from(upper),
+                updates,
+            })
+            .boxed()
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
