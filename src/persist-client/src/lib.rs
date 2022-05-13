@@ -225,6 +225,53 @@ impl PersistClient {
         Ok((writer, reader))
     }
 
+    /// [Self::open], but returning only a [ReadHandle].
+    ///
+    /// Use this to save latency and a bit of persist traffic if you're just
+    /// going to immediately drop or expire the [WriteHandle].
+    pub async fn open_reader<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        trace!("Client::open_reader shard_id={:?}", shard_id);
+        // At the moment, writers aren't registered, so there's nothing special
+        // to do here. Introduce the method, though, so that code using persist
+        // doesn't have to change if we bring writer registration back.
+        let (_, reader) = self.open(shard_id).await?;
+        Ok(reader)
+    }
+
+    /// [Self::open], but returning only a [WriteHandle].
+    ///
+    /// Use this to save latency and a bit of persist traffic if you're just
+    /// going to immediately drop or expire the [ReadHandle].
+    pub async fn open_writer<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        trace!("Client::open_writer shard_id={:?}", shard_id);
+        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
+        let shard_upper = machine.fetch_upper().await;
+        let writer = WriteHandle {
+            machine,
+            blob: Arc::clone(&self.blob),
+            upper: shard_upper,
+        };
+        Ok(writer)
+    }
+
     /// Test helper for a [Self::open] call that is expected to succeed.
     #[cfg(test)]
     #[track_caller]
@@ -338,6 +385,48 @@ mod tests {
         // Downgrading the since is tracked locally (but otherwise is a no-op).
         read.downgrade_since(Antichain::from_elem(2)).await;
         assert_eq!(read.since(), &Antichain::from_elem(2));
+    }
+
+    // Sanity check that the open_reader and open_writer calls work.
+    #[tokio::test]
+    async fn open_reader_writer() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let shard_id = ShardId::new();
+        let client = new_test_client().await;
+        let mut write1 = client
+            .open_writer::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+        let read1 = client
+            .open_reader::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+        let read2 = client
+            .open_reader::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+        let mut write2 = client
+            .open_writer::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+
+        write2.expect_compare_and_append(&data[..1], 0, 2).await;
+        assert_eq!(
+            read2.expect_snapshot(1).await.read_all().await,
+            all_ok(&data[..1], 1)
+        );
+        write1.expect_compare_and_append(&data[1..], 2, 4).await;
+        assert_eq!(
+            read1.expect_snapshot(3).await.read_all().await,
+            all_ok(&data, 3)
+        );
     }
 
     #[tokio::test]
