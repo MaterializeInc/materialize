@@ -242,6 +242,10 @@ where
     /// sink code so it is always safe to retry [ExternalError]s, but SQL txns
     /// will have to pass the error back to the user (or risk double committing
     /// the txn).
+    ///
+    /// TODO: This already retries [mz_persist::location::Determinate] errors,
+    /// so the signature could be changed to only return Indeterminate, but
+    /// leaving it as ExternalError for now to save churn on storage PR rebases.
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,

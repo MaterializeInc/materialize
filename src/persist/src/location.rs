@@ -18,8 +18,10 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures_executor::block_on;
+use libsqlite3_sys::ErrorCode;
 use mz_persist_types::Codec;
 use serde::{Deserialize, Serialize};
+use tokio_postgres::error::SqlState;
 use tracing::info;
 
 use crate::error::Error;
@@ -106,15 +108,44 @@ impl SeqNo {
     }
 }
 
+/// An error coming from an underlying durability system (e.g. s3) indicating
+/// that the operation _definitely did NOT succeed_ (e.g. permission denied).
+#[derive(Debug)]
+pub struct Determinate {
+    inner: anyhow::Error,
+}
+
+impl std::fmt::Display for Determinate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "determinate: {}", self.inner)
+    }
+}
+
+impl std::error::Error for Determinate {}
+
+/// An error coming from an underlying durability system (e.g. s3) indicating
+/// that the operation _might have succeeded_ (e.g. timeout).
+#[derive(Debug)]
+pub struct Indeterminate {
+    inner: anyhow::Error,
+}
+
+impl std::fmt::Display for Indeterminate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "indeterminate: {}", self.inner)
+    }
+}
+
+impl std::error::Error for Indeterminate {}
+
 /// An error coming from an underlying durability system (e.g. s3) or from
 /// invalid data received from one.
-///
-/// TODO: Split this into an enum with variants for failures which mean the
-/// operation _definitely didn't occur_ (e.g. permission denied) vs ones that
-/// _might have occurred_ (e.g. timeout).
 #[derive(Debug)]
-pub struct ExternalError {
-    inner: anyhow::Error,
+pub enum ExternalError {
+    /// A determinate error from an external system.
+    Determinate(Determinate),
+    /// An indeterminate error from an external system.
+    Indeterminate(Indeterminate),
 }
 
 impl ExternalError {
@@ -124,7 +155,9 @@ impl ExternalError {
     /// that can be matched on.
     #[track_caller]
     pub fn new_timeout(deadline: Instant) -> Self {
-        ExternalError::from(anyhow!("timeout at {:?}", deadline))
+        ExternalError::Indeterminate(Indeterminate {
+            inner: anyhow!("timeout at {:?}", deadline),
+        })
     }
 
     /// Returns whether this error represents a timeout.
@@ -133,13 +166,16 @@ impl ExternalError {
     /// that can be matched on.
     pub fn is_timeout(&self) -> bool {
         // Gross...
-        self.inner.to_string().contains("timeout")
+        self.to_string().contains("timeout")
     }
 }
 
 impl std::fmt::Display for ExternalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "storage: {}", self.inner)
+        match self {
+            ExternalError::Determinate(x) => std::fmt::Display::fmt(x, f),
+            ExternalError::Indeterminate(x) => std::fmt::Display::fmt(x, f),
+        }
     }
 }
 
@@ -153,43 +189,86 @@ impl PartialEq for ExternalError {
     }
 }
 
+impl From<Indeterminate> for ExternalError {
+    fn from(x: Indeterminate) -> Self {
+        ExternalError::Indeterminate(x)
+    }
+}
+
+impl From<Determinate> for ExternalError {
+    fn from(x: Determinate) -> Self {
+        ExternalError::Determinate(x)
+    }
+}
+
 impl From<anyhow::Error> for ExternalError {
     fn from(inner: anyhow::Error) -> Self {
-        ExternalError { inner }
+        ExternalError::Indeterminate(Indeterminate { inner })
     }
 }
 
 impl From<Error> for ExternalError {
     fn from(x: Error) -> Self {
-        ExternalError {
+        ExternalError::Indeterminate(Indeterminate {
             inner: anyhow::Error::new(x),
-        }
+        })
     }
 }
 
 impl From<std::io::Error> for ExternalError {
     fn from(x: std::io::Error) -> Self {
-        ExternalError {
+        ExternalError::Indeterminate(Indeterminate {
             inner: anyhow::Error::new(x),
-        }
+        })
     }
 }
 
 impl From<rusqlite::Error> for ExternalError {
     fn from(x: rusqlite::Error) -> Self {
-        ExternalError {
-            inner: anyhow::Error::new(x),
+        let code = match x {
+            rusqlite::Error::SqliteFailure(libsqlite3_sys::Error { code, .. }, _) => code,
+            _ => {
+                return ExternalError::Indeterminate(Indeterminate {
+                    inner: anyhow::Error::new(x),
+                })
+            }
+        };
+        match code {
+            // Feel free to add more things to this whitelist as we encounter
+            // them as long as you're certain they're determinate.
+            ErrorCode::DatabaseBusy => ExternalError::Determinate(Determinate {
+                inner: anyhow::Error::new(x),
+            }),
+            _ => ExternalError::Indeterminate(Indeterminate {
+                inner: anyhow::Error::new(x),
+            }),
         }
     }
 }
 
 impl From<tokio_postgres::Error> for ExternalError {
     fn from(e: tokio_postgres::Error) -> Self {
-        ExternalError {
-            inner: anyhow::Error::new(e),
+        let code = match e.as_db_error().map(|x| x.code()) {
+            Some(x) => x,
+            None => {
+                return ExternalError::Indeterminate(Indeterminate {
+                    inner: anyhow::Error::new(e),
+                })
+            }
+        };
+        match code {
+            // Feel free to add more things to this whitelist as we encounter
+            // them as long as you're certain they're determinate.
+            &SqlState::T_R_SERIALIZATION_FAILURE => ExternalError::Determinate(Determinate {
+                inner: anyhow::Error::new(e),
+            }),
+            _ => ExternalError::Indeterminate(Indeterminate {
+                inner: anyhow::Error::new(e),
+            }),
         }
     }
 }
+
 /// An abstraction over an append-only bytes log.
 ///
 /// Each written entry is assigned a unique, incrementing SeqNo, which can be
