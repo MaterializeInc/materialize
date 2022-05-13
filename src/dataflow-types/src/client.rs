@@ -593,6 +593,8 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
                             .map(|(id, trace)| ProtoTrace {
                                 id: Some(id.into()),
                                 updates: trace
+                                    // Clone because the `iter()` expects
+                                    // `trace` to be mutable.
                                     .clone()
                                     .iter()
                                     .map(|(t, d)| ProtoUpdate {
