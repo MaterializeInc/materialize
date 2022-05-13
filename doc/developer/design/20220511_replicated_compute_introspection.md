@@ -318,15 +318,6 @@ accessible to the user. We might need a to add a new session variable akin to
 
 ## Open questions
 
-* **Who is responsible for maintaining the `since` frontier of introspection
-  collections?**
-
-  Some component needs to periodically downgrade `since` of the introspection
-  storage collections to enable compaction when there are no other readers.
-  Also, some component needs to downgrade `since` to the empty frontier when a
-  collection should be cleaned up (its replica is dropped). What should this
-  component be? Does the storage controller already handle this for us?
-
 * **Should introspection sources be created inside `mz_catalog` or a separate
   schema?**
 
