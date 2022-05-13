@@ -43,7 +43,7 @@ md-5 = "0.10.1"
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "task"] }
 mz-persist-types = { path = "../persist-types" }
-openssl-sys = { version = "0.9.72", features = ["vendored"] }
+openssl-sys = { version = "0.9.73", features = ["vendored"] }
 prost = "0.10.1"
 rand = { version = "0.8.5", features = ["small_rng"] }
 rusqlite = { version = "0.27.0", features = ["bundled"] }
