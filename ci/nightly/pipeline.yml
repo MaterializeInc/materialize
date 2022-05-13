@@ -46,19 +46,18 @@ steps:
     agents:
       queue: builder-linux-x86_64
 
+  - wait: ~
+
   - command: bin/ci-builder run stable bin/pyactivate -m ci.nightly.trim_pipeline
     if: build.source == "ui"
     agents:
       queue: linux
-    depends_on: build-x86_64
 
   - wait: ~
-    if: build.source == "ui"
 
   - id: feature-benchmark
     label: "Feature benchmark against latest release"
     timeout_in_minutes: 180
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -78,7 +77,6 @@ steps:
 
   - id: kafka-matrix
     label: Kafka smoke test against previous Kafka versions
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -87,7 +85,6 @@ steps:
 
   - id: kafka-multi-broker
     label: Kafka multi-broker test
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -96,7 +93,6 @@ steps:
 
   - id: redpanda-testdrive
     label: ":panda_face: :racing_car: testdrive"
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -117,7 +113,6 @@ steps:
 
   - id: upgrade
     label: "Upgrade testing"
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -127,7 +122,6 @@ steps:
 
   - id: limits
     label: "Product limits"
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -137,7 +131,6 @@ steps:
 
   - id: cluster-limits
     label: "Cluster Product limits"
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -148,7 +141,6 @@ steps:
 
   - id: limits-instance-size
     label: "Instance size limits"
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -159,7 +151,6 @@ steps:
 
   - id: cluster-testdrive
     label: "Full testdrive against Cluster"
-    depends_on: build-x86_64
     agents:
       queue: linux-x86_64
     plugins:
@@ -170,7 +161,6 @@ steps:
 
   - id: testdrive-workers-1
     label: ":racing_car: testdrive with --workers 1"
-    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -196,7 +186,6 @@ steps:
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
-    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -208,7 +197,6 @@ steps:
 
   - id: persistence-testdrive
     label: ":racing_car: testdrive with --persistent-user-tables"
-    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -221,7 +209,6 @@ steps:
 
   - id: aws-config
     label: "AWS credentials and role assumption"
-    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
@@ -251,7 +238,6 @@ steps:
 
   - id: persistence-failpoints
     label: Persistence failpoints
-    depends_on: build-x86_64
     timeout_in_minutes: 30
     artifact_paths: junit_mzcompose_*.xml
     agents:
