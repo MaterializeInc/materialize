@@ -82,7 +82,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let source = SequentialSource::new(2, source_wait_time);
 
-    // TODO: Turn this into a standalone binary, with arguments that specify a persist location.
+    // TODO: Move this to be a subcommand of persistcli, with arguments that
+    // specify a persist location.
     let persist = persist_client(
         "file:///tmp/persistent_source_example/blob",
         "sqlite:///tmp/persistent_source_example/sqlite-consensus",

@@ -88,6 +88,7 @@ struct Args {
 
 const MIB: u64 = 1024 * 1024;
 
+// TODO: Move this to be a subcommand of persistcli.
 fn main() {
     mz_ore::test::init_logging();
 

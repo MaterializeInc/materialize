@@ -3661,12 +3661,15 @@ dependencies = [
  "mz-persist",
  "mz-persist-types",
  "num_cpus",
+ "num_enum",
  "rand",
  "serde",
+ "serde_json",
  "tempfile",
  "timely",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
