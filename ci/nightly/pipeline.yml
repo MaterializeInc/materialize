@@ -50,6 +50,7 @@ steps:
     if: build.source == "ui"
     agents:
       queue: linux
+    depends_on: build-x86_64
 
   - wait: ~
     if: build.source == "ui"
