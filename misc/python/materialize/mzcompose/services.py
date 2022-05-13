@@ -509,6 +509,8 @@ class Testdrive(Service):
         volume_workdir: str = ".:/workdir",
         propagate_uid_gid: bool = True,
         forward_buildkite_shard: bool = False,
+        aws_region: Optional[str] = None,
+        aws_endpoint: str = "http://localstack:4566",
     ) -> None:
         if environment is None:
             environment = [
@@ -540,6 +542,12 @@ class Testdrive(Service):
                 "--schema-registry-url=http://schema-registry:8081",
                 f"--materialized-url={materialized_url}",
             ]
+
+        if aws_region:
+            entrypoint.append(f"--aws-region={aws_region}")
+
+        if aws_endpoint and not aws_region:
+            entrypoint.append(f"--aws-endpoint={aws_endpoint}")
 
         if validate_data_dir:
             entrypoint.append("--validate-data-dir=/share/mzdata")

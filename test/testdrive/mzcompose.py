@@ -86,9 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     testdrive = Testdrive(
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
-        entrypoint_extra=[f"--aws-region={args.aws_region}"]
-        if args.aws_region
-        else ["--aws-endpoint=http://localstack:4566"],
+        aws_region=args.aws_region,
     )
 
     with c.override(materialized, testdrive):
