@@ -100,6 +100,10 @@ SERVICES = [
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
         propagate_uid_gid=False,
+        # Required so that testdrive can load and validate the catalog
+        environment=[
+            "SSL_KEY_PASSWORD=mzmzmz",
+        ],
     ),
 ]
 
