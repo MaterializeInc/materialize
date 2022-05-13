@@ -29,8 +29,10 @@ lazy_static! {
 }
 
 fn default_secrets_reader() -> Arc<Box<dyn SecretsReader>> {
+    // This is a clumsy way of checking but based on the structop configuration in materialized/main.rs this looks accurate for detecting being in k8s
     match env::var("MZ_POD_NAME") {
         Ok(_) => {
+            // A Kubernetes compatible SecretsReader implementer should go here
             unreachable!()
         }
         Err(_) => {

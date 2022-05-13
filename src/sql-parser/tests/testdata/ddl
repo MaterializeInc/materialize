@@ -1294,11 +1294,39 @@ ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 AlterSecret(AlterSecretStatement { name: Name(UnresolvedObjectName([Ident("secret")])), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 parse-statement
-CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SASL MECHANISM PLAIN USERNAME 'phineas' PASSWORD 'butterfat'
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SASL MECHANISM PLAIN USERNAME 'phineas' PASSWORD secret_name
 ----
-CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SASL MECHANISM PLAIN USERNAME 'phineas' PASSWORD 'butterfat'
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SASL MECHANISM PLAIN USERNAME 'phineas' PASSWORD secret_name
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: KafkaNew { broker: "kafka:1234", security: SASL { mechanism: "PLAIN", ssl: false, certificate: None, username: Some("phineas"), password: Some("butterfat") } }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SASL { mechanism: "PLAIN", ssl: false, username: "phineas", password: UnresolvedObjectName([Ident("secret_name")]) } }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name
+----
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name
+=>
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: None, authority: None } }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL CERTIFICATE cert_name KEY key_name
+----
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name
+=>
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: None, authority: None } }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name AUTHORITY ca_name PASSWORD passphrase_name
+----
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name PASSPHRASE passphrase_name AUTHORITY ca_name
+=>
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: Some(UnresolvedObjectName([Ident("passphrase_name")])), authority: Some(UnresolvedObjectName([Ident("ca_name")])) } }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL PASSWORD passphrase_name  CERTIFICATE cert_name AUTHORITY ca_name KEY key_name 
+----
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name PASSPHRASE passphrase_name AUTHORITY ca_name
+=>
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: Some(UnresolvedObjectName([Ident("passphrase_name")])), authority: Some(UnresolvedObjectName([Ident("ca_name")])) } }, if_not_exists: false })
 
 parse-statement
 DROP CONNECTOR conn1
@@ -1308,6 +1336,13 @@ DROP CONNECTOR conn1
 DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [Name(UnresolvedObjectName([Ident("conn1")]))], cascade: false })
 
 parse-statement
+DROP CONNECTOR conn1 CASCADE
+----
+DROP CONNECTOR conn1 CASCADE
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [Name(UnresolvedObjectName([Ident("conn1")]))], cascade: true })
+
+parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
@@ -1315,11 +1350,25 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'l
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
-CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username='user', password='word')
+CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' USERNAME 'user' PASSWORD secret_name
 ----
-CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = 'user', password = 'word')
+CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' USERNAME 'user' PASSWORD secret_name
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: CSR { registry: "http://localhost:8081", with_options: [WithOption { key: Ident("username"), value: Some(Value(String("user"))) }, WithOption { key: Ident("password"), value: Some(Value(String("word"))) }] }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: CSR { registry: "http://localhost:8081", username: Some("user"), password: Some(UnresolvedObjectName([Ident("secret_name")])), authority: None, certificate: None, key: None }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'  PASSWORD secret_name USERNAME 'user'
+----
+CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' USERNAME 'user' PASSWORD secret_name
+=>
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: CSR { registry: "http://localhost:8081", username: Some("user"), password: Some(UnresolvedObjectName([Ident("secret_name")])), authority: None, certificate: None, key: None }, if_not_exists: false })
+
+parse-statement
+CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' PASSWORD secret_name PASSWORD wrong USERNAME 'user'
+----
+error: Cannot set property PASSWORD more than once
+CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' PASSWORD secret_name PASSWORD wrong USERNAME 'user'
+                                                                                                  ^
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
@@ -1327,7 +1376,6 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONF
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Reference { connector: UnresolvedObjectName([Ident("conn2")]), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
-
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
