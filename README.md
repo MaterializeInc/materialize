@@ -2,7 +2,7 @@
 [![Doc reference](https://img.shields.io/badge/doc-reference-orange)](https://materialize.com/docs)
 [![Chat on Slack](https://img.shields.io/badge/chat-on%20slack-purple)](https://materialize.com/s/chat)
 
-[<img src="https://materialize.com/wp-content/uploads/2020/01/materialize_logo_primary.png" width=60%>](https://materialize.com)
+[<img src="https://user-images.githubusercontent.com/23521087/168297221-5d346edc-3a55-4055-b355-281b4bd76963.png" width=55%>](https://materialize.com)
 
 Materialize is a streaming database for real-time applications.
 
