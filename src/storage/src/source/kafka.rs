@@ -583,7 +583,7 @@ fn create_kafka_config(
 }
 
 /// Find secrets in the ClientConfig and transform them to values or canonical paths as appropriate
-/// The key strings to expect come from [`mz_sql::kafka_util::extract_config`]
+/// The key strings to expect come from mz_sql::kafka_util::extract_config
 fn fixup_secrets(cfg: &mut ClientConfig) {
     fn secret_path(uuid: &str) -> PathBuf {
         //TODO: this should come from a config someplace
