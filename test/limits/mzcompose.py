@@ -1027,8 +1027,19 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     Materialized(memory="8G"),
-    Testdrive(),
+    Testdrive(default_timeout="60s"),
 ]
+
+
+def run_test(c: Composition) -> None:
+    c.up("testdrive", persistent=True)
+
+    for cls in Generator.__subclasses__():
+        with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
+            with contextlib.redirect_stdout(tmp):
+                cls.generate()
+                sys.stdout.flush()
+                c.exec("testdrive", os.path.basename(tmp.name))
 
 
 def workflow_default(c: Composition) -> None:
@@ -1037,13 +1048,7 @@ def workflow_default(c: Composition) -> None:
     c.up("materialized")
     c.wait_for_materialized()
 
-    c.up("testdrive", persistent=True)
-
-    with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
-        with contextlib.redirect_stdout(tmp):
-            [cls.generate() for cls in Generator.__subclasses__()]
-            sys.stdout.flush()
-            c.exec("testdrive", os.path.basename(tmp.name))
+    run_test(c)
 
 
 def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1096,17 +1101,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
         """
         )
 
-        c.up("testdrive", persistent=True)
-
-        with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
-            with contextlib.redirect_stdout(tmp):
-                [cls.generate() for cls in Generator.__subclasses__()]
-                sys.stdout.flush()
-                c.exec(
-                    "testdrive",
-                    "--materialized-param=cluster=cluster1",
-                    os.path.basename(tmp.name),
-                )
+        run_test(c)
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
