@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
-use std::path::PathBuf;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -190,7 +189,7 @@ impl Arbitrary for CollectionMetadata {
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
+pub struct StorageControllerState<T, S> {
     pub(super) client: Box<dyn StorageClient<T>>,
     /// Collections maintained by the storage controller.
     ///
@@ -202,8 +201,8 @@ pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T> {
-    state: StorageControllerState<T>,
+pub struct Controller<T, S> {
+    state: StorageControllerState<T, S>,
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
 }
@@ -268,10 +267,8 @@ impl From<StashError> for StorageError {
     }
 }
 
-impl<T> StorageControllerState<T> {
-    pub(super) fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
-        let stash = mz_stash::Sqlite::open(&state_dir.join("storage"))
-            .expect("unable to create storage stash");
+impl<T, S> StorageControllerState<T, S> {
+    pub(super) fn new(client: Box<dyn StorageClient<T>>, stash: S) -> Self {
         Self {
             client,
             collections: BTreeMap::default(),
@@ -281,11 +278,12 @@ impl<T> StorageControllerState<T> {
 }
 
 #[async_trait]
-impl<T> StorageController for Controller<T>
+impl<T, S> StorageController for Controller<T, S>
 where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
+    S: Stash,
 {
     type Timestamp = T;
 
@@ -700,20 +698,21 @@ where
     }
 }
 
-impl<T> Controller<T>
+impl<T, S> Controller<T, S>
 where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
+    S: Stash,
 {
     /// Create a new storage controller from a client it should wrap.
     pub fn new(
         client: Box<dyn StorageClient<T>>,
-        state_dir: PathBuf,
+        stash: S,
         persist_location: PersistLocation,
     ) -> Self {
         Self {
-            state: StorageControllerState::new(client, state_dir),
+            state: StorageControllerState::new(client, stash),
             persist_location,
         }
     }

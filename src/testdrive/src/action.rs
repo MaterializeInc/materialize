@@ -212,12 +212,12 @@ impl State {
             client
                 .batch_execute(
                     "
-                                CREATE TABLE fence AS SELECT * FROM public.fence;
-                                CREATE TABLE collections AS SELECT * FROM public.collections;
-                                CREATE TABLE data AS SELECT * FROM public.data;
-                                CREATE TABLE sinces AS SELECT * FROM public.sinces;
-                                CREATE TABLE uppers AS SELECT * FROM public.uppers;
-                            ",
+                        CREATE TABLE fence AS SELECT * FROM catalog.fence;
+                        CREATE TABLE collections AS SELECT * FROM catalog.collections;
+                        CREATE TABLE data AS SELECT * FROM catalog.data;
+                        CREATE TABLE sinces AS SELECT * FROM catalog.sinces;
+                        CREATE TABLE uppers AS SELECT * FROM catalog.uppers;
+                    ",
                 )
                 .await?;
 

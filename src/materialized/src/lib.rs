@@ -200,20 +200,29 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     match &config.catalog_postgres_stash {
         Some(s) => {
             let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(s)?)?;
-            let stash = mz_stash::Postgres::new(s.to_string(), None, tls).await?;
-            serve_stash(config, stash).await
+            let catalog_stash =
+                mz_stash::Postgres::new(s.to_string(), Some("catalog".into()), tls.clone()).await?;
+            let storage_stash =
+                mz_stash::Postgres::new(s.to_string(), Some("storage".into()), tls).await?;
+            serve_stash(config, catalog_stash, storage_stash).await
         }
         None => {
-            let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
-            serve_stash(config, stash).await
+            let catalog_stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
+            let storage_stash = mz_stash::Sqlite::open(&config.data_directory.join("storage"))?;
+            serve_stash(config, catalog_stash, storage_stash).await
         }
     }
 }
 
-async fn serve_stash<S: mz_stash::Append + 'static>(
+async fn serve_stash<CS, SS>(
     config: Config,
-    stash: S,
-) -> Result<Server, anyhow::Error> {
+    catalog_stash: CS,
+    storage_stash: SS,
+) -> Result<Server, anyhow::Error>
+where
+    CS: mz_stash::Append + 'static,
+    SS: mz_stash::Stash + 'static,
+{
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
         None => (None, None),
@@ -273,7 +282,8 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
 
     // Load the coordinator catalog from disk.
     let coord_storage =
-        mz_coord::catalog::storage::Connection::open(stash, Some(config.experimental_mode)).await?;
+        mz_coord::catalog::storage::Connection::open(catalog_stash, Some(config.experimental_mode))
+            .await?;
 
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
@@ -374,7 +384,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     });
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
         storage_client,
-        config.data_directory,
+        storage_stash,
         config.persist_location,
     );
     let dataflow_controller =

@@ -146,6 +146,12 @@ impl Postgres {
             .await?;
         if let Some(schema) = &self.schema {
             client
+                .execute(
+                    format!("CREATE SCHEMA IF NOT EXISTS {schema}").as_str(),
+                    &[],
+                )
+                .await?;
+            client
                 .execute(format!("SET search_path TO {schema}").as_str(), &[])
                 .await?;
         }

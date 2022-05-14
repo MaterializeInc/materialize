@@ -42,6 +42,7 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-kinesis-util = { path = "../kinesis-util" }
 mz-ore = { path = "../ore", features = ["task"] }
 mz-pgrepr = { path = "../pgrepr" }
+mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
