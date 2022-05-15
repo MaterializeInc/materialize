@@ -925,7 +925,6 @@ pub mod process_local {
         async fn reconnect(&mut self) {
             panic!("Disconnecting and reconnection local clients is currently impossible");
         }
-
     }
 
     #[async_trait]
@@ -1040,7 +1039,6 @@ pub mod tcp {
         pub fn connected(&self) -> bool {
             matches!(self.connection, TcpConn::Connected(_))
         }
-
     }
 
     #[async_trait]
