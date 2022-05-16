@@ -42,7 +42,7 @@ use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
 use mz_persist_client::PersistLocation;
 use sysinfo::{ProcessorExt, SystemExt};
-use tower_http::cors::{self, Origin};
+use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
@@ -573,10 +573,10 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     {
         cors::Any.into()
     } else if !args.cors_allowed_origin.is_empty() {
-        Origin::list(args.cors_allowed_origin).into()
+        AllowOrigin::list(args.cors_allowed_origin)
     } else {
         let port = args.listen_addr.port();
-        Origin::list([
+        AllowOrigin::list([
             HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
@@ -584,7 +584,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
         ])
-        .into()
     };
 
     // Configure orchestrator.

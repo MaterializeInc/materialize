@@ -22,7 +22,7 @@ use postgres::types::{FromSql, Type};
 use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tower_http::cors::Origin;
+use tower_http::cors::AllowOrigin;
 
 use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
 use mz_dataflow_types::sources::AwsExternalId;
@@ -172,7 +172,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: metrics_registry.clone(),
         metrics_listen_addr: None,
         now: config.now,
-        cors_allowed_origin: Origin::list([]).into(),
+        cors_allowed_origin: AllowOrigin::list([]),
         replica_sizes: Default::default(),
         availability_zones: Default::default(),
     }))?;
