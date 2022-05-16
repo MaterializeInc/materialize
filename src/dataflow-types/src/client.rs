@@ -587,7 +587,7 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
         ProtoComputeResponse {
             kind: Some(match x {
                 ComputeResponse::FrontierUppers(traces) => {
-                    FrontierUppers(ProtoFrontierUppersEnum {
+                    FrontierUppers(ProtoFrontierUppersKind {
                         traces: traces
                             .iter()
                             .map(|(id, trace)| ProtoTrace {
@@ -606,11 +606,11 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
                             .collect(),
                     })
                 }
-                ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseEnum {
+                ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseKind {
                     id: Some(id.into_proto()),
                     resp: Some(resp.into()),
                 }),
-                ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseEnum {
+                ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
                     id: Some(id.into()),
                     resp: Some(resp.into()),
                 }),
@@ -642,12 +642,12 @@ impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
-                resp.id.from_proto_if_some("ProtoPeekResponseEnum::id")?,
-                resp.resp.try_into_if_some("ProtoPeekResponseEnum::resp")?,
+                resp.id.from_proto_if_some("ProtoPeekResponseKind::id")?,
+                resp.resp.try_into_if_some("ProtoPeekResponseKind::resp")?,
             )),
             Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
-                resp.id.try_into_if_some("ProtoTailResponseEnum::id")?,
-                resp.resp.try_into_if_some("ProtoTailResponseEnum::resp")?,
+                resp.id.try_into_if_some("ProtoTailResponseKind::id")?,
+                resp.resp.try_into_if_some("ProtoTailResponseKind::resp")?,
             )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",

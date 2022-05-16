@@ -74,23 +74,23 @@ message ProtoComputeResponse {
         repeated ProtoUpdate updates = 2;
     }
 
-    message ProtoFrontierUppersEnum {
+    message ProtoFrontierUppersKind {
         repeated ProtoTrace traces = 1;
     }
 
-    message ProtoPeekResponseEnum {
+    message ProtoPeekResponseKind {
         mz_repr.proto.ProtoU128 id = 1;
         mz_dataflow_types.types.ProtoPeekResponse resp = 2;
     }
 
-    message ProtoTailResponseEnum {
+    message ProtoTailResponseKind {
         mz_repr.global_id.ProtoGlobalId id = 1;
         mz_dataflow_types.types.ProtoTailResponse resp = 2;
     }
 
     oneof kind {
-        ProtoFrontierUppersEnum frontier_uppers = 1;
-        ProtoPeekResponseEnum peek_response = 2;
-        ProtoTailResponseEnum tail_response = 3;
+        ProtoFrontierUppersKind frontier_uppers = 1;
+        ProtoPeekResponseKind peek_response = 2;
+        ProtoTailResponseKind tail_response = 3;
     }
 }

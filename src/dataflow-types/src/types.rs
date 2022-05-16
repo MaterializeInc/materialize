@@ -67,7 +67,7 @@ impl From<&PeekResponse> for ProtoPeekResponse {
                         .iter()
                         .map(|(r, d)| ProtoRow {
                             row: Some(r.into()),
-                            diff: usize::from(*d).into_proto(),
+                            diff: d.into_proto(),
                         })
                         .collect(),
                 }),
@@ -90,7 +90,7 @@ impl TryFrom<ProtoPeekResponse> for PeekResponse {
                     .map(|row| {
                         Ok((
                             row.row.try_into_if_some("ProtoRow::row")?,
-                            usize::from_proto(row.diff)?.try_into()?,
+                            NonZeroUsize::from_proto(row.diff)?,
                         ))
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
