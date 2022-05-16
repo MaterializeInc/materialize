@@ -55,7 +55,7 @@ There will be a follow-up design document that goes into depth for these operati
 
 The main interface Materialize provides to clients for data manipulation and data definition is SQL. SQL provides
 transactions which allows a client to group multiple statements into a single atomic operation. Statements that are not
-explicitly inside a transaction should be considered to be implicitly inside a single statement transaction.
+explicitly inside a transaction are inside a single statement transaction.
 
 #### Transactions
 
@@ -66,17 +66,18 @@ Materialize supports two kinds of transactions, read-only and write-only transac
 Read only transactions allows a client to read from multiple objects at a single timestamp. When a client performs the
 first read of the transaction, a timestamp is selected for all subsequent reads and a read hold is taken on all objects
 in the same schema for that timestamp. A read hold prevents compaction from happening on an object up to that timestamp.
-A consequence of this is that read only transactions can only read from objects that are in the same schema and that
-existed at the time of the first read (due to implementation details on the read holds).
+When selecting the timestamp we consider all objects in the schema. A consequence of this is that read only transactions
+can only read from objects that are in the same schema and that existed at the time of the first read (due to
+implementation details on the read holds).
 
-There is an additional restriction that objects on different timelines cannot be read in the same transaction. Details
-on this are out of scope for this document but more details can be found
+There is an additional restriction that objects on different timelines cannot currently be read in the same transaction.
+Details on this are out of scope for this document but more details can be found
 here: [https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210408_timelines.md](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210408_timelines.md)
 
 ##### Write Only Transactions
 
-Write only transaction allows a client to perform multiple writes atomically. They are currently very limited and only
-allow writes to a single table. They also only allow `INSERT` statements (no `DELETE`, `UPDATE`, `CREATE`
+Write only transaction allows a client to perform one or more writes atomically. They currently only allow writes to a
+single table. They also only allow `INSERT` statements (no `DELETE`, `UPDATE`, `CREATE`
 , `INSERT INTO SELECT`, etc). All writes within a transaction are buffered in a session local variable and are not
 visible to any other session. When the transaction commits, a timestamp is selected by the coordinator and all writes
 are sent to STORAGE with the selected timestamp. Commits do not return an OK message to the client until all writes have
@@ -91,15 +92,20 @@ and should be completed soon.
 - `INSERT` statements behave identically to write-only transactions containing a single statement.
 - `SELECT` statements behave very similarly to read-only transactions containing a single statement. A timestamp is
   selected for the read, the read is performed at that timestamp, and the results are sent back to the client. However,
-  no read holds are taken.
-- `COPY TO` statements perform a read and then writes the results to an external source. The read is executed exactly as
-  described in the `SELECT` bullet above (`TAIL` is excluded from this document). The write is excluded from this
-  discussion of consistency because it is to an external system.
-- `COPY FROM` statements read from an external source and then writes the results to a table. The write is executed
-  exactly as described in the `INSERT` bullet above. The read is excluded from this discussion of consistency because it
-  is from an external source.
+  no read holds are taken and the timestamp is selected only using the objects in the query (not all objects in the
+  schema like read-only transactions).
+- `COPY TO` statements perform a read and then writes the results to an external source. Currently, we only
+  support `COPY TO STDOUT` which behaves identically to a normal `SELECT`. In the future if we add more destinations
+  then the read will be executed exactly as described in the `SELECT` bullet above, and we can exclude the write from
+  this discussion because it is to an external system.
+- `COPY FROM` statements read from an external source and then writes the results to a table. Currently, we only
+  support `COPY FROM STDIN` which behaves identically to a normal `INSERT`. In the future if we add more sources then
+  the the write will be executed exactly as described in the `INSERT` bullet above, and we can exclude the read from
+  this discussion of consistency because it is from an external source.
 
 #### DDL
+
+NOTE: Sinks are excluded from the discussion in this section.
 
 - `CREATE` statements create new objects such as tables, sources, and views. They have five steps
     1. Update the in-memory catalog representation.
@@ -111,7 +117,7 @@ and should be completed soon.
         2. All other objects have an initial `since` of 0 (`Timestamp::Minimum`)
     5. Send command to COMPUTE to create dataflows if necessary.
 
-  All five steps happen on the main coordinator thread and no other operation can execute in the meantime.
+All five steps happen on the main coordinator thread and no other operation can execute in the meantime.
 
 - `DROP` statements remove objects such as tables, sources, and views. They have 4 steps
     1. Update the in-memory catalog representation.
@@ -130,8 +136,9 @@ transactions, but has a specific implementation for these types of statements.
 
 The first thing a ReadThenWrite statement does is acquire a lock on the Coordinator. This lock prevents all write-only
 transactions and other ReadThenWrite statements from executing until the current ReadThenWrite statement has fully
-completed. Then a timestamp is selected and the read is performed at that timestamp. Finally, the write behaves
-identically to a write-only transaction containing a single statement (a new timestamp is selected for the write).
+completed. The lock does block any other operation. Then a timestamp is selected and the read is performed at that
+timestamp. Finally, the write behaves identically to a write-only transaction containing a single statement (a new
+timestamp is selected for the write).
 
 For more information you can read the design document for these
 statements: [https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210715_table_update.md](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210715_table_update.md)
@@ -148,13 +155,11 @@ consistency level of Strict Serializable.
 #### Since and Upper
 
 Every object maintains a range of timestamps, [`since`, `upper`). All reads to that object must take place at a
-timestamp greater than or equal to `since`, but less than `upper`. All writes to that object must take place at a
+timestamp greater than or equal to `since`. If a timestamp larger than `upper` is selected to read an object, the read
+will block until `upper` has advanced past the selected timestamp. All writes to that object must take place at a
 timestamp greater than or equal to `upper`. Throughout the lifetime of the object, both `since` and `upper` can
 increase, but they never decrease. This ensures that a read at timestamp `ts` will always return the same value, because
 if `ts` is readable, then all future writes must take place at a timestamp greater than `ts`.
-
-If a timestamp larger than `upper` is selected to read an object, the read will block until `upper` has advanced past
-the selected timestamp.
 
 NOTE: When an object is first created the `upper` may be initialized below the `since`. This will quickly correct itself
 and, as mentioned above, all reads will block until the upper has advanced.
@@ -168,10 +173,11 @@ configuration variable that determines how often to compact old data).
 
 When determining a timestamp to use to read from one or more user tables, the Coordinator uses the current value of the
 global timestamp. Additionally, the Coordinator advances all tables to a timestamp larger than the timestamp selected
-for the read.
+for the read. Multiple consecutive reads can all be done at the same timestamp, which only requires advancing the tables
+on the first read.
 
 When determining a timestamp to use to write to a user table, the Coordinator uses a timestamp larger than the previous
-timestamp used (either for a read or a write) and advances all tables to this timestamp.
+timestamp used (either for a read or a write) and advances all tables to this new timestamp.
 
 #### Upstream Sources
 
@@ -193,13 +199,18 @@ As a side effect all user tables will be advanced to a timestamp greater than th
 
 #### DDL
 
+As described above timestamps are used in two places during DDL:
+
+1. Writing to builtin tables.
+2. Setting an initial `since` for table sources.
+
 Whenever a timestamp is selected for DDL, we use the same method as determining a timestamp for a write to a user table.
 
 ### Views
 
 This section will briefly discuss views. If a write happens on a table at timestamp `ts`, then Differential Dataflow
 provides the guarantee that the write will happen on all downstream views at timestamp `ts` too. This helps us ensure
-that if we write to a table at timestamp `ts` and then read from a downstream view at timestamp `ts + 1` then we are
+that if we write to a table at timestamp `ts` and then read from a downstream view at timestamp `ts` then we are
 guaranteed to see the results of that write.
 
 ### Consistency
@@ -263,8 +274,6 @@ Informally we can use the transaction timestamps to provide a total ordering ove
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 < the timestamp of T2.
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is write-only, and
   T2 is read-only.
-- Transaction T1 can be arbitrarily ordered with Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is
-  write-only, and T2 is write-only.
 - Transaction T1 can be arbitrarily ordered with Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is
   read-only, and T2 is read-only.
 
@@ -333,6 +342,9 @@ timestamp is too high.
 Before performing a write that would advance the global timestamp ahead of the current wall time, we block the write
 until the current wall time catches up to the global timestamp. As an optimization we can implement a form of group
 commit, where all writes within the same millisecond commit together at the same timestamp.
+[#11150](https://github.com/MaterializeInc/materialize/pull/11150)
+and [#10173](https://github.com/MaterializeInc/materialize/pull/10173) are previous pull requests that try and do
+something similar.
 
 **Pros:**
 
@@ -352,18 +364,21 @@ Currently, the timestamps used to in Materialize for `upper`, `since`, and the g
 integers that are interpreted as an epoch in milliseconds. Instead we can change the representation of these timestamps
 so that the X most significant bits are used for the epoch and the Y least significant bits are used for a counter.
 Every 1 millisecond the X bits are increased by 1 and the Y bytes are all reset to 0. Every write increments the Y bits
-by 1. This would allow us to have 2^Y writes per millisecond, without blocking any queries. Any write in
-excess of 2^Y per millisecond must be blocked until the next millisecond.
+by 1. This would allow us to have 2^Y writes per millisecond, without blocking any queries. Any write in excess of 2^Y
+per millisecond must be blocked until the next millisecond.
 
 Note: Increasing the size of the timestamp type would give more flexibility (for example to 128 bits).
 
 **Pros:**
 
 - With a sufficiently high Y, no queries would be blocked.
+- May be helpful if/when we wanted to make the coordinator distributed.
 
 **Cons:**
 
 - Complicated to implement and likely has a large blast radius.
+- Requires [#8426](https://github.com/MaterializeInc/materialize/issues/8426)
+  to be completed first.
 - If X is low enough we will overflow our timestamps at some point in the future. This can be mitigated with a high
   enough X.
 
@@ -385,6 +400,7 @@ problem for read/write cycles.
 **Cons:**
 
 - Only solves half the problem.
+- Requires the WAL backend to have a distributed consensus operation.
 
 ##### Timely Fast Forward
 
