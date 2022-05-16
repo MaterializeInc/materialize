@@ -839,6 +839,12 @@ pub type LocalStorageClient = LocalClient<StorageCommand, StorageResponse>;
 /// A [`LocalClient`] for the compute layer.
 pub type LocalComputeClient = LocalClient<ComputeCommand, ComputeResponse>;
 
+/// Trait for clients that can be disconnected and reconnected.
+#[async_trait]
+pub trait Reconnect {
+    async fn reconnect(&mut self);
+}
+
 /// A convenience type for compatibility.
 #[derive(Debug)]
 pub struct RemoteClient<C, R>
@@ -848,6 +854,21 @@ where
     R: fmt::Debug + Send,
 {
     client: partitioned::Partitioned<tcp::TcpClient<C, R>, C, R>,
+}
+
+#[async_trait]
+impl<C, R> Reconnect for RemoteClient<C, R>
+where
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug + Send,
+    R: fmt::Debug + Send,
+{
+    // TODO: initiate connections concurrently.
+    async fn reconnect(&mut self) {
+        for part in &mut self.client.parts {
+            part.reconnect().await;
+        }
+    }
 }
 
 impl<C, R> RemoteClient<C, R>
@@ -864,14 +885,6 @@ where
         }
         Self {
             client: partitioned::Partitioned::new(remotes),
-        }
-    }
-
-    /// Construct a client backed by multiple tcp connections
-    pub async fn connect(&mut self) {
-        // TODO: initiate connections concurrently.
-        for remote in self.client.parts.iter_mut() {
-            remote.connect().await;
         }
     }
 }
@@ -900,7 +913,7 @@ pub mod process_local {
 
     use async_trait::async_trait;
 
-    use super::GenericClient;
+    use super::{GenericClient, Reconnect};
 
     /// A client to a dataflow server running in the current process.
     #[derive(Debug)]
@@ -908,6 +921,13 @@ pub mod process_local {
         feedback_rx: tokio::sync::mpsc::UnboundedReceiver<R>,
         worker_tx: crossbeam_channel::Sender<C>,
         worker_thread: std::thread::Thread,
+    }
+
+    #[async_trait]
+    impl<C: Send, R: Send> Reconnect for ProcessLocal<C, R> {
+        async fn reconnect(&mut self) {
+            panic!("Reconnecting local clients is currently impossible");
+        }
     }
 
     #[async_trait]
@@ -978,6 +998,8 @@ pub mod tcp {
 
     use crate::client::GenericClient;
 
+    use super::Reconnect;
+
     enum TcpConn<C, R> {
         Disconnected,
         Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
@@ -1020,9 +1042,12 @@ pub mod tcp {
         pub fn connected(&self) -> bool {
             matches!(self.connection, TcpConn::Connected(_))
         }
+    }
 
-        /// Connects the underlying `connection`.
-        pub async fn connect(&mut self) {
+    #[async_trait]
+    impl<C: Send, R: Send> Reconnect for TcpClient<C, R> {
+        async fn reconnect(&mut self) {
+            self.connection = TcpConn::Disconnected;
             // This is written in state-machine style to be cancellation safe.
             loop {
                 match &mut self.connection {
@@ -1085,16 +1110,14 @@ pub mod tcp {
                         match other {
                             Some(Ok(_)) => unreachable!("handled above"),
                             None => error!("connection unexpectedly terminated cleanly"),
-                            Some(Err(e)) => error!("connection unexpectedly errored: {}", e),
+                            Some(Err(e)) => error!("connection unexpectedly errored: {e}"),
                         }
                         self.connection = TcpConn::Disconnected;
-                        self.connect().await;
-                        Err(anyhow::anyhow!("Connection severed; reconnected"))
+                        Err(anyhow::anyhow!("Connection severed"))
                     }
                 }
             } else {
-                self.connect().await;
-                Err(anyhow::anyhow!("Connection severed; reconnected"))
+                Err(anyhow::anyhow!("Connection severed"))
             }
         }
     }

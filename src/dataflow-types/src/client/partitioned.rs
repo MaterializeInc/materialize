@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::iter;
+use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
@@ -30,6 +32,10 @@ use crate::client::{
 };
 use crate::{DataflowDescription, TailResponse};
 
+use super::Reconnect;
+
+const PARTITIONED_INITIAL_BACKOFF: Duration = Duration::from_millis(1);
+
 /// A client whose implementation is partitioned across a number of other
 /// clients.
 ///
@@ -43,10 +49,14 @@ where
 {
     /// The individual partitions representing per-worker clients.
     pub parts: Vec<P>,
-    /// The number of errors observed from underlying clients.
-    seen_errors: usize,
     /// The partitioned state.
     state: <(C, R) as Partitionable<C, R>>::PartitionedState,
+    /// When the current successful connection (if any) began
+    last_successful_connection: Option<Instant>,
+    /// When the current backoff expires
+    backoff_expiry: Option<Instant>,
+    /// The current backoff, for preventing crash loops
+    backoff: Duration,
 }
 
 impl<P, C, R> Partitioned<P, C, R>
@@ -58,7 +68,9 @@ where
         Self {
             state: <(C, R) as Partitionable<C, R>>::new(parts.len()),
             parts,
-            seen_errors: 0,
+            last_successful_connection: None,
+            backoff: PARTITIONED_INITIAL_BACKOFF,
+            backoff_expiry: None,
         }
     }
 }
@@ -66,7 +78,7 @@ where
 #[async_trait]
 impl<P, C, R> GenericClient<C, R> for Partitioned<P, C, R>
 where
-    P: GenericClient<C, R>,
+    P: GenericClient<C, R> + Reconnect,
     (C, R): Partitionable<C, R>,
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
@@ -80,7 +92,6 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        let parts = self.parts.len();
         let mut stream: StreamMap<_, _> = self
             .parts
             .iter_mut()
@@ -90,13 +101,43 @@ where
         while let Some((index, response)) = stream.next().await {
             match response {
                 Err(e) => {
-                    // Only emit one out of every `parts` errors. (If one
-                    // underlying client observes an error, we expect all of
-                    // the other clients to observe the same error.)
-                    self.seen_errors += 1;
-                    if (self.seen_errors % parts) == 0 {
-                        return Err(e);
+                    // Having received an error from one part, we can assume all of them are dead, because of the shared-fate architecture.
+                    // Disconnect from all of them and try again.
+                    drop(stream);
+                    // We need to back off here, in case we're crashing because we were accidentally connected
+                    // to two different generations of the cluster -- e.g., reconnected some
+                    // partitions to a cluster that was already crashing, and some other ones
+                    // to the new one that was being booted up to replace it.
+                    //
+                    // The time such a state can persist for is assumed to be bounded, so the
+                    // backoff ensures we will eventually converge to a valid state.
+
+                    // If we were previously up for long enough (60 seconds chosen arbitrarily), we consider the previous connection to have
+                    // been successful and reset the backoff.
+                    if let Some(prev) = self.last_successful_connection {
+                        if Instant::now() - prev > Duration::from_secs(60) {
+                            self.backoff = PARTITIONED_INITIAL_BACKOFF;
+                            self.backoff_expiry = None;
+                        }
                     }
+                    // We can't just use `tokio::time::sleep`, since that might be canceled and have to be restarted
+                    // from the beginning, possibly never finishing.
+                    // Thus we need to store the expected backoff expiration time, so if we get canceled
+                    // in the middle of the backoff, we can pick back up where we left off.
+                    if self.backoff_expiry.is_none() {
+                        self.backoff_expiry = Some(Instant::now() + self.backoff);
+                    }
+                    tokio::time::sleep_until(self.backoff_expiry.unwrap().into()).await;
+                    for part in &mut self.parts {
+                        part.reconnect().await;
+                    }
+                    self.backoff_expiry = None;
+                    self.last_successful_connection = Some(Instant::now());
+                    // 60 seconds is arbitrarily chosen as a maximum plausible backoff.
+                    // If Timely processes aren't realizing their buddies are down within that time,
+                    // something is seriously hosed with the network anyway and its unlikely things will work.
+                    self.backoff = (self.backoff * 2).min(Duration::from_secs(60));
+                    return Err(e);
                 }
                 Ok(response) => {
                     if let Some(response) = self.state.absorb_response(index, response) {
