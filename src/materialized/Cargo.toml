@@ -92,7 +92,7 @@ tokio = { version = "1.17.0", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-stream = { version = "0.1.8", features = ["net"] }
-tower-http = { version = "0.2.5", features = ["cors"] }
+tower-http = { version = "0.3.3", features = ["cors"] }
 tracing = "0.1.34"
 url = "2.2.2"
 urlencoding = "2.1.0"
