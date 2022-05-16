@@ -1305,28 +1305,28 @@ CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name
 ----
 CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: None, authority: None } }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), password: None, authority: None } }, if_not_exists: false })
 
 parse-statement
 CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL CERTIFICATE cert_name KEY key_name
 ----
 CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: None, authority: None } }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), password: None, authority: None } }, if_not_exists: false })
 
 parse-statement
-CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name AUTHORITY ca_name PASSWORD passphrase_name
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name AUTHORITY ca_name PASSWORD password_name
 ----
-CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name PASSPHRASE passphrase_name AUTHORITY ca_name
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name PASSWORD password_name CERTIFICATE cert_name AUTHORITY ca_name
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: Some(UnresolvedObjectName([Ident("passphrase_name")])), authority: Some(UnresolvedObjectName([Ident("ca_name")])) } }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), password: Some(UnresolvedObjectName([Ident("password_name")])), authority: Some(UnresolvedObjectName([Ident("ca_name")])) } }, if_not_exists: false })
 
 parse-statement
-CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL PASSWORD passphrase_name  CERTIFICATE cert_name AUTHORITY ca_name KEY key_name
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL PASSWORD password_name  CERTIFICATE cert_name AUTHORITY ca_name KEY key_name
 ----
-CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name CERTIFICATE cert_name PASSPHRASE passphrase_name AUTHORITY ca_name
+CREATE CONNECTOR newconn FOR KAFKA BROKER 'kafka:1234' SECURITY SSL KEY key_name PASSWORD password_name CERTIFICATE cert_name AUTHORITY ca_name
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), passphrase: Some(UnresolvedObjectName([Ident("passphrase_name")])), authority: Some(UnresolvedObjectName([Ident("ca_name")])) } }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("newconn")]), connector: Kafka { broker: "kafka:1234", security: SSL { certificate: Some(UnresolvedObjectName([Ident("cert_name")])), key: Some(UnresolvedObjectName([Ident("key_name")])), password: Some(UnresolvedObjectName([Ident("password_name")])), authority: Some(UnresolvedObjectName([Ident("ca_name")])) } }, if_not_exists: false })
 
 parse-statement
 DROP CONNECTOR conn1

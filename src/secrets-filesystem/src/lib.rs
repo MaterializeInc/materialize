@@ -6,13 +6,14 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use anyhow::{bail, Error};
-use async_trait::async_trait;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
+
+use anyhow::{bail, Error};
+use async_trait::async_trait;
 
 use mz_repr::GlobalId;
 use mz_secrets::{SecretOp, SecretsController, SecretsReader};
@@ -68,7 +69,7 @@ impl SecretsController for FilesystemSecretsController {
 
 impl SecretsReader for FilesystemSecretsController {
     fn read(&self, id: GlobalId) -> Result<Vec<u8>, Error> {
-        let file_path = self.secrets_storage_path.join(format!("{}", &id));
+        let file_path = self.secrets_storage_path.join(id.to_string());
         let mut file = OpenOptions::new().read(true).open(file_path)?;
         let mut buf: Vec<u8> = Vec::new();
         file.read_to_end(&mut buf)?;

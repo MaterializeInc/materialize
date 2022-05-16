@@ -149,6 +149,7 @@ contains:self signed certificate in certificate chain
 > CREATE SECRET client_cert AS '${arg.client-cert}'
 > CREATE SECRET client_key AS '${arg.client-key}'
 > CREATE SECRET ca_cert AS '${arg.ca-cert}'
+> CREATE SECRET key_password AS 'mzmzmz'
 
 # Ensure that connectors work with SSL basic_auth
 > CREATE CONNECTOR kafka_ssl
@@ -157,6 +158,7 @@ contains:self signed certificate in certificate chain
   CERTIFICATE client_cert
   KEY client_key
   AUTHORITY ca_cert
+  PASSWORD key_password
 
 > CREATE SECRET csr_pass AS 'sekurity'
 

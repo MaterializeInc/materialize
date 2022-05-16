@@ -2993,7 +2993,17 @@ pub fn plan_create_connector(
             .resolve_item(&normalize::unresolved_object_name(name.clone())?)?
             .id())
     }
-
+    let resolve_and_track = |depends_on: &mut Vec<GlobalId>,
+                             secret: Option<&UnresolvedObjectName>|
+     -> Result<Option<String>, anyhow::Error> {
+        Ok(if let Some(secret_id) = secret {
+            let id = name_to_id(scx, secret_id)?;
+            depends_on.push(id);
+            Some(id.to_string())
+        } else {
+            None
+        })
+    };
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
     let CreateConnectorStatement {
         name,
@@ -3008,42 +3018,18 @@ pub fn plan_create_connector(
                 mz_sql_parser::ast::KafkaSecurityOptions::SSL {
                     key,
                     certificate,
-                    passphrase,
+                    password: passphrase,
                     authority,
                 } => {
-                    let key_id = if let Some(key) = key.as_ref() {
-                        let key_id = name_to_id(scx, key)?;
-                        depends_on.push(key_id);
-                        Some(key_id)
-                    } else {
-                        None
-                    };
-                    let certificate_id = if let Some(certificate) = certificate.as_ref() {
-                        let certificate_id = name_to_id(scx, certificate)?;
-                        depends_on.push(certificate_id);
-                        Some(certificate_id)
-                    } else {
-                        None
-                    };
-                    let passphrase_id = if let Some(passphrase) = passphrase.as_ref() {
-                        let passphrase_id = name_to_id(scx, passphrase)?;
-                        depends_on.push(passphrase_id);
-                        Some(passphrase_id)
-                    } else {
-                        None
-                    };
-                    let authority_id = if let Some(authority) = authority.as_ref() {
-                        let authority_id = name_to_id(scx, authority)?;
-                        depends_on.push(authority_id);
-                        Some(authority_id)
-                    } else {
-                        None
-                    };
+                    let key = resolve_and_track(&mut depends_on, key.as_ref())?;
+                    let certificate = resolve_and_track(&mut depends_on, certificate.as_ref())?;
+                    let passphrase = resolve_and_track(&mut depends_on, passphrase.as_ref())?;
+                    let authority = resolve_and_track(&mut depends_on, authority.as_ref())?;
                     KafkaSecurityOptions::SSL {
-                        key: key_id.map_or_else(|| None, |i| Some(i.to_string())),
-                        certificate: certificate_id.map_or_else(|| None, |i| Some(i.to_string())),
-                        passphrase: passphrase_id.map_or_else(|| None, |i| Some(i.to_string())),
-                        authority: authority_id.map_or_else(|| None, |i| Some(i.to_string())),
+                        key,
+                        certificate,
+                        passphrase,
+                        authority,
                     }
                 }
                 mz_sql_parser::ast::KafkaSecurityOptions::SASL {
@@ -3052,16 +3038,12 @@ pub fn plan_create_connector(
                     username,
                     password,
                 } => {
-                    let password_id = scx
-                        .catalog
-                        .resolve_item(&normalize::unresolved_object_name(password)?)?
-                        .id();
-                    depends_on.push(password_id);
+                    let password = resolve_and_track(&mut depends_on, Some(&password))?.unwrap();
                     KafkaSecurityOptions::SASL {
                         mechanism,
                         ssl,
                         username,
-                        password: password_id.to_string(),
+                        password,
                     }
                 }
                 mz_sql_parser::ast::KafkaSecurityOptions::PLAINTEXT => {
@@ -3077,53 +3059,17 @@ pub fn plan_create_connector(
             certificate,
             authority,
         } => {
-            let password_id = if let Some(password) = password.as_ref() {
-                let password_id = scx
-                    .catalog
-                    .resolve_item(&normalize::unresolved_object_name(password.clone())?)?
-                    .id();
-                depends_on.push(password_id);
-                Some(password_id)
-            } else {
-                None
-            };
-            let authority_id = if let Some(authority) = authority.as_ref() {
-                let authority_id = scx
-                    .catalog
-                    .resolve_item(&normalize::unresolved_object_name(authority.clone())?)?
-                    .id();
-                depends_on.push(authority_id);
-                Some(authority_id)
-            } else {
-                None
-            };
-            let certificate_id = if let Some(certificate) = certificate.as_ref() {
-                let certificate_id = scx
-                    .catalog
-                    .resolve_item(&normalize::unresolved_object_name(certificate.clone())?)?
-                    .id();
-                depends_on.push(certificate_id);
-                Some(certificate_id)
-            } else {
-                None
-            };
-            let key_id = if let Some(key) = key.as_ref() {
-                let key_id = scx
-                    .catalog
-                    .resolve_item(&normalize::unresolved_object_name(key.clone())?)?
-                    .id();
-                depends_on.push(key_id);
-                Some(key_id)
-            } else {
-                None
-            };
+            let password = resolve_and_track(&mut depends_on, password.as_ref())?;
+            let authority = resolve_and_track(&mut depends_on, authority.as_ref())?;
+            let certificate = resolve_and_track(&mut depends_on, certificate.as_ref())?;
+            let key = resolve_and_track(&mut depends_on, key.as_ref())?;
             ConnectorInner::CSR {
                 registry,
                 username,
-                password: password_id.map_or_else(|| None, |p| Some(p.to_string())),
-                authority: authority_id.map_or_else(|| None, |a| Some(a.to_string())),
-                certificate: certificate_id.map_or_else(|| None, |c| Some(c.to_string())),
-                key: key_id.map_or_else(|| None, |c| Some(c.to_string())),
+                password,
+                authority,
+                certificate,
+                key,
             }
         }
     };

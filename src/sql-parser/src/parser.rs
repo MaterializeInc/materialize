@@ -1985,7 +1985,7 @@ impl<'a> Parser<'a> {
     fn parse_kafka_security(&mut self) -> Result<KafkaSecurityOptions, ParserError> {
         Ok(match self.expect_one_of_keywords(&[SSL, SASL, SASLSSL])? {
             Keyword::Ssl => {
-                let (mut key, mut certificate, mut passphrase, mut authority) =
+                let (mut key, mut certificate, mut password, mut authority) =
                     (None, None, None, None);
                 while let Ok(keyword) =
                     self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD, AUTHORITY])
@@ -2012,14 +2012,14 @@ impl<'a> Parser<'a> {
                             certificate = Some(self.parse_object_name()?);
                         }
                         Keyword::Password => {
-                            if passphrase.is_some() {
+                            if password.is_some() {
                                 self.error(
                                     self.peek_pos(),
                                     "Cannot set property PASSWORD twice!".into(),
                                 );
                             }
                             let _ = self.consume_token(&Token::Eq);
-                            passphrase = Some(self.parse_object_name()?);
+                            password = Some(self.parse_object_name()?);
                         }
                         Keyword::Authority => {
                             if authority.is_some() {
@@ -2037,7 +2037,7 @@ impl<'a> Parser<'a> {
                 KafkaSecurityOptions::SSL {
                     key,
                     certificate,
-                    passphrase,
+                    password,
                     authority,
                 }
             }
