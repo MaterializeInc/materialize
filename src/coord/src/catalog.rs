@@ -18,6 +18,8 @@ use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+use mz_dataflow_types::sources::encoding::{DataEncoding, SourceDataEncoding};
 use mz_stash::{Append, Postgres, Sqlite};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -28,10 +30,11 @@ use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
 };
-use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_dataflow_types::logging::{LogVariant, LoggingConfig as DataflowLoggingConfig};
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ConnectorInner, ExternalSourceConnector, SourceConnector, Timeline,
+    AwsExternalId, ConnectorInner, ExternalSourceConnector, PersistSourceConnector,
+    SourceConnector, SourceEnvelope, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -455,6 +458,7 @@ impl CatalogState {
                     granularity_ns: introspection.granularity.as_nanos(),
                     log_logging: introspection.debugging,
                     active_logs,
+                    sink_logs: HashMap::new(),
                 })
             }
         };
@@ -479,7 +483,46 @@ impl CatalogState {
         replica_name: String,
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
+        log_collections: Vec<(&'static BuiltinLog, GlobalId, CollectionMetadata)>,
     ) {
+        let mut log_collections_by_variant = HashMap::new();
+        for (log, source_id, collection_meta) in log_collections {
+            let oid = self.allocate_oid().expect("cannot return error here");
+            let log_id = self.resolve_builtin_log(&log);
+            let source_name = QualifiedObjectName {
+                qualifiers: ObjectQualifiers {
+                    database_spec: ResolvedDatabaseSpecifier::Ambient,
+                    schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
+                },
+                item: format!("{}_{}", log.name, replica_id),
+            };
+            let desc = log.variant.desc();
+            self.insert_item(
+                source_id,
+                oid,
+                source_name,
+                CatalogItem::Source(Source {
+                    create_sql: "TODO".into(),
+                    connector: SourceConnector::External {
+                        connector: ExternalSourceConnector::Persist(PersistSourceConnector {
+                            consensus_uri: collection_meta.persist_location.consensus_uri,
+                            blob_uri: collection_meta.persist_location.blob_uri,
+                            shard_id: collection_meta.shard_id.expect("missing shard_id"),
+                        }),
+                        encoding: SourceDataEncoding::Single(DataEncoding::RowCodec(desc.clone())),
+                        envelope: SourceEnvelope::DifferentialRow,
+                        metadata_columns: Vec::new(),
+                        ts_frequency: self.config.timestamp_frequency,
+                        timeline: Timeline::EpochMilliseconds,
+                    },
+                    desc,
+                    depends_on: vec![log_id],
+                }),
+            );
+
+            log_collections_by_variant.insert(log.variant.clone(), source_id);
+        }
+
         let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
         assert!(compute_instance
             .replica_id_by_name
@@ -487,7 +530,13 @@ impl CatalogState {
             .is_none());
         assert!(compute_instance
             .replicas_by_id
-            .insert(replica_id, config)
+            .insert(
+                replica_id,
+                ComputeInstanceReplica {
+                    config,
+                    log_collections: log_collections_by_variant,
+                }
+            )
             .is_none());
     }
 
@@ -897,7 +946,13 @@ pub struct ComputeInstance {
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
-    pub replicas_by_id: HashMap<ReplicaId, ConcreteComputeInstanceReplicaConfig>,
+    pub replicas_by_id: HashMap<ReplicaId, ComputeInstanceReplica>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeInstanceReplica {
+    pub config: ConcreteComputeInstanceReplicaConfig,
+    pub log_collections: HashMap<LogVariant, GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -1628,9 +1683,16 @@ impl<S: Append> Catalog<S> {
             .load_compute_instance_replicas()
             .await?;
         for (instance_id, replica_id, name, config) in replicas {
-            catalog
-                .state
-                .insert_compute_instance_replica(instance_id, name, replica_id, config);
+            // TODO(teskje)
+            let log_collections = Vec::new();
+
+            catalog.state.insert_compute_instance_replica(
+                instance_id,
+                name,
+                replica_id,
+                config,
+                log_collections,
+            );
         }
 
         if !config.skip_migrations {
@@ -2344,6 +2406,7 @@ impl<S: Append> Catalog<S> {
                 name: String,
                 on_cluster_name: String,
                 config: ConcreteComputeInstanceReplicaConfig,
+                log_collections: Vec<(&'static BuiltinLog, GlobalId, CollectionMetadata)>,
             },
             CreateItem {
                 id: GlobalId,
@@ -2479,6 +2542,7 @@ impl<S: Append> Catalog<S> {
                     name,
                     on_cluster_name,
                     config,
+                    log_collections,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(CoordError::Catalog(Error::new(
@@ -2490,6 +2554,7 @@ impl<S: Append> Catalog<S> {
                         name,
                         on_cluster_name,
                         config,
+                        log_collections,
                     }]
                 }
                 Op::CreateItem {
@@ -2782,20 +2847,27 @@ impl<S: Append> Catalog<S> {
                     name,
                     on_cluster_name,
                     config,
+                    log_collections,
                 } => {
                     info!("create replica {} of instance {}", name, on_cluster_name);
+                    let source_ids: Vec<GlobalId> =
+                        log_collections.iter().map(|(_, id, _)| *id).collect();
                     let compute_instance_id = state.compute_instances_by_name[&on_cluster_name];
                     state.insert_compute_instance_replica(
                         compute_instance_id,
                         name.clone(),
                         id,
                         config,
+                        log_collections,
                     );
                     builtin_table_updates.push(state.pack_compute_instance_replica_update(
                         compute_instance_id,
                         &name,
                         1,
                     ));
+                    for id in source_ids {
+                        builtin_table_updates.extend(state.pack_item_update(id, 1));
+                    }
                 }
 
                 Action::CreateItem {
@@ -3110,6 +3182,12 @@ impl<S: Append> Catalog<S> {
             .expect("cannot fail to allocate system ids");
         BUILTINS.logs().zip(system_ids.into_iter()).collect()
     }
+
+    pub async fn allocate_introspection_collections(
+        &mut self,
+    ) -> Vec<(&'static BuiltinLog, GlobalId)> {
+        self.allocate_introspection_source_indexes().await
+    }
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -3141,6 +3219,7 @@ pub enum Op {
         name: String,
         config: ConcreteComputeInstanceReplicaConfig,
         on_cluster_name: String,
+        log_collections: Vec<(&'static BuiltinLog, GlobalId, CollectionMetadata)>,
     },
     CreateItem {
         id: GlobalId,

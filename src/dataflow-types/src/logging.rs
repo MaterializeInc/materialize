@@ -15,15 +15,18 @@ use serde::{Deserialize, Serialize};
 use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
+use crate::client::controller::storage::CollectionMetadata;
+
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.logging.rs"));
 
 /// Logging configuration.
 #[derive(Arbitrary, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub granularity_ns: u128,
-    pub active_logs: HashMap<LogVariant, GlobalId>,
     // Whether we should report logs for the log-processing dataflows
     pub log_logging: bool,
+    pub active_logs: HashMap<LogVariant, GlobalId>,
+    pub sink_logs: HashMap<LogVariant, CollectionMetadata>,
 }
 
 impl LoggingConfig {
@@ -51,12 +54,14 @@ impl TryFrom<ProtoLoggingConfig> for LoggingConfig {
             granularity_ns: x
                 .granularity_ns
                 .from_proto_if_some("ProtoLoggingConfig::granularity_ns")?,
+            log_logging: x.log_logging,
             active_logs: x
                 .active_logs
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<HashMap<_, _>, _>>()?,
-            log_logging: x.log_logging,
+            // TODO(teskje): implement
+            sink_logs: HashMap::new(),
         })
     }
 }

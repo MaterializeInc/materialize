@@ -31,7 +31,7 @@ use mz_repr::{Datum, DatumVec, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
 
-use crate::logging::persist::persist_roundtrip;
+use crate::logging::persist::persist_sink;
 
 use super::{LogVariant, MaterializedLog};
 
@@ -321,7 +321,11 @@ pub fn construct<A: Allocate>(
                         (row_key, row_val)
                     }
                 });
-                let rows = persist_roundtrip(rows);
+
+                if let Some(target) = config.sink_logs.get(&variant) {
+                    persist_sink(target, &rows);
+                }
+
                 let trace = rows
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;

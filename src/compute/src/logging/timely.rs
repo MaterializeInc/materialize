@@ -28,7 +28,7 @@ use mz_dataflow_types::RowSpine;
 use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
 
 use super::{LogVariant, TimelyLog};
-use crate::logging::persist::persist_roundtrip;
+use crate::logging::persist::persist_sink;
 use crate::logging::ConsolidateBuffer;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
@@ -492,7 +492,11 @@ pub fn construct<A: Allocate>(
                         (row_key, row_val)
                     }
                 });
-                let rows = persist_roundtrip(rows);
+
+                if let Some(target) = config.sink_logs.get(&variant) {
+                    persist_sink(target, &rows);
+                }
+
                 let trace = rows
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("ArrangeByKey {:?}", variant))
                     .trace;

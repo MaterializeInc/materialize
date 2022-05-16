@@ -525,9 +525,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
-            for (replica_id, config) in instance.replicas_by_id.clone() {
+            for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.dataflow_client
-                    .add_replica_to_instance(instance.id, replica_id, config)
+                    .add_replica_to_instance(
+                        instance.id,
+                        replica_id,
+                        replica.config,
+                        replica.log_collections,
+                    )
                     .await
                     .unwrap();
             }
@@ -1963,16 +1968,53 @@ impl<S: Append + 'static> Coordinator<S> {
             introspection_sources,
         }];
 
-        for (replica_name, config) in replicas {
-            let config =
-                concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
+        let mut source_ids = Vec::new();
+        for (replica_name, replica_config) in replicas {
+            let replica_config = concretize_replica_config(
+                replica_config,
+                &self.replica_sizes,
+                &self.availability_zones,
+            )?;
+            let log_collections = if config.is_some() {
+                self.catalog
+                    .allocate_introspection_collections()
+                    .await
+                    .into_iter()
+                    .map(|(log, id)| {
+                        let collection_meta = self.dataflow_client.storage().allocate_collection();
+                        (log, id, collection_meta)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            source_ids.extend(log_collections.iter().map(|(_, id, _)| *id));
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
-                config,
+                config: replica_config,
                 on_cluster_name: name.clone(),
+                log_collections,
             });
         }
         self.catalog_transact(ops, |_| Ok(())).await?;
+
+        let source_bindings = source_ids
+            .iter()
+            .map(|&id| {
+                let description = self.catalog.state().source_description_for(id).unwrap();
+                let since = Antichain::from_elem(Timestamp::minimum());
+                (id, (description, since))
+            })
+            .collect();
+
+        self.dataflow_client
+            .storage_mut()
+            .create_sources(source_bindings)
+            .await
+            .unwrap();
+        self.initialize_storage_read_policies(source_ids, self.logical_compaction_window_ms)
+            .await;
+
         let instance = self
             .catalog
             .resolve_compute_instance(&name)
@@ -1981,9 +2023,14 @@ impl<S: Append + 'static> Coordinator<S> {
             .create_instance(instance.id, instance.logging.clone())
             .await
             .unwrap();
-        for (replica_id, config) in instance.replicas_by_id.clone() {
+        for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.dataflow_client
-                .add_replica_to_instance(instance.id, replica_id, config)
+                .add_replica_to_instance(
+                    instance.id,
+                    replica_id,
+                    replica.config,
+                    replica.log_collections,
+                )
                 .await
                 .unwrap();
         }
@@ -2000,20 +2047,63 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, CoordError> {
         let config =
             concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
+
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let log_collections = if instance.logging.is_some() {
+            self.catalog
+                .allocate_introspection_collections()
+                .await
+                .into_iter()
+                .map(|(log, id)| {
+                    let collection_meta = self.dataflow_client.storage().allocate_collection();
+                    (log, id, collection_meta)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let source_ids: Vec<_> = log_collections.iter().map(|(_, id, _)| *id).collect();
+
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
             on_cluster_name: of_cluster.clone(),
+            log_collections,
         };
 
         self.catalog_transact(vec![op], |_| Ok(())).await?;
 
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
-        let replica_id = instance.replica_id_by_name[&name];
+        let source_bindings = source_ids
+            .iter()
+            .map(|&id| {
+                let description = self.catalog.state().source_description_for(id).unwrap();
+                let since = Antichain::from_elem(Timestamp::minimum());
+                (id, (description, since))
+            })
+            .collect();
+
         self.dataflow_client
-            .add_replica_to_instance(instance.id, replica_id, config)
+            .storage_mut()
+            .create_sources(source_bindings)
             .await
             .unwrap();
+        self.initialize_storage_read_policies(source_ids, self.logical_compaction_window_ms)
+            .await;
+
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let replica_id = instance.replica_id_by_name[&name];
+        let replica = instance.replicas_by_id[&replica_id].clone();
+
+        self.dataflow_client
+            .add_replica_to_instance(
+                instance.id,
+                replica_id,
+                replica.config,
+                replica.log_collections,
+            )
+            .await
+            .unwrap();
+
         Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
     }
 
@@ -2663,9 +2753,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.catalog_transact(ops, |_| Ok(())).await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
-            for (replica_id, config) in replicas {
+            for (replica_id, replica) in replicas {
                 self.dataflow_client
-                    .drop_replica(instance_id, replica_id, config)
+                    .drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -2704,9 +2794,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
         self.catalog_transact(ops, |_| Ok(())).await?;
 
-        for (compute_id, replica_id, config) in replicas_to_drop {
+        for (compute_id, replica_id, replica) in replicas_to_drop {
             self.dataflow_client
-                .drop_replica(compute_id, replica_id, config)
+                .drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }

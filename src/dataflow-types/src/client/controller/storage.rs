@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use mz_persist_client::ShardId;
 use mz_repr::proto::TryFromProtoError;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
@@ -70,6 +71,8 @@ pub trait StorageController: Debug + Send {
         &mut self,
         id: GlobalId,
     ) -> Result<&mut CollectionState<Self::Timestamp>, StorageError>;
+
+    fn allocate_collection(&self) -> CollectionMetadata;
 
     /// Returns the necessary metadata to read a collection
     fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError>;
@@ -148,6 +151,7 @@ pub trait StorageController: Debug + Send {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
+    pub shard_id: Option<ShardId>,
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
@@ -167,6 +171,7 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            shard_id: None,
         })
     }
 }
@@ -183,6 +188,7 @@ impl Arbitrary for CollectionMetadata {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            shard_id: None,
         })
         .boxed()
     }
@@ -303,9 +309,23 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn collection_metadata(&self, _id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+    fn allocate_collection(&self) -> CollectionMetadata {
+        CollectionMetadata {
+            persist_location: self.persist_location.clone(),
+            shard_id: Some(ShardId::new()),
+        }
+    }
+
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+        let collection = self
+            .state
+            .collections
+            .get(&id)
+            .ok_or(StorageError::IdentifierMissing(id))?;
+
         Ok(CollectionMetadata {
             persist_location: self.persist_location.clone(),
+            shard_id: collection.shard_id,
         })
     }
 
@@ -376,9 +396,15 @@ where
                 Box::new(ReadHandleWrapper { read_handle: read })
                     as Box<dyn CollectionReadHandle<T>>
             });
+            let shard_id = desc.connector.get_shard_id();
 
-            let collection_state =
-                CollectionState::new(desc.clone(), since.clone(), read_handle, last_bindings);
+            let collection_state = CollectionState::new(
+                desc.clone(),
+                since.clone(),
+                read_handle,
+                shard_id,
+                last_bindings,
+            );
             self.state.collections.insert(id, collection_state);
 
             let storage_metadata = self.collection_metadata(id)?;
@@ -759,6 +785,7 @@ pub struct CollectionState<T> {
     // TODO(aljoscha): Once all sources are wired up to go through persist/STORAGE, this will stop
     // being optional
     pub read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
+    pub shard_id: Option<ShardId>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -767,6 +794,7 @@ impl<T: Timestamp> CollectionState<T> {
         description: SourceDesc,
         since: Antichain<T>,
         read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
+        shard_id: Option<ShardId>,
         last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -779,6 +807,7 @@ impl<T: Timestamp> CollectionState<T> {
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             last_reported_ts_bindings,
             read_handle,
+            shard_id,
         }
     }
 }

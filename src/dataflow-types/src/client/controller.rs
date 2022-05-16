@@ -28,6 +28,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use maplit::hashmap;
+use mz_repr::GlobalId;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
@@ -42,7 +43,7 @@ use crate::client::{
     ConcreteComputeInstanceReplicaConfig, ControllerResponse, RemoteClient, ReplicaId,
     StorageResponse,
 };
-use crate::logging::LoggingConfig;
+use crate::logging::{LogVariant, LoggingConfig};
 use crate::{TailBatch, TailResponse};
 
 pub use storage::{StorageController, StorageControllerState};
@@ -179,6 +180,7 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
+        log_collections: HashMap<LogVariant, GlobalId>,
     ) -> Result<(), anyhow::Error> {
         assert!(
             self.compute.contains_key(&instance_id),
@@ -193,7 +195,9 @@ where
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
                 let client = RemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                compute_instance.add_replica(replica_name, client).await;
+                compute_instance
+                    .add_replica(replica_name, client, log_collections)
+                    .await;
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config,
@@ -270,7 +274,7 @@ where
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
                     .unwrap()
-                    .add_replica(replica_name, client)
+                    .add_replica(replica_name, client, log_collections)
                     .await;
             }
         }

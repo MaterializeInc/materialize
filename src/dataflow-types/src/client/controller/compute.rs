@@ -22,7 +22,7 @@
 //! compaction of each of its outputs, ensuring that we can recover each dataflow to its current state in case of
 //! failure or other reconfiguration.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt;
 
@@ -36,7 +36,7 @@ use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
 use crate::client::{GenericClient, Peek};
-use crate::logging::LoggingConfig;
+use crate::logging::{LogVariant, LoggingConfig};
 use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
 use mz_repr::{GlobalId, Row};
@@ -217,8 +217,27 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub async fn add_replica(&mut self, id: String, client: Box<dyn ComputeClient<T>>) {
-        self.compute.client.add_replica(id, client).await;
+    pub async fn add_replica(
+        &mut self,
+        id: String,
+        client: Box<dyn ComputeClient<T>>,
+        log_collections: HashMap<LogVariant, GlobalId>,
+    ) {
+        let log_collections = log_collections
+            .into_iter()
+            .map(|(variant, id)| {
+                let meta = self
+                    .storage_controller
+                    .collection_metadata(id)
+                    .expect("cannot get collection metadata");
+                (variant, meta)
+            })
+            .collect();
+
+        self.compute
+            .client
+            .add_replica(id, client, log_collections)
+            .await;
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = &String> {

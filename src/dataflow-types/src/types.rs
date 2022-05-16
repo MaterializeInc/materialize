@@ -1568,6 +1568,16 @@ pub mod sources {
 
             Ok(result)
         }
+
+        pub fn get_shard_id(&self) -> Option<ShardId> {
+            match self {
+                SourceConnector::External {
+                    connector: ExternalSourceConnector::Persist(conn),
+                    ..
+                } => Some(conn.shard_id),
+                _ => None,
+            }
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

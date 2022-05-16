@@ -27,7 +27,7 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use super::{LogVariant, TimelyLog};
-use crate::logging::persist::persist_roundtrip;
+use crate::logging::persist::persist_sink;
 use crate::logging::ConsolidateBuffer;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::replay::MzReplay;
@@ -159,7 +159,11 @@ pub fn construct<A: Allocate>(
                     variant.desc().arity(),
                 );
                 let updates = construct_reachability(key.clone(), value);
-                let updates = persist_roundtrip(updates);
+
+                if let Some(target) = config.sink_logs.get(&variant) {
+                    persist_sink(target, &updates);
+                }
+
                 let trace = updates
                     .arrange_named::<RowSpine<_, _, _, _>>(&format!("Arrange {:?}", variant))
                     .trace;

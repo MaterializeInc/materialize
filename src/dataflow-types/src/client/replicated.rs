@@ -29,8 +29,10 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::client::Peek;
+use crate::logging::LogVariant;
 use mz_repr::GlobalId;
 
+use super::controller::storage::CollectionMetadata;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
 
@@ -85,17 +87,18 @@ pub fn spawn_client_task<
     (cmd_tx, response_rx)
 }
 
+#[derive(Debug)]
+struct Replica<T> {
+    tx: UnboundedSender<ComputeCommand<T>>,
+    rx: UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
+    log_collections: HashMap<LogVariant, CollectionMetadata>,
+}
+
 /// A client backed by multiple replicas.
 #[derive(Debug)]
 pub struct ActiveReplication<T> {
     /// Handles to the replicas themselves.
-    replicas: HashMap<
-        String,
-        (
-            UnboundedSender<ComputeCommand<T>>,
-            UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
-        ),
-    >,
+    replicas: HashMap<String, Replica<T>>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashSet<uuid::Uuid>,
     /// Reported frontier of each in-progress tail.
@@ -132,6 +135,7 @@ where
         &mut self,
         identifier: String,
         client: C,
+        log_collections: HashMap<LogVariant, CollectionMetadata>,
     ) {
         for (_, frontiers) in self.uppers.values_mut() {
             frontiers.insert(identifier.clone(), {
@@ -140,10 +144,15 @@ where
                 frontier
             });
         }
-        let (cmd_tx, resp_rx) =
-            spawn_client_task(client, || "ActiveReplication client message pump");
-        self.replicas
-            .insert(identifier.clone(), (cmd_tx, resp_rx.into()));
+        let (tx, rx) = spawn_client_task(client, || "ActiveReplication client message pump");
+        self.replicas.insert(
+            identifier.clone(),
+            Replica {
+                tx,
+                rx: rx.into(),
+                log_collections,
+            },
+        );
         self.hydrate_replica(&identifier);
     }
 
@@ -174,16 +183,23 @@ where
         self.last_command_count = self.history.reduce(&self.peeks);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let (cmd_tx, _) = self.replicas.get_mut(replica_id).unwrap();
+        let replica = self.replicas.get_mut(replica_id).unwrap();
         for command in self.history.iter() {
             let mut command = command.clone();
+
+            // Make logging config replica-specific.
+            if let ComputeCommand::CreateInstance(Some(logging)) = &mut command {
+                logging.sink_logs = replica.log_collections.clone();
+            }
+
             // Replace dataflow identifiers with new unique ids.
             if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
                 for dataflow in dataflows.iter_mut() {
                     dataflow.id = uuid::Uuid::new_v4();
                 }
             }
-            cmd_tx
+            replica
+                .tx
                 .send(command)
                 .expect("Channel to client has gone away!")
         }
@@ -233,7 +249,7 @@ where
         }
 
         // Clone the command for each active replica.
-        for (_id, (tx, _)) in self.replicas.iter_mut() {
+        for (_id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
             // Replace dataflow identifiers with new unique ids.
             if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
@@ -244,7 +260,7 @@ where
 
             // Errors are suppressed by this client, which awaits a reconnection in `recv` and
             // will rehydrate the client when that happens.
-            let _ = tx.send(command);
+            let _ = replica.tx.send(command);
         }
 
         Ok(())
@@ -264,7 +280,7 @@ where
                 let mut stream: tokio_stream::StreamMap<_, _> = self
                     .replicas
                     .iter_mut()
-                    .map(|(id, (_, rx))| (id.clone(), rx))
+                    .map(|(id, replica)| (id.clone(), &mut replica.rx))
                     .collect();
 
                 use futures::StreamExt;
