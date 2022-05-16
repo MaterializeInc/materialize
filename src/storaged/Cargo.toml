@@ -17,7 +17,7 @@ mz-dataflow-types = { path = "../dataflow-types" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
-mz-prof = { path = "../prof", features = [ "jemalloc" ] }
+mz-prof = { path = "../prof" }
 mz-storage = { path = "../storage", features = ["server"] }
 serde = "1.0.137"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
