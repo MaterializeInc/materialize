@@ -21,11 +21,16 @@ fn cmd() -> Command {
 /// changing and overwriting our custom version output.
 #[test]
 fn test_version() {
-    let expected_version = materialized::BUILD_INFO.human_version();
-    assert!(!expected_version.is_empty() && expected_version.starts_with('v'));
+    // We don't make assertions about the build SHA because caching in CI can
+    // cause the test binary and `materialized` to have different embedded SHAs.
+    let expected_version = materialized::BUILD_INFO.version;
+    assert!(!expected_version.is_empty());
     cmd()
         .arg("--version")
         .assert()
         .success()
-        .stdout(format!("materialized {}\n", expected_version));
+        .stdout(predicates::str::starts_with(format!(
+            "materialized v{}",
+            expected_version
+        )));
 }
