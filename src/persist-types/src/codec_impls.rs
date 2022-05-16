@@ -67,37 +67,6 @@ impl Codec for Vec<u8> {
     }
 }
 
-const OPTION_NONE: u8 = 0;
-const OPTION_SOME: u8 = 1;
-impl<T: Codec> Codec for Option<T> {
-    fn codec_name() -> String {
-        format!("Option<{}>", T::codec_name())
-    }
-
-    fn encode<B>(&self, buf: &mut B)
-    where
-        B: BufMut,
-    {
-        match self {
-            Some(s) => {
-                buf.put_u8(OPTION_SOME);
-                s.encode(buf);
-            }
-            None => buf.put_u8(OPTION_NONE),
-        }
-    }
-
-    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
-        let opt = buf.get(0).copied();
-        let result = match opt {
-            Some(OPTION_NONE) => None,
-            Some(OPTION_SOME) => Some(T::decode(&buf[1..])?),
-            opt => return Err(format!("Unexpected Option variant: {:?}.", opt)),
-        };
-        Ok(result)
-    }
-}
-
 impl Codec64 for i64 {
     fn codec_name() -> String {
         "i64".to_owned()

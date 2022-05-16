@@ -444,7 +444,7 @@ pub trait SourceReader {
         timestamp_frequency: Duration,
     ) -> LocalBoxStream<'a, Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>>
     where
-        Self: Sized + 'static,
+        Self: Sized + 'a,
     {
         Box::pin(async_stream::stream! {
             while let Some(msg) = self.next(timestamp_frequency).await {
@@ -960,10 +960,7 @@ where
                 }
             };
 
-            // TODO(petrosagg): What is the purpose of an partition offset being None?
-            //let start_offsets = timestamper.partition_cursors().into_iter().map(|(p, o)| (p, Some(o))).collect();
-            // XXX: Providing these causes some tests to fail: seems like they were NOT being provided before for whatever reason.
-            //      I checked and on main, we pass empty start_offsets in tests like materializations.td
+            // TODO: Use the persisted partition offsets to skip forward
             let start_offsets = vec![];
 
             let source_reader = S::new(

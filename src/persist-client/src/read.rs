@@ -12,7 +12,6 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
@@ -224,9 +223,6 @@ pub enum ListenEvent<K, V, T, D> {
     Updates(Vec<((Result<K, String>, Result<V, String>), T, D)>),
 }
 
-/// Convencient type for Stream constructed from Listen.
-pub type ListenStream<K, V, T, D> = Pin<Box<dyn Stream<Item = ListenEvent<K, V, T, D>>>>;
-
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
 pub struct Listen<K, V, T, D> {
@@ -244,15 +240,14 @@ where
     D: Semigroup + Codec64,
 {
     /// Convert listener into futures::Stream
-    pub fn into_stream(mut self) -> ListenStream<K, V, T, D> {
-        Box::pin(async_stream::stream! {
+    pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<K, V, T, D>> {
+        async_stream::stream! {
             loop{
-                let msgs = self.next().await;
-                for msg in msgs {
+                for msg in self.next().await {
                     yield msg;
                 }
             }
-        })
+        }
     }
 
     /// Attempt to pull out the next values of this subscription.

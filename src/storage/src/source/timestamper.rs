@@ -9,11 +9,12 @@
 
 //! Timestamper using persistent collection
 use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _};
 use differential_dataflow::lattice::Lattice;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
@@ -21,7 +22,7 @@ use timely::PartialOrder;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
-use mz_persist_client::read::{ListenEvent, ListenStream, ReadHandle};
+use mz_persist_client::read::{ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::{Diff, Timestamp};
@@ -35,7 +36,8 @@ pub struct CreateSourceTimestamper {
     read_cursors: HashMap<PartitionId, MzOffset>,
     write_handle: WriteHandle<(), PartitionId, Timestamp, Diff>,
     read_handle: ReadHandle<(), PartitionId, Timestamp, Diff>,
-    timestamp_bindings_listener: ListenStream<(), PartitionId, Timestamp, Diff>,
+    timestamp_bindings_listener:
+        Pin<Box<dyn Stream<Item = ListenEvent<(), PartitionId, Timestamp, Diff>>>>,
     now: NowFn,
 }
 
@@ -128,7 +130,8 @@ impl CreateSourceTimestamper {
             .listen(as_of)
             .await
             .expect("Initial listen at handle.since ts")
-            .into_stream();
+            .into_stream()
+            .boxed();
 
         Ok(Self {
             name,
