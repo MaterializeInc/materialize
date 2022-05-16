@@ -68,7 +68,12 @@ pub struct SqliteConsensus {
 
 impl SqliteConsensus {
     /// Open a sqlite-backed [Consensus] instance at `path`.
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, ExternalError> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, ExternalError> {
+        tokio::task::block_in_place(|| Self::open_blocking(path))
+    }
+
+    /// Open a sqlite-backed [Consensus] instance at `path`.
+    fn open_blocking<P: AsRef<Path>>(path: P) -> Result<Self, ExternalError> {
         let mut conn = Connection::open(path)?;
         let tx = conn.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
@@ -89,11 +94,8 @@ impl SqliteConsensus {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
-}
 
-#[async_trait]
-impl Consensus for SqliteConsensus {
-    async fn head(
+    fn head_blocking(
         &self,
         _deadline: Instant,
         key: &str,
@@ -112,7 +114,7 @@ impl Consensus for SqliteConsensus {
         .map_err(|e| e.into())
     }
 
-    async fn compare_and_set(
+    fn compare_and_set_blocking(
         &self,
         deadline: Instant,
         key: &str,
@@ -180,12 +182,12 @@ impl Consensus for SqliteConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(deadline, key).await?;
+            let current = self.head_blocking(deadline, key)?;
             Ok(Err(current))
         }
     }
 
-    async fn scan(
+    fn scan_blocking(
         &self,
         _deadline: Instant,
         key: &str,
@@ -215,7 +217,7 @@ impl Consensus for SqliteConsensus {
         }
     }
 
-    async fn truncate(
+    fn truncate_blocking(
         &self,
         deadline: Instant,
         key: &str,
@@ -246,7 +248,7 @@ impl Consensus for SqliteConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(deadline, key).await?;
+            let current = self.head_blocking(deadline, key)?;
             if current.map_or(true, |data| data.seqno < seqno) {
                 return Err(ExternalError::from(anyhow!(
                     "upper bound too high for truncate: {:?}",
@@ -259,18 +261,57 @@ impl Consensus for SqliteConsensus {
     }
 }
 
+#[async_trait]
+impl Consensus for SqliteConsensus {
+    async fn head(
+        &self,
+        deadline: Instant,
+        key: &str,
+    ) -> Result<Option<VersionedData>, ExternalError> {
+        tokio::task::block_in_place(|| self.head_blocking(deadline, key))
+    }
+
+    async fn compare_and_set(
+        &self,
+        deadline: Instant,
+        key: &str,
+        expected: Option<SeqNo>,
+        new: VersionedData,
+    ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
+        tokio::task::block_in_place(|| self.compare_and_set_blocking(deadline, key, expected, new))
+    }
+
+    async fn scan(
+        &self,
+        deadline: Instant,
+        key: &str,
+        from: SeqNo,
+    ) -> Result<Vec<VersionedData>, ExternalError> {
+        tokio::task::block_in_place(|| self.scan_blocking(deadline, key, from))
+    }
+
+    async fn truncate(
+        &self,
+        deadline: Instant,
+        key: &str,
+        seqno: SeqNo,
+    ) -> Result<(), ExternalError> {
+        tokio::task::block_in_place(|| self.truncate_blocking(deadline, key, seqno))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::location::tests::consensus_impl_test;
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn sqlite_consensus() -> Result<(), ExternalError> {
         let temp_dir = tempfile::tempdir()?;
         consensus_impl_test(|| {
             let path = temp_dir.path().join("sqlite_consensus");
-            SqliteConsensus::open(&path)
+            SqliteConsensus::open_blocking(&path)
         })
         .await
     }
