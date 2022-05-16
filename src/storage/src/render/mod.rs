@@ -190,12 +190,13 @@ pub fn build_storage_dataflow<A: Allocate>(
                         .await
                         .unwrap();
 
-                    let (mut write, _) = persist_client
+                    let (mut write, read) = persist_client
                         .open::<(), SourceData, mz_repr::Timestamp, mz_repr::Diff>(
                             source.storage_metadata.persist_shard,
                         )
                         .await
                         .expect("could not open persist shard");
+                    read.expire().await;
 
                     while scheduler.notified().await {
                         let frontier = frontiers.borrow()[0].clone();

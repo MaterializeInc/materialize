@@ -85,10 +85,14 @@ where
         let persist_client = futures_executor::block_on(persist_location.open())
             .expect("cannot open persist client");
 
-        let (write, _read) = futures_executor::block_on(
-            persist_client.open::<Row, Row, Timestamp, Diff>(self.shard_id),
-        )
-        .expect("could not open persist shard");
+        let write = futures_executor::block_on(async {
+            let (write, read) = persist_client
+                .open::<Row, Row, Timestamp, Diff>(self.shard_id)
+                .await
+                .expect("could not open persist shard");
+            read.expire().await;
+            write
+        });
 
         let write = Rc::new(RefCell::new(Some(write)));
         let write_weak = Rc::downgrade(&write);

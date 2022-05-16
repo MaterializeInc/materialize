@@ -218,12 +218,16 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                             let persist_client =
                                 futures_executor::block_on(location.open()).unwrap();
 
-                            let (write, _read) = futures_executor::block_on(
-                                persist_client.open::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(
-                                    persist_connector.shard_id,
-                                ),
-                            )
-                            .unwrap();
+                            let write = futures_executor::block_on(async {
+                                let (write, read) = persist_client
+                                    .open::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(
+                                        persist_connector.shard_id,
+                                    )
+                                    .await
+                                    .unwrap();
+                                read.expire().await;
+                                write
+                            });
 
                             self.storage_state.persist_handles.insert(source.id, write);
                         }
