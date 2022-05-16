@@ -95,13 +95,42 @@ where
         keys: &[String],
         desc: &Description<T>,
     ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
-        let (seqno, res) = self
-            .apply_unbatched_cmd(|_, state| state.compare_and_append(keys, desc))
-            .await?;
-        match res {
-            Ok(()) => Ok(Ok(Ok(seqno))),
-            Err(Ok(err)) => return Ok(Ok(Err(err))),
-            Err(Err(current_upper)) => return Ok(Err(current_upper)),
+        loop {
+            let (seqno, res) = self
+                .apply_unbatched_cmd(|_, state| state.compare_and_append(keys, desc))
+                .await?;
+
+            match res {
+                Ok(()) => {
+                    return Ok(Ok(Ok(seqno)));
+                }
+                // TODO(aljoscha): This upper seems useless because we have to
+                // read from consensus to get an up-to-date version of the
+                // upper. Might as well change the signature of
+                // `State::compare_and_append`.
+                Err(Ok(_current_upper)) => {
+                    // If the state machine thinks that the shard upper is not
+                    // far enough along, it could be because the caller of this
+                    // method has found out that it advanced via some some
+                    // side-channel that didn't update our local cache of the
+                    // machine state. So, fetch the latest state and try again
+                    // if we indeed get something different.
+                    self.fetch_and_update_state().await;
+                    let current_upper = self.upper();
+
+                    // We tried to to a compare_and_append with the wrong
+                    // expected upper, that won't work.
+                    if &current_upper != desc.lower() {
+                        return Ok(Ok(Err(Upper(current_upper))));
+                    } else {
+                        // The upper stored in state was outdated. Retry after
+                        // updating.
+                    }
+                }
+                Err(Err(invalid_usage)) => {
+                    return Ok(Err(invalid_usage));
+                }
+            }
         }
     }
 

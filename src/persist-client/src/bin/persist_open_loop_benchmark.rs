@@ -459,8 +459,9 @@ mod raw_persist_benchmark {
             // TODO: figure out the right way to do this without the extra allocations.
             let batch = batch
                 .iter()
-                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d));
-            self.append(batch, self.upper().clone(), new_upper)
+                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
+                .collect::<Vec<_>>();
+            self.append(batch.iter(), self.upper().clone(), new_upper)
                 .await??
                 .expect("invalid current upper");
 
