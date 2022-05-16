@@ -50,6 +50,7 @@ use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 use timely::Data;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
+use tokio::time::MissedTickBehavior;
 use tracing::error;
 
 use mz_avro::types::Value;
@@ -986,6 +987,7 @@ where
             tokio::pin!(source_stream);
 
             let mut timestamp_interval = tokio::time::interval(timestamp_frequency);
+            timestamp_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut pending_messages = vec![];
             loop {
                 tokio::select! {
