@@ -34,7 +34,7 @@ SERVICES = [
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Debezium(),
-    Materialized(),
+    Materialized(timestamp_frequency="1s"),
     Postgres(),
     SqlServer(sa_password=password),
     MySql(mysql_root_password=password),

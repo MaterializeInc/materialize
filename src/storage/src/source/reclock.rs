@@ -351,20 +351,20 @@ impl ReclockOperator {
                     // This is an error not because we don't expect it to happen but because we should handle it better.
                     // Importantly, `continue`ing here is _correct_.  Just likely not ideal beacause we'll stall until
                     // `self.now` catches up.
-                    error!("Time unexpectedly went backwards for {:?}", self.name);
+                    error!("Time unexpectedly didn't go forwards for {:?}", self.name);
+                    tokio::time::sleep(self.update_interval).await;
                     continue;
                 }
             };
             let new_upper = Antichain::from_elem(new_ts + 1);
 
             // Can happen if clock skew between replicas.
-            // TODO: push handling this into ts generation and remove sleep
             if PartialOrder::less_equal(&new_upper, &self.write_upper) {
                 info!(
-                    "Current write upper is not less than new upper: {:?} {:?}",
-                    self.write_upper, new_upper
+                    "Current write upper is not less than new upper for {:?}: {:?} {:?}",
+                    self.name, self.write_upper, new_upper
                 );
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(self.update_interval).await;
                 continue;
             }
             let compare_and_append_result = self

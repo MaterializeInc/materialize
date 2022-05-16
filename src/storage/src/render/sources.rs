@@ -269,7 +269,7 @@ where
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
-                storage_metadata: storage_metadata.clone(),
+                storage_metadata,
                 as_of: as_of_frontier.clone(),
                 aws_external_id: storage_state.aws_external_id.clone(),
             };
