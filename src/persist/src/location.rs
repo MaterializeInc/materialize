@@ -15,9 +15,9 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
+use deadpool_postgres::tokio_postgres::error::SqlState;
 use mz_persist_types::Codec;
 use serde::{Deserialize, Serialize};
-use tokio_postgres::error::SqlState;
 
 use crate::error::Error;
 
@@ -195,8 +195,8 @@ impl From<std::io::Error> for ExternalError {
     }
 }
 
-impl From<tokio_postgres::Error> for ExternalError {
-    fn from(e: tokio_postgres::Error) -> Self {
+impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
+    fn from(e: deadpool_postgres::tokio_postgres::Error) -> Self {
         let code = match e.as_db_error().map(|x| x.code()) {
             Some(x) => x,
             None => {
@@ -213,6 +213,19 @@ impl From<tokio_postgres::Error> for ExternalError {
             }),
             _ => ExternalError::Indeterminate(Indeterminate {
                 inner: anyhow::Error::new(e),
+            }),
+        }
+    }
+}
+
+impl From<deadpool_postgres::PoolError> for ExternalError {
+    fn from(x: deadpool_postgres::PoolError) -> Self {
+        match x {
+            // We have logic for turning a postgres Error into an ExternalError,
+            // so use it.
+            deadpool_postgres::PoolError::Backend(x) => ExternalError::from(x),
+            x => ExternalError::Indeterminate(Indeterminate {
+                inner: anyhow::Error::new(x),
             }),
         }
     }

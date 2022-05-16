@@ -1372,6 +1372,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "deadpool"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90d58a15f5acfe41afcac9775d8e92f2338d14482220c778c6e42aa77778182"
+dependencies = [
+ "async-trait",
+ "deadpool-runtime",
+ "num_cpus",
+ "retain_mut",
+ "tokio",
+]
+
+[[package]]
+name = "deadpool-postgres"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c668a58063c6331e3437e3146970943ad82b1b36169fd979bb2645ac2088209a"
+dependencies = [
+ "deadpool",
+ "log",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
+name = "deadpool-runtime"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaa37046cc0f6c3cc6090fbdbf73ef0b8ef4cfcc37f6befc0020f63e8cf121e1"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "debugid"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3632,6 +3666,7 @@ dependencies = [
  "bytes",
  "criterion",
  "crossbeam-channel",
+ "deadpool-postgres",
  "differential-dataflow",
  "fail",
  "futures-util",
@@ -5377,6 +5412,12 @@ dependencies = [
  "web-sys",
  "winreg",
 ]
+
+[[package]]
+name = "retain_mut"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c31b5c4033f8fdde8700e4657be2c497e7288f01515be52168c631e2e4d4086"
 
 [[package]]
 name = "ring"
