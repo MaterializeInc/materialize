@@ -84,7 +84,8 @@ pub fn bench_consensus_compare_and_set(data: &DataGenerator, g: &mut BenchmarkGr
 
     // Create a directory that will automatically be dropped after the test finishes.
     let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let mut sqlite_consensus = SqliteConsensus::open(temp_dir.path().join("db"))
+    let mut sqlite_consensus = runtime
+        .block_on(SqliteConsensus::open(temp_dir.path().join("db")))
         .expect("creating a SqliteConsensus cannot fail");
     g.bench_with_input(
         BenchmarkId::new("sqlite", data.goodput_pretty()),
