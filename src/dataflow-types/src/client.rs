@@ -268,7 +268,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             any::<Option<LoggingConfig>>().prop_map(ComputeCommand::CreateInstance),
             Just(ComputeCommand::DropInstance),
             proptest::collection::vec(
-                any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>(),
+                any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
                 1..4
             )
             .prop_map(ComputeCommand::CreateDataflows),
