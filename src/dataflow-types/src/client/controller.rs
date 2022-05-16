@@ -420,7 +420,7 @@ where
     /// such a branch is fine.
     ///
     /// This method is _not_ intended to await indefinitely for reconnections and such;
-    /// the controller relies on this property in order to not hang.
+    /// the coordinator relies on this property in order to not hang.
     pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         let stashed = self.stashed_response.take().expect("`process` is not allowed to block indefinitely -- `ready` should be polled to completion first.");
         match stashed {
