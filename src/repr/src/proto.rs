@@ -186,6 +186,18 @@ impl ProtoRepr for Uuid {
     }
 }
 
+impl ProtoRepr for std::num::NonZeroUsize {
+    type Repr = u64;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        usize::from(self).into_proto()
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        Ok(usize::from_proto(repr)?.try_into()?)
+    }
+}
+
 pub fn any_uuid() -> impl Strategy<Value = Uuid> {
     (0..u128::MAX).prop_map(Uuid::from_u128)
 }

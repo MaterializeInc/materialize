@@ -62,3 +62,35 @@ message ProtoComputeCommand {
         ProtoCancelPeeks cancel_peeks = 6;
     }
 }
+
+message ProtoComputeResponse {
+    message ProtoUpdate {
+        uint64 timestamp = 1;
+        int64 diff = 2;
+    }
+
+    message ProtoTrace {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        repeated ProtoUpdate updates = 2;
+    }
+
+    message ProtoFrontierUppersKind {
+        repeated ProtoTrace traces = 1;
+    }
+
+    message ProtoPeekResponseKind {
+        mz_repr.proto.ProtoU128 id = 1;
+        mz_dataflow_types.types.ProtoPeekResponse resp = 2;
+    }
+
+    message ProtoTailResponseKind {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        mz_dataflow_types.types.ProtoTailResponse resp = 2;
+    }
+
+    oneof kind {
+        ProtoFrontierUppersKind frontier_uppers = 1;
+        ProtoPeekResponseKind peek_response = 2;
+        ProtoTailResponseKind tail_response = 3;
+    }
+}
