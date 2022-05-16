@@ -24,7 +24,7 @@ mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 openssl = { version = "0.10.38", features = ["vendored"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tokio = "1.17.0"
+tokio = "1.18.2"
 tokio-openssl = "0.6.3"
 tokio-util = { version = "0.7.1", features = ["codec"] }
 tracing = "0.1.34"
