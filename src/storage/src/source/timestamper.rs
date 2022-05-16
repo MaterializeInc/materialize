@@ -196,26 +196,14 @@ impl CreateSourceTimestamper {
     pub async fn timestamp_offsets(
         &mut self,
         observed_max_offsets: HashMap<PartitionId, MzOffset>,
-    ) -> anyhow::Result<
-        Option<(
-            HashMap<PartitionId, (Timestamp, MzOffset)>,
-            Antichain<Timestamp>,
-        )>,
-    > {
+    ) -> anyhow::Result<(
+        HashMap<PartitionId, (Timestamp, MzOffset)>,
+        Antichain<Timestamp>,
+    )> {
         // XXX: make handling empty better: want to CAA once before returning
         let mut empty_flag = observed_max_offsets.is_empty();
         let mut matched_offsets = HashMap::new();
         loop {
-            if self.write_upper.is_empty() || self.read_handle.since().is_empty() {
-                if !self.write_upper.is_empty() {
-                    self.write_upper = Antichain::new();
-                }
-
-                // TODO(#12267): Properly downgrade `since` of the timestamp collection based on the source data collection.
-
-                return Ok(None);
-            }
-
             // See if we're able to assert a timestamp for any of the input offsets
             for (partition, offset) in observed_max_offsets.iter() {
                 if matched_offsets.contains_key(partition) {
@@ -328,7 +316,7 @@ impl CreateSourceTimestamper {
                     ))
                     .min()
                     .unwrap_or_else(Timestamp::minimum);
-                return Ok(Some((matched_offsets, Antichain::from_elem(progress))));
+                return Ok((matched_offsets, Antichain::from_elem(progress)));
             }
             empty_flag = false;
 
@@ -367,8 +355,13 @@ impl CreateSourceTimestamper {
             };
 
             while PartialOrder::less_than(&self.read_progress, &self.write_upper) {
-                match self.timestamp_bindings_listener.next().await {
-                    Some(ListenEvent::Progress(progress)) => {
+                match self
+                    .timestamp_bindings_listener
+                    .next()
+                    .await
+                    .expect("ListenStream doesn't end")
+                {
+                    ListenEvent::Progress(progress) => {
                         assert!(
                             timely::PartialOrder::less_equal(&self.read_progress, &progress),
                             "{:?} PARTIAL ORDER: {:?} {:?}",
@@ -378,7 +371,7 @@ impl CreateSourceTimestamper {
                         );
                         self.read_progress = progress;
                     }
-                    Some(ListenEvent::Updates(updates)) => {
+                    ListenEvent::Updates(updates) => {
                         for ((_, value), timestamp, diff) in updates {
                             let partition = value.expect("Unable to decode partition id");
                             self.persisted_timestamp_bindings
@@ -386,11 +379,6 @@ impl CreateSourceTimestamper {
                                 .or_insert_with(VecDeque::new)
                                 .push_back((timestamp, MzOffset { offset: diff }));
                         }
-                    }
-                    None => {
-                        // time to shut down!
-                        self.write_upper = Antichain::new();
-                        return Ok(None);
                     }
                 }
             }

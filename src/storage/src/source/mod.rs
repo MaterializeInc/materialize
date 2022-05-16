@@ -1006,11 +1006,7 @@ where
                             *entry = std::cmp::max(*entry, message.offset);
                         }
                         let (bindings, progress) = match timestamper.timestamp_offsets(max_offsets).await {
-                            Ok(Some((bindings, progress))) => (bindings, progress),
-                            Ok(None) => {
-                                // Timestamper shutdown.  Should exit
-                                break;
-                            },
+                            Ok((bindings, progress)) => (bindings, progress),
                             Err(e) => {
                                 error!("Error timestamping offsets: {}", e);
                                 return;
