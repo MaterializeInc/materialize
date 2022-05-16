@@ -173,7 +173,7 @@ mod indexes;
 #[derive(Debug)]
 pub enum Message {
     Command(Command),
-    ControllerReady, // (ControllerResponse)
+    ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
     SinkConnectorReady(SinkConnectorReady),
     SendDiffs(SendDiffs),
