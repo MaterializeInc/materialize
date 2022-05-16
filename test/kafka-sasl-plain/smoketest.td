@@ -89,7 +89,7 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
       security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
       sasl_username = 'materialize',
-      sasl_password_env = 'SASL_PASSWORD',
+      sasl_password = 'sekurity',
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -130,16 +130,6 @@ a
 #---
 #1
 #2
-#
-#> CREATE CONNECTOR sasl_env_pw_connector
-#  FOR KAFKA BROKER '${testdrive.kafka-addr}'
-#  WITH (
-#      security_protocol = 'SASL_SSL',
-#      sasl_mechanisms = 'PLAIN',
-#      sasl_username = 'materialize',
-#      sasl_password_env = 'SASL_PASSWORD',
-#      ssl_ca_location = '/share/secrets/ca.crt'
-#  )
 #
 #> CREATE MATERIALIZED SOURCE connector_env_pw_data
 #  FROM KAFKA CONNECTOR sasl_env_pw_connector

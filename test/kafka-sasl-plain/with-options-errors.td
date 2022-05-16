@@ -39,7 +39,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
       security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
       sasl_username = 'materialize',
-      sasl_password = 'sekurity',
       sasl_password_env = 'SASL_PASSWORD',
       ssl_ca_location = '/share/secrets/ca.crt'
   )
@@ -48,37 +47,4 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
-contains:Invalid WITH options: cannot specify both sasl_password and sasl_password_env options at the same time
-
-! CREATE MATERIALIZED SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password_env = 'SASL_PASSWORD',
-      sasl_password = 'sekurity',
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  ENVELOPE DEBEZIUM
-contains:Invalid WITH options: cannot specify both sasl_password and sasl_password_env options at the same time
-
-! CREATE MATERIALIZED SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (
-      security_protocol = 'SASL_SSL',
-      sasl_mechanisms = 'PLAIN',
-      sasl_username = 'materialize',
-      sasl_password_env = 'DNE',
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  WITH (
-      ssl_ca_location = '/share/secrets/ca.crt'
-  )
-  ENVELOPE DEBEZIUM
-contains:Invalid WITH option sasl_password_env='DNE': environment variable not found
+contains:unexpected parameters for CREATE SOURCE: sasl_password_env

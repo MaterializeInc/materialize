@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::task;
@@ -34,7 +34,6 @@ enum ValType {
     // Number with range [lower, upper]
     Number(i32, i32),
     Boolean,
-    EnvVar,
 }
 
 impl ValType {
@@ -52,7 +51,6 @@ impl ValType {
                 Ok(parsed_n) if *lower <= parsed_n && parsed_n <= *upper => n.to_string(),
                 _ => bail!("must be a number between {} and {}", lower, upper),
             },
-            (ValType::EnvVar, Value::String(v)) => std::env::var(v)?,
             _ => bail!("unexpected value type"),
         })
     }
@@ -65,9 +63,6 @@ struct Config {
     val_type: ValType,
     transform: fn(String) -> String,
     default: Option<String>,
-    // If set, look for an environment variable named `<name>_env` to possibly
-    // define the named setting.
-    include_env_var: bool,
 }
 
 impl Config {
@@ -77,7 +72,6 @@ impl Config {
             val_type,
             transform: convert::identity,
             default: None,
-            include_env_var: false,
         }
     }
 
@@ -105,32 +99,13 @@ impl Config {
 
     /// Allows for returning a default value for this configuration option
     fn set_default(mut self, d: Option<String>) -> Self {
-        assert!(
-            !self.include_env_var,
-            "cannot currently both set default values and include environment variables on the same config"
-        );
         self.default = d;
-        self
-    }
-
-    /// Allows for returning a default value for this configuration option
-    fn include_env_var(mut self) -> Self {
-        assert!(
-            self.default.is_none(),
-            "cannot currently both set default values and include environment variables on the same config"
-        );
-        self.include_env_var = true;
         self
     }
 
     /// Get the appropriate String to use as the Kafka config key.
     fn get_kafka_config_key(&self) -> String {
         self.name.replace('_', ".")
-    }
-
-    /// Gets the key to lookup for configs that support environment variable lookups.
-    fn get_env_var_key(&self) -> String {
-        format!("{}_env", self.name)
     }
 }
 
@@ -142,35 +117,10 @@ fn extract(
     for config in configs {
         // Look for config.name
         let value = match input.remove(config.name) {
-            Some(v) => match config.val_type.process_val(&v) {
-                Ok(v) => {
-                    // Ensure env var variant wasn't also included.
-                    if config.include_env_var && input.get(&config.get_env_var_key()).is_some() {
-                        bail!(
-                            "Invalid WITH options: cannot specify both {} and {} options at the same time",
-                            config.name,
-                            config.get_env_var_key()
-                        )
-                    }
-
-                    v
-                }
-                Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
-            },
-            // If config.name is not a key and config permits it, look for an
-            // environment variable.
-            None if config.include_env_var => match input.remove(&config.get_env_var_key()) {
-                Some(v) => match ValType::EnvVar.process_val(&v) {
-                    Ok(v) => v,
-                    Err(e) => bail!(
-                        "Invalid WITH option {}={}: {}",
-                        config.get_env_var_key(),
-                        v,
-                        e
-                    ),
-                },
-                None => continue,
-            },
+            Some(v) => config
+                .val_type
+                .process_val(&v)
+                .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
             // Check for default values
             None => match &config.default {
                 Some(v) => v.to_string(),
@@ -220,7 +170,7 @@ pub fn extract_config(
             Config::string("isolation_level").set_default(Some(String::from("read_committed"))),
             Config::string("security_protocol"),
             Config::string("sasl_username"),
-            Config::string("sasl_password").include_env_var(),
+            Config::string("sasl_password"),
             // For historical reasons, we allow `sasl_mechanisms` to be lowercase or
             // mixed case, while librdkafka requires all uppercase (e.g., `PLAIN`,
             // not `plain`).
@@ -228,7 +178,7 @@ pub fn extract_config(
             Config::path("ssl_ca_location"),
             Config::path("ssl_certificate_location"),
             Config::path("ssl_key_location"),
-            Config::string("ssl_key_password").include_env_var(),
+            Config::string("ssl_key_password"),
             Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
             Config::new("enable_idempotence", ValType::Boolean),
             Config::new(
