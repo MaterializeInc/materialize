@@ -438,6 +438,12 @@ where
                                             // N.B. tx_id is validated when constructing dbz_envelope
                                             .expect("bad tx metadata spec")
                                             .clone();
+                                        let tx_collection_metadata = storage_state
+                                            .collection_metadata
+                                            .get(&tx_metadata.tx_metadata_global_id)
+                                            // N.B. tx_id is validated when constructing dbz_envelope
+                                            .expect("bad tx metadata spec")
+                                            .clone();
                                         // TODO(#11667): reuse the existing arrangement if it exists
                                         let ((tx_source_ok, tx_source_err), tx_token) =
                                             render_source(
@@ -445,16 +451,7 @@ where
                                                 as_of_frontier,
                                                 SourceInstanceDesc {
                                                     description: tx_src_desc,
-                                                    storage_metadata: CollectionMetadata {
-                                                        persist_location: storage_metadata
-                                                            .persist_location
-                                                            .clone(),
-                                                        timestamp_shard_id: storage_metadata
-                                                            .tx_timestamp_shard_id
-                                                            .clone()
-                                                            .unwrap(),
-                                                        tx_timestamp_shard_id: None,
-                                                    },
+                                                    storage_metadata: tx_collection_metadata,
                                                     arguments: SourceInstanceArguments {
                                                         operators: None,
                                                     },

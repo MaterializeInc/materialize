@@ -47,7 +47,6 @@ impl CreateSourceTimestamper {
         CollectionMetadata {
             persist_location,
             timestamp_shard_id,
-            tx_timestamp_shard_id: _,
         }: CollectionMetadata,
         now: NowFn,
         mut as_of: Antichain<Timestamp>,

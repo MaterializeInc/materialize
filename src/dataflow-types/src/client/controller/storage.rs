@@ -132,7 +132,6 @@ pub trait StorageController: Debug + Send {
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
     pub timestamp_shard_id: ShardId,
-    pub tx_timestamp_shard_id: Option<ShardId>,
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
@@ -154,7 +153,6 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
                 consensus_uri: "".to_string(),
             },
             timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
-            tx_timestamp_shard_id: None,
         })
     }
 }
@@ -173,7 +171,6 @@ impl Arbitrary for CollectionMetadata {
                 consensus_uri: "".to_string(),
             },
             timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
-            tx_timestamp_shard_id: None,
         })
         .boxed()
     }
@@ -298,7 +295,6 @@ where
         let collection = self.collection(id)?;
         Ok(CollectionMetadata {
             timestamp_shard_id: collection.timestamp_shard_id,
-            tx_timestamp_shard_id: collection.tx_timestamp_shard_id,
             persist_location: self.persist_location.clone(),
         })
     }
@@ -351,27 +347,8 @@ where
                 .insert_without_overwrite(&mut self.state.stash, &id, ShardId::new())
                 .await?;
 
-            let tx_timestamp_shard_id = match desc.connector {
-                crate::sources::SourceConnector::External {
-                    envelope: crate::sources::SourceEnvelope::Debezium(ref dbz_envelope),
-                    ..
-                } => match dbz_envelope.mode.tx_metadata() {
-                    Some(md) => Some(
-                        self.collection_metadata(md.tx_metadata_global_id)?
-                            .timestamp_shard_id,
-                    ),
-                    None => None,
-                },
-                _ => None,
-            };
-
-            let collection_state = CollectionState::new(
-                desc.clone(),
-                since.clone(),
-                read_handle,
-                timestamp_shard_id,
-                tx_timestamp_shard_id,
-            );
+            let collection_state =
+                CollectionState::new(desc.clone(), since.clone(), read_handle, timestamp_shard_id);
             self.state.collections.insert(id, collection_state);
 
             let storage_metadata = self.collection_metadata(id)?;
@@ -620,8 +597,6 @@ pub struct CollectionState<T> {
     // TODO: only makes sense for collections that are ingested so maybe should live elsewhere?
     /// The persist shard id of the remap collection used to reclock this collection
     pub timestamp_shard_id: ShardId,
-    /// The persist shard id of the remap collection used to reclock the transaction metadata of this collection
-    pub tx_timestamp_shard_id: Option<ShardId>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -631,7 +606,6 @@ impl<T: Timestamp> CollectionState<T> {
         since: Antichain<T>,
         read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
         timestamp_shard_id: ShardId,
-        tx_timestamp_shard_id: Option<ShardId>,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
@@ -643,7 +617,6 @@ impl<T: Timestamp> CollectionState<T> {
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
             read_handle,
             timestamp_shard_id,
-            tx_timestamp_shard_id,
         }
     }
 }

@@ -12,6 +12,7 @@ use std::sync::Weak;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistLocation;
 use timely::communication::Allocate;
@@ -59,6 +60,8 @@ pub struct StorageState {
     /// Persist handles for all sources that deal with persist collections/shards.
     pub persist_handles:
         HashMap<GlobalId, WriteHandle<Row, Row, mz_repr::Timestamp, mz_repr::Diff>>,
+    /// Persist shard ids for the reclocking collection of a source.
+    pub collection_metadata: HashMap<GlobalId, CollectionMetadata>,
     /// Handles to external sources, keyed by ID.
     // TODO(guswynn): determine if this field is needed
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
@@ -178,6 +181,10 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         source.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
+
+                    self.storage_state
+                        .collection_metadata
+                        .insert(source.id, source.storage_metadata);
                 }
             }
             StorageCommand::RenderSources(sources) => self.build_storage_dataflow(sources),

@@ -130,6 +130,7 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 persist_handles: HashMap::new(),
+                collection_metadata: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
