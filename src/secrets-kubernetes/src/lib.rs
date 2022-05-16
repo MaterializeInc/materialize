@@ -177,6 +177,8 @@ impl SecretsController for KubernetesSecretsController {
     }
 }
 
+//TODO: this trait needs to be implemented appropriately for the KubernetesSecretsController
+//before this functionality will work in production
 impl SecretsReader for KubernetesSecretsController {
     fn read(&self, _id: mz_repr::GlobalId) -> Result<Vec<u8>, Error> {
         unreachable!()
