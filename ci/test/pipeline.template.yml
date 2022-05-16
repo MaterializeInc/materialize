@@ -84,9 +84,9 @@ steps:
     agents:
       queue: mac
 
-  - id: lint-allocator
-    label: Lint memory allocator
-    command: bin/ci-builder run stable ci/test/lint-allocator.sh
+  - id: lint-deps
+    label: Lint dependencies
+    command: bin/ci-builder run stable ci/test/lint-deps.sh
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"
