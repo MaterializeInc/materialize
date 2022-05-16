@@ -76,9 +76,6 @@ SERVICES = [
         bootstrap_server_type="SSL",
     ),
     Materialized(
-        environment=[
-            "SSL_KEY_PASSWORD=mzmzmz",
-        ],
         volumes_extra=["secrets:/share/secrets"],
     ),
     Testdrive(
