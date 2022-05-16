@@ -352,7 +352,7 @@ Currently, the timestamps used to in Materialize for `upper`, `since`, and the g
 integers that are interpreted as an epoch in milliseconds. Instead we can change the representation of these timestamps
 so that the X most significant bits are used for the epoch and the Y least significant bits are used for a counter.
 Every 1 millisecond the X bits are increased by 1 and the Y bytes are all reset to 0. Every write increments the Y bits
-by 1. This would allow us to have 2^Y concurrent writes per millisecond, without blocking any queries. Any write in
+by 1. This would allow us to have 2^Y writes per millisecond, without blocking any queries. Any write in
 excess of 2^Y per millisecond must be blocked until the next millisecond.
 
 Note: Increasing the size of the timestamp type would give more flexibility (for example to 128 bits).
