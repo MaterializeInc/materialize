@@ -9,17 +9,16 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use tokio_postgres::{Client as PostgresClient, IsolationLevel, NoTls, Transaction};
-
-use mz_ore::task;
+use deadpool_postgres::tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use deadpool_postgres::tokio_postgres::{
+    Client as PostgresClient, IsolationLevel, NoTls, Transaction,
+};
+use deadpool_postgres::{Hook, Manager, Pool};
+use tracing::debug;
 
 use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
@@ -73,6 +72,7 @@ impl<'a> FromSql<'a> for SeqNo {
 #[derive(Clone, Debug)]
 pub struct PostgresConsensusConfig {
     url: String,
+    pool_max_size: usize,
 }
 
 impl PostgresConsensusConfig {
@@ -83,6 +83,8 @@ impl PostgresConsensusConfig {
     pub async fn new(url: &str) -> Result<Self, Error> {
         Ok(PostgresConsensusConfig {
             url: url.to_string(),
+            // WIP get this from somewhere
+            pool_max_size: 8,
         })
     }
 
@@ -112,10 +114,14 @@ impl PostgresConsensusConfig {
 }
 
 /// Implementation of [Consensus] over a Postgres database.
-#[derive(Debug)]
 pub struct PostgresConsensus {
-    client: Arc<Mutex<PostgresClient>>,
-    _handle: JoinHandle<()>,
+    pool: Pool,
+}
+
+impl std::fmt::Debug for PostgresConsensus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PostgresConsensus").finish_non_exhaustive()
+    }
 }
 
 impl PostgresConsensus {
@@ -125,21 +131,21 @@ impl PostgresConsensus {
         // TODO: reconsider opening with NoTLS. Perhaps we actually want to,
         // especially given the fact that its not entirely known what data
         // will actually be stored in Consensus.
-        let (mut client, conn) = tokio_postgres::connect(&config.url, NoTls).await?;
-        let handle = task::spawn(|| "pg_consensus_client", async move {
-            if let Err(e) = conn.await {
-                tracing::error!("connection error: {}", e);
-                return;
-            }
-        });
+        let mgr = Manager::new(config.url.parse()?, NoTls);
+        let pool = Pool::builder(mgr)
+            .max_size(config.pool_max_size)
+            .post_create(Hook::sync_fn(|_, _| {
+                debug!("made a new postgres connection");
+                Ok(())
+            }))
+            .build()
+            .unwrap();
 
+        let mut client = pool.get().await?;
         let tx = client.transaction().await?;
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
-        Ok(PostgresConsensus {
-            client: Arc::new(Mutex::new(client)),
-            _handle: handle,
-        })
+        Ok(PostgresConsensus { pool })
     }
 
     async fn tx<'a>(
@@ -180,7 +186,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
-        let mut client = self.client.lock().await;
+        let mut client = self.pool.get().await?;
         let tx = self.tx(&mut client).await?;
         let ret = self.head_tx(&tx, key).await?;
         tx.commit().await?;
@@ -205,7 +211,7 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        let mut client = self.client.lock().await;
+        let mut client = self.pool.get().await?;
         let tx = self.tx(&mut client).await?;
         let result = if let Some(expected) = expected {
             // Only insert the new row if:
@@ -260,7 +266,7 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let mut client = self.client.lock().await;
+        let mut client = self.pool.get().await?;
         let tx = self.tx(&mut client).await?;
         // Intentianally wait to actually use the data until after the transaction
         // has successfully committed to ensure the reads were valid. See [1]
@@ -299,7 +305,7 @@ impl Consensus for PostgresConsensus {
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 
-        let mut client = self.client.lock().await;
+        let mut client = self.pool.get().await?;
         let tx = self.tx(&mut client).await?;
         let result = tx.execute(&*q, &[&key, &seqno]).await?;
         let ret = if result == 0 {

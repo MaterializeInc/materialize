@@ -1358,6 +1358,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "deadpool"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90d58a15f5acfe41afcac9775d8e92f2338d14482220c778c6e42aa77778182"
+dependencies = [
+ "async-trait",
+ "deadpool-runtime",
+ "num_cpus",
+ "retain_mut",
+ "tokio",
+]
+
+[[package]]
+name = "deadpool-postgres"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c668a58063c6331e3437e3146970943ad82b1b36169fd979bb2645ac2088209a"
+dependencies = [
+ "deadpool",
+ "log",
+ "tokio",
+ "tokio-postgres 0.7.6",
+]
+
+[[package]]
+name = "deadpool-runtime"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaa37046cc0f6c3cc6090fbdbf73ef0b8ef4cfcc37f6befc0020f63e8cf121e1"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "debugid"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2862,7 +2896,7 @@ dependencies = [
  "os_info",
  "postgres",
  "postgres-openssl",
- "postgres-protocol",
+ "postgres-protocol 0.6.1",
  "postgres_array",
  "predicates",
  "prometheus",
@@ -2881,7 +2915,7 @@ dependencies = [
  "tikv-jemallocator",
  "tokio",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tokio-stream",
  "tower-http",
  "tracing",
@@ -3099,7 +3133,7 @@ dependencies = [
  "rand",
  "rand_distr",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -3223,7 +3257,7 @@ dependencies = [
  "thiserror",
  "timely",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tokio-stream",
  "tracing",
  "uncased",
@@ -3475,7 +3509,7 @@ dependencies = [
  "mz-metabase",
  "mz-ore",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tracing",
 ]
 
@@ -3592,7 +3626,7 @@ dependencies = [
  "mz-test-util",
  "rand",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3611,6 +3645,7 @@ dependencies = [
  "bytes",
  "criterion",
  "crossbeam-channel",
+ "deadpool-postgres",
  "differential-dataflow",
  "fail",
  "futures-executor",
@@ -3632,7 +3667,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tracing",
  "url",
  "uuid",
@@ -3695,7 +3730,7 @@ dependencies = [
  "dec",
  "lazy_static",
  "mz-repr",
- "postgres-types",
+ "postgres-types 0.2.1",
  "uuid",
 ]
 
@@ -3709,7 +3744,7 @@ dependencies = [
  "datadriven",
  "fallible-iterator",
  "mz-ore",
- "postgres-protocol",
+ "postgres-protocol 0.6.1",
  "serde",
  "serde_json",
 ]
@@ -3759,7 +3794,7 @@ dependencies = [
  "mz-ore",
  "openssl",
  "postgres-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
 ]
 
 [[package]]
@@ -3968,13 +4003,13 @@ dependencies = [
  "mz-pgrepr",
  "mz-repr",
  "mz-sql",
- "postgres-protocol",
+ "postgres-protocol 0.6.1",
  "regex",
  "serde_json",
  "tempfile",
  "time",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tower-http",
  "uuid",
  "walkdir",
@@ -3998,7 +4033,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tracing",
 ]
 
@@ -4042,7 +4077,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-timely-util",
- "postgres-protocol",
+ "postgres-protocol 0.6.1",
  "prometheus",
  "prost",
  "prost-build",
@@ -4056,7 +4091,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-byteorder",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tokio-serde",
  "tokio-util 0.7.2",
  "tracing",
@@ -4074,7 +4109,7 @@ dependencies = [
  "rand",
  "rdkafka",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tracing",
 ]
 
@@ -4137,7 +4172,7 @@ dependencies = [
  "tiberius",
  "time",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
  "tokio-stream",
  "tokio-util 0.7.2",
  "tracing-subscriber",
@@ -4767,7 +4802,7 @@ dependencies = [
  "futures",
  "log",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
 ]
 
 [[package]]
@@ -4779,13 +4814,31 @@ dependencies = [
  "openssl",
  "tokio",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.7.2",
 ]
 
 [[package]]
 name = "postgres-protocol"
 version = "0.6.1"
 source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
+dependencies = [
+ "base64",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "hmac",
+ "md-5",
+ "memchr",
+ "rand",
+ "sha2",
+ "stringprep",
+]
+
+[[package]]
+name = "postgres-protocol"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "878c6cbf956e03af9aa8204b407b9cbf47c072164800aa918c516cd4b056c50c"
 dependencies = [
  "base64",
  "byteorder",
@@ -4807,10 +4860,21 @@ dependencies = [
  "bytes",
  "chrono",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.6.1",
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "postgres-types"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebd6e8b7189a73169290e89bd24c771071f1012d8fe6f738f5226531f0b03d89"
+dependencies = [
+ "bytes",
+ "fallible-iterator",
+ "postgres-protocol 0.6.4",
 ]
 
 [[package]]
@@ -4820,8 +4884,8 @@ source = "git+https://github.com/MaterializeInc/rust-postgres-array?branch=mz-0.
 dependencies = [
  "bytes",
  "fallible-iterator",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.6.1",
+ "postgres-types 0.2.1",
 ]
 
 [[package]]
@@ -5394,6 +5458,12 @@ dependencies = [
  "web-sys",
  "winreg",
 ]
+
+[[package]]
+name = "retain_mut"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c31b5c4033f8fdde8700e4657be2c497e7288f01515be52168c631e2e4d4086"
 
 [[package]]
 name = "ring"
@@ -6256,11 +6326,34 @@ dependencies = [
  "percent-encoding",
  "phf",
  "pin-project-lite",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.6.1",
+ "postgres-types 0.2.1",
  "socket2",
  "tokio",
  "tokio-util 0.6.9",
+]
+
+[[package]]
+name = "tokio-postgres"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19c88a47a23c5d2dc9ecd28fb38fba5fc7e5ddc1fe64488ec145076b0c71c8ae"
+dependencies = [
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "futures",
+ "log",
+ "parking_lot 0.12.0",
+ "percent-encoding",
+ "phf",
+ "pin-project-lite",
+ "postgres-protocol 0.6.4",
+ "postgres-types 0.2.3",
+ "socket2",
+ "tokio",
+ "tokio-util 0.7.2",
 ]
 
 [[package]]
