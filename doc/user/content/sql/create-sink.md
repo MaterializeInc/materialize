@@ -83,11 +83,9 @@ they occur. To only see results after the sink is created, specify `WITHOUT SNAP
 
 ## Detail
 
-- Materialize currently only supports the following [sink formats](#sink_format_spec):
-    - Avro-formatted sinks that write to either a topic or an Avro object container file.
-    - JSON-formatted sinks that write to a topic.
-- For most sinks, Materialize creates new, distinct topics and files for each sink on restart. A beta feature enables the use of the same topic after restart. For details, see [Exactly-once sinks](#exactly-once-sinks-with-topic-reuse-after-restart).
-- Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` log sources. See the [examples](#examples) below for more details.
+- Materialize currently only supports Avro or JSON-formatted sinks that write to a Kafka topic.
+- For most sinks, Materialize creates new, distinct topics for each sink on restart. A beta feature enables the use of the same topic after restart. For details, see [Exactly-once sinks](#exactly-once-sinks-with-topic-reuse-after-restart).
+- Materialize stores information about actual topic names in the `mz_kafka_sinks` log sources. See the [examples](#examples) below for more details.
 - For Avro-formatted sinks, Materialize generates Avro schemas for views and sources that are stored in the sink. If needed, the fullnames for these schemas can be specified with the `avro_key_fullname` and `avro_value_fullname` options.
 - Materialize can also optionally emit transaction information for changes. This is only supported for Kafka sinks and adds transaction information inline with the data, and adds a separate transaction metadata topic.
 
