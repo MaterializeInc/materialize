@@ -86,6 +86,7 @@ impl Server {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,

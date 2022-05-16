@@ -93,6 +93,7 @@ pub struct RunParams<'a, A> {
 /// error to the client. It only returns `Err` if an unexpected I/O error occurs
 /// while communicating with the client, e.g., if the connection is severed in
 /// the middle of a request.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn run<'a, A>(
     RunParams {
         tls_mode,
@@ -266,6 +267,7 @@ where
     // error message is produced if there are problems with Send or other traits
     // somewhere within the Future.
     #[allow(clippy::manual_async_fn)]
+    #[tracing::instrument(level = "debug", skip_all)]
     fn run(mut self) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
         async move {
             let mut state = State::Ready;
@@ -1040,6 +1042,8 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
+    // TODO(guswynn): figure out how to get it to compile without skip_all
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send_execute_response(
         &mut self,
         response: ExecuteResponse,
@@ -1174,9 +1178,15 @@ where
                 // have OIDs.
                 command_complete!("INSERT 0 {}", n)
             }
-            ExecuteResponse::SendingRows(rx) => {
+            ExecuteResponse::SendingRows {
+                future: rx,
+                otel_ctx,
+            } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
+
+                otel_ctx.attach_as_parent();
+
                 self.send_rows(
                     row_desc,
                     portal_name,
@@ -1262,7 +1272,12 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
                     ExecuteResponse::Tailing { rx } => rx,
-                    ExecuteResponse::SendingRows(rows_rx) => {
+                    ExecuteResponse::SendingRows {
+                        future: rows_rx,
+                        otel_ctx,
+                    } => {
+                        otel_ctx.attach_as_parent();
+
                         self.row_future_to_stream(rows_rx).await?
                     }
                     _ => {
@@ -1317,6 +1332,8 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
+    // TODO(guswynn): figure out how to get it to compile without skip_all
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send_rows(
         &mut self,
         row_desc: RelationDesc,
@@ -1494,6 +1511,7 @@ where
         Ok(State::Ready)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn copy_rows(
         &mut self,
         format: CopyFormat,

@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-use http::HeaderMap;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
@@ -145,8 +144,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
         log_filter: args.log_filter.clone(),
-        opentelemetry_endpoint: None,
-        opentelemetry_headers: HeaderMap::new(),
+        opentelemetry_config: None,
         prefix: args.log_process_name.then(|| "storaged".into()),
         #[cfg(feature = "tokio-console")]
         tokio_console: false,
