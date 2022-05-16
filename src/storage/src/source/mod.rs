@@ -952,7 +952,7 @@ where
         let base_metrics = base_metrics.clone();
         let source_connector = source_connector.clone();
         let mut source_reader = Box::pin(async_stream::stream! {
-            let mut timestamper = match ReclockOperator::new(name.clone(), storage_metadata, now, as_of.clone()).await {
+            let mut timestamper = match ReclockOperator::new(name.clone(), storage_metadata, now, timestamp_frequency.clone(), as_of.clone()).await {
                 Ok(t) => t,
                 Err(e) => {
                     error!("Failed to create source {} timestamper: {}", name, e);

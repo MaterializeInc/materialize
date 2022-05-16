@@ -42,6 +42,8 @@ pub struct ReclockOperator {
     timestamp_bindings_listener:
         Pin<Box<dyn Stream<Item = ListenEvent<(), PartitionId, Timestamp, Diff>>>>,
     now: NowFn,
+    update_interval: Duration,
+    last_timestamp: Timestamp,
 }
 
 impl ReclockOperator {
@@ -52,6 +54,7 @@ impl ReclockOperator {
             timestamp_shard_id,
         }: CollectionMetadata,
         now: NowFn,
+        update_interval: Duration,
         mut as_of: Antichain<Timestamp>,
     ) -> anyhow::Result<Self> {
         let persist_client = persist_location
@@ -144,20 +147,34 @@ impl ReclockOperator {
             write_handle,
             timestamp_bindings_listener,
             now,
+            update_interval,
+            last_timestamp: Timestamp::minimum(),
         })
     }
 
-    // XXX: actually use this before merging.  Less granularity in ts seems to make it easier to catch bugs so I'll wait
-    fn get_time(&self) -> Timestamp {
-        let update_interval = 100;
+    // TODO: require NowFn to be monotonic so we can simplify this function
+    fn get_time(&mut self) -> Option<Timestamp> {
+        let update_interval: u64 = self
+            .update_interval
+            .clone()
+            .as_millis()
+            .try_into()
+            .expect("interval millis don't fit into u64");
         let new_ts = (self.now)();
 
         // Mod and then round up
         let remainder = new_ts % update_interval;
-        if remainder == 0 {
+        let new_ts_rounded = if remainder == 0 {
             new_ts
         } else {
             new_ts - remainder + update_interval
+        };
+
+        if new_ts_rounded > self.last_timestamp {
+            self.last_timestamp = new_ts_rounded;
+            Some(new_ts_rounded)
+        } else {
+            None
         }
     }
 
@@ -326,8 +343,18 @@ impl ReclockOperator {
             }
             need_upper_advance = false;
 
-            // XXX: should clamp to round timestamp_frequency?? Also make sure it doesn't go backwards??
-            let new_ts = (self.now)();
+            let new_ts = match self.get_time() {
+                Some(new_ts) => new_ts,
+                None => {
+                    // TODO: better handle time going backwards / switch to monotonic time that works across restarts.
+                    //
+                    // This is an error not because we don't expect it to happen but because we should handle it better.
+                    // Importantly, `continue`ing here is _correct_.  Just likely not ideal beacause we'll stall until
+                    // `self.now` catches up.
+                    error!("Time unexpectedly went backwards for {:?}", self.name);
+                    continue;
+                }
+            };
             let new_upper = Antichain::from_elem(new_ts + 1);
 
             // Can happen if clock skew between replicas.
