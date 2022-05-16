@@ -173,7 +173,7 @@ mod indexes;
 #[derive(Debug)]
 pub enum Message {
     Command(Command),
-    Controller(ControllerResponse),
+    ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
     SinkConnectorReady(SinkConnectorReady),
     SendDiffs(SendDiffs),
@@ -742,12 +742,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 biased;
 
                 Some(m) = internal_cmd_rx.recv() => m,
-                m = self.dataflow_client.recv() => {
-                    match m.unwrap() {
-                        None => break,
-                        Some(r) => Message::Controller(r),
-                    }
-                },
+                m = self.dataflow_client.ready() => {
+                    let () = m.unwrap();
+                    Message::ControllerReady
+                }
                 m = cmd_rx.recv() => match m {
                     None => break,
                     Some(m) => Message::Command(m),
@@ -756,7 +754,11 @@ impl<S: Append + 'static> Coordinator<S> {
 
             match msg {
                 Message::Command(cmd) => self.message_command(cmd).await,
-                Message::Controller(worker) => self.message_controller(worker).await,
+                Message::ControllerReady => {
+                    if let Some(m) = self.dataflow_client.process().await.unwrap() {
+                        self.message_controller(m).await
+                    }
+                }
                 Message::CreateSourceStatementReady(ready) => {
                     self.message_create_source_statement_ready(ready).await
                 }

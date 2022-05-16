@@ -140,6 +140,11 @@ fn generate_replica_service_name(instance_id: ComputeInstanceId, replica_id: Rep
     format!("cluster-{instance_id}-replica-{replica_id}")
 }
 
+enum UnderlyingControllerResponse<T> {
+    Storage(StorageResponse<T>),
+    Compute(ComputeInstanceId, ComputeResponse<T>),
+}
+
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 ///
 /// NOTE(benesch): I find the fact that this type is called `Controller` but is
@@ -149,6 +154,7 @@ pub struct Controller<T = mz_repr::Timestamp> {
     orchestrator: OrchestratorConfig,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
+    stashed_response: Option<UnderlyingControllerResponse<T>>,
 }
 
 impl<T> Controller<T>
@@ -367,75 +373,115 @@ impl<T> Controller<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub async fn recv(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
-        let mut storage_alive = true;
-        loop {
+    /// Wait until the controller is ready to process a response.
+    ///
+    /// This method may await indefinitely.
+    ///
+    /// This method is intended to be cancel-safe: dropping the returned
+    /// future at any await point and restarting from the beginning is fine.
+    // This method's correctness relies on the assumption that the _underlying_
+    // clients are _also_ cancel-safe, since it introduces its own `select` call.
+    pub async fn ready(&mut self) -> Result<(), anyhow::Error> {
+        if self.stashed_response.is_some() {
+            Ok(())
+        } else {
             let mut compute_stream: StreamMap<_, _> = self
                 .compute
                 .iter_mut()
                 .map(|(id, compute)| (*id, compute.client.as_stream()))
                 .collect();
-            tokio::select! {
-                Some((instance, response)) = compute_stream.next() => {
-                    drop(compute_stream);
-                    match response? {
-                        ComputeResponse::FrontierUppers(updates) => {
-                            self.compute_mut(instance)
-                                // TODO: determine if this is an error, or perhaps just a late
-                                // response about a terminated instance.
-                                .expect("Reference to absent instance")
-                                .update_write_frontiers(&updates)
-                                .await?;
-                        }
-                        ComputeResponse::PeekResponse(uuid, response) => {
-                            self.compute_mut(instance)
-                                .expect("Reference to absent instance")
-                                .remove_peeks(std::iter::once(uuid))
-                                .await?;
-                            return Ok(Some(ControllerResponse::PeekResponse(uuid, response)));
-                        }
-                        ComputeResponse::TailResponse(global_id, response) => {
-                            let mut changes = timely::progress::ChangeBatch::new();
-                            match &response {
-                                TailResponse::Batch(TailBatch { lower, upper, .. }) => {
-                                    changes.extend(upper.iter().map(|time| (time.clone(), 1)));
-                                    changes.extend(lower.iter().map(|time| (time.clone(), -1)));
-                                }
-                                TailResponse::DroppedAt(frontier) => {
-                                    // The tail will not be written to again, but we should not confuse that
-                                    // with the source of the TAIL being complete through this time.
-                                    changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
-                                }
-                            }
-                            self.compute_mut(instance)
-                                .expect("Reference to absent instance")
-                                .update_write_frontiers(&[(global_id, changes)])
-                                .await?;
-                            return Ok(Some(ControllerResponse::TailResponse(global_id, response)));
+            let mut storage_alive = true;
+            loop {
+                tokio::select! {
+                    Some((instance, response)) = compute_stream.next() => {
+                        let response = response?;
+                        assert!(self.stashed_response.is_none());
+                        self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
+                        return Ok(());
+                    }
+                    response = self.storage_controller.recv(), if storage_alive => {
+                        if let Some(response) = response? {
+                            assert!(self.stashed_response.is_none());
+                            self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
+                            return Ok(());
+                        } else {
+                            storage_alive = false;
                         }
                     }
                 }
-                response = self.storage_controller.recv(), if storage_alive => {
-                    match response? {
-                        Some(StorageResponse::TimestampBindings(feedback)) => {
-                            // Order is important here. We must durably record
-                            // the timestamp bindings before we act on them, or
-                            // an ill-timed crash could cause data loss.
-                            self.storage_controller
-                                .persist_timestamp_bindings(&feedback)
-                                .await?;
+            }
+        }
+    }
 
-                            self.storage_controller
-                                .update_write_frontiers(&feedback.changes)
-                                .await?;
-                        }
-                        Some(StorageResponse::LinearizedTimestamps(res)) => {
-                            return Ok(Some(ControllerResponse::LinearizedTimestamps(res)));
-                        }
-                        None => storage_alive = false,
+    /// Process any queued messages.
+    ///
+    /// This method is _not_ known to be cancel-safe, and should _not_ be called
+    /// in the receiver of a `tokio::select` branch. Calling it in the handler of
+    /// such a branch is fine.
+    ///
+    /// This method is _not_ intended to await indefinitely for reconnections and such;
+    /// the coordinator relies on this property in order to not hang.
+    pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+        let stashed = self.stashed_response.take().expect("`process` is not allowed to block indefinitely -- `ready` should be polled to completion first.");
+        match stashed {
+            UnderlyingControllerResponse::Storage(response) => {
+                match response {
+                    StorageResponse::TimestampBindings(feedback) => {
+                        // Order is important here. We must durably record
+                        // the timestamp bindings before we act on them, or
+                        // an ill-timed crash could cause data loss.
+                        self.storage_controller
+                            .persist_timestamp_bindings(&feedback)
+                            .await?;
+
+                        self.storage_controller
+                            .update_write_frontiers(&feedback.changes)
+                            .await?;
+                        Ok(None)
+                    }
+                    StorageResponse::LinearizedTimestamps(res) => {
+                        Ok(Some(ControllerResponse::LinearizedTimestamps(res)))
                     }
                 }
-                else => return Ok(None),
+            }
+            UnderlyingControllerResponse::Compute(instance, response) => {
+                match response {
+                    ComputeResponse::FrontierUppers(updates) => {
+                        self.compute_mut(instance)
+                            // TODO: determine if this is an error, or perhaps just a late
+                            // response about a terminated instance.
+                            .expect("Reference to absent instance")
+                            .update_write_frontiers(&updates)
+                            .await?;
+                        Ok(None)
+                    }
+                    ComputeResponse::PeekResponse(uuid, response) => {
+                        self.compute_mut(instance)
+                            .expect("Reference to absent instance")
+                            .remove_peeks(std::iter::once(uuid))
+                            .await?;
+                        Ok(Some(ControllerResponse::PeekResponse(uuid, response)))
+                    }
+                    ComputeResponse::TailResponse(global_id, response) => {
+                        let mut changes = timely::progress::ChangeBatch::new();
+                        match &response {
+                            TailResponse::Batch(TailBatch { lower, upper, .. }) => {
+                                changes.extend(upper.iter().map(|time| (time.clone(), 1)));
+                                changes.extend(lower.iter().map(|time| (time.clone(), -1)));
+                            }
+                            TailResponse::DroppedAt(frontier) => {
+                                // The tail will not be written to again, but we should not confuse that
+                                // with the source of the TAIL being complete through this time.
+                                changes.extend(frontier.iter().map(|time| (time.clone(), -1)));
+                            }
+                        }
+                        self.compute_mut(instance)
+                            .expect("Reference to absent instance")
+                            .update_write_frontiers(&[(global_id, changes)])
+                            .await?;
+                        Ok(Some(ControllerResponse::TailResponse(global_id, response)))
+                    }
+                }
             }
         }
     }
@@ -451,6 +497,7 @@ impl<T> Controller<T> {
             orchestrator,
             storage_controller: Box::new(storage_controller),
             compute: BTreeMap::default(),
+            stashed_response: None,
         }
     }
 }
