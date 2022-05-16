@@ -103,10 +103,7 @@ where
                 Err(e) => {
                     // Having received an error from one part, we can assume all of them are dead, because of the shared-fate architecture.
                     // Disconnect from all of them and try again.
-                    std::mem::drop(stream);
-                    for part in &mut self.parts {
-                        part.disconnect();
-                    }
+                    drop(stream);
                     // We need to back off here, in case we're crashing because we were accidentally connected
                     // to two different generations of the cluster -- e.g., reconnected some
                     // partitions to a cluster that was already crashing, and some other ones
@@ -115,7 +112,7 @@ where
                     // The time such a state can persist for is assumed to be bounded, so the
                     // backoff ensures we will eventually converge to a valid state.
 
-                    // If we were previously up for long enough, we consider the previous connection to have
+                    // If we were previously up for long enough (60 seconds chosen arbitrarily), we consider the previous connection to have
                     // been successful and reset the backoff.
                     if let Some(prev) = self.last_successful_connection {
                         if Instant::now() - prev > Duration::from_secs(60) {
@@ -136,6 +133,9 @@ where
                     }
                     self.backoff_expiry = None;
                     self.last_successful_connection = Some(Instant::now());
+                    // 60 seconds is arbitrarily chosen as a maximum plausible backoff.
+                    // If Timely processes aren't realizing their buddies are down within that time,
+                    // something is seriously hosed with the network anyway and its unlikely things will work.
                     self.backoff = (self.backoff * 2).min(Duration::from_secs(60));
                     return Err(e);
                 }

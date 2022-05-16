@@ -842,7 +842,6 @@ pub type LocalComputeClient = LocalClient<ComputeCommand, ComputeResponse>;
 /// Trait for clients that can be disconnected and reconnected.
 #[async_trait]
 pub trait Reconnect {
-    fn disconnect(&mut self);
     async fn reconnect(&mut self);
 }
 
@@ -855,6 +854,21 @@ where
     R: fmt::Debug + Send,
 {
     client: partitioned::Partitioned<tcp::TcpClient<C, R>, C, R>,
+}
+
+#[async_trait]
+impl<C, R> Reconnect for RemoteClient<C, R>
+where
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug + Send,
+    R: fmt::Debug + Send,
+{
+    // TODO: initiate connections concurrently.
+    async fn reconnect(&mut self) {
+        for part in &mut self.client.parts {
+            part.reconnect().await;
+        }
+    }
 }
 
 impl<C, R> RemoteClient<C, R>
@@ -871,14 +885,6 @@ where
         }
         Self {
             client: partitioned::Partitioned::new(remotes),
-        }
-    }
-
-    /// Construct a client backed by multiple tcp connections
-    pub async fn connect(&mut self) {
-        // TODO: initiate connections concurrently.
-        for remote in self.client.parts.iter_mut() {
-            remote.reconnect().await;
         }
     }
 }
@@ -919,11 +925,8 @@ pub mod process_local {
 
     #[async_trait]
     impl<C: Send, R: Send> Reconnect for ProcessLocal<C, R> {
-        fn disconnect(&mut self) {
-            panic!("Disconnecting and reconnection local clients is currently impossible");
-        }
         async fn reconnect(&mut self) {
-            panic!("Disconnecting and reconnection local clients is currently impossible");
+            panic!("Reconnecting local clients is currently impossible");
         }
     }
 
@@ -1043,10 +1046,8 @@ pub mod tcp {
 
     #[async_trait]
     impl<C: Send, R: Send> Reconnect for TcpClient<C, R> {
-        fn disconnect(&mut self) {
-            self.connection = TcpConn::Disconnected;
-        }
         async fn reconnect(&mut self) {
+            self.connection = TcpConn::Disconnected;
             // This is written in state-machine style to be cancellation safe.
             loop {
                 match &mut self.connection {
