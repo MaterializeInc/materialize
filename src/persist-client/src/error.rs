@@ -58,6 +58,15 @@ pub enum InvalidUsage<T> {
         /// The given upper bound
         upper: Antichain<T>,
     },
+    /// An update was sent at an empty interval of times.
+    InvalidEmptyTimeInterval {
+        /// The given lower bound
+        lower: Antichain<T>,
+        /// The given upper bound
+        upper: Antichain<T>,
+        /// Set of keys containing updates.
+        keys: Vec<String>,
+    },
     /// An update was not within valid bounds
     UpdateNotWithinBounds {
         /// Timestamp of the update
@@ -89,6 +98,13 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
         match self {
             InvalidUsage::InvalidBounds { lower, upper } => {
                 write!(f, "invalid bounds [{:?}, {:?})", lower, upper)
+            }
+            InvalidUsage::InvalidEmptyTimeInterval { lower, upper, keys } => {
+                write!(
+                    f,
+                    "invalid empty time interval [{:?}, {:?} {:?})",
+                    lower, upper, keys
+                )
             }
             InvalidUsage::UpdateNotWithinBounds { ts, lower, upper } => write!(
                 f,
