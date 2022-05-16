@@ -511,7 +511,7 @@ pub fn create_statement(
                     KafkaSecurityOptions::SSL {
                         key,
                         certificate,
-                        passphrase,
+                        password: passphrase,
                         authority,
                     } => {
                         if let Some(inner) = key {

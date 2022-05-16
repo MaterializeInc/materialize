@@ -1483,6 +1483,33 @@ pub mod sources {
         ) -> Result<BTreeMap<String, String>, anyhow::Error> {
             const SECURITY_PROTOCOL: &str = "security.protocol";
             let mut with_options = BTreeMap::new();
+            let fill_secret_value = |options: &mut BTreeMap<String, String>,
+                                     field: &Option<String>,
+                                     key: &str|
+             -> Result<(), anyhow::Error> {
+                if let Some(secret_id) = field {
+                    options.insert(
+                        key.into(),
+                        String::from_utf8(secrets_reader.read(GlobalId::from_str(secret_id)?)?)?,
+                    );
+                }
+                Ok(())
+            };
+            let fill_secret_path = |options: &mut BTreeMap<String, String>,
+                                    field: &Option<String>,
+                                    key: &str|
+             -> Result<(), anyhow::Error> {
+                if let Some(secret_id) = field {
+                    options.insert(
+                        key.into(),
+                        secrets_reader
+                            .canonical_path(GlobalId::from_str(secret_id)?)?
+                            .display()
+                            .to_string(),
+                    );
+                }
+                Ok(())
+            };
             match self {
                 ConnectorInner::Kafka { security, .. } => match security {
                     KafkaSecurityOptions::PLAINTEXT => {
@@ -1495,41 +1522,14 @@ pub mod sources {
                         authority,
                     } => {
                         with_options.insert(SECURITY_PROTOCOL.into(), "SSL".into());
-                        if let Some(secret_id) = key {
-                            with_options.insert(
-                                "ssl.key.location".into(),
-                                secrets_reader
-                                    .canonical_path(GlobalId::from_str(secret_id)?)?
-                                    .display()
-                                    .to_string(),
-                            );
-                        };
-                        if let Some(secret_id) = certificate {
-                            with_options.insert(
-                                "ssl.certificate.location".into(),
-                                secrets_reader
-                                    .canonical_path(GlobalId::from_str(secret_id)?)?
-                                    .display()
-                                    .to_string(),
-                            );
-                        }
-                        if let Some(secret_id) = passphrase {
-                            with_options.insert(
-                                "ssl.key.password".into(),
-                                String::from_utf8(
-                                    secrets_reader.read(GlobalId::from_str(secret_id)?)?,
-                                )?,
-                            );
-                        }
-                        if let Some(secret_id) = authority {
-                            with_options.insert(
-                                "ssl.ca.location".into(),
-                                secrets_reader
-                                    .canonical_path(GlobalId::from_str(secret_id)?)?
-                                    .display()
-                                    .to_string(),
-                            );
-                        }
+                        fill_secret_path(&mut with_options, key, "ssl.key.location")?;
+                        fill_secret_path(
+                            &mut with_options,
+                            certificate,
+                            "ssl.certificate.location",
+                        )?;
+                        fill_secret_path(&mut with_options, authority, "ssl.ca.location")?;
+                        fill_secret_value(&mut with_options, passphrase, "ssl.key.password")?;
                     }
                     KafkaSecurityOptions::SASL {
                         mechanism,
@@ -1547,10 +1547,11 @@ pub mod sources {
                         );
                         with_options.insert("sasl.mechanism".to_string(), mechanism.to_owned());
                         with_options.insert("sasl.username".to_string(), username.to_owned());
-                        with_options.insert(
-                            "sasl.password".to_string(),
-                            String::from_utf8(secrets_reader.read(GlobalId::from_str(password)?)?)?,
-                        );
+                        fill_secret_value(
+                            &mut with_options,
+                            &Some(password.to_owned()),
+                            "sasl.password",
+                        )?;
                     }
                 },
                 ConnectorInner::CSR {
@@ -1570,33 +1571,9 @@ pub mod sources {
                             String::from_utf8(secrets_reader.read(GlobalId::from_str(password)?)?)?,
                         );
                     }
-                    if let Some(authority) = authority {
-                        with_options.insert(
-                            "ssl_ca_location".into(),
-                            secrets_reader
-                                .canonical_path(GlobalId::from_str(authority)?)?
-                                .display()
-                                .to_string(),
-                        );
-                    }
-                    if let Some(certificate) = certificate {
-                        with_options.insert(
-                            "ssl_certificate_location".into(),
-                            secrets_reader
-                                .canonical_path(GlobalId::from_str(certificate)?)?
-                                .display()
-                                .to_string(),
-                        );
-                    }
-                    if let Some(key) = key {
-                        with_options.insert(
-                            "ssl_key_location".into(),
-                            secrets_reader
-                                .canonical_path(GlobalId::from_str(key)?)?
-                                .display()
-                                .to_string(),
-                        );
-                    }
+                    fill_secret_path(&mut with_options, authority, "ssl_ca_location")?;
+                    fill_secret_path(&mut with_options, certificate, "ssl_certificate_location")?;
+                    fill_secret_path(&mut with_options, key, "ssl_key_location")?;
                 }
             }
             Ok(with_options)

@@ -400,7 +400,7 @@ async fn purify_csr_connector_avro(
             if let CsrConnector::Reference { with_options, .. } = connector {
                 with_options
                     .as_ref()
-                    .expect("")
+                    .unwrap()
                     .iter()
                     .map(|(k, v)| (k.to_owned(), Value::String(v.to_string())))
                     .collect::<BTreeMap<String, Value>>()

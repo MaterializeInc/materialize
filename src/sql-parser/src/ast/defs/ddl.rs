@@ -506,7 +506,7 @@ pub enum KafkaSecurityOptions {
         /// Optional Client private key supplied as a catalog Secret
         key: Option<UnresolvedObjectName>,
         /// Optional Private key passphrase supplied as a catalog Secret
-        passphrase: Option<UnresolvedObjectName>,
+        password: Option<UnresolvedObjectName>,
         /// Optional CA Certificate for validating custom signing chains
         authority: Option<UnresolvedObjectName>,
     },
@@ -531,7 +531,7 @@ impl AstDisplay for KafkaSecurityOptions {
             KafkaSecurityOptions::SSL {
                 key,
                 certificate,
-                passphrase,
+                password,
                 authority,
             } => {
                 f.write_str(" SSL");
@@ -539,12 +539,12 @@ impl AstDisplay for KafkaSecurityOptions {
                     f.write_str(" KEY ");
                     f.write_node(secret_name);
                 }
-                if let Some(secret_name) = certificate {
-                    f.write_str(" CERTIFICATE ");
+                if let Some(secret_name) = password {
+                    f.write_str(" PASSWORD ");
                     f.write_node(secret_name);
                 }
-                if let Some(secret_name) = passphrase {
-                    f.write_str(" PASSPHRASE ");
+                if let Some(secret_name) = certificate {
+                    f.write_str(" CERTIFICATE ");
                     f.write_node(secret_name);
                 }
                 if let Some(authority_name) = authority {

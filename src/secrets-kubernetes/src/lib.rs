@@ -7,6 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use anyhow::{anyhow, bail, Error};
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Secret};
@@ -14,14 +18,12 @@ use k8s_openapi::ByteString;
 use kube::api::{Patch, PatchParams};
 use kube::config::KubeConfigOptions;
 use kube::{Api, Client, Config, ResourceExt};
-use mz_ore::retry::Retry;
-use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 use rand::random;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tokio::io;
 use tracing::info;
+
+use mz_ore::retry::Retry;
+use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 
 const FIELD_MANAGER: &str = "materialized";
 const POD_ANNOTATION: &str = "materialized.materialize.cloud/secret-refresh";
