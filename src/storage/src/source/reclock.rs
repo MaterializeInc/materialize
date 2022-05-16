@@ -30,9 +30,13 @@ use tracing::{error, info};
 
 pub struct ReclockOperator {
     name: String,
+    // How far on the persist collection we've read
     read_progress: Antichain<Timestamp>,
+    // Upper for the underlying persist collection
     write_upper: Antichain<Timestamp>,
+    // If a binding is here, it has been persisted.  Previously returned bindings are compacted.
     persisted_timestamp_bindings: HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>,
+    // Max offset we've returned (or have committed to returning at the end of the current invocation).
     read_cursors: HashMap<PartitionId, MzOffset>,
     write_handle: WriteHandle<(), PartitionId, Timestamp, Diff>,
     timestamp_bindings_listener:
@@ -157,6 +161,7 @@ impl ReclockOperator {
         }
     }
 
+    // Ensure our persisted timestamp bindings go forward for a given partition.
     fn validate_persisted_bindings(&self) -> bool {
         for (partition, bindings) in self.persisted_timestamp_bindings.iter() {
             let mut last_ts = Timestamp::minimum();
@@ -175,11 +180,23 @@ impl ReclockOperator {
         true
     }
 
-    pub async fn timestamp_offsets(
+    /// Given a mapping of highest observed offsets, for each provided partition id, return a `(Timestamp, MzOffset)`
+    /// pair as well as an Antichain describing progress made.  Provided offsets must be increasing across calls to this
+    /// function.  If `observed_max_offsets` is empty, one attempt will be made to increase the upper of underlying
+    /// persist collection.  After that attempt, thre progress will be computed and returned.
+    ///
+    /// Return values:
+    /// - The `Timestamp` returned is a persisted `Timestamp` that will be returned by any replica after any number of
+    ///   restarts
+    /// - Re: the return Antichain: Once a progress value is returned, all future invocations of this function will
+    ///   return bindings not less than that progress value.  The progress value is non-descreasing across invocations.
+    ///   The returned value should be a sensible value for the source to downgrade its capability to after emitting
+    ///   all messages at offsets less_equal to the returned offsets.
+    pub async fn timestamp_offsets<'a>(
         &mut self,
-        observed_max_offsets: HashMap<PartitionId, MzOffset>,
+        observed_max_offsets: &'a HashMap<PartitionId, MzOffset>,
     ) -> anyhow::Result<(
-        HashMap<PartitionId, (Timestamp, MzOffset)>,
+        HashMap<&'a PartitionId, (Timestamp, &'a MzOffset)>,
         Antichain<Timestamp>,
     )> {
         let mut need_upper_advance = observed_max_offsets.is_empty();
@@ -221,8 +238,7 @@ impl ReclockOperator {
                         ),
                         _ => {}
                     }
-                    let old_match =
-                        matched_offsets.insert(partition.clone(), (*timestamp, *offset));
+                    let old_match = matched_offsets.insert(partition, (*timestamp, offset));
                     assert_eq!(old_match, None);
                 } else {
                     assert_eq!(bindings.len(), 1);
@@ -262,17 +278,26 @@ impl ReclockOperator {
             if new_bindings.is_empty() && !need_upper_advance {
                 assert_eq!(matched_offsets.len(), observed_max_offsets.len());
 
-                // XXX: rewrite this comment (??)
-                // Progress is min of:
-                // - if partition in request: use ts of the output.  We know we CAN'T go backwards bceause caller must make requests with non-decreasing offsets
-                // - if partition NOT in request: use ts for offset of read_cursor.  Highest message written out
-                //     - if offset of read cursors MATCHES lowest offset AND there's a second binding, return the timestamp for the second binding -- as it'll eventually get compacted
-                //     - if offset of read cursors MATCHES lowest offset AND there's NOT a second binding, we've written everything we know about in that partition so disregard in
-                //       calculation (equiv to using `read_progress` for this partition)
-                //     - if offset of read cursors is LESS THAN lowest offset, return that timestamp as we could still return a message
-                // - Read_progress because anything will come after that
-
-                // This should be a sensible value for the source to downgrade its capability to after emitting the messages that we return
+                // Computing the progress is perhaps the most subtle part of reclocking.  For each partition, we compute
+                // the lowest timestamp we could, in the future, return.  We then compute the minimum of those minimums.
+                // (To be more general, we'd use `Lattice::meet` rather than the `Iterator::min` but we've already
+                // hardcoded 1-D time in many places here.)
+                //
+                // For each partition, we compute the minimum as follows:
+                // - If partition is in the request: use Timestamp we're returning.  We know we CAN'T go backwards
+                //   because caller must make requests with non-decreasing offsets.
+                // - If partition is NOT in request:
+                //     - If offset of read_cursors MATCHES lowest persisted offset AND there's a second binding, return
+                //       the timestamp for the second binding. Because we've been asked through `read_cursor` value, we
+                //       know we will not ever need to serve anything prior to the second binding's timestamp.
+                //     - If offset of read_cursors MATCHES lowest persisted offset AND there's NOT a second binding,
+                //       we've returned everything we current about in that partition so disregard in the global minimun
+                //       calculation (This is equivalent to using `read_progress` for this partition.)
+                //     - If offset of read_cursors is LESS THAN lowest persisted offset, return that timestamp as we
+                //       could still return a message.
+                //
+                // We take the minimum of all of these as well as `read_progress` as we know no new bindings can have a
+                // time before that (because we read from the listener in ascending timestamp order).
                 let progress = self
                     .persisted_timestamp_bindings
                     .iter()
@@ -293,7 +318,7 @@ impl ReclockOperator {
                         Some(*lo_binding_ts)
                     })
                     .chain(std::iter::once(
-                        *self.read_progress.elements().first().unwrap_or(&u64::MAX),
+                        *self.read_progress.as_option().unwrap_or(&u64::MAX),
                     ))
                     .min()
                     .unwrap_or_else(Timestamp::minimum);

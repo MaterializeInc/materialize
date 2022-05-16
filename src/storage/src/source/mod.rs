@@ -1005,7 +1005,7 @@ where
                             let entry = max_offsets.entry(message.partition.clone()).or_default();
                             *entry = std::cmp::max(*entry, message.offset);
                         }
-                        let (bindings, progress) = match timestamper.timestamp_offsets(max_offsets).await {
+                        let (bindings, progress) = match timestamper.timestamp_offsets(&max_offsets).await {
                             Ok((bindings, progress)) => (bindings, progress),
                             Err(e) => {
                                 error!("Error timestamping offsets: {}", e);
