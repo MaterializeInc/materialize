@@ -43,6 +43,12 @@ pub fn bench_persist(c: &mut Criterion) {
     consensus::bench_consensus_compare_and_set(
         &small_data,
         &mut c.benchmark_group("consensus/compare_and_set"),
+        1,
+    );
+    consensus::bench_consensus_compare_and_set(
+        &small_data,
+        &mut c.benchmark_group("consensus/concurrent_compare_and_set"),
+        8,
     );
 }
 
