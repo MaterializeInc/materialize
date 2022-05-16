@@ -22,26 +22,25 @@ use timely::PartialOrder;
 use mz_dataflow_types::sources::MzOffset;
 use mz_expr::PartitionId;
 use mz_ore::now::NowFn;
-use mz_persist_client::read::{ListenEvent, ReadHandle};
+use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::{Diff, Timestamp};
 use tracing::{error, info};
 
-pub struct CreateSourceTimestamper {
+pub struct ReclockOperator {
     name: String,
     read_progress: Antichain<Timestamp>,
     write_upper: Antichain<Timestamp>,
     persisted_timestamp_bindings: HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>,
     read_cursors: HashMap<PartitionId, MzOffset>,
     write_handle: WriteHandle<(), PartitionId, Timestamp, Diff>,
-    read_handle: ReadHandle<(), PartitionId, Timestamp, Diff>,
     timestamp_bindings_listener:
         Pin<Box<dyn Stream<Item = ListenEvent<(), PartitionId, Timestamp, Diff>>>>,
     now: NowFn,
 }
 
-impl CreateSourceTimestamper {
+impl ReclockOperator {
     pub async fn new(
         name: String,
         CollectionMetadata {
@@ -139,25 +138,9 @@ impl CreateSourceTimestamper {
             persisted_timestamp_bindings,
             read_cursors,
             write_handle,
-            read_handle,
             timestamp_bindings_listener,
             now,
         })
-    }
-
-    pub fn partition_cursors(&self) -> HashMap<PartitionId, MzOffset> {
-        self.persisted_timestamp_bindings
-            .iter()
-            .map(|(partition, bindings)| {
-                (
-                    partition.clone(),
-                    bindings
-                        .back()
-                        .map(|(_ts, offset)| *offset)
-                        .unwrap_or_default(),
-                )
-            })
-            .collect()
     }
 
     // XXX: actually use this before merging.  Less granularity in ts seems to make it easier to catch bugs so I'll wait
@@ -199,8 +182,7 @@ impl CreateSourceTimestamper {
         HashMap<PartitionId, (Timestamp, MzOffset)>,
         Antichain<Timestamp>,
     )> {
-        // XXX: make handling empty better: want to CAA once before returning
-        let mut empty_flag = observed_max_offsets.is_empty();
+        let mut need_upper_advance = observed_max_offsets.is_empty();
         let mut matched_offsets = HashMap::new();
         loop {
             // See if we're able to assert a timestamp for any of the input offsets
@@ -277,7 +259,7 @@ impl CreateSourceTimestamper {
             // If we have nothing new to propose, figure out the progress we ought to communicate and return.
             // N.B. If this was called with no new offsets, we need to do have at least one invocation of
             // `compare_and_append` to drive progress so we can't return immediately.
-            if new_bindings.is_empty() && !empty_flag {
+            if new_bindings.is_empty() && !need_upper_advance {
                 assert_eq!(matched_offsets.len(), observed_max_offsets.len());
 
                 // XXX: rewrite this comment (??)
@@ -317,7 +299,7 @@ impl CreateSourceTimestamper {
                     .unwrap_or_else(Timestamp::minimum);
                 return Ok((matched_offsets, Antichain::from_elem(progress)));
             }
-            empty_flag = false;
+            need_upper_advance = false;
 
             // XXX: should clamp to round timestamp_frequency?? Also make sure it doesn't go backwards??
             let new_ts = (self.now)();

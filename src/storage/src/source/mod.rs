@@ -65,7 +65,7 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::timestamper::CreateSourceTimestamper;
+use crate::source::reclock::ReclockOperator;
 use crate::source::util::source;
 
 mod kafka;
@@ -74,8 +74,8 @@ pub mod metrics;
 pub mod persist_source;
 mod postgres;
 mod pubnub;
+mod reclock;
 mod s3;
-mod timestamper;
 pub mod util;
 
 pub use kafka::KafkaSourceReader;
@@ -952,7 +952,7 @@ where
         let base_metrics = base_metrics.clone();
         let source_connector = source_connector.clone();
         let mut source_reader = Box::pin(async_stream::stream! {
-            let mut timestamper = match CreateSourceTimestamper::new(name.clone(), storage_metadata, now, as_of.clone()).await {
+            let mut timestamper = match ReclockOperator::new(name.clone(), storage_metadata, now, as_of.clone()).await {
                 Ok(t) => t,
                 Err(e) => {
                     error!("Failed to create source {} timestamper: {}", name, e);
