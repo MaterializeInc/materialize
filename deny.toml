@@ -19,6 +19,15 @@ skip = [
 
     # https://github.com/awslabs/smithy-rs/pull/1301
     { name = "urlencoding", version = "1.3.0" },
+
+    # WASI dependencies from multiple sources.
+    { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
+    { name = "windows-sys", version = "0.32.0" },
+    { name = "windows_aarch64_msvc", version = "0.32.0" },
+    { name = "windows_i686_gnu", version = "0.32.0" },
+    { name = "windows_i686_msvc", version = "0.32.0" },
+    { name = "windows_x86_64_gnu", version = "0.32.0" },
+    { name = "windows_x86_64_msvc", version = "0.32.0" },
 ]
 
 # Use `tracing` instead.
