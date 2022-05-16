@@ -41,7 +41,7 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
-use tower_http::cors::{Any, AnyOr, CorsLayer, Origin};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, warn};
 
 use mz_coord::session::Session;
@@ -73,7 +73,7 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     pub frontegg: Option<FronteggAuthentication>,
     pub coord_client: mz_coord::Client,
-    pub allowed_origin: AnyOr<Origin>,
+    pub allowed_origin: AllowOrigin,
 }
 
 #[derive(Debug, Clone)]

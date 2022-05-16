@@ -38,7 +38,7 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::{AnyOr, Origin};
+use tower_http::cors::AllowOrigin;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -87,7 +87,7 @@ pub struct Config {
     pub frontegg: Option<FronteggAuthentication>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
-    pub cors_allowed_origin: AnyOr<Origin>,
+    pub cors_allowed_origin: AllowOrigin,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.

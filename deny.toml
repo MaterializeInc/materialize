@@ -1,14 +1,3 @@
-[advisories]
-ignore = [
-    # chrono calls localtime_r, which can result in memory unsafety if another
-    # thread is simultaneously calling setenv. The likelihood of this happening
-    # in Materialize is exceptionally low (we don't call setenv directly
-    # anywhere, and it is unlikely that our dependencies do either). There is
-    # no easy fix for chrono (https://github.com/chronotope/chrono/issues/499),
-    # so we're just ignoring the advisory for now.
-    "RUSTSEC-2020-0159",
-]
-
 [bans]
 multiple-versions = "deny"
 skip = [
