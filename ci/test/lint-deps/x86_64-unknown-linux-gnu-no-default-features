@@ -1,0 +1,5 @@
+tikv_jemalloc_ctl
+0:materialized:
+1:mz_prof:jemalloc,tikv-jemalloc-ctl
+2:tikv_jemalloc_ctl:default,use_std
+tikv_jemallocator
