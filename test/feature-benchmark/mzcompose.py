@@ -148,20 +148,16 @@ def start_services(
                 + "));"
             )
 
-        c.up("testdrive", persistent=True)
+    c.up("testdrive", persistent=True)
 
     return cluster_services
 
 
 def stop_services(c: Composition, cluster_services: List[Service]) -> None:
+    service_names = [s.name for s in cluster_services] + ["testdrive"]
+    c.kill(*service_names)
+    c.rm(*service_names)
 
-    with c.override(*cluster_services):
-        service_names = [s.name for s in cluster_services]
-        c.kill(*service_names)
-        c.rm(*service_names)
-
-    c.kill("testdrive")
-    c.rm("testdrive")
     c.rm_volumes("mzdata")
 
 
@@ -176,25 +172,26 @@ def run_one_scenario(
     for mz_id, instance in enumerate(["this", "other"]):
         cluster_services = start_services(c, args, instance)
 
-        executor = Docker(
-            composition=c,
-            seed=common_seed,
-        )
+        with c.override(*cluster_services):
+            executor = Docker(
+                composition=c,
+                seed=common_seed,
+            )
 
-        benchmark = Benchmark(
-            mz_id=mz_id,
-            scenario=scenario,
-            scale=args.scale,
-            executor=executor,
-            filter=make_filter(args),
-            termination_conditions=make_termination_conditions(args),
-            aggregation=make_aggregation(),
-        )
+            benchmark = Benchmark(
+                mz_id=mz_id,
+                scenario=scenario,
+                scale=args.scale,
+                executor=executor,
+                filter=make_filter(args),
+                termination_conditions=make_termination_conditions(args),
+                aggregation=make_aggregation(),
+            )
 
-        outcome, iterations = benchmark.run()
-        comparator.append(outcome)
+            outcome, iterations = benchmark.run()
+            comparator.append(outcome)
 
-        stop_services(c, cluster_services)
+            stop_services(c, cluster_services)
 
     return comparator
 
