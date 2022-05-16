@@ -384,9 +384,20 @@ pub struct Args {
         value_name = "HEADER",
         env = "MZ_OPENTELEMETRY_HEADER",
         requires = "opentelemetry-endpoint",
+        use_value_delimiter = true,
         hide = true
     )]
     opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
+
+    /// Log filter specific to the opentelemetry layer.
+    /// Defaults to `debug`.
+    #[clap(
+        long,
+        env = "MZ_OPENTELEMETRY_LOG_FILTER",
+        requires = "opentelemetry-log-filter",
+        hide = true
+    )]
+    opentelemetry_log_filter: Option<Targets>,
 
     #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: Option<String>,
@@ -468,12 +479,17 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
         log_filter: args.log_filter.clone(),
-        opentelemetry_endpoint: args.opentelemetry_endpoint,
-        opentelemetry_headers: args
-            .opentelemetry_header
-            .into_iter()
-            .map(|header| (header.key, header.value))
-            .collect(),
+        opentelemetry_config: args.opentelemetry_endpoint.map(|endpoint| {
+            mz_ore::tracing::OpenTelemetryConfig {
+                endpoint,
+                headers: args
+                    .opentelemetry_header
+                    .into_iter()
+                    .map(|header| (header.key, header.value))
+                    .collect(),
+                log_filter: args.opentelemetry_log_filter,
+            }
+        }),
         prefix: None,
         #[cfg(feature = "tokio-console")]
         tokio_console: args.tokio_console,

@@ -9,17 +9,21 @@
 
 //! Utilities for configuring [`tracing`]
 
+use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
+use opentelemetry::global;
+use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
 use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::{Event, Level, Subscriber};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::format::{format, Format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
@@ -46,24 +50,27 @@ fn create_h2_alpn_https_connector() -> HttpsConnector<HttpConnector> {
 
 /// Setting up opentel in the background requires we are in a tokio-runtime
 /// context, hence the `async`
+// TODO(guswynn): figure out where/how to call opentelemetry::global::shutdown_tracer_provider();
 #[allow(clippy::unused_async)]
 async fn configure_opentelemetry_and_init<
     L: Layer<S> + Send + Sync + 'static,
     S: Subscriber + Send + Sync + 'static,
 >(
     stack: Layered<L, S>,
-    opentelemetry_endpoint: Option<String>,
-    opentelemetry_headers: HeaderMap,
+    opentelemetry_config: Option<OpenTelemetryConfig>,
 ) -> Result<(), anyhow::Error>
 where
     Layered<L, S>: tracing_subscriber::util::SubscriberInitExt,
     for<'ls> S: LookupSpan<'ls>,
 {
-    if let Some(endpoint) = opentelemetry_endpoint {
+    if let Some(otel_config) = opentelemetry_config {
+        use opentelemetry::sdk::propagation::TraceContextPropagator;
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
         // Manually setup an openssl-backed, h2, proxied `Channel`,
         // and setup the timeout according to
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
-        let endpoint = Endpoint::from_shared(endpoint)?.timeout(Duration::from_secs(
+        let endpoint = Endpoint::from_shared(otel_config.endpoint)?.timeout(Duration::from_secs(
             opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
         ));
 
@@ -72,7 +79,7 @@ where
         let otlp_exporter = opentelemetry_otlp::new_exporter()
             .tonic()
             .with_channel(channel)
-            .with_metadata(MetadataMap::from_headers(opentelemetry_headers));
+            .with_metadata(MetadataMap::from_headers(otel_config.headers));
 
         let tracer =
             opentelemetry_otlp::new_pipeline()
@@ -85,7 +92,13 @@ where
                 .unwrap();
         let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-        let stack = stack.with(otel_layer);
+        let stack = stack.with(
+            otel_layer.with_filter(
+                otel_config
+                    .log_filter
+                    .unwrap_or_else(|| Targets::new().with_default(LevelFilter::DEBUG)),
+            ),
+        );
 
         stack.init();
         Ok(())
@@ -102,17 +115,30 @@ pub struct TracingConfig {
     pub log_filter: Targets,
     /// When `Some(_)`, the https endpoint to send
     /// opentelemetry traces.
-    pub opentelemetry_endpoint: Option<String>,
-    /// When `opentelemetry_endpoint` is `Some(_)`,
-    /// configure additional comma separated
-    /// headers.
-    pub opentelemetry_headers: HeaderMap,
+    pub opentelemetry_config: Option<OpenTelemetryConfig>,
     /// Optional prefix for log lines
     pub prefix: Option<String>,
     /// When enabled, optionally turn on the
     /// tokio console.
     #[cfg(feature = "tokio-console")]
     pub tokio_console: bool,
+}
+
+/// Configuration to setup Opentelemetry [`tracing`] subscribers
+#[derive(Debug)]
+pub struct OpenTelemetryConfig {
+    /// When `Some(_)`, the https endpoint to send
+    /// opentelemetry traces.
+    pub endpoint: String,
+    /// When `opentelemetry_endpoint` is `Some(_)`,
+    /// configure additional comma separated
+    /// headers.
+    pub headers: HeaderMap,
+    /// When `opentelemetry_endpoint` is `Some(_)`,
+    /// configure the opentelemetry layer with this log filter.
+    // TODO(guswynn): switch to just `Targets` when all processes
+    // have this supported.
+    pub log_filter: Option<Targets>,
 }
 
 /// Configures [`tracing`] and OpenTelemetry.
@@ -137,12 +163,7 @@ pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
 
-    configure_opentelemetry_and_init(
-        stack,
-        config.opentelemetry_endpoint,
-        config.opentelemetry_headers,
-    )
-    .await?;
+    configure_opentelemetry_and_init(stack, config.opentelemetry_config).await?;
 
     Ok(())
 }
@@ -215,5 +236,53 @@ where
             }
         }
         Ok(())
+    }
+}
+
+/// An OpenTelemetry context.
+///
+/// Allows associating [`tracing`] spans across task or thread boundaries.
+#[derive(Debug, Clone)]
+pub struct OpenTelemetryContext {
+    inner: HashMap<String, String>,
+}
+
+impl OpenTelemetryContext {
+    /// Attaches this `Context` into the current `tracing` span.
+    pub fn attach_as_parent(&self) {
+        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(&self.inner));
+        tracing::Span::current().set_parent(parent_cx);
+    }
+
+    /// Obtain a `Context` from the current `tracing` span.
+    pub fn obtain() -> Self {
+        let mut map = std::collections::HashMap::new();
+        global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(&tracing::Span::current().context(), &mut map)
+        });
+
+        Self { inner: map }
+    }
+
+    /// Obtain an empty `Context`.
+    pub fn empty() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
+}
+
+impl Extractor for OpenTelemetryContext {
+    fn get(&self, key: &str) -> Option<&str> {
+        Extractor::get(&self.inner, key)
+    }
+    fn keys(&self) -> Vec<&str> {
+        Extractor::keys(&self.inner)
+    }
+}
+
+impl Injector for OpenTelemetryContext {
+    fn set(&mut self, key: &str, value: String) {
+        Injector::set(&mut self.inner, key, value)
     }
 }

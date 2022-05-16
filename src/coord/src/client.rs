@@ -17,6 +17,7 @@ use uuid::Uuid;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
@@ -140,6 +141,7 @@ impl ConnClient {
     ///
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn startup(
         self,
         session: Session,
@@ -299,11 +301,13 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
             session,
             tx,
+            otel_ctx: OpenTelemetryContext::obtain(),
         })
         .await
     }
@@ -513,7 +517,10 @@ impl SessionClient {
                 | ExecuteResponse::Prepare => {
                     results.push(SimpleResult::Ok);
                 }
-                ExecuteResponse::SendingRows(rows) => {
+                ExecuteResponse::SendingRows {
+                    future: rows,
+                    otel_ctx: _,
+                } => {
                     let rows = match rows.await {
                         PeekResponseUnary::Rows(rows) => rows,
                         PeekResponseUnary::Error(e) => {

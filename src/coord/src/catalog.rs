@@ -359,7 +359,6 @@ impl CatalogState {
             })
     }
 
-    #[tracing::instrument(level = "trace", skip(self))]
     fn insert_item(
         &mut self,
         id: GlobalId,

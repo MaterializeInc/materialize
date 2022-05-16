@@ -114,6 +114,7 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
@@ -246,6 +247,7 @@ pub struct Config<S> {
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
+    otel_ctx: OpenTelemetryContext,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -820,6 +822,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn message_controller(&mut self, message: ControllerResponse) {
         match message {
             ControllerResponse::PeekResponse(uuid, response) => {
@@ -828,8 +831,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 if let Some(PendingPeek {
                     sender: rows_tx,
                     conn_id,
+                    otel_ctx,
                 }) = self.pending_peeks.remove(&uuid)
                 {
+                    otel_ctx.attach_as_parent();
                     // Peek cancellations are best effort, so we might still
                     // receive a response, even though the recipient is gone.
                     let _ = rows_tx.send(response);
@@ -970,6 +975,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
@@ -1046,8 +1052,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 portal_name,
                 session,
                 tx,
+                otel_ctx,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+
+                otel_ctx.attach_as_parent();
                 self.handle_execute(portal_name, session, tx).await;
             }
 
@@ -1295,6 +1304,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Handles an execute command.
+    #[tracing::instrument(level = "debug", skip(self, tx, session))]
     async fn handle_execute(
         &mut self,
         portal_name: String,
@@ -1524,6 +1534,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     if let Some(PendingPeek {
                         sender: rows_tx,
                         conn_id: _,
+                        otel_ctx: _,
                     }) = self.pending_peeks.remove(&uuid)
                     {
                         rows_tx
@@ -1876,6 +1887,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     portal_name,
                                     session,
                                     tx: tx.take(),
+                                    otel_ctx: OpenTelemetryContext::empty(),
                                 }))
                                 .expect("sending to internal_cmd_tx cannot fail");
                         });
@@ -1903,6 +1915,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     // Returns the name of the portal to execute.
+    #[tracing::instrument(level = "debug", skip(self))]
     fn sequence_execute(
         &mut self,
         session: &mut Session,
@@ -3062,6 +3075,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// deploying the most efficient evaluation plan. The peek could evaluate to a constant,
     /// be a simple read out of an existing arrangement, or required a new dataflow to build
     /// the results to return.
+    #[tracing::instrument(level = "debug", skip(self, session))]
     async fn sequence_peek(
         &mut self,
         session: &mut Session,
@@ -4239,7 +4253,10 @@ impl<S: Append + 'static> Coordinator<S> {
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let arena = RowArena::new();
             let diffs = match peek_response {
-                ExecuteResponse::SendingRows(batch) => {
+                ExecuteResponse::SendingRows {
+                    future: batch,
+                    otel_ctx: _,
+                } => {
                     // TODO: This timeout should be removed once #11782 lands;
                     // we should instead periodically ensure clusters are
                     // healthy and actively cancel any work waiting on unhealthy
@@ -4965,7 +4982,10 @@ pub async fn serve<S: Append + 'static>(
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    ExecuteResponse::SendingRows(Box::pin(async { PeekResponseUnary::Rows(rows) }))
+    ExecuteResponse::SendingRows {
+        future: Box::pin(async { PeekResponseUnary::Rows(rows) }),
+        otel_ctx: OpenTelemetryContext::empty(),
+    }
 }
 
 fn auto_generate_primary_idx(
@@ -5081,8 +5101,8 @@ pub fn describe<S: Append>(
 /// This module determines if a dataflow can be short-cut, by returning constant values
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
-
     use mz_dataflow_types::client::{ComputeInstanceId, ReplicaId};
+    use mz_ore::tracing::OpenTelemetryContext;
     use mz_stash::Append;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
@@ -5212,6 +5232,7 @@ pub mod fast_path_peek {
 
     impl<S: Append + 'static> crate::coord::Coordinator<S> {
         /// Implements a peek plan produced by `create_plan` above.
+        #[tracing::instrument(level = "debug", skip(self))]
         pub async fn implement_fast_path_peek(
             &mut self,
             fast_path: Plan,
@@ -5334,6 +5355,7 @@ pub mod fast_path_peek {
                 uuid = Uuid::new_v4();
             }
 
+            let otel_ctx = OpenTelemetryContext::obtain();
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks.insert(
@@ -5341,6 +5363,7 @@ pub mod fast_path_peek {
                 PendingPeek {
                     sender: rows_tx,
                     conn_id,
+                    otel_ctx: otel_ctx.clone(),
                 },
             );
             self.client_pending_peeks
@@ -5395,7 +5418,10 @@ pub mod fast_path_peek {
                 self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
-            Ok(crate::ExecuteResponse::SendingRows(Box::pin(rows_rx)))
+            Ok(crate::ExecuteResponse::SendingRows {
+                future: Box::pin(rows_rx),
+                otel_ctx,
+            })
         }
     }
 }
