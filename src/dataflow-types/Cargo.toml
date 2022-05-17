@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.57"
 async-stream = "0.3.3"
 async-trait = "0.1.53"
-aws-config = { version = "0.10.1", default-features = false, features = ["native-tls"] }
+aws-config = { version = "0.12.0", default-features = false, features = ["native-tls"] }
 aws-smithy-http = "0.40.2"
 aws-types = { version = "0.10.1", features = ["hardcoded-credentials"] }
 bytes = "1.1.0"
