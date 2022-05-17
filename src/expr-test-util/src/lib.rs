@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use once_cell::sync::Lazy;
 use proc_macro2::TokenTree;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use mz_expr::explain::ViewExplanation;
@@ -29,6 +30,7 @@ pub static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
     let mut rti = ReflectedTypeInfo::default();
     EvalError::add_to_reflected_type_info(&mut rti);
     MirRelationExpr::add_to_reflected_type_info(&mut rti);
+    TestCatalogCommand::add_to_reflected_type_info(&mut rti);
     rti
 });
 
@@ -118,6 +120,15 @@ pub struct TestCatalog {
     names: HashMap<GlobalId, String>,
 }
 
+/// Contains the arguments for a command for [TestCatalog].
+///
+/// See [mz_lowertest] for the command syntax.
+#[derive(Debug, Serialize, Deserialize, MzReflect)]
+enum TestCatalogCommand {
+    /// Insert a source into the catalog.
+    Defsource { name: String, typ: RelationType },
+}
+
 impl<'a> TestCatalog {
     /// Registers an object in the catalog.
     ///
@@ -162,29 +173,16 @@ impl<'a> TestCatalog {
     ///   insert a source into the catalog.
     pub fn handle_test_command(&mut self, spec: &str) -> Result<(), String> {
         let mut stream_iter = tokenize(spec)?.into_iter();
-        while let Some(token) = stream_iter.next() {
-            match token {
-                TokenTree::Group(group) => {
-                    let mut inner_iter = group.stream().into_iter();
-                    match inner_iter.next() {
-                        Some(TokenTree::Ident(ident)) if &ident.to_string()[..] == "defsource" => {
-                            let name = match inner_iter.next() {
-                                Some(TokenTree::Ident(ident)) => Ok(ident.to_string()),
-                                invalid_token => {
-                                    Err(format!("invalid source name: {:?}", invalid_token))
-                                }
-                            }?;
-
-                            let mut ctx = GenericTestDeserializeContext::default();
-                            let typ: RelationType =
-                                deserialize(&mut inner_iter, "RelationType", &RTI, &mut ctx)?;
-
-                            self.insert(&name, typ, false)?;
-                        }
-                        s => return Err(format!("not a valid catalog command: {:?}", s)),
-                    }
+        while let Some(command) = deserialize_optional::<TestCatalogCommand, _, _>(
+            &mut stream_iter,
+            "TestCatalogCommand",
+            &RTI,
+            &mut GenericTestDeserializeContext::default(),
+        )? {
+            match command {
+                TestCatalogCommand::Defsource { name, typ } => {
+                    self.insert(&name, typ, false)?;
                 }
-                s => return Err(format!("not a valid catalog command spec: {:?}", s)),
             }
         }
         Ok(())
