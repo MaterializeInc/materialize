@@ -11,6 +11,8 @@
 #
 # This file uses the old create source syntax.
 
+$ set-sql-timeout duration=300s
+
 $ set keyschema={"type": "record", "name": "Key", "fields": [ { "name": "f1", "type": "long" } ] }
 
 $ set schema={"type" : "record", "name" : "test", "fields": [ { "name": "f2", "type": "long" } ] }

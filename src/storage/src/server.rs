@@ -130,8 +130,8 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 persist_handles: HashMap::new(),
+                collection_metadata: HashMap::new(),
                 ts_source_mapping: HashMap::new(),
-                ts_histories: HashMap::default(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
@@ -195,9 +195,7 @@ where
             // a command or when new Kafka messages have arrived.
             self.timely_worker.step_or_park(None);
 
-            self.activate_storage().update_rt_timestamps();
-            self.activate_storage()
-                .report_conditional_frontier_progress();
+            self.activate_storage().report_frontier_progress();
 
             // Handle any received commands.
             let mut cmds = vec![];

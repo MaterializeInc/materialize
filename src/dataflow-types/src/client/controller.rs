@@ -424,26 +424,17 @@ where
     pub async fn process(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
         let stashed = self.stashed_response.take().expect("`process` is not allowed to block indefinitely -- `ready` should be polled to completion first.");
         match stashed {
-            UnderlyingControllerResponse::Storage(response) => {
-                match response {
-                    StorageResponse::TimestampBindings(feedback) => {
-                        // Order is important here. We must durably record
-                        // the timestamp bindings before we act on them, or
-                        // an ill-timed crash could cause data loss.
-                        self.storage_controller
-                            .persist_timestamp_bindings(&feedback)
-                            .await?;
-
-                        self.storage_controller
-                            .update_write_frontiers(&feedback.changes)
-                            .await?;
-                        Ok(None)
-                    }
-                    StorageResponse::LinearizedTimestamps(res) => {
-                        Ok(Some(ControllerResponse::LinearizedTimestamps(res)))
-                    }
+            UnderlyingControllerResponse::Storage(response) => match response {
+                StorageResponse::FrontierUppers(updates) => {
+                    self.storage_controller
+                        .update_write_frontiers(&updates)
+                        .await?;
+                    Ok(None)
                 }
-            }
+                StorageResponse::LinearizedTimestamps(res) => {
+                    Ok(Some(ControllerResponse::LinearizedTimestamps(res)))
+                }
+            },
             UnderlyingControllerResponse::Compute(instance, response) => {
                 match response {
                     ComputeResponse::FrontierUppers(updates) => {

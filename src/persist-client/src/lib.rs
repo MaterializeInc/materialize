@@ -20,6 +20,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
@@ -39,6 +40,8 @@ pub mod error;
 mod examples;
 pub mod read;
 pub mod write;
+
+pub use crate::r#impl::state::{Since, Upper};
 
 /// An implementation of the public crate interface.
 ///
@@ -108,7 +111,7 @@ impl PersistLocation {
 /// The [std::string::ToString::to_string] format of this may be stored durably
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
@@ -133,6 +136,25 @@ impl std::str::FromStr for ShardId {
         };
         let uuid = Uuid::parse_str(&u).map_err(|err| format!("invalid ShardId {}: {}", s, err))?;
         Ok(ShardId(*uuid.as_bytes()))
+    }
+}
+
+impl Codec for ShardId {
+    fn codec_name() -> String {
+        "ShardId".to_owned()
+    }
+
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        let s = self.to_string();
+        <String as Codec>::encode(&s, buf)
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let s = <String as Codec>::decode(buf)?;
+        s.parse()
     }
 }
 

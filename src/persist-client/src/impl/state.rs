@@ -303,6 +303,7 @@ where
     }
 }
 
+/// Wrapper for Antichain that represents a Since
 #[derive(Debug, PartialEq)]
 pub struct Since<T>(pub Antichain<T>);
 
@@ -311,6 +312,7 @@ impl<T> Determinacy for Since<T> {
     const DETERMINANT: bool = true;
 }
 
+/// Wrapper for Antichain that represents an Upper
 #[derive(Debug, PartialEq)]
 pub struct Upper<T>(pub Antichain<T>);
 

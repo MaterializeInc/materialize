@@ -840,7 +840,7 @@ impl TryFrom<ProtoDataflowDescription>
 /// Types and traits related to the introduction of changing collections into `dataflow`.
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
-    use std::ops::{Add, Deref, DerefMut};
+    use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -1118,6 +1118,37 @@ pub mod sources {
             MzOffset {
                 offset: self.offset + x,
             }
+        }
+    }
+
+    impl Add<Self> for MzOffset {
+        type Output = Self;
+
+        fn add(self, x: Self) -> Self {
+            MzOffset {
+                offset: self.offset + x.offset,
+            }
+        }
+    }
+
+    impl AddAssign<i64> for MzOffset {
+        fn add_assign(&mut self, x: i64) {
+            self.offset += x;
+        }
+    }
+
+    impl AddAssign<Self> for MzOffset {
+        fn add_assign(&mut self, x: Self) {
+            self.offset += x.offset;
+        }
+    }
+
+    // Output is a diff but not itself an MzOffset
+    impl Sub<Self> for MzOffset {
+        type Output = i64;
+
+        fn sub(self, other: Self) -> i64 {
+            self.offset - other.offset
         }
     }
 

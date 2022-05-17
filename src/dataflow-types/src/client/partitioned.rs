@@ -299,8 +299,8 @@ where
     ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
         match response {
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::TimestampBindings(mut feedback) => {
-                for (id, changes) in feedback.changes.iter_mut() {
+            StorageResponse::FrontierUppers(mut list) => {
+                for (id, changes) in list.iter_mut() {
                     if let Some(frontier) = self.uppers.get_mut(id) {
                         let iter = frontier.update_iter(changes.drain());
                         changes.extend(iter);
@@ -312,15 +312,19 @@ where
                 // This is more verbose than `list.retain()` because that method cannot mutate
                 // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
                 let mut cursor = 0;
-                while let Some((_id, changes)) = feedback.changes.get_mut(cursor) {
+                while let Some((_id, changes)) = list.get_mut(cursor) {
                     if changes.is_empty() {
-                        feedback.changes.swap_remove(cursor);
+                        list.swap_remove(cursor);
                     } else {
                         cursor += 1;
                     }
                 }
 
-                Some(Ok(StorageResponse::TimestampBindings(feedback)))
+                if list.is_empty() {
+                    None
+                } else {
+                    Some(Ok(StorageResponse::FrontierUppers(list)))
+                }
             }
             // TODO(guswynn): is this the correct implementation?
             StorageResponse::LinearizedTimestamps(feedback) => {

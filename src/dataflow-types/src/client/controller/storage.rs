@@ -19,16 +19,15 @@
 //! empty frontier.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use mz_repr::proto::TryFromProtoError;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
@@ -37,19 +36,14 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use uuid::Uuid;
 
-use mz_expr::PartitionId;
-use mz_persist_client::{read::ReadHandle, PersistLocation};
+use mz_persist_client::{read::ReadHandle, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
-use mz_repr::Diff;
-use mz_repr::GlobalId;
-use mz_repr::Row;
-use mz_stash::{self, Stash, StashError};
+use mz_repr::proto::TryFromProtoError;
+use mz_repr::{Diff, GlobalId, Row};
+use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
-use crate::client::{
-    CreateSourceCommand, MzOffset, StorageClient, StorageCommand, StorageResponse,
-    TimestampBindingFeedback,
-};
+use crate::client::{CreateSourceCommand, StorageClient, StorageCommand, StorageResponse};
 use crate::sources::SourceDesc;
 use crate::Update;
 
@@ -98,17 +92,6 @@ pub trait StorageController: Debug + Send {
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError>;
 
-    async fn update_durability_frontiers(
-        &mut self,
-        updates: Vec<(GlobalId, Antichain<Self::Timestamp>)>,
-    ) -> Result<(), StorageError>;
-
-    /// Persist timestamp bindings updates received from ingestion workers
-    async fn persist_timestamp_bindings(
-        &mut self,
-        feedback: &TimestampBindingFeedback<Self::Timestamp>,
-    ) -> Result<(), StorageError>;
-
     /// Assigns a read policy to specific identifiers.
     ///
     /// The policies are assigned in the order presented, and repeated identifiers should
@@ -148,6 +131,7 @@ pub trait StorageController: Debug + Send {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
+    pub timestamp_shard_id: ShardId,
 }
 
 impl From<&CollectionMetadata> for ProtoCollectionMetadata {
@@ -162,11 +146,13 @@ impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
     type Error = TryFromProtoError;
 
     fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
+        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
         })
     }
 }
@@ -178,11 +164,13 @@ impl Arbitrary for CollectionMetadata {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         // TODO (#12359): derive Arbitrary after CollectionMetadata
         // gains proper protobuf support.
+        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
         Just(CollectionMetadata {
             persist_location: PersistLocation {
                 blob_uri: "".to_string(),
                 consensus_uri: "".to_string(),
             },
+            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
         })
         .boxed()
     }
@@ -303,8 +291,10 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    fn collection_metadata(&self, _id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError> {
+        let collection = self.collection(id)?;
         Ok(CollectionMetadata {
+            timestamp_shard_id: collection.timestamp_shard_id,
             persist_location: self.persist_location.clone(),
         })
     }
@@ -348,37 +338,17 @@ where
                 .map(|read| read.since().clone())
                 .unwrap_or(since);
 
-            // TODO(aljoscha): We don't need a timestamp bindings collection for all types of
-            // sources but right now we always create one. Perhaps the responsibility for creating
-            // this should be moved to the `SourceConnector`, similar to how we have
-            // `get_read_handle()` for the persist read handle.
-            let ts_binding_collection = self
-                .state
-                .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                .await?;
-
-            let mut ts_bindings = Vec::new();
-            let mut last_bindings: HashMap<_, MzOffset> = HashMap::new();
-            for ((pid, _), time, diff) in self.state.stash.iter(ts_binding_collection).await? {
-                let prev_offset = last_bindings.entry(pid.clone()).or_default();
-                ts_bindings.push((
-                    pid,
-                    T::try_from(time).expect("timestamp overflowed i64"),
-                    MzOffset {
-                        offset: prev_offset.offset + diff,
-                    },
-                ));
-                prev_offset.offset += diff;
-            }
-
             let read_handle = read_handle.map(|read| {
                 Box::new(ReadHandleWrapper { read_handle: read })
                     as Box<dyn CollectionReadHandle<T>>
             });
 
+            let timestamp_shard_id = TypedCollection::new("timestamp-shard-id")
+                .insert_without_overwrite(&mut self.state.stash, &id, ShardId::new())
+                .await?;
+
             let collection_state =
-                CollectionState::new(desc.clone(), since.clone(), read_handle, last_bindings);
+                CollectionState::new(desc.clone(), since.clone(), read_handle, timestamp_shard_id);
             self.state.collections.insert(id, collection_state);
 
             let storage_metadata = self.collection_metadata(id)?;
@@ -387,7 +357,6 @@ where
                 id,
                 desc,
                 since,
-                ts_bindings,
                 storage_metadata,
             };
 
@@ -431,17 +400,6 @@ where
             .map_err(StorageError::from)
     }
 
-    async fn update_durability_frontiers(
-        &mut self,
-        updates: Vec<(GlobalId, Antichain<T>)>,
-    ) -> Result<(), StorageError> {
-        self.state
-            .client
-            .send(StorageCommand::DurabilityFrontierUpdates(updates))
-            .await
-            .map_err(StorageError::from)
-    }
-
     async fn set_read_policy(
         &mut self,
         policies: Vec<(GlobalId, ReadPolicy<T>)>,
@@ -470,104 +428,6 @@ where
             self.update_read_capabilities(&mut read_capability_changes)
                 .await?;
         }
-        Ok(())
-    }
-
-    /// Persist timestamp bindings updates received from ingestion workers
-    async fn persist_timestamp_bindings(
-        &mut self,
-        feedback: &TimestampBindingFeedback<T>,
-    ) -> Result<(), StorageError> {
-        for (id, bindings) in &feedback.bindings {
-            let ts_binding_collection = self
-                .state
-                .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                .await?;
-
-            let upper = self.state.stash.upper(ts_binding_collection).await?;
-
-            let collection_state = self.collection_mut(*id).expect("missing source id");
-
-            // Here we differentialize the bindings we got from workers
-            // Timestamp bindings as represented as a TVC whose data, time, and diff types
-            // correspond to PartitionId, Time, MzOffset.
-            //
-            // For example, suppose we read from a kafka topic with two partitions and at timestamp
-            // 1 we've read up to offsets 5 and 10 for each partition and at timestamp 2 we read up
-            // to offsets 7 and 17. The differentialized collection will contain the following
-            // updates:
-            //
-            // (PartitionId::Kafka(1), 1, +5)
-            // (PartitionId::Kafka(2), 1, +10)
-            // (PartitionId::Kafka(1), 2, +2)  <-- This is how much the offset changed, 7 - 5 = 2
-            // (PartitionId::Kafka(2), 2, +7)
-            //
-            // This representation allows us to compact timestamp bindings simply by adding
-            // together offsets and collapsing their timestamps. For example, if we were to compact
-            // through timestamp 2 the collection would contain the following updates:
-            //
-            // (PartitionId::Kafka(1), 2, +7)  <-- 5 + 2 = 7
-            // (PartitionId::Kafka(2), 2, +17) <-- 10 + 7 = 17
-            let mut bindings = bindings.clone();
-            // Sort the bindings by (pid, ts, offset)
-            bindings.sort_unstable();
-            let mut updates = vec![];
-            for (pid, ts, offset) in bindings {
-                let prev_offset = collection_state
-                    .last_reported_ts_bindings
-                    .entry(pid.clone())
-                    .or_default();
-
-                let ts = ts.try_into().expect("timestamp overflowed i64");
-                let update = ((pid, ()), ts, offset.offset - prev_offset.offset);
-
-                prev_offset.offset = offset.offset;
-                // TODO(petrosagg): refactor timestamp binding handling so that we never enter a
-                // situation where the previous bindings are re-reported by workers
-                if upper.less_equal(&ts) {
-                    updates.push(update);
-                }
-            }
-            self.state
-                .stash
-                .update_many(ts_binding_collection, updates)
-                .await?;
-        }
-
-        let mut durability_updates = vec![];
-        let mut seals = vec![];
-        for (id, _changes) in &feedback.changes {
-            let ts_binding_collection = self
-                .state
-                .stash
-                .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                .await?;
-            let collection = self.collection_mut(*id).expect("missing source id");
-            let write_frontier = collection.write_frontier.frontier().to_owned();
-            let seal_frontier = Antichain::from_iter(
-                write_frontier
-                    .as_option()
-                    .map(|ts| ts.clone().try_into().expect("negative timestamp")),
-            );
-            let upper = self.state.stash.upper(ts_binding_collection).await?;
-            // TODO(petrosagg): This guard should go away by ensuring storage workers never re-send
-            // the bindings and frontiers they were initialized with
-            if PartialOrder::less_than(&upper, &seal_frontier) {
-                seals.push((ts_binding_collection, seal_frontier));
-            }
-            durability_updates.push((*id, write_frontier));
-        }
-
-        // Note: this seal is not performed in a transaction with the above `update_many`.
-        // This is fine/correct, but subtle. If we crash in between these 2 writes, the
-        // updates will be read in their entirety, and future updates past the old upper will
-        // still be accepted. Later seals will never erroneously seal times for ts bindings
-        // that were recorded, because we always record bindings before seal-ing here.
-        self.state.stash.seal_batch(&seals).await?;
-
-        self.update_durability_frontiers(durability_updates).await?;
-
         Ok(())
     }
 
@@ -627,8 +487,6 @@ where
 
         // Translate our net compute actions into `AllowCompaction` commands.
         let mut compaction_commands = Vec::new();
-        let mut stash_compactions = vec![];
-        let mut stash_consolidations = vec![];
         for (id, change) in storage_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
@@ -638,20 +496,6 @@ where
                     .frontier()
                     .to_owned();
 
-                let ts_binding_collection = self
-                    .state
-                    .stash
-                    .collection::<PartitionId, ()>(&format!("timestamp-bindings-{id}"))
-                    .await?;
-
-                let mut since = self.state.stash.since(ts_binding_collection).await?;
-                since.extend(
-                    frontier
-                        .iter()
-                        .map(|t| t.clone().try_into().expect("timestamp overflowed i64")),
-                );
-                stash_compactions.push((ts_binding_collection, since));
-                stash_consolidations.push(ts_binding_collection);
                 compaction_commands.push((*id, frontier.clone()));
 
                 let collection = self.collection_mut(*id).unwrap();
@@ -660,11 +504,6 @@ where
                 }
             }
         }
-        self.state.stash.compact_batch(&stash_compactions).await?;
-        self.state
-            .stash
-            .consolidate_batch(&stash_consolidations)
-            .await?;
 
         if !compaction_commands.is_empty() {
             self.state
@@ -750,15 +589,14 @@ pub struct CollectionState<T> {
     /// equal to `write_frontier.frontier()`.
     pub write_frontier: MutableAntichain<T>,
 
-    /// The last reported timestamp bindings, if any.
-    /// This is used to differentialize timestamp bindings received before storing them in stash
-    pub(super) last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
-
     /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
     /// since frontier and we need to downgrade that when the read capabilities change.
     // TODO(aljoscha): Once all sources are wired up to go through persist/STORAGE, this will stop
     // being optional
     pub read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
+    // TODO: only makes sense for collections that are ingested so maybe should live elsewhere?
+    /// The persist shard id of the remap collection used to reclock this collection
+    pub timestamp_shard_id: ShardId,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -767,7 +605,7 @@ impl<T: Timestamp> CollectionState<T> {
         description: SourceDesc,
         since: Antichain<T>,
         read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
-        last_reported_ts_bindings: HashMap<PartitionId, MzOffset>,
+        timestamp_shard_id: ShardId,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
@@ -777,8 +615,8 @@ impl<T: Timestamp> CollectionState<T> {
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
-            last_reported_ts_bindings,
             read_handle,
+            timestamp_shard_id,
         }
     }
 }

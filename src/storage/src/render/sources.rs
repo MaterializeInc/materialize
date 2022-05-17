@@ -255,10 +255,6 @@ where
                 )
             };
 
-            let timestamp_histories = storage_state
-                .ts_histories
-                .get(&src_id)
-                .map(|history| history.clone());
             let source_name = format!("{}-{}", connector.name(), src_id);
             let base_source_config = RawSourceCreationConfig {
                 name: source_name,
@@ -267,13 +263,14 @@ where
                 scope,
                 // Distribute read responsibility among workers.
                 active: active_read_worker,
-                timestamp_histories,
                 timestamp_frequency: ts_frequency,
                 worker_id: scope.index(),
                 worker_count: scope.peers(),
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
+                storage_metadata,
+                as_of: as_of_frontier.clone(),
                 aws_external_id: storage_state.aws_external_id.clone(),
             };
 
@@ -299,7 +296,7 @@ where
                         .as_collection(),
                 );
 
-                (ok_stream.as_collection(), capability)
+                (ok_stream.as_collection(), Some(capability))
             } else if let ExternalSourceConnector::Persist(_) = connector {
                 unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
             } else {
@@ -441,6 +438,12 @@ where
                                             // N.B. tx_id is validated when constructing dbz_envelope
                                             .expect("bad tx metadata spec")
                                             .clone();
+                                        let tx_collection_metadata = storage_state
+                                            .collection_metadata
+                                            .get(&tx_metadata.tx_metadata_global_id)
+                                            // N.B. tx_id is validated when constructing dbz_envelope
+                                            .expect("bad tx metadata spec")
+                                            .clone();
                                         // TODO(#11667): reuse the existing arrangement if it exists
                                         let ((tx_source_ok, tx_source_err), tx_token) =
                                             render_source(
@@ -448,7 +451,7 @@ where
                                                 as_of_frontier,
                                                 SourceInstanceDesc {
                                                     description: tx_src_desc,
-                                                    storage_metadata,
+                                                    storage_metadata: tx_collection_metadata,
                                                     arguments: SourceInstanceArguments {
                                                         operators: None,
                                                     },
