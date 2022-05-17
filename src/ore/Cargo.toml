@@ -25,7 +25,7 @@ futures = { version = "0.3.21", optional = true }
 lazy_static = "1.4.0"
 # This isn't directly imported by anything, but it's required at link time. The
 # vendored feature is transitively depended upon by tokio-openssl.
-openssl = { version = "0.10.39", features = ["vendored"], optional = true }
+openssl = { version = "0.10.40", features = ["vendored"], optional = true }
 paste = "1.0.7"
 pin-project = "1.0.0"
 prometheus = { version = "0.13.0", default-features = false, optional = true }
