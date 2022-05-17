@@ -32,8 +32,9 @@ Sinks are left out of this document and not considered for consistency.
 
 `TAIL` is left out of this document and not considered for consistency.
 
-`AS OF` allows clients to specify the timestamp of a query. This allows clients to circumvent our consistency
-guarantees, so they’re left out of this document.
+`AS OF` allows clients to specify the timestamp of a query. Queries with `AS OF` do not constrain the timestamp
+selection of other queries. This allows clients to circumvent our consistency guarantees, so they’re left out of this
+document.
 
 This document does not include Materialize initiated acknowledgements of upstream sources (e.g., the commit of an offset
 by a Kafka source, the acknowledgment of an LSN by a PostgresSQL source, etcetera). For the purposes of this document we
@@ -57,13 +58,14 @@ The main interface Materialize provides to clients for data manipulation and dat
 transactions which allows a client to group multiple statements into a single atomic operation. Statements that are not
 explicitly inside a transaction are inside a single statement transaction.
 
-#### Transactions
+#### Multi-statement Transactions
 
-Materialize supports two kinds of transactions, read-only and write-only transactions.
+Materialize supports two kinds of multi-statement transactions, read-only and write-only transactions. All other
+transaction types must be executed as single statement transactions.
 
 ##### Read Only Transactions
 
-Read only transactions allows a client to read from multiple objects at a single timestamp. When a client performs the
+Read only transactions allow a client to read from multiple objects at a single timestamp. When a client performs the
 first read of the transaction, a timestamp is selected for all subsequent reads and a read hold is taken on all objects
 in the same schema for that timestamp. A read hold prevents compaction from happening on an object up to that timestamp.
 When selecting the timestamp we consider all objects in the schema. A consequence of this is that read only transactions
@@ -76,7 +78,7 @@ here: [https://github.com/MaterializeInc/materialize/blob/main/doc/developer/des
 
 ##### Write Only Transactions
 
-Write only transaction allows a client to perform one or more writes atomically. They currently only allow writes to a
+Write only transactions allow a client to perform one or more writes atomically. They currently only allow writes to a
 single table. They also only allow `INSERT` statements (no `DELETE`, `UPDATE`, `CREATE`
 , `INSERT INTO SELECT`, etc). All writes within a transaction are buffered in a session local variable and are not
 visible to any other session. When the transaction commits, a timestamp is selected by the coordinator and all writes
@@ -168,9 +170,9 @@ and, as mentioned above, all reads will block until the upper has advanced.
 
 The Coordinator maintains a global timestamp for all user tables. Every one second this timestamp is increased by one
 second and all tables are advanced to the new timestamp (reads and writes can also increase the timestamp and/or advance
-tables as described below). Advancing a table to `ts` causes it’s `upper` to be set to `ts`
-, and it’s `since` to be set to `logical_compaction_window` less than `ts` (`logical_compaction_window` is a
-configuration variable that determines how often to compact old data).
+tables as described below). Advancing a table to `ts` causes its `upper` to be set to `ts`, and its `since` to be set
+to `logical_compaction_window` less than `ts` (`logical_compaction_window` is a configuration variable that determines
+how often to compact old data).
 
 When determining a timestamp to use to read from one or more user tables, the Coordinator uses the current value of the
 global timestamp. Additionally, the Coordinator advances all tables to a timestamp larger than the timestamp selected
@@ -286,9 +288,10 @@ Linearizable, which means that the total order formed by all transactions must b
 occurrences. So if transaction t1 happened in real time before transaction t2, then t1 must be ordered before t2 in the
 total ordering.
 
-Operations that only include user tables are currently Strict Serializable. This is made easy by using a single global
-timestamp and a single thread in the coordinator to order operations. Writes happen at a timestamp larger than all
-previous operations. Reads happen at a timestamp equal to or larger than all previous operations.
+Operations that only include user tables, and include at least one user table, are currently Strict Serializable. This
+is accomplished by using a single global timestamp and a single thread in the coordinator to order operations. Writes
+happen at a timestamp larger than all previous operations. Reads happen at a timestamp equal to or larger than all
+previous operations.
 
 Operations that involve reading from views over upstream data are not currently Strict Serializable. It is possible to
 read from a view at one timestamp and then later read from the same view at an earlier timestamp. Consider the following
@@ -303,11 +306,12 @@ violation of strict serializability because the second read happens later than t
 assigned an earlier timestamp.
 
 In order to achieve Strict Serializability in the general case, Materialize must always select a timestamp greater than
-all previously selected timestamps. This will ensure that if an operation happens later in real time, then it will be
-assigned a later timestamp. Consecutive reads can all be assigned an equal timestamp as long as there’s no writes in
-between them. This is made somewhat easier by the fact that all timestamp selection happens on a single thread so no
-coordination is needed. One implementation for this is to consult the global timestamp for all reads, not just ones
-involving user tables.
+or equal to all previously selected timestamps. This will ensure that if an operation happens later in real time, then
+it will be assigned an equal or later timestamp. Consecutive reads can (but don't have to) all be assigned an equal
+timestamp as long as there’s no writes in between them. Consecutive writes can (but don't have to) all be assigned an
+equal timestamp as long as there's no reads in between them. This can be accomplished by the fact that all timestamp
+selection happens on a single thread so no coordination is needed. One implementation for this is to consult the global
+timestamp for all reads, not just ones involving user tables.
 
 If we use the global timestamp for all reads, then the global timestamp will have to advance in the following cases:
 
@@ -351,8 +355,8 @@ timestamp is too high.
 Before performing any operation that would advance the global timestamp ahead of the current wall time, we block the
 operation until the current wall time catches up to the value we want to advance the global timestamp to. These
 operations include writing to a user table or reading from a view over an upstream source. As an optimization we can
-implement a form of group commit, where all writes to user tables within the same millisecond commit together at the
-same timestamp.
+implement a form of group commit or write coalescing, where all writes to user tables within the same millisecond commit
+together at the same timestamp.
 [#11150](https://github.com/MaterializeInc/materialize/pull/11150)
 and [#10173](https://github.com/MaterializeInc/materialize/pull/10173) are previous pull requests that try and do
 something similar.
@@ -397,6 +401,9 @@ here: https://github.com/cockroachdb/cockroach/blob/711ccb5b8fba4e6a826ed6ba46c0
   to be completed first.
 - If X is low enough we will overflow our timestamps at some point in the future. This can be mitigated with a high
   enough X.
+- Each distinct timestamp written has a significant impact on the underlying view maintenance engine, which will perform
+  work to correctly update for each distinct time it is presented with. Spraying lots of distinct times at it introduces
+  a substantial amount of potentially zero-value work for it to do.
 
 ##### Write Ahead Log (WAL)
 
