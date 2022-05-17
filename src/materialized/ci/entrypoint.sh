@@ -12,4 +12,4 @@
 set -euo pipefail
 
 pg_ctlcluster 14 materialize start
-exec materialized --listen-addr=0.0.0.0:6875 --persist-consensus-url postgresql://materialize@%2Ftmp "$@"
+exec materialized --listen-addr=0.0.0.0:6875 "$@"
