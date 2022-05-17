@@ -964,7 +964,7 @@ a b
 $ kafka-create-topic topic=schema-strategy-test
 
 $ set first-writer-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}
-$ set second-writer-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}, {"name": "c", "type": ["null", "long"], "default": "null"}]}
+$ set second-writer-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}, {"name": "c", "type": ["null", "long"], "default": null}]}
 $ set reader-schema={"type": "record", "name": "row", "fields": [{"name": "a", "type": "long"}]}
 
 $ kafka-ingest format=avro topic=schema-strategy-test schema=${first-writer-schema} timestamp=1 publish=true
