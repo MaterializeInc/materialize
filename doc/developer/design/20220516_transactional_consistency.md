@@ -302,21 +302,29 @@ Reference [Timestamp Selection](#Timestamp Selection) to see why these timestamp
 violation of strict serializability because the second read happens later than the first read in real time, but it is
 assigned an earlier timestamp.
 
-In order to achieve Strict Serializability Materialize must always select a timestamp greater than all previously
-selected timestamps. This will ensure that if an operation happens later in real time, then it will be assigned a later
-timestamp. Consecutive reads can all be assigned an equal timestamp as long as there’s no writes in between them. This
-is made somewhat easy by the fact that all timestamp selection happens on a single thread so no coordination is needed.
-On implementation for this is to consult the global timestamp for all reads, not just ones involving user tables. If
-the `[since, upper)` of any object drifts ahead of the global timestamp, causing the selected timestamp to be greater
-than the global timestamp, then the global timestamp can be fast-forwarded to the selected timestamp.
+In order to achieve Strict Serializability in the general case, Materialize must always select a timestamp greater than
+all previously selected timestamps. This will ensure that if an operation happens later in real time, then it will be
+assigned a later timestamp. Consecutive reads can all be assigned an equal timestamp as long as there’s no writes in
+between them. This is made somewhat easier by the fact that all timestamp selection happens on a single thread so no
+coordination is needed. One implementation for this is to consult the global timestamp for all reads, not just ones
+involving user tables.
+
+If we use the global timestamp for all reads, then the global timestamp will have to advance in the following cases:
+
+1. Client writes to a user table.
+2. One second passes and the global timestamp is below the wall clock.
+3. Client reads from a view that has a [`since`, `upper`) range larger than the current global timestamp.
 
 For the purposes of this document, the approach described above is sufficient to achieve a consistency level of Strict
-Serializability. However, it introduces a performance issue that we will now discuss. Consecutive writes or read/write
-cycles (read followed by write, followed by read, followed by write, etc) will increase the global timestamp in an
-unbounded fashion. If the global timestamp is larger than some object’s `upper`, and a client tries to read from that
-object using the global timestamp, then the read must be blocked until the object’s upper advances to the global
-timestamp. The larger the difference between these two values, the larger the read must be blocked for. Below I provide
-some solutions to fixing this.
+Serializability. However, it introduces a performance issue that we will now discuss. Increasing the global timestamp
+past the current wall clock can cause reads to be blocked. For example if a client performs many consecutive writes to a
+user table then the global timestamp can be pushed far past the wall clock. If the client tries to read from a view that
+has a [`since`, `upper`) closely tracking the wall clock, then the read will have to be blocked until the view catches
+up to the global timestamp. Another example is if the client reads from a view that has a [`since`, `upper`) larger than
+the wall clock, then the global timestamp must be advanced to somewhere in the [`since`, `upper`) range, and the next
+read must be at the new timestamp. If the next read was from an object that had a [`since`, `upper`) that closely
+tracked the wall clock, it would be blocked until the view caught up to the global timestamp. Below I provide some
+solutions to fixing this.
 
 NOTE: This problem already exists when joining between a user table and a view over an upstream source as discussed
 in [#12198](https://github.com/MaterializeInc/materialize/issues/12198).
@@ -338,41 +346,45 @@ timestamp is too high.
 
 - Allows unbounded delay on reads.
 
-##### Block Writes
+##### Block Operations that Advance the Global Timestamp
 
-Before performing a write that would advance the global timestamp ahead of the current wall time, we block the write
-until the current wall time catches up to the global timestamp. As an optimization we can implement a form of group
-commit, where all writes within the same millisecond commit together at the same timestamp.
+Before performing any operation that would advance the global timestamp ahead of the current wall time, we block the
+operation until the current wall time catches up to the value we want to advance the global timestamp to. These
+operations include writing to a user table or reading from a view over an upstream source. As an optimization we can
+implement a form of group commit, where all writes to user tables within the same millisecond commit together at the
+same timestamp.
 [#11150](https://github.com/MaterializeInc/materialize/pull/11150)
 and [#10173](https://github.com/MaterializeInc/materialize/pull/10173) are previous pull requests that try and do
 something similar.
 
 **Pros:**
 
-- Prevents reads from being blocked.
+- Prevents some reads from being blocked.
 
 **Cons:**
 
-- Limits write throughput (1 write per millisecond without group commit) or limits write latency (1 millisecond per
-  write with group commit).
+- Limits user table write throughput (1 write per millisecond without group commit) or limits user table write latency (
+  1 millisecond per write with group commit).
+- Blocks some reads.
 
 ##### Hybrid Logical Timestamps
 
 Note: There might be an actual name for this concept, but I chose the name above because it’s similar to Hybrid Logical
 Clocks.
 
-Currently, the timestamps used to in Materialize for `upper`, `since`, and the global timestamp are 64 bit unsigned
-integers that are interpreted as an epoch in milliseconds. Instead we can change the representation of these timestamps
+Currently, the timestamps used in Materialize for `upper`, `since`, and the global timestamp are 64 bit unsigned
+integers that are interpreted as an epoch in milliseconds. Instead, we can change the representation of these timestamps
 so that the X most significant bits are used for the epoch and the Y least significant bits are used for a counter.
 Every 1 millisecond the X bits are increased by 1 and the Y bytes are all reset to 0. Every write increments the Y bits
-by 1. This would allow us to have 2^Y writes per millisecond, without blocking any queries. Any write in excess of 2^Y
-per millisecond must be blocked until the next millisecond.
+by 1. This would allow us to have 2^Y writes per millisecond per object, without blocking any queries. Any write in
+excess of 2^Y per millisecond per object must be blocked until the next millisecond. This way no object's `upper` would
+have to advance past the current wall clock.
 
 Note: Increasing the size of the timestamp type would give more flexibility (for example to 128 bits).
 
 **Pros:**
 
-- With a sufficiently high Y, no queries would be blocked.
+- With a sufficiently high Y, no queries or writes would be blocked.
 - May be helpful if/when we wanted to make the coordinator distributed.
 
 **Cons:**
@@ -385,30 +397,31 @@ Note: Increasing the size of the timestamp type would give more flexibility (for
 
 ##### Write Ahead Log (WAL)
 
-This approach involves the coordinator buffering all writes in a durable write ahead log. All writes that occur in the
-same millisecond can be assigned the same timestamp, as long as there are no reads in-between them. Then at the end of
-the millisecond, or after X milliseconds, all writes are sent to STORAGE in a batch. If Materialize crashes/restarts
-before sending the writes to STORAGE, then it can just read the unsent write from the durable logs after starting back
-up. This prevents us from having to increment the global timestamp on every write. However, this does not solve the
-problem for read/write cycles.
+This approach involves the coordinator buffering all writes to user tables in a durable write ahead log. All writes to
+user tables that occur in the same millisecond can be assigned the same timestamp, as long as there are no reads
+in-between them. Then at the end of the millisecond, or after X milliseconds, all writes are sent to STORAGE in a batch.
+If Materialize crashes/restarts before sending the writes to STORAGE, then it can just read the unsent writes from the
+durable logs after starting back up. This prevents us from having to increment the global timestamp on every write to a
+user table. However, this does not solve the problem if there are reads in-between the writes or if we read from a view
+that's ahead of the wall clock.
 
 **Pros:**
 
-- No queries are blocked from consecutive writes.
+- No queries are blocked from consecutive writes to user tables.
 - A WAL would be useful for many other reasons not in scope for this document. It’s likely that no matter what solution
-  we pick, we’d still want to implement a WAL.
+  we pick, we’d still want to implement a WAL eventually.
 
 **Cons:**
 
-- Only solves half the problem.
+- Only solves part of the problem.
 - Requires the WAL backend to have a distributed consensus operation.
 
-##### Timely Fast Forward
+##### Fast Forward
 
 Timestamps in Materialize are meant to closely track the wall clock, but are not guaranteed to be exactly equal to the
-wall clock. This approach would involve forcibly fast-forwarding the `upper`s of all objects. Whenever a write would
-push the global timestamp above the wall clock by some threshold, all `upper`s are jumped to the global timestamp’s new
-value. The threshold could be set to 0 to prevent blocking any queries.
+wall clock. This approach would involve forcibly fast-forwarding the `upper`s of all objects. Whenever an operation
+would push the global timestamp above the `upper` of other objects by some threshold, all `upper`s are jumped to the
+global timestamp’s new value. The threshold could be set to 0 to prevent blocking any queries.
 
 **Pros:**
 
@@ -416,7 +429,7 @@ value. The threshold could be set to 0 to prevent blocking any queries.
 
 **Cons:**
 
-- Certain writes will require a broadcast to all nodes.
+- Certain operations will require a broadcast to all nodes.
 - I’m not actually sure if this is possible, but if it is possible then it’s probably complicated and has a large blast
   radius.
 
