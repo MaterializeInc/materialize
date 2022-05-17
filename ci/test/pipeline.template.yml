@@ -161,7 +161,7 @@ steps:
     label: Cluster isolation test
     depends_on: build-x86_64
     timeout_in_minutes: 10
-    inputs: [test/cluster]
+    inputs: [test/cluster-isolation]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
