@@ -18,10 +18,10 @@ prost-types = "0.10.0"
 rand = "0.8.5"
 rand_distr = "0.4.3"
 tokio = "1.18.2"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.34"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
-uuid = { version = "0.8.2", features = ["v4"] }
+uuid = { version = "1.0.0", features = ["v4"] }
 
 [build-dependencies]
 prost-build = { version = "0.10.3", features = ["vendored"] }

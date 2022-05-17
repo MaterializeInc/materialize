@@ -38,7 +38,7 @@ serde = { version = "1.0.137", features = ["derive"] }
 serde_json = { version = "1.0.81", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
 smallvec = { version = "1.8.0", features = ["serde", "union"] }
-uuid = "0.8.2"
+uuid = "1.0.0"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
