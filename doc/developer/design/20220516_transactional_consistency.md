@@ -167,7 +167,8 @@ and, as mentioned above, all reads will block until the upper has advanced.
 #### User Tables
 
 The Coordinator maintains a global timestamp for all user tables. Every one second this timestamp is increased by one
-second and all tables are advanced to the new timestamp. Advancing a table to `ts` causes it’s `upper` to be set to `ts`
+second and all tables are advanced to the new timestamp (reads and writes can also increase the timestamp and/or advance
+tables as described below). Advancing a table to `ts` causes it’s `upper` to be set to `ts`
 , and it’s `since` to be set to `logical_compaction_window` less than `ts` (`logical_compaction_window` is a
 configuration variable that determines how often to compact old data).
 
@@ -176,8 +177,8 @@ global timestamp. Additionally, the Coordinator advances all tables to a timesta
 for the read. Multiple consecutive reads can all be done at the same timestamp, which only requires advancing the tables
 on the first read.
 
-When determining a timestamp to use to write to a user table, the Coordinator uses a timestamp larger than the previous
-timestamp used (either for a read or a write) and advances all tables to this new timestamp.
+When determining a timestamp to use to write to a user table, the Coordinator increases the global timestamp and uses
+the new value. Additionally, the Coordinator advances all tables to this new timestamp.
 
 #### Upstream Sources
 
