@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use tokio_postgres::{Client as PostgresClient, NoTls};
+use tokio_postgres::{Client as PostgresClient, IsolationLevel, NoTls, Transaction};
 
 use mz_ore::task;
 
@@ -25,13 +25,18 @@ use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const SCHEMA: &str = "
-SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-
-CREATE TABLE IF NOT EXISTS consensus (
+CREATE TABLE IF NOT EXISTS tail (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
     data bytea NOT NULL,
     PRIMARY KEY(shard, sequence_number)
+);
+
+CREATE TABLE IF NOT EXISTS head (
+    shard text NOT NULL,
+    sequence_number bigint NOT NULL,
+    data bytea NOT NULL,
+    PRIMARY KEY(shard)
 );
 ";
 
@@ -143,6 +148,35 @@ impl PostgresConsensus {
             _handle: handle,
         })
     }
+
+    async fn tx<'a>(
+        &self,
+        client: &'a mut PostgresClient,
+    ) -> Result<Transaction<'a>, ExternalError> {
+        let tx = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::Serializable)
+            .start()
+            .await?;
+        Ok(tx)
+    }
+
+    async fn head_tx(
+        &self,
+        tx: &Transaction<'_>,
+        key: &str,
+    ) -> Result<Option<VersionedData>, ExternalError> {
+        let q = "SELECT sequence_number, data FROM head WHERE shard = $1";
+
+        let row = match tx.query_opt(q, &[&key]).await? {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+
+        let seqno: SeqNo = row.try_get("sequence_number")?;
+        let data: Vec<u8> = row.try_get("data")?;
+        Ok(Some(VersionedData { seqno, data }))
+    }
 }
 
 #[async_trait]
@@ -153,86 +187,60 @@ impl Consensus for PostgresConsensus {
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
-
-        let q = "SELECT sequence_number, data FROM consensus
-             WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let client = self.client.lock().await;
-        let row = client.query_opt(&*q, &[&key]).await?;
-        let row = match row {
-            None => return Ok(None),
-            Some(row) => row,
-        };
-
-        let seqno: SeqNo = row.try_get("sequence_number")?;
-
-        let data: Vec<u8> = row.try_get("data")?;
-        Ok(Some(VersionedData { seqno, data }))
+        let mut client = self.client.lock().await;
+        let tx = self.tx(&mut client).await?;
+        let ret = self.head_tx(&tx, key).await?;
+        tx.commit().await?;
+        Ok(ret)
     }
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
+        _deadline: Instant,
         key: &str,
-        expected: Option<SeqNo>,
+        expected_seqno: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
         // TODO: properly use the deadline argument.
-
-        if let Some(expected) = expected {
+        if let Some(expected) = expected_seqno {
             if new.seqno <= expected {
                 return Err(Error::from(
                         format!("new seqno must be strictly greater than expected. Got new: {:?} expected: {:?}",
                                  new.seqno, expected)).into());
             }
         }
+        let mut client = self.client.lock().await;
+        let tx = self.tx(&mut client).await?;
 
-        let result = if let Some(expected) = expected {
-            // Only insert the new row if:
-            // - sequence number expected is already present
-            // - expected corresponds to the most recent sequence number
-            //   i.e. there is no other sequence number > expected already
-            //   present.
-            //
-            // This query has also been written to execute within a single
-            // network round-trip (instead of a slightly simpler implementation
-            // that would call `BEGIN` and have multiple `SELECT` queries).
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     EXISTS (
-                        SELECT * FROM consensus WHERE shard = $1 AND sequence_number = $4
-                     )
-                     AND NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
-                     )
-                     ON CONFLICT DO NOTHING";
-
-            let client = self.client.lock().await;
-
-            client
-                .execute(&*q, &[&key, &new.seqno, &new.data, &expected])
-                .await?
-        } else {
-            // Insert the new row as long as no other row exists for the same shard.
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1
-                     )
-                     ON CONFLICT DO NOTHING";
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &new.seqno, &new.data]).await?
+        let q = "DELETE FROM head WHERE shard = $1 RETURNING sequence_number, data";
+        let current_head = match tx.query_opt(q, &[&key]).await? {
+            Some(row) => {
+                let head = VersionedData {
+                    seqno: row.get(0),
+                    data: row.get(1),
+                };
+                Some(head)
+            }
+            None => None,
         };
 
-        if result == 1 {
-            Ok(Ok(()))
-        } else {
-            // It's safe to call head in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
-            let current = self.head(deadline, key).await?;
-            Ok(Err(current))
+        let current_seqno = current_head.as_ref().map(|h| h.seqno);
+        if current_seqno != expected_seqno {
+            // The DELETE will be rolled back since the transaction won't commit
+            return Ok(Err(current_head));
         }
+
+        if let Some(head) = current_head {
+            let q = "INSERT INTO tail VALUES ($1, $2, $3)";
+            tx.execute(q, &[&key, &head.seqno, &head.data]).await?;
+        }
+
+        let q = "INSERT INTO head VALUES ($1, $2, $3)";
+        tx.execute(q, &[&key, &new.seqno, &new.data]).await?;
+
+        tx.commit().await?;
+
+        Ok(Ok(()))
     }
 
     async fn scan(
@@ -241,20 +249,20 @@ impl Consensus for PostgresConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
+        let mut client = self.client.lock().await;
+        let tx = self.tx(&mut client).await?;
         // TODO: properly use the deadline argument.
-
-        let q = "SELECT sequence_number, data FROM consensus
-             WHERE shard = $1 AND sequence_number >= $2
-             ORDER BY sequence_number";
-        let client = self.client.lock().await;
-        let rows = client.query(&*q, &[&key, &from]).await?;
+        let q = "SELECT sequence_number, data FROM tail
+                 WHERE shard = $1 AND sequence_number >= $2
+                 ORDER BY sequence_number";
+        let rows = tx.query(q, &[&key, &from]).await?;
         let mut results = vec![];
-
         for row in rows {
-            let seqno: SeqNo = row.try_get("sequence_number")?;
-            let data: Vec<u8> = row.try_get("data")?;
+            let seqno: SeqNo = row.get("sequence_number");
+            let data: Vec<u8> = row.get("data");
             results.push(VersionedData { seqno, data });
         }
+        results.extend(self.head_tx(&tx, key).await?);
 
         if results.is_empty() {
             Err(ExternalError::from(anyhow!(
@@ -262,47 +270,20 @@ impl Consensus for PostgresConsensus {
                 from
             )))
         } else {
+            tx.commit().await?;
             Ok(results)
         }
     }
 
     async fn truncate(
         &self,
-        deadline: Instant,
+        _deadline: Instant,
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
-        let q = "DELETE FROM consensus
-                WHERE shard = $1 AND sequence_number < $2 AND
-                EXISTS(
-                    SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
-                )";
-
-        let result = {
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &seqno]).await?
-        };
-        if result == 0 {
-            // We weren't able to successfully truncate any rows inspect head to
-            // determine whether the request was valid and there were no records in
-            // the provided range, or the request was invalid because it would have
-            // also deleted head.
-
-            // It's safe to call head in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
-            let current = self.head(deadline, key).await?;
-            if current.map_or(true, |data| data.seqno < seqno) {
-                // return Err(ExternalError::from(anyhow!(
-                //     "upper bound too high for truncate: {:?}",
-                //     seqno
-                // )));
-            }
-        }
-
+        let client = self.client.lock().await;
+        let q = "DELETE FROM tail WHERE shard = $1 AND sequence_number < $2";
+        client.execute(q, &[&key, &seqno]).await?;
         Ok(())
     }
 }
