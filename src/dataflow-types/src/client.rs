@@ -877,7 +877,7 @@ where
     pub async fn connect(&mut self) {
         for part in &mut self.client.parts {
             part.reconnect().await;
-        }        
+        }
     }
 }
 
