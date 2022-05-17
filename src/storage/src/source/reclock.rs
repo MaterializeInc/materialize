@@ -79,22 +79,21 @@ impl ReclockOperator {
             write_upper,
         );
 
-        if timely::PartialOrder::less_than(&as_of, &read_progress) {
-            bail!(
-                "Source AS OF must not be less than since: {:?} vs {:?}",
-                as_of,
-                read_progress
-            );
-        }
+        assert!(
+            timely::PartialOrder::less_equal(&read_progress, &as_of),
+            "Source AS OF must not be less than since: {:?} vs {:?}",
+            as_of,
+            read_progress
+        );
 
-        // XXX: what do we do if the write_upper is less than the as of? e.g. if we get a non-zero as of on a new source?
-        // - Should that get special-cased and just CAA with empty up to the AS OF??
-        // - Is it possible in general for a non-new source to have an AS OF that's not between since and upper? What to do?
         if timely::PartialOrder::less_than(&write_upper, &as_of) {
-            error!(
-                "Source upper must not be less than AS OF: {:?} vs {:?}.  Since: {:?}",
-                write_upper, as_of, read_progress,
-            );
+            // Make an exception for empty sources
+            if write_upper != Antichain::from_elem(Timestamp::minimum()) {
+                panic!(
+                    "Source upper must not be less than AS OF for non-empty source: {:?} vs {:?}.  Since: {:?}",
+                    write_upper, as_of, read_progress,
+                );
+            }
             as_of.meet_assign(&write_upper);
         }
 
