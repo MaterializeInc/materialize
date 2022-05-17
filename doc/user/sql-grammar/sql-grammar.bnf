@@ -176,7 +176,7 @@ fetch ::=
   ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
   'AVRO USING' (
-        'CONFLUENT SCHEMA REGISTRY' url with_options? |
+        'CONFLUENT SCHEMA REGISTRY' url key_strat? val_strat? with_options? |
         'SCHEMA FILE' path
         ) |
   'PROTOBUF' (
@@ -187,6 +187,14 @@ format_spec ::=
   'CSV WITH' ('HEADER' ( '(' col_name (',' col_name)* ')' ) | n 'COLUMNS') ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+key_strat ::=
+  'KEY STRATEGY' strat
+val_strat ::=
+  'VALUE STRATEGY' strat
+strat ::=
+  'INLINE' avro_reader_schema |
+  'ID' schema_registry_id |
+  'LATEST'
 kinesis_format_spec ::=
   'PROTOBUF MESSAGE' message_name 'USING SCHEMA FILE' path |
   'REGEX' regex |
