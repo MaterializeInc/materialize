@@ -1199,8 +1199,8 @@ impl ParsedDateTime {
 /// - `actual`: The queue of tokens representing the string you want use to fill
 ///   `pdt`'s fields.
 fn fill_pdt_date(
-    mut pdt: &mut ParsedDateTime,
-    mut actual: &mut VecDeque<TimeStrToken>,
+    pdt: &mut ParsedDateTime,
+    actual: &mut VecDeque<TimeStrToken>,
 ) -> Result<(), String> {
     use TimeStrToken::*;
 
@@ -1232,22 +1232,22 @@ fn fill_pdt_date(
         _ => (),
     }
 
-    let valid_formats = vec![
-        vec![
+    let valid_formats = [
+        [
             Num(0, 1), // year
             Dash,
             Num(0, 1), // month
             Dash,
             Num(0, 1), // day
         ],
-        vec![
+        [
             Num(0, 1), // year
             Delim,
             Num(0, 1), // month
             Dash,
             Num(0, 1), // day
         ],
-        vec![
+        [
             Num(0, 1), // year
             Delim,
             Num(0, 1), // month
@@ -1259,9 +1259,7 @@ fn fill_pdt_date(
     let original_actual = actual.clone();
 
     for expected in valid_formats {
-        let mut expected = VecDeque::from(expected);
-
-        match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, DateTimeField::Year, 1) {
+        match fill_pdt_from_tokens(pdt, actual, &expected, DateTimeField::Year, 1) {
             Ok(()) => {
                 return Ok(());
             }
@@ -1284,14 +1282,14 @@ fn fill_pdt_date(
 /// - `actual`: The queue of tokens representing the string you want use to fill
 ///   `pdt`'s fields.
 fn fill_pdt_time(
-    mut pdt: &mut ParsedDateTime,
-    mut actual: &mut VecDeque<TimeStrToken>,
+    pdt: &mut ParsedDateTime,
+    actual: &mut VecDeque<TimeStrToken>,
 ) -> Result<(), String> {
     match determine_format_w_datetimefield(actual.clone(), None)? {
         Some(TimePartFormat::SqlStandard(leading_field)) => {
-            let mut expected = expected_dur_like_tokens(leading_field)?;
+            let expected = expected_dur_like_tokens(leading_field)?;
 
-            fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, 1)
+            fill_pdt_from_tokens(pdt, actual, expected, leading_field, 1)
         }
         _ => Ok(()),
     }
@@ -1308,9 +1306,9 @@ fn fill_pdt_time(
 ///   tokens, but end up being parsed as PostgreSQL-style tokens because of their
 ///   greater expressivity, in that they allow fractions, and otherwise-equivalence.
 fn fill_pdt_interval_sql(
-    mut actual: &mut VecDeque<TimeStrToken>,
+    actual: &mut VecDeque<TimeStrToken>,
     leading_field: DateTimeField,
-    mut pdt: &mut ParsedDateTime,
+    pdt: &mut ParsedDateTime,
 ) -> Result<(), String> {
     use DateTimeField::*;
 
@@ -1339,11 +1337,11 @@ fn fill_pdt_interval_sql(
         }
     }
 
-    let mut expected = expected_sql_standard_interval_tokens(leading_field);
+    let expected = expected_sql_standard_interval_tokens(leading_field);
 
-    let sign = trim_and_return_sign(&mut actual);
+    let sign = trim_and_return_sign(actual);
 
-    fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, leading_field, sign)?;
+    fill_pdt_from_tokens(pdt, actual, expected, leading_field, sign)?;
 
     // Write default values to any unwritten member of the `leading_field`'s group.
     // This will ensure that those fields cannot be written to at a later time, which
@@ -1395,25 +1393,20 @@ fn fill_pdt_interval_sql(
 /// - Only PostgreSQL-style parts can use fractional components in positions
 ///   other than seconds, e.g. `1.5 months`.
 fn fill_pdt_interval_pg(
-    mut actual: &mut VecDeque<TimeStrToken>,
+    actual: &mut VecDeque<TimeStrToken>,
     time_unit: DateTimeField,
-    mut pdt: &mut ParsedDateTime,
+    pdt: &mut ParsedDateTime,
 ) -> Result<(), String> {
     use TimeStrToken::*;
 
     // We remove all spaces during tokenization, so TimeUnit only shows up if
     // there is no space between the number and the TimeUnit, e.g. `1y 2d 3h`, which
     // PostgreSQL allows.
-    let mut expected = VecDeque::from(vec![
-        Num(0, 1),
-        Dot,
-        Nanos(0),
-        TimeUnit(DateTimeField::Year),
-    ]);
+    let expected = [Num(0, 1), Dot, Nanos(0), TimeUnit(DateTimeField::Year)];
 
-    let sign = trim_and_return_sign(&mut actual);
+    let sign = trim_and_return_sign(actual);
 
-    fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, time_unit, sign)?;
+    fill_pdt_from_tokens(pdt, actual, &expected, time_unit, sign)?;
 
     Ok(())
 }
@@ -1428,10 +1421,10 @@ fn fill_pdt_interval_pg(
 /// # Panics
 /// - Trying to advance to the next smallest DateTimeField if you're currently
 ///     at DateTimeField::Second.
-fn fill_pdt_from_tokens(
+fn fill_pdt_from_tokens<'a, E: IntoIterator<Item = &'a TimeStrToken>>(
     pdt: &mut ParsedDateTime,
     actual: &mut VecDeque<TimeStrToken>,
-    expected: &mut VecDeque<TimeStrToken>,
+    expected: E,
     leading_field: DateTimeField,
     sign: i64,
 ) -> Result<(), String> {
@@ -1442,7 +1435,9 @@ fn fill_pdt_from_tokens(
 
     let mut unit_buf: Option<DateTimeFieldValue> = None;
 
-    while let (Some(atok), Some(etok)) = (actual.front(), expected.front()) {
+    let mut expected = expected.into_iter().peekable();
+
+    while let (Some(atok), Some(etok)) = (actual.front(), expected.peek()) {
         match (atok, etok) {
             // The following forms of punctuation signal the end of a field and can
             // trigger a write.
@@ -1460,7 +1455,7 @@ fn fill_pdt_from_tokens(
                 // arbitrary number of delimiters wherever they're allowed. Note
                 // that this does not include colons.
                 actual.pop_front();
-                expected.pop_front();
+                expected.next();
                 i += 1;
 
                 while let Some(Delim) = actual.front() {
@@ -1561,19 +1556,18 @@ fn fill_pdt_from_tokens(
             }
             // Allow skipping expected spaces (Delim), numbers, dots, and nanoseconds.
             (_, Num(_, _)) | (_, Dot) | (_, Nanos(_)) | (_, Delim) => {
-                expected.pop_front();
+                expected.next();
                 continue;
             }
             (provided, expected) => {
                 return Err(format!(
-                    "Invalid syntax at offset {}: provided {:?} but expected {:?}",
-                    i, provided, expected
+                    "Invalid syntax at offset {i}: provided {provided:?} but expected {expected:?}",
                 ))
             }
         }
         i += 1;
         actual.pop_front();
-        expected.pop_front();
+        expected.next();
     }
 
     ltrim_delim_or_colon(actual);
@@ -1679,11 +1673,11 @@ fn determine_format_w_datetimefield(
 ///
 /// # Errors
 /// - If `from` is YEAR, MONTH, or DAY.
-fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken>, String> {
+fn expected_dur_like_tokens(from: DateTimeField) -> Result<&'static [TimeStrToken], String> {
     use DateTimeField::*;
     use TimeStrToken::*;
 
-    let all_toks = [
+    const ALL_TOKS: [TimeStrToken; 7] = [
         Num(0, 1), // hour
         Colon,
         Num(0, 1), // minute
@@ -1704,18 +1698,18 @@ fn expected_dur_like_tokens(from: DateTimeField) -> Result<VecDeque<TimeStrToken
         }
     };
 
-    Ok(VecDeque::from(all_toks[start..all_toks.len()].to_vec()))
+    Ok(&ALL_TOKS[start..ALL_TOKS.len()])
 }
 
 /// Get the expected TimeStrTokens to parse TimePartFormat::SqlStandard parts,
 /// starting from some `DateTimeField`. Delim tokens are never actually included
 /// in the output, but are illustrative of what the expected input of SQL
 /// Standard interval values looks like.
-fn expected_sql_standard_interval_tokens(from: DateTimeField) -> VecDeque<TimeStrToken> {
+fn expected_sql_standard_interval_tokens(from: DateTimeField) -> &'static [TimeStrToken] {
     use DateTimeField::*;
     use TimeStrToken::*;
 
-    let all_toks = [
+    const ALL_TOKS: [TimeStrToken; 6] = [
         Num(0, 1), // year
         Dash,
         Num(0, 1), // month
@@ -1734,7 +1728,7 @@ fn expected_sql_standard_interval_tokens(from: DateTimeField) -> VecDeque<TimeSt
         }
     };
 
-    VecDeque::from(all_toks[start..end].to_vec())
+    &ALL_TOKS[start..end]
 }
 
 fn trim_and_return_sign(z: &mut VecDeque<TimeStrToken>) -> i64 {
@@ -1810,7 +1804,7 @@ impl std::fmt::Display for TimeStrToken {
 /// into Vec<TimeStrToken>.
 ///
 /// # Warning
-/// - Any sequence of numeric characters following a decimal that exceeds 9 charactrers
+/// - Any sequence of numeric characters following a decimal that exceeds 9 characters
 ///   gets truncated to 9 characters, e.g. `0.1234567899` is truncated to `0.123456789`.
 ///
 /// # Errors
@@ -1847,7 +1841,7 @@ pub(crate) fn tokenize_time_str(value: &str) -> Result<VecDeque<TimeStrToken>, S
                 t.push_back(TimeStrToken::Nanos(raw * multiplicand));
                 n.clear();
             } else {
-                t.push_back(parse_num(&n, i)?);
+                t.push_back(parse_num(n, i)?);
                 n.clear();
             }
         }
@@ -2408,7 +2402,7 @@ mod tests {
                 Day,
                 -1,
             ),
-            // Mixed delimeter parsing
+            // Mixed delimiter parsing
             (
                 ParsedDateTime {
                     year: Some(DateTimeFieldValue::new(1, 0)),
@@ -2529,9 +2523,9 @@ mod tests {
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
             let mut actual = tokenize_time_str(test.1).unwrap();
-            let mut expected = tokenize_time_str(test.2).unwrap();
+            let expected = tokenize_time_str(test.2).unwrap();
 
-            fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.3, test.4).unwrap();
+            fill_pdt_from_tokens(&mut pdt, &mut actual, &expected, test.3, test.4).unwrap();
 
             assert_eq!(pdt, test.0);
         }
@@ -2553,9 +2547,9 @@ mod tests {
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
             let mut actual = tokenize_time_str(test.0).unwrap();
-            let mut expected = tokenize_time_str(test.1).unwrap();
+            let expected = tokenize_time_str(test.1).unwrap();
 
-            match fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3) {
+            match fill_pdt_from_tokens(&mut pdt, &mut actual, &expected, test.2, test.3) {
                 Err(e) => assert_eq!(e.to_string(), test.4),
                 Ok(_) => panic!("Test passed when expected to fail, generated {:?}", pdt),
             };
@@ -2572,11 +2566,11 @@ mod tests {
         for test in test_cases.iter() {
             let mut pdt = ParsedDateTime::default();
             let mut actual = tokenize_time_str(test.0).unwrap();
-            let mut expected = tokenize_time_str(test.1).unwrap();
+            let expected = tokenize_time_str(test.1).unwrap();
 
-            if fill_pdt_from_tokens(&mut pdt, &mut actual, &mut expected, test.2, test.3).is_ok() {
+            if fill_pdt_from_tokens(&mut pdt, &mut actual, &expected, test.2, test.3).is_ok() {
                 panic!(
-                    "test_fill_pdt_from_tokens_panic should have paniced. input {}\nformat {}\
+                    "test_fill_pdt_from_tokens_panic should have panicked. input {}\nformat {}\
                      \nDateTimeField {}\nGenerated ParsedDateTime {:?}",
                     test.0, test.1, test.2, pdt
                 );
