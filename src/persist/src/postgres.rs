@@ -25,8 +25,6 @@ use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const SCHEMA: &str = "
-SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
@@ -143,6 +141,7 @@ impl PostgresConsensus {
             _handle: handle,
         })
     }
+
     async fn tx<'a>(
         &self,
         client: &'a mut PostgresClient,
@@ -242,12 +241,6 @@ impl Consensus for PostgresConsensus {
         let ret = if result == 1 {
             Ok(())
         } else {
-            // It's safe to call head in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
             let current = self.head_tx(&tx, key).await?;
             Err(current)
         };
@@ -269,6 +262,11 @@ impl Consensus for PostgresConsensus {
              ORDER BY sequence_number";
         let mut client = self.client.lock().await;
         let tx = self.tx(&mut client).await?;
+        // Intentianally wait to actually use the data until after the transaction
+        // has successfully committed to ensure the reads were valid. See [1]
+        // for more details.
+        //
+        // [1]: https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE
         let rows = tx.query(&*q, &[&key, &from]).await?;
         tx.commit().await?;
         let mut results = vec![];
@@ -303,20 +301,18 @@ impl Consensus for PostgresConsensus {
 
         let mut client = self.client.lock().await;
         let tx = self.tx(&mut client).await?;
-        let result = { tx.execute(&*q, &[&key, &seqno]).await? };
+        let result = tx.execute(&*q, &[&key, &seqno]).await?;
         let ret = if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to
             // determine whether the request was valid and there were no records in
             // the provided range, or the request was invalid because it would have
             // also deleted head.
-
-            // It's safe to call head in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
             let current = self.head_tx(&tx, key).await?;
+            // Intentionally don't early exit here and instead wait until after
+            // we have committed the transaction to ensure that our reads were
+            // valid. See [1] for more details.
+            //
+            // [1]: https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE
             if current.map_or(true, |data| data.seqno < seqno) {
                 Err(ExternalError::from(anyhow!(
                     "upper bound too high for truncate: {:?}",
