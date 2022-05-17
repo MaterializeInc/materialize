@@ -2570,7 +2570,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-tungstenite",
- "tokio-util 0.7.1",
+ "tokio-util 0.7.2",
  "tower",
  "tower-http",
  "tracing",
@@ -3286,7 +3286,7 @@ dependencies = [
  "tokio",
  "tokio-serde",
  "tokio-stream",
- "tokio-util 0.7.1",
+ "tokio-util 0.7.2",
  "tracing",
  "url",
  "uuid",
@@ -3739,7 +3739,7 @@ dependencies = [
  "postgres",
  "tokio",
  "tokio-openssl",
- "tokio-util 0.7.1",
+ "tokio-util 0.7.2",
  "tracing",
 ]
 
@@ -4060,7 +4060,7 @@ dependencies = [
  "tokio-byteorder",
  "tokio-postgres",
  "tokio-serde",
- "tokio-util 0.7.1",
+ "tokio-util 0.7.2",
  "tracing",
  "uuid",
 ]
@@ -4141,7 +4141,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
- "tokio-util 0.7.1",
+ "tokio-util 0.7.2",
  "tracing-subscriber",
  "url",
  "uuid",
@@ -6319,9 +6319,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0edfdeb067411dba2044da6d1cb2df793dd35add7888d73c16e3381ded401764"
+checksum = "f988a1a1adc2fb21f9c12aa96441da33a1728193ae0b95d2be22dbd17fcb4e5c"
 dependencies = [
  "bytes",
  "futures-core",
@@ -6365,7 +6365,7 @@ dependencies = [
  "prost-derive",
  "tokio",
  "tokio-stream",
- "tokio-util 0.7.1",
+ "tokio-util 0.7.2",
  "tower",
  "tower-layer",
  "tower-service",
@@ -6400,7 +6400,7 @@ dependencies = [
  "rand",
  "slab",
  "tokio",
- "tokio-util 0.7.1",
+ "tokio-util 0.7.2",
  "tower-layer",
  "tower-service",
  "tracing",
