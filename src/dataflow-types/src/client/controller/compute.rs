@@ -427,7 +427,18 @@ where
             .await
             .map_err(ComputeError::from)
     }
+
     /// Cancels existing peek requests.
+    ///
+    /// Canceling a peek is best effort. The caller may see any of the following
+    /// after canceling a peek request:
+    ///
+    ///   * A `PeekResponse::Rows` indicating that the cancellation request did
+    ///    not take effect in time and the query succeeded.
+    ///
+    ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
+    ///
+    ///   * No `PeekResponse` at all.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(uuids.iter().cloned()).await?;
         self.compute
