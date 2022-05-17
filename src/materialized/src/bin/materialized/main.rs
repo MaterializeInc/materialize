@@ -634,12 +634,17 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             Some(blob_url) => blob_url.to_string(),
         },
         consensus_uri: match args.persist_consensus_url {
-            // TODO: need to handle non-UTF-8 paths here.
-            None => format!(
-                "sqlite://{}/{}/persist/consensus",
-                cwd.display(),
-                data_directory.display()
-            ),
+            None => {
+                #[cfg(target_os = "macos")]
+                let host = "/tmp";
+                #[cfg(not(target_os = "macos"))]
+                let host = "/var/run/postgresql";
+                format!(
+                    "postgres://{}@{}",
+                    urlencoding::encode(&whoami::username()),
+                    urlencoding::encode(host),
+                )
+            }
             Some(consensus_url) => consensus_url.to_string(),
         },
     };
