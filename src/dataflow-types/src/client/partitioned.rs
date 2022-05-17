@@ -36,6 +36,16 @@ use super::Reconnect;
 
 const PARTITIONED_INITIAL_BACKOFF: Duration = Duration::from_millis(1);
 
+#[derive(Debug)]
+struct ReconnectionState {
+    /// Why we are trying to reconnect
+    reason: anyhow::Error,
+    /// When we should actually begin reconnecting
+    backoff_expiry: Instant,
+    /// How many parts we have successfully reconnected already
+    parts_reconnected: usize,
+}
+
 /// A client whose implementation is partitioned across a number of other
 /// clients.
 ///
@@ -53,10 +63,10 @@ where
     state: <(C, R) as Partitionable<C, R>>::PartitionedState,
     /// When the current successful connection (if any) began
     last_successful_connection: Option<Instant>,
-    /// When the current backoff expires
-    backoff_expiry: Option<Instant>,
     /// The current backoff, for preventing crash loops
     backoff: Duration,
+    /// `Some` if we are in the process of reconnecting to the parts
+    reconnect: Option<ReconnectionState>,
 }
 
 impl<P, C, R> Partitioned<P, C, R>
@@ -70,8 +80,50 @@ where
             parts,
             last_successful_connection: None,
             backoff: PARTITIONED_INITIAL_BACKOFF,
-            backoff_expiry: None,
+            reconnect: None,
         }
+    }
+}
+
+impl<P, C, R> Partitioned<P, C, R>
+where
+    (C, R): Partitionable<C, R>,
+    P: Reconnect,
+{
+    async fn try_reconnect(&mut self) -> anyhow::Error {
+        // Having received an error from one part, we can assume all of them are dead, because of the shared-fate architecture.
+        // Disconnect from all of them and try again.
+        let reconnect_state = self
+            .reconnect
+            .as_mut()
+            .expect("Must set `self.reconnect` before calling this function.");
+
+        // We need to back off here, in case we're crashing because we were accidentally connected
+        // to two different generations of the cluster -- e.g., reconnected some
+        // partitions to a cluster that was already crashing, and some other ones
+        // to the new one that was being booted up to replace it.
+        //
+        // The time such a state can persist for is assumed to be bounded, so the
+        // backoff ensures we will eventually converge to a valid state.
+
+        tokio::time::sleep_until(reconnect_state.backoff_expiry.into()).await;
+        let prc = reconnect_state.parts_reconnected;
+        for part in &mut self.parts[prc..] {
+            part.reconnect().await;
+            reconnect_state.parts_reconnected += 1;
+        }
+
+        self.last_successful_connection = Some(Instant::now());
+        // 60 seconds is arbitrarily chosen as a maximum plausible backoff.
+        // If Timely processes aren't realizing their buddies are down within that time,
+        // something is seriously hosed with the network anyway and its unlikely things will work.
+        self.backoff = (self.backoff * 2).min(Duration::from_secs(60));
+
+        let ReconnectionState { reason, .. } = self
+            .reconnect
+            .take()
+            .expect("Asserted to exist at the beginning of the function");
+        reason
     }
 }
 
@@ -84,6 +136,9 @@ where
     R: fmt::Debug + Send,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+        if self.reconnect.is_some() {
+            anyhow::bail!("client is reconnecting");
+        }
         let cmd_parts = self.state.split_command(cmd);
         for (shard, cmd_part) in self.parts.iter_mut().zip(cmd_parts) {
             shard.send(cmd_part).await?;
@@ -92,6 +147,9 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
+        if self.reconnect.is_some() {
+            return Err(self.try_reconnect().await);
+        }
         let mut stream: StreamMap<_, _> = self
             .parts
             .iter_mut()
@@ -101,43 +159,25 @@ where
         while let Some((index, response)) = stream.next().await {
             match response {
                 Err(e) => {
-                    // Having received an error from one part, we can assume all of them are dead, because of the shared-fate architecture.
-                    // Disconnect from all of them and try again.
                     drop(stream);
-                    // We need to back off here, in case we're crashing because we were accidentally connected
-                    // to two different generations of the cluster -- e.g., reconnected some
-                    // partitions to a cluster that was already crashing, and some other ones
-                    // to the new one that was being booted up to replace it.
-                    //
-                    // The time such a state can persist for is assumed to be bounded, so the
-                    // backoff ensures we will eventually converge to a valid state.
-
                     // If we were previously up for long enough (60 seconds chosen arbitrarily), we consider the previous connection to have
                     // been successful and reset the backoff.
                     if let Some(prev) = self.last_successful_connection {
                         if Instant::now() - prev > Duration::from_secs(60) {
                             self.backoff = PARTITIONED_INITIAL_BACKOFF;
-                            self.backoff_expiry = None;
                         }
                     }
-                    // We can't just use `tokio::time::sleep`, since that might be canceled and have to be restarted
-                    // from the beginning, possibly never finishing.
-                    // Thus we need to store the expected backoff expiration time, so if we get canceled
-                    // in the middle of the backoff, we can pick back up where we left off.
-                    if self.backoff_expiry.is_none() {
-                        self.backoff_expiry = Some(Instant::now() + self.backoff);
+
+                    for p in &mut self.parts {
+                        p.disconnect();
                     }
-                    tokio::time::sleep_until(self.backoff_expiry.unwrap().into()).await;
-                    for part in &mut self.parts {
-                        part.reconnect().await;
-                    }
-                    self.backoff_expiry = None;
-                    self.last_successful_connection = Some(Instant::now());
-                    // 60 seconds is arbitrarily chosen as a maximum plausible backoff.
-                    // If Timely processes aren't realizing their buddies are down within that time,
-                    // something is seriously hosed with the network anyway and its unlikely things will work.
-                    self.backoff = (self.backoff * 2).min(Duration::from_secs(60));
-                    return Err(e);
+
+                    self.reconnect = Some(ReconnectionState {
+                        reason: e,
+                        backoff_expiry: Instant::now() + self.backoff,
+                        parts_reconnected: 0,
+                    });
+                    return Err(self.try_reconnect().await);
                 }
                 Ok(response) => {
                     if let Some(response) = self.state.absorb_response(index, response) {

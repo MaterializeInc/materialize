@@ -27,7 +27,7 @@ use anyhow::{anyhow, Context};
 use futures::StreamExt;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
-use mz_dataflow_types::client::{Reconnect, RemoteClient};
+use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
@@ -369,7 +369,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     let storage_client = Box::new({
         let mut client =
             RemoteClient::new(&[storage_service.addresses("controller").into_element()]);
-        client.reconnect().await;
+        client.connect().await;
         client
     });
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
