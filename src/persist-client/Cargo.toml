@@ -49,6 +49,6 @@ criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", featur
 futures-task = "0.3.21"
 num_cpus = "1.13.1"
 num_enum = "0.5.7"
-serde_json = "1.0.79"
+serde_json = "1.0.81"
 tempfile = "3.2.0"
 tracing-subscriber = { version = "0.3.11", default-features = false, features = ["env-filter", "fmt"] }
