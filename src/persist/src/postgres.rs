@@ -296,10 +296,10 @@ impl Consensus for PostgresConsensus {
             //    the sequence number.
             let current = self.head(deadline, key).await?;
             if current.map_or(true, |data| data.seqno < seqno) {
-                return Err(ExternalError::from(anyhow!(
-                    "upper bound too high for truncate: {:?}",
-                    seqno
-                )));
+                // return Err(ExternalError::from(anyhow!(
+                //     "upper bound too high for truncate: {:?}",
+                //     seqno
+                // )));
             }
         }
 
