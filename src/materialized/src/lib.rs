@@ -27,7 +27,7 @@ use anyhow::{anyhow, Context};
 use futures::StreamExt;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
-use mz_dataflow_types::client::{Reconnect, RemoteClient};
+use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
