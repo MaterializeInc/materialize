@@ -27,7 +27,7 @@ futures-util = "0.3.19"
 globset = { version = "0.4.8", optional = true }
 inotify = { version = "0.10.0", optional = true }
 lazy_static = { version = "1.4.0", optional = true }
-log = { version = "0.4.16", optional = true }
+log = { version = "0.4.17", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
 mz-ccsr = { path = "../ccsr", optional = true }
 mz-dataflow-types = { path = "../dataflow-types" }
