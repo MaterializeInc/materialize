@@ -382,6 +382,9 @@ have to advance past the current wall clock.
 
 Note: Increasing the size of the timestamp type would give more flexibility (for example to 128 bits).
 
+CockroachDB uses similar timestamps
+here: https://github.com/cockroachdb/cockroach/blob/711ccb5b8fba4e6a826ed6ba46c0fc346233a0f7/pkg/sql/sem/builtins/builtins.go#L8548-L8560
+
 **Pros:**
 
 - With a sufficiently high Y, no queries or writes would be blocked.
