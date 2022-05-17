@@ -979,8 +979,8 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-sch
   VALUE STRATEGY INLINE '${reader-schema}'
   ENVELOPE NONE
 
-> SELECT a FROM schema_strategy_test_inline
-a
--
-0
-2
+> SELECT a, a FROM schema_strategy_test_inline
+a a
+---
+0 0
+2 2
