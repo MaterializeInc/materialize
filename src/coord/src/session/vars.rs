@@ -20,14 +20,6 @@ use mz_sql::DEFAULT_SCHEMA;
 use crate::error::CoordError;
 use crate::session::EndTransactionAction;
 
-// TODO(benesch): remove this when SergioBenitez/uncased#3 resolves.
-macro_rules! static_uncased_str {
-    ($string:expr) => {{
-        // This is safe for the same reason that `UncasedStr::new` is safe.
-        unsafe { ::core::mem::transmute::<&'static str, &'static UncasedStr>($string) }
-    }};
-}
-
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
 // be. Too new and some clients will emit a "server too new" warning. Too old
 // and some clients will fall back to legacy code paths. v9.5.0 empirically
@@ -46,69 +38,69 @@ pub const SERVER_PATCH_VERSION: u8 = 0;
 pub const DEFAULT_DATABASE_NAME: &str = "materialize";
 
 const APPLICATION_NAME: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("application_name"),
+    name: UncasedStr::new("application_name"),
     value: "",
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
 };
 
 const CLIENT_ENCODING: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("client_encoding"),
+    name: UncasedStr::new("client_encoding"),
     value: "UTF8",
     description: "Sets the client's character set encoding (PostgreSQL).",
 };
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
-    name: static_uncased_str!("client_min_messages"),
+    name: UncasedStr::new("client_min_messages"),
     value: &ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
 };
 
 const CLUSTER: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("cluster"),
+    name: UncasedStr::new("cluster"),
     value: "default",
     description: "Sets the current cluster (Materialize).",
 };
 
 const DATABASE: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("database"),
+    name: UncasedStr::new("database"),
     value: DEFAULT_DATABASE_NAME,
     description: "Sets the current database (CockroachDB).",
 };
 
 const DATE_STYLE: ServerVar<str> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
-    name: static_uncased_str!("DateStyle"),
+    name: UncasedStr::new("DateStyle"),
     value: "ISO, MDY",
     description: "Sets the display format for date and time values (PostgreSQL).",
 };
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
-    name: static_uncased_str!("extra_float_digits"),
+    name: UncasedStr::new("extra_float_digits"),
     value: &3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
 };
 
 const FAILPOINTS: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("failpoints"),
+    name: UncasedStr::new("failpoints"),
     value: "",
     description: "Allows failpoints to be dynamically activated.",
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("integer_datetimes"),
+    name: UncasedStr::new("integer_datetimes"),
     value: &true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
 };
 
 const INTERVAL_STYLE: ServerVar<str> = ServerVar {
     // IntervalStyle has nonstandard capitalization for historical reasons.
-    name: static_uncased_str!("IntervalStyle"),
+    name: UncasedStr::new("IntervalStyle"),
     value: "postgres",
     description: "Sets the display format for interval values (PostgreSQL).",
 };
 
 const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("qgm_optimizations_experimental"),
+    name: UncasedStr::new("qgm_optimizations_experimental"),
     value: &false,
     description: "Enables optimizations based on a Query Graph Model (QGM) query representation.",
 };
@@ -116,7 +108,7 @@ const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
 lazy_static! {
     static ref DEFAULT_SEARCH_PATH: [String; 1] = [DEFAULT_SCHEMA.to_owned(),];
     static ref SEARCH_PATH: ServerVar<[String]> = ServerVar {
-        name: static_uncased_str!("search_path"),
+        name: UncasedStr::new("search_path"),
         value: &*DEFAULT_SEARCH_PATH,
         description:
             "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
@@ -124,7 +116,7 @@ lazy_static! {
 }
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("server_version"),
+    name: UncasedStr::new("server_version"),
     value: concatcp!(
         SERVER_MAJOR_VERSION,
         ".",
@@ -136,7 +128,7 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
-    name: static_uncased_str!("server_version_num"),
+    name: UncasedStr::new("server_version_num"),
     value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
@@ -144,26 +136,26 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
 };
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("sql_safe_updates"),
+    name: UncasedStr::new("sql_safe_updates"),
     value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("standard_conforming_strings"),
+    name: UncasedStr::new("standard_conforming_strings"),
     value: &true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
 };
 
 const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
-    name: static_uncased_str!("TimeZone"),
+    name: UncasedStr::new("TimeZone"),
     value: &TimeZone::UTC,
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
 const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("transaction_isolation"),
+    name: UncasedStr::new("transaction_isolation"),
     value: "serializable",
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
