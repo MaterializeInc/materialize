@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use tokio_postgres::{Client as PostgresClient, NoTls};
+use tokio_postgres::{Client as PostgresClient, IsolationLevel, NoTls, Transaction};
 
 use mz_ore::task;
 
@@ -143,6 +143,34 @@ impl PostgresConsensus {
             _handle: handle,
         })
     }
+    async fn tx<'a>(
+        &self,
+        client: &'a mut PostgresClient,
+    ) -> Result<Transaction<'a>, ExternalError> {
+        let tx = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::Serializable)
+            .start()
+            .await?;
+        Ok(tx)
+    }
+
+    async fn head_tx(
+        &self,
+        tx: &Transaction<'_>,
+        key: &str,
+    ) -> Result<Option<VersionedData>, ExternalError> {
+        let q = "SELECT sequence_number, data FROM consensus WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
+
+        let row = match tx.query_opt(q, &[&key]).await? {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+
+        let seqno: SeqNo = row.try_get("sequence_number")?;
+        let data: Vec<u8> = row.try_get("data")?;
+        Ok(Some(VersionedData { seqno, data }))
+    }
 }
 
 #[async_trait]
@@ -153,25 +181,17 @@ impl Consensus for PostgresConsensus {
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
+        let mut client = self.client.lock().await;
+        let tx = self.tx(&mut client).await?;
+        let ret = self.head_tx(&tx, key).await?;
+        tx.commit().await?;
 
-        let q = "SELECT sequence_number, data FROM consensus
-             WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let client = self.client.lock().await;
-        let row = client.query_opt(&*q, &[&key]).await?;
-        let row = match row {
-            None => return Ok(None),
-            Some(row) => row,
-        };
-
-        let seqno: SeqNo = row.try_get("sequence_number")?;
-
-        let data: Vec<u8> = row.try_get("data")?;
-        Ok(Some(VersionedData { seqno, data }))
+        Ok(ret)
     }
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
+        _deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -186,6 +206,8 @@ impl Consensus for PostgresConsensus {
             }
         }
 
+        let mut client = self.client.lock().await;
+        let tx = self.tx(&mut client).await?;
         let result = if let Some(expected) = expected {
             // Only insert the new row if:
             // - sequence number expected is already present
@@ -205,10 +227,7 @@ impl Consensus for PostgresConsensus {
                      )
                      ON CONFLICT DO NOTHING";
 
-            let client = self.client.lock().await;
-
-            client
-                .execute(&*q, &[&key, &new.seqno, &new.data, &expected])
+            tx.execute(&*q, &[&key, &new.seqno, &new.data, &expected])
                 .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
@@ -217,12 +236,11 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &new.seqno, &new.data]).await?
+            tx.execute(&*q, &[&key, &new.seqno, &new.data]).await?
         };
 
-        if result == 1 {
-            Ok(Ok(()))
+        let ret = if result == 1 {
+            Ok(())
         } else {
             // It's safe to call head in a subsequent transaction rather than doing
             // so directly in the same transaction because, once a given (seqno, data)
@@ -230,9 +248,12 @@ impl Consensus for PostgresConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(deadline, key).await?;
-            Ok(Err(current))
-        }
+            let current = self.head_tx(&tx, key).await?;
+            Err(current)
+        };
+
+        tx.commit().await?;
+        Ok(ret)
     }
 
     async fn scan(
@@ -246,8 +267,10 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let client = self.client.lock().await;
-        let rows = client.query(&*q, &[&key, &from]).await?;
+        let mut client = self.client.lock().await;
+        let tx = self.tx(&mut client).await?;
+        let rows = tx.query(&*q, &[&key, &from]).await?;
+        tx.commit().await?;
         let mut results = vec![];
 
         for row in rows {
@@ -268,7 +291,7 @@ impl Consensus for PostgresConsensus {
 
     async fn truncate(
         &self,
-        deadline: Instant,
+        _deadline: Instant,
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
@@ -278,11 +301,10 @@ impl Consensus for PostgresConsensus {
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 
-        let result = {
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &seqno]).await?
-        };
-        if result == 0 {
+        let mut client = self.client.lock().await;
+        let tx = self.tx(&mut client).await?;
+        let result = { tx.execute(&*q, &[&key, &seqno]).await? };
+        let ret = if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to
             // determine whether the request was valid and there were no records in
             // the provided range, or the request was invalid because it would have
@@ -294,16 +316,22 @@ impl Consensus for PostgresConsensus {
             // 1. Our shard will always have _some_ data mapped to it.
             // 2. All operations that modify the (seqno, data) can only increase
             //    the sequence number.
-            let current = self.head(deadline, key).await?;
+            let current = self.head_tx(&tx, key).await?;
             if current.map_or(true, |data| data.seqno < seqno) {
-                return Err(ExternalError::from(anyhow!(
+                Err(ExternalError::from(anyhow!(
                     "upper bound too high for truncate: {:?}",
                     seqno
-                )));
+                )))
+            } else {
+                Ok(())
             }
-        }
+        } else {
+            Ok(())
+        };
 
-        Ok(())
+        tx.commit().await?;
+
+        ret
     }
 }
 
