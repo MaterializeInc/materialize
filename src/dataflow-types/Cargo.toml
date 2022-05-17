@@ -45,7 +45,7 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = "1.18.2"
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-stream = " 0.1.8"
-tokio-util = { version = "0.7.1", features = ["codec"] }
+tokio-util = { version = "0.7.2", features = ["codec"] }
 tracing = "0.1.34"
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
