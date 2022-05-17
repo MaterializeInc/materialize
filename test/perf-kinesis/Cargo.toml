@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.57"
 aws-config = { version = "0.10.1", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"] }
+aws-sdk-kinesis = { version = "0.12.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 bytes = "1.1.0"
 clap = { version = "3.1.15", features = ["derive"] }
 futures = "0.3.21"
