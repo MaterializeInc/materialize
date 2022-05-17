@@ -33,7 +33,7 @@ num_enum = "0.5.7"
 ordered-float = { version = "3.0.0", features = ["serde"] }
 prost = "0.10.1"
 regex = "1.5.4"
-ryu = "1.0.9"
+ryu = "1.0.10"
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = { version = "1.0.81", features = ["arbitrary_precision"] }
 serde_regex = "1.1.0"
