@@ -53,8 +53,8 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 use mz_sql_parser::ast::{
-    CreateClusterReplicaStatement, CreateConnector, CreateConnectorStatement, CsrConnector,
-    QualifiedReplica, ReplicaDefinition, ReplicaOption, WithOptionValue,
+    AstInfo, CreateClusterReplicaStatement, CreateConnector, CreateConnectorStatement,
+    CsrConnector, QualifiedReplica, ReplicaDefinition, ReplicaOption, WithOptionValue,
 };
 
 use crate::ast::display::AstDisplay;
@@ -2974,16 +2974,16 @@ pub fn plan_create_secret(
     }))
 }
 
-pub fn describe_create_connector(
+pub fn describe_create_connector<T: AstInfo>(
     _: &StatementContext,
-    _: &CreateConnectorStatement,
+    _: &CreateConnectorStatement<T>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_connector(
     scx: &StatementContext,
-    stmt: CreateConnectorStatement,
+    stmt: CreateConnectorStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("CREATE CONNECTOR")?;
     let mut depends_on = vec![];
@@ -2993,17 +2993,24 @@ pub fn plan_create_connector(
             .resolve_item(&normalize::unresolved_object_name(name.clone())?)?
             .id())
     }
-    let resolve_and_track = |depends_on: &mut Vec<GlobalId>,
-                             secret: Option<&UnresolvedObjectName>|
-     -> Result<Option<String>, anyhow::Error> {
-        Ok(if let Some(secret_id) = secret {
-            let id = name_to_id(scx, secret_id)?;
-            depends_on.push(id);
-            Some(id.to_string())
-        } else {
-            None
-        })
-    };
+
+    fn resolve_and_track_option(
+        scx: &StatementContext,
+        depends_on: &mut Vec<GlobalId>,
+        source_map: &BTreeMap<String, Option<&WithOptionValue<Aug>>>,
+        option_key: &str,
+    ) -> Result<Option<String>, anyhow::Error> {
+        Ok(
+            if let Some(Some(WithOptionValue::ObjectName(ref name))) = source_map.get(option_key) {
+                let id = name_to_id(scx, name)?;
+                depends_on.push(id);
+                Some(id.to_string())
+            } else {
+                None
+            },
+        )
+    }
+
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
     let CreateConnectorStatement {
         name,
@@ -3011,58 +3018,91 @@ pub fn plan_create_connector(
         if_not_exists,
     } = stmt;
     let connector_inner = match connector {
-        CreateConnector::Kafka { broker, security } => ConnectorInner::Kafka {
-            broker: broker.parse()?,
-            // TODO resolve secrets from names to values
-            security: match security {
-                mz_sql_parser::ast::KafkaSecurityOptions::SSL {
-                    key,
-                    certificate,
-                    password: passphrase,
-                    authority,
-                } => {
-                    let key = resolve_and_track(&mut depends_on, key.as_ref())?;
-                    let certificate = resolve_and_track(&mut depends_on, certificate.as_ref())?;
-                    let passphrase = resolve_and_track(&mut depends_on, passphrase.as_ref())?;
-                    let authority = resolve_and_track(&mut depends_on, authority.as_ref())?;
-                    KafkaSecurityOptions::SSL {
-                        key,
-                        certificate,
-                        passphrase,
-                        authority,
+        CreateConnector::Kafka { broker, security } => {
+            let opts_map = BTreeMap::from_iter(
+                security
+                    .iter()
+                    .map(|o| (o.key.to_string(), o.value.as_ref())),
+            );
+            let security = if let Some(Some(WithOptionValue::Value(Value::String(protocol)))) =
+                opts_map.get("SECURITY")
+            {
+                match protocol.as_str() {
+                    "SSL" => {
+                        let key = resolve_and_track_option(scx, &mut depends_on, &opts_map, "KEY")?;
+                        let certificate = resolve_and_track_option(scx, &mut depends_on, &opts_map, "CERTIFICATE")?;
+                        let passphrase = resolve_and_track_option(scx, &mut depends_on, &opts_map, "PASSWORD")?;
+                        let authority = resolve_and_track_option(scx, &mut depends_on, &opts_map, "AUTHORITY")?;
+                        KafkaSecurityOptions::SSL { key, certificate, passphrase, authority }
                     }
-                }
-                mz_sql_parser::ast::KafkaSecurityOptions::SASL {
-                    mechanism,
-                    ssl,
-                    username,
-                    password,
-                } => {
-                    let password = resolve_and_track(&mut depends_on, Some(&password))?.unwrap();
-                    KafkaSecurityOptions::SASL {
-                        mechanism,
-                        ssl,
-                        username,
-                        password,
+                    // "SASL-SSL" => {}
+                    // "SASL-PLAIN" => {}
+                    "PLAINTEXT" => {
+                        KafkaSecurityOptions::PLAINTEXT
                     }
+                    _ => bail!("Unsupported value for SECURITY, must be one of: SSL, SASL-SSL, SASL-PLAIN, or PLAINTEXT")
                 }
-                mz_sql_parser::ast::KafkaSecurityOptions::PLAINTEXT => {
-                    KafkaSecurityOptions::PLAINTEXT
-                }
-            },
-        },
-        CreateConnector::CSR {
-            registry,
-            username,
-            password,
-            key,
-            certificate,
-            authority,
-        } => {
-            let password = resolve_and_track(&mut depends_on, password.as_ref())?;
-            let authority = resolve_and_track(&mut depends_on, authority.as_ref())?;
-            let certificate = resolve_and_track(&mut depends_on, certificate.as_ref())?;
-            let key = resolve_and_track(&mut depends_on, key.as_ref())?;
+            } else {
+                KafkaSecurityOptions::PLAINTEXT
+            };
+            ConnectorInner::Kafka {
+                broker: broker.parse()?,
+                // security: match security {
+                //     mz_sql_parser::ast::KafkaSecurityOptions::SSL {
+                //         key,
+                //         certificate,
+                //         password: passphrase,
+                //         authority,
+                //     } => {
+                //         let key = resolve_and_track(&mut depends_on, key.as_ref())?;
+                //         let certificate = resolve_and_track(&mut depends_on, certificate.as_ref())?;
+                //         let passphrase = resolve_and_track(&mut depends_on, passphrase.as_ref())?;
+                //         let authority = resolve_and_track(&mut depends_on, authority.as_ref())?;
+                //         KafkaSecurityOptions::SSL {
+                //             key,
+                //             certificate,
+                //             passphrase,
+                //             authority,
+                //         }
+                //     }
+                //     mz_sql_parser::ast::KafkaSecurityOptions::SASL {
+                //         mechanism,
+                //         ssl,
+                //         username,
+                //         password,
+                //     } => {
+                //         let password = resolve_and_track(&mut depends_on, Some(&password))?.unwrap();
+                //         KafkaSecurityOptions::SASL {
+                //             mechanism,
+                //             ssl,
+                //             username,
+                //             password,
+                //         }
+                //     }
+                //     mz_sql_parser::ast::KafkaSecurityOptions::PLAINTEXT => {
+                //         KafkaSecurityOptions::PLAINTEXT
+                //     }
+                // },
+                security,
+            }
+        }
+        CreateConnector::CSR { registry, security } => {
+            let opts_map = BTreeMap::from_iter(
+                security
+                    .iter()
+                    .map(|o| (o.key.to_string(), o.value.as_ref())),
+            );
+            let password = resolve_and_track_option(scx, &mut depends_on, &opts_map, "PASSWORD")?;
+            let authority = resolve_and_track_option(scx, &mut depends_on, &opts_map, "AUTHORITY")?;
+            let certificate =
+                resolve_and_track_option(scx, &mut depends_on, &opts_map, "CERTIFICATE")?;
+            let key = resolve_and_track_option(scx, &mut depends_on, &opts_map, "KEY")?;
+            let username = if let Some(Some(WithOptionValue::Value(val))) = opts_map.get("USERNAME")
+            {
+                Some(val.to_string())
+            } else {
+                None
+            };
             ConnectorInner::CSR {
                 registry,
                 username,

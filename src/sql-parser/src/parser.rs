@@ -1896,82 +1896,18 @@ impl<'a> Parser<'a> {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
-                let security = if self.peek_keyword(SECURITY) {
-                    self.expect_keyword(SECURITY)?;
-                    self.parse_kafka_security()?
+                let security = if self.peek_token() == Some(Token::LParen) {
+                    self.parse_with_options(false)?
                 } else {
-                    KafkaSecurityOptions::PLAINTEXT
+                    vec![]
                 };
                 CreateConnector::Kafka { broker, security }
             }
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
-                let (mut username, mut password, mut authority, mut key, mut certificate) =
-                    (None, None, None, None, None);
-                while let Ok(keyword) =
-                    self.expect_one_of_keywords(&[USERNAME, PASSWORD, AUTHORITY, CERTIFICATE, KEY])
-                {
-                    match keyword {
-                        Keyword::Username => {
-                            if username.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property USERNAME more than once".into(),
-                                ))?;
-                            }
-                            username = Some(self.parse_literal_string()?);
-                        }
-                        Keyword::Password => {
-                            if password.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property PASSWORD more than once".into(),
-                                ))?;
-                            }
-                            password = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Key => {
-                            if key.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property KEY more than once".into(),
-                                ))?;
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            key = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Certificate => {
-                            if certificate.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property CERTIFICATE more than once".into(),
-                                ))?;
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            certificate = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Authority => {
-                            if authority.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property AUTHORITY more than once".into(),
-                                ))?;
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            authority = Some(self.parse_object_name()?);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                CreateConnector::CSR {
-                    registry,
-                    username,
-                    password,
-                    authority,
-                    key,
-                    certificate,
-                }
+                let security = self.parse_with_options(false)?;
+                CreateConnector::CSR { registry, security }
             }
             _ => unreachable!(),
         };
