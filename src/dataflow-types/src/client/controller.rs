@@ -258,7 +258,7 @@ where
                                     },
                                     ServicePort {
                                         name: "http".into(),
-                                        port_hint: 2103,
+                                        port_hint: 6875,
                                     },
                                 ],
                                 cpu_limit: size_config.cpu_limit,

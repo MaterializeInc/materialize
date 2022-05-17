@@ -302,6 +302,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
                         ),
+                        format!(
+                            "--http-console-addr={}:{}",
+                            default_listen_host, my_ports["http"]
+                        ),
                         "--log-process-name".to_string(),
                     ];
                     if config.orchestrator.linger {
@@ -317,6 +321,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                     ServicePort {
                         name: "compute".into(),
                         port_hint: 2101,
+                    },
+                    ServicePort {
+                        name: "http".into(),
+                        port_hint: 6875,
                     },
                 ],
                 // TODO: limits?
