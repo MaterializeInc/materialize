@@ -1086,12 +1086,13 @@ pub mod tcp {
         }
 
         pub async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-            if let GrpcComputedTcpConn::Connected(channels) = &self.state {
-                channels.0.send((&cmd).into_proto()).await.expect("Ok");
-                Ok(())
+            let sender = if let GrpcComputedTcpConn::Connected((sender, _)) = &self.state {
+                sender
             } else {
-                Err(anyhow::anyhow!("Sent into disconnected channel"))
-            }
+                return Err(anyhow::anyhow!("Sent into disconnected channel"));
+            };
+            sender.send((&cmd).into_proto()).await.expect("Ok");
+            Ok(())
         }
 
         pub async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
@@ -1118,16 +1119,16 @@ pub mod tcp {
     }
 
     // (LH): Needs some + Send or so....
-    //#[async_trait]
-    //impl GenericClient<ComputeCommand, ComputeResponse> for GrpcComputedClient {
-    //    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-    //        self.send(cmd).await
-    //    }
+    #[async_trait]
+    impl GenericClient<ComputeCommand, ComputeResponse> for GrpcComputedClient {
+        async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
+            self.send(cmd).await
+        }
 
-    //    async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
-    //        self.recv().await
-    //    }
-    //}
+        async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
+            self.recv().await
+        }
+    }
 
     /// A client to a remote dataflow server.
     ///
