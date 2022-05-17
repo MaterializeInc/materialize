@@ -1363,7 +1363,7 @@ version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f91cf5a8c2f2097e2a32627123508635d47ce10563d999ec1a95addf08b502ba"
 dependencies = [
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -2888,7 +2888,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
- "uuid",
+ "uuid 1.0.0",
  "whoami",
 ]
 
@@ -3011,7 +3011,7 @@ dependencies = [
  "tokio-util 0.6.9",
  "twox-hash",
  "url",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -3048,7 +3048,7 @@ dependencies = [
  "subprocess",
  "thiserror",
  "time",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -3072,7 +3072,7 @@ dependencies = [
  "sha2",
  "snap",
  "tracing",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3102,7 +3102,7 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "tracing-subscriber",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3174,7 +3174,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3227,7 +3227,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uncased",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3287,7 +3287,7 @@ dependencies = [
  "tokio-util 0.7.2",
  "tracing",
  "url",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3334,7 +3334,7 @@ dependencies = [
  "sha-1",
  "sha2",
  "uncased",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3366,7 +3366,7 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3403,7 +3403,7 @@ dependencies = [
  "serde_json",
  "timely",
  "tracing",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3635,7 +3635,7 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "url",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3666,7 +3666,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3698,7 +3698,7 @@ dependencies = [
  "lazy_static",
  "mz-repr",
  "postgres-types",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3821,7 +3821,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "smallvec",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3928,7 +3928,7 @@ dependencies = [
  "tracing",
  "typemap_rev",
  "uncased",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -3978,7 +3978,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tower-http",
- "uuid",
+ "uuid 1.0.0",
  "walkdir",
 ]
 
@@ -4062,7 +4062,7 @@ dependencies = [
  "tokio-serde",
  "tokio-util 0.7.2",
  "tracing",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
@@ -4144,7 +4144,7 @@ dependencies = [
  "tokio-util 0.7.2",
  "tracing-subscriber",
  "url",
- "uuid",
+ "uuid 1.0.0",
  "walkdir",
 ]
 
@@ -4761,8 +4761,8 @@ dependencies = [
 
 [[package]]
 name = "postgres"
-version = "0.19.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
+version = "0.19.3"
+source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -4775,7 +4775,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
+source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
 dependencies = [
  "futures",
  "openssl",
@@ -4786,8 +4786,8 @@ dependencies = [
 
 [[package]]
 name = "postgres-protocol"
-version = "0.6.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
+version = "0.6.4"
+source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
 dependencies = [
  "base64",
  "byteorder",
@@ -4803,8 +4803,8 @@ dependencies = [
 
 [[package]]
 name = "postgres-types"
-version = "0.2.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
+version = "0.2.3"
+source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
 dependencies = [
  "bytes",
  "chrono",
@@ -4812,13 +4812,13 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
- "uuid",
+ "uuid 1.0.0",
 ]
 
 [[package]]
 name = "postgres_array"
 version = "0.11.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres-array?branch=mz-0.7.2#c84fa6fc9e0cfdeb731a83d577f579ba1598ff4d"
+source = "git+https://github.com/MaterializeInc/rust-postgres-array#cbf48cd674ded4b6e7648fab253807c055c8ec10"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -5131,7 +5131,7 @@ dependencies = [
  "log",
  "percent-encoding",
  "thiserror",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -5871,7 +5871,7 @@ dependencies = [
  "debugid",
  "memmap",
  "stable_deref_trait",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -6052,7 +6052,7 @@ dependencies = [
  "pretty-hex",
  "thiserror",
  "tracing",
- "uuid",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -6245,8 +6245,8 @@ dependencies = [
 
 [[package]]
 name = "tokio-postgres"
-version = "0.7.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres?branch=mz-0.7.2#5ae9ff03d1b8085fe026c7d179226b1d169ef6c6"
+version = "0.7.6"
+source = "git+https://github.com/MaterializeInc/rust-postgres#c46e0afff1006dd869f24fc8ce7129a5705cff50"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -6254,7 +6254,7 @@ dependencies = [
  "fallible-iterator",
  "futures",
  "log",
- "parking_lot 0.11.1",
+ "parking_lot 0.12.0",
  "percent-encoding",
  "phf",
  "pin-project-lite",
@@ -6262,7 +6262,7 @@ dependencies = [
  "postgres-types",
  "socket2",
  "tokio",
- "tokio-util 0.6.9",
+ "tokio-util 0.7.2",
 ]
 
 [[package]]
@@ -6684,6 +6684,15 @@ name = "uuid"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
+dependencies = [
+ "getrandom",
+]
+
+[[package]]
+name = "uuid"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cfcd319456c4d6ea10087ed423473267e1a071f3bc0aa89f80d60997843c6f0"
 dependencies = [
  "getrandom",
  "serde",

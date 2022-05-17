@@ -46,7 +46,7 @@ mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-stash = { path = "../stash" }
-postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 prost = "0.10.3"
 prost-reflect = { version = "0.8.0", features = ["serde"] }
 protobuf-src = "1.0.4"
@@ -63,9 +63,9 @@ tiberius = { version = "0.9.0", default-features = false }
 time = "0.3.9"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
 tokio = { version = "1.18.2", features = ["process"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.8"
 tokio-util = { version = "0.7.2", features = ["compat"] }
 url = "2.2.2"
-uuid = "0.8.2"
+uuid = "1.0.0"
 walkdir = "2.3.2"

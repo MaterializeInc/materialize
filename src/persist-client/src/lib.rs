@@ -889,13 +889,13 @@ mod tests {
         assert_eq!(
             ShardId::from_str("s0"),
             Err(format!(
-                "invalid ShardId s0: invalid length: expected one of [36, 32], found 1"
+                "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
             ))
         );
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
             Err(format!(
-                "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid length: expected one of [36, 32], found 39"
+                "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38"
             ))
         );
     }

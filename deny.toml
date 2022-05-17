@@ -31,6 +31,9 @@ skip = [
     { name = "windows_i686_msvc", version = "0.32.0" },
     { name = "windows_x86_64_gnu", version = "0.32.0" },
     { name = "windows_x86_64_msvc", version = "0.32.0" },
+
+    # Waiting on many dependencies throughout the ecosystem.
+    { name = "uuid", version = "0.8.2" },
 ]
 
 # Use `tracing` instead.
