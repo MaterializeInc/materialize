@@ -956,7 +956,7 @@ where
             let mut timestamper = match ReclockOperator::new(name.clone(), storage_metadata, now, timestamp_frequency.clone(), as_of.clone()).await {
                 Ok(t) => t,
                 Err(e) => {
-                    error!("Failed to create source {} timestamper: {}", name, e);
+                    error!("Failed to create source {} timestamper: {:#}", name, e);
                     return;
                 }
             };
