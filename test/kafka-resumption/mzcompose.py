@@ -27,7 +27,7 @@ SERVICES = [
     SchemaRegistry(),
     Materialized(),
     Toxiproxy(),
-    Testdrive(default_timeout="120s"),
+    Testdrive(default_timeout="300s"),
 ]
 
 #
