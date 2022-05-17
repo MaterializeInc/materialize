@@ -74,8 +74,8 @@ mz-stash = { path = "../stash" }
 native-tls = { version = "0.2.10", features = ["alpn"] }
 nix = "0.23.1"
 num_cpus = "1.13.1"
-openssl = { version = "0.10.38", features = ["vendored"] }
-openssl-sys = { version = "0.9.72", features = ["vendored"] }
+openssl = { version = "0.10.39", features = ["vendored"] }
+openssl-sys = { version = "0.9.73", features = ["vendored"] }
 os_info = "3.3.0"
 prometheus = { version = "0.13.0", default-features = false, features = ["process"] }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
