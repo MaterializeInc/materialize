@@ -134,7 +134,7 @@ steps:
   - id: testdrive
     label: Testdrive %n
     depends_on: build-x86_64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 120
     inputs: [test/testdrive]
     parallelism: 4
     artifact_paths: test/testdrive/junit_testdrive_*.xml
