@@ -34,6 +34,7 @@ SERVICES = [
     Kafka(auto_create_topics=True),
     SchemaRegistry(),
     Debezium(),
+    # Currently gets hosed and takes much longer if the default frequency of 100ms is used
     Materialized(timestamp_frequency="1s"),
     Postgres(),
     SqlServer(sa_password=password),
