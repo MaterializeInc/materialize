@@ -31,7 +31,7 @@ mz-persist-types = { path = "../persist-types" }
 num-traits = "0.2.15"
 num_enum = "0.5.7"
 ordered-float = { version = "3.0.0", features = ["serde"] }
-prost = "0.10.1"
+prost = "0.10.3"
 regex = "1.5.4"
 ryu = "1.0.10"
 serde = { version = "1.0.137", features = ["derive"] }

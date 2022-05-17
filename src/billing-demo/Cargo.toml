@@ -13,7 +13,7 @@ clap = { version = "3.1.15", features = ["derive"] }
 hex = "0.4.3"
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../../test/test-util" }
-prost = "0.10.1"
+prost = "0.10.3"
 prost-types = "0.10.0"
 rand = "0.8.5"
 rand_distr = "0.4.3"
