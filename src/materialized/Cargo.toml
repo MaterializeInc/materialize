@@ -36,7 +36,7 @@ backtrace = "0.3.64"
 base64 = "0.13.0"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-clap = { version = "3.1.15", features = ["wrap_help", "env", "derive"] }
+clap = { version = "3.1.18", features = ["wrap_help", "env", "derive"] }
 fail = { version = "0.5.0", features = ["failpoints"] }
 futures = "0.3.21"
 headers = "0.3.7"
