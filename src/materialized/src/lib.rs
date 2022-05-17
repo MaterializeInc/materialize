@@ -369,7 +369,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     let storage_client = Box::new({
         let mut client =
             RemoteClient::new(&[storage_service.addresses("controller").into_element()]);
-        client.reconnect().await;
+        client.connect().await;
         client
     });
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(

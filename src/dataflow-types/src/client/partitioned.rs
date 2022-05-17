@@ -168,6 +168,10 @@ where
                         }
                     }
 
+                    for p in &mut self.parts {
+                        p.disconnect();
+                    }
+                    
                     self.reconnect = Some(ReconnectionState {
                         reason: e,
                         backoff_expiry: Instant::now() + self.backoff,
