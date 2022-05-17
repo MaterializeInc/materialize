@@ -829,10 +829,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     if uuids.is_empty() {
                         self.client_pending_peeks.remove(&conn_id);
                     }
-                } else if response != PeekResponse::Canceled {
-                    // Cancel is handled by handle_cancel, so do not need to log them here.
-                    warn!("Received a PeekResponse without a pending peek: {uuid}");
                 }
+                // Cancellation may cause us to receive responses for peeks no
+                // longer in `self.pending_peeks`, so we quietly ignore them.
             }
             ControllerResponse::TailResponse(sink_id, response) => {
                 // We use an `if let` here because the peek could have been canceled already.
