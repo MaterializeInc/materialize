@@ -9,8 +9,6 @@
 #
 # Test that large transactions are properly replicated
 
-$ set-sql-timeout duration=300s
-
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE IF EXISTS ten;
 CREATE TABLE ten (f1 INTEGER);
