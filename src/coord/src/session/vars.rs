@@ -463,7 +463,7 @@ impl Vars {
             application_name,
             client_encoding: _,
             client_min_messages,
-            cluster: _,
+            cluster,
             database,
             date_style: _,
             extra_float_digits,
@@ -476,16 +476,18 @@ impl Vars {
             server_version_num: _,
             sql_safe_updates,
             standard_conforming_strings: _,
-            timezone: _,
+            timezone,
             transaction_isolation: _,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
+        cluster.end_transaction(action);
         database.end_transaction(action);
+        extra_float_digits.end_transaction(action);
         qgm_optimizations.end_transaction(action);
         search_path.end_transaction(action);
-        extra_float_digits.end_transaction(action);
         sql_safe_updates.end_transaction(action);
+        timezone.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
