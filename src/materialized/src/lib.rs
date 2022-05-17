@@ -29,8 +29,6 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::{AnyOr, Origin};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
