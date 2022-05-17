@@ -304,7 +304,7 @@ where
                     Ok(x) => x,
                     Err(err) => return Err(err),
                 };
-                debug_assert_eq!(current.seqno, current_state.seqno());
+                assert_eq!(current.seqno, current_state.seqno());
                 return Ok(current_state);
             }
 
@@ -341,7 +341,7 @@ where
                         "maybe_init_state lost the CaS race, using current value: {:?}",
                         x.as_ref().map(|x| x.seqno)
                     );
-                    debug_assert!(x.is_some());
+                    assert!(x.is_some());
                     current = x
                 }
             }
@@ -374,8 +374,8 @@ where
             // We received a State with different declared codecs than a
             // previous SeqNo of the same State. Fail loudly.
             .expect("internal error: new durable state disagreed with old durable state");
-        debug_assert_eq!(current.seqno, current_state.seqno());
-        debug_assert!(self.state.seqno() <= current.seqno);
+        assert_eq!(current.seqno, current_state.seqno());
+        assert!(self.state.seqno() <= current.seqno);
         self.state = current_state;
     }
 }

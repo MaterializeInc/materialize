@@ -90,7 +90,7 @@ where
         }
 
         self.push_batch(keys, desc);
-        debug_assert_eq!(&self.upper(), desc.upper());
+        assert_eq!(&self.upper(), desc.upper());
 
         Continue(())
     }
