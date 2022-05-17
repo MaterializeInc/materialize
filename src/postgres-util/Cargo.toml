@@ -10,6 +10,6 @@ publish = false
 anyhow = "1.0.57"
 
 mz-ore = { path = "../ore", features = ["task"] }
-openssl = { version = "0.10.39", features = ["vendored"] }
+openssl = { version = "0.10.40", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
