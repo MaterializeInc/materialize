@@ -83,6 +83,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
 
     println!("Finished PG operations");
 
+    let _ = mz_client.batch_execute(&"SELECT 1;")?;
     // Create postgres source in Materialize
     // mz_client.batch_execute(
     //     &"CREATE SOURCE mz_source
