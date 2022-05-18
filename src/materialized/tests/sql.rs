@@ -84,12 +84,12 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     println!("Finished PG operations");
 
     // Create postgres source in Materialize
-    mz_client.batch_execute(
-        &"CREATE SOURCE mz_source
-            FROM POSTGRES
-            CONNECTION 'host=localhost port=5432 user=postgres dbname=postgres'
-            PUBLICATION 'mz_source';",
-    )?;
+    // mz_client.batch_execute(
+    //     &"CREATE SOURCE mz_source
+    //         FROM POSTGRES
+    //         CONNECTION 'host=localhost port=5432 user=postgres dbname=postgres'
+    //         PUBLICATION 'mz_source';",
+    // )?;
     /*mz_client.batch_execute(&"CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (v);")?;
 
     // Create user table in Materialize
