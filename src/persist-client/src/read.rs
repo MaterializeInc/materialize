@@ -241,13 +241,13 @@ where
 {
     /// Convert listener into futures::Stream
     pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<K, V, T, D>> {
-        async_stream::stream! {
-            loop{
+        async_stream::stream!({
+            loop {
                 for msg in self.next().await {
                     yield msg;
                 }
             }
-        }
+        })
     }
 
     /// Attempt to pull out the next values of this subscription.

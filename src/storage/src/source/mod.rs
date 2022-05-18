@@ -445,11 +445,11 @@ pub trait SourceReader {
     where
         Self: Sized + 'a,
     {
-        Box::pin(async_stream::stream! {
+        Box::pin(async_stream::stream!({
             while let Some(msg) = self.next(timestamp_frequency).await {
                 yield msg;
             }
-        })
+        }))
     }
 }
 
@@ -950,8 +950,16 @@ where
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
         let source_connector = source_connector.clone();
-        let mut source_reader = Box::pin(async_stream::stream! {
-            let mut timestamper = match ReclockOperator::new(name.clone(), storage_metadata, now, timestamp_frequency.clone(), as_of.clone()).await {
+        let mut source_reader = Box::pin(async_stream::stream!({
+            let mut timestamper = match ReclockOperator::new(
+                name.clone(),
+                storage_metadata,
+                now,
+                timestamp_frequency.clone(),
+                as_of.clone(),
+            )
+            .await
+            {
                 Ok(t) => t,
                 Err(e) => {
                     error!("Failed to create source {} timestamper: {:#}", name, e);
@@ -1037,7 +1045,7 @@ where
                     }
                 }
             }
-        });
+        }));
 
         let activator = scope.activator_for(&info.address[..]);
         move |cap, output| {

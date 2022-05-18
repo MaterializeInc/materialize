@@ -729,15 +729,17 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     where
         R: Send + 'a,
     {
-        Box::pin(async_stream::stream! {
+        Box::pin(async_stream::stream!({
             loop {
                 match self.recv().await {
                     Ok(Some(response)) => yield Ok(response),
                     Err(error) => yield Err(error),
-                    Ok(None) => { return; }
+                    Ok(None) => {
+                        return;
+                    }
                 }
             }
-        })
+        }))
     }
 }
 

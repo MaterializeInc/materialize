@@ -60,7 +60,7 @@ where
 
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
-    let async_stream = async_stream::try_stream! {
+    let async_stream = async_stream::try_stream!({
         // We are reading only from worker 0. We can split the work of reading from the snapshot to
         // multiple workers, but someone has to distribute the splits. Also, in the glorious
         // STORAGE future, we will use multiple persist shards to back a STORAGE collection. Then,
@@ -112,7 +112,7 @@ where
                 yield event;
             }
         }
-    };
+    });
 
     let mut pinned_stream = Box::pin(async_stream);
 
