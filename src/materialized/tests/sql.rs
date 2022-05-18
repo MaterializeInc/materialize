@@ -38,9 +38,8 @@ use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 pub mod util;
 
 #[test]
-fn test_linearizability() -> Result<(), Box<dyn Error>> {
+fn aaaaatest_linearizability() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-
     let timestamp = Arc::new(Mutex::new(1_000));
     let now = {
         let timestamp = Arc::clone(&timestamp);
@@ -49,10 +48,9 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut mz_client = server.connect(postgres::NoTls)?;
-    let runtime = &server.runtime;
     let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(&server.runtime);
 
-    let (pg_client, connection) = runtime.block_on(tokio_postgres::connect(
+    let (pg_client, connection) = server.runtime.block_on(tokio_postgres::connect(
         &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
         postgres::NoTls,
     ))?;
@@ -64,13 +62,24 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     });
 
     // Create table in Postgres with publication
-    let _ = runtime.block_on(pg_client.execute("DROP TABLE IF EXISTS v;", &[]))?;
-    let _ = runtime.block_on(pg_client.execute("DROP PUBLICATION IF EXISTS mz_source;", &[]))?;
-    let _ = runtime.block_on(pg_client.execute("CREATE TABLE v (a INT);", &[]))?;
-    let _ = runtime.block_on(pg_client.execute("ALTER TABLE v REPLICA IDENTITY FULL;", &[]))?;
-    let _ =
-        runtime.block_on(pg_client.execute("CREATE PUBLICATION mz_source FOR TABLE v;", &[]))?;
-    let _ = runtime.block_on(pg_client.execute("INSERT INTO v VALUES (42);", &[]))?;
+    let _ = server
+        .runtime
+        .block_on(pg_client.execute("DROP TABLE IF EXISTS v;", &[]))?;
+    let _ = server
+        .runtime
+        .block_on(pg_client.execute("DROP PUBLICATION IF EXISTS mz_source;", &[]))?;
+    let _ = server
+        .runtime
+        .block_on(pg_client.execute("CREATE TABLE v (a INT);", &[]))?;
+    let _ = server
+        .runtime
+        .block_on(pg_client.execute("ALTER TABLE v REPLICA IDENTITY FULL;", &[]))?;
+    let _ = server
+        .runtime
+        .block_on(pg_client.execute("CREATE PUBLICATION mz_source FOR TABLE v;", &[]))?;
+    let _ = server
+        .runtime
+        .block_on(pg_client.execute("INSERT INTO v VALUES (42);", &[]))?;
 
     println!("Finished PG operations");
 
