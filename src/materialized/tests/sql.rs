@@ -50,7 +50,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     let mut mz_client = server.connect(postgres::NoTls)?;
     let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(&server.runtime);
 
-    /*let (pg_client, connection) = server.runtime.block_on(tokio_postgres::connect(
+    let (pg_client, connection) = server.runtime.block_on(tokio_postgres::connect(
         &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
         postgres::NoTls,
     ))?;
@@ -90,7 +90,7 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
             CONNECTION 'host=localhost port=5432 user=postgres dbname=postgres'
             PUBLICATION 'mz_source';",
     )?;
-    mz_client.batch_execute(&"CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (v);")?;
+    /*mz_client.batch_execute(&"CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (v);")?;
 
     // Create user table in Materialize
     mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
