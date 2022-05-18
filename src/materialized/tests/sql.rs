@@ -48,9 +48,9 @@ fn test_linearizability() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut mz_client = server.connect(postgres::NoTls)?;
-    /*let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(&server.runtime);
+    let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(&server.runtime);
 
-    let (pg_client, connection) = server.runtime.block_on(tokio_postgres::connect(
+    /*let (pg_client, connection) = server.runtime.block_on(tokio_postgres::connect(
         &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
         postgres::NoTls,
     ))?;
