@@ -35,6 +35,12 @@ pub trait MzReflect {
     fn add_to_reflected_type_info(rti: &mut ReflectedTypeInfo);
 }
 
+impl<T: MzReflect> MzReflect for Vec<T> {
+    fn add_to_reflected_type_info(rti: &mut ReflectedTypeInfo) {
+        T::add_to_reflected_type_info(rti);
+    }
+}
+
 /// Info that must be combined with a spec to form deserializable JSON.
 ///
 /// To add information required to construct a struct or enum,
@@ -76,15 +82,16 @@ pub fn unquote(s: &str) -> String {
 pub fn deserialize_optional<D, I, C>(
     stream_iter: &mut I,
     type_name: &'static str,
-    rti: &ReflectedTypeInfo,
     ctx: &mut C,
 ) -> Result<Option<D>, String>
 where
     C: TestDeserializeContext,
-    D: DeserializeOwned,
+    D: DeserializeOwned + MzReflect,
     I: Iterator<Item = TokenTree>,
 {
-    match to_json(stream_iter, type_name, rti, ctx)? {
+    let mut rti = ReflectedTypeInfo::default();
+    D::add_to_reflected_type_info(&mut rti);
+    match to_json(stream_iter, type_name, &rti, ctx)? {
         Some(j) => Ok(Some(serde_json::from_str::<D>(&j).map_err(|e| {
             format!("String while serializing: {}\nOriginal JSON: {}", e, j)
         })?)),
@@ -102,15 +109,14 @@ where
 pub fn deserialize<D, I, C>(
     stream_iter: &mut I,
     type_name: &'static str,
-    rti: &ReflectedTypeInfo,
     ctx: &mut C,
 ) -> Result<D, String>
 where
     C: TestDeserializeContext,
-    D: DeserializeOwned,
+    D: DeserializeOwned + MzReflect,
     I: Iterator<Item = TokenTree>,
 {
-    deserialize_optional(stream_iter, type_name, rti, ctx)?
+    deserialize_optional(stream_iter, type_name, ctx)?
         .ok_or_else(|| format!("Empty spec for type {}", type_name))
 }
 
@@ -182,9 +188,7 @@ where
             return Ok(Some(result));
         }
         // Resolving types that are not enums or structs defined by us.
-        if let Some(result) =
-            ctx.override_syntax(first_arg.clone(), stream_iter, &type_name, rti)?
-        {
+        if let Some(result) = ctx.override_syntax(first_arg.clone(), stream_iter, &type_name)? {
             return Ok(Some(result));
         }
         match first_arg {
@@ -290,7 +294,6 @@ pub trait TestDeserializeContext {
         first_arg: TokenTree,
         rest_of_stream: &mut I,
         type_name: &str,
-        rti: &ReflectedTypeInfo,
     ) -> Result<Option<String>, String>
     where
         I: Iterator<Item = TokenTree>;
@@ -300,12 +303,7 @@ pub trait TestDeserializeContext {
     ///
     /// Returns `Some(value)` if `json` has been resolved.
     /// Returns `None` is `json` should be resolved in the default manner.
-    fn reverse_syntax_override(
-        &mut self,
-        json: &Value,
-        type_name: &str,
-        rti: &ReflectedTypeInfo,
-    ) -> Option<String>;
+    fn reverse_syntax_override(&mut self, json: &Value, type_name: &str) -> Option<String>;
 }
 
 /// Default `TestDeserializeContext`.
@@ -320,7 +318,6 @@ impl TestDeserializeContext for GenericTestDeserializeContext {
         _first_arg: TokenTree,
         _rest_of_stream: &mut I,
         _type_name: &str,
-        _rti: &ReflectedTypeInfo,
     ) -> Result<Option<String>, String>
     where
         I: Iterator<Item = TokenTree>,
@@ -328,12 +325,7 @@ impl TestDeserializeContext for GenericTestDeserializeContext {
         Ok(None)
     }
 
-    fn reverse_syntax_override(
-        &mut self,
-        _: &Value,
-        _: &str,
-        _: &ReflectedTypeInfo,
-    ) -> Option<String> {
+    fn reverse_syntax_override(&mut self, _: &Value, _: &str) -> Option<String> {
         None
     }
 }
@@ -474,7 +466,7 @@ where
     C: TestDeserializeContext,
     I: Iterator<Item = TokenTree>,
 {
-    if let Some(result) = ctx.override_syntax(first_arg.clone(), rest_of_stream, type_name, rti)? {
+    if let Some(result) = ctx.override_syntax(first_arg.clone(), rest_of_stream, type_name)? {
         Ok(Some(result))
     } else if let Some((f_names, f_types)) = rti.struct_dict.get(type_name).map(|r| r.clone()) {
         Ok(Some(to_json_fields(
@@ -611,6 +603,16 @@ where
 
 /* #endregion */
 
+pub fn serialize<M, C>(json: &Value, type_name: &str, ctx: &mut C) -> String
+where
+    C: TestDeserializeContext,
+    M: MzReflect,
+{
+    let mut rti = ReflectedTypeInfo::default();
+    M::add_to_reflected_type_info(&mut rti);
+    from_json(json, type_name, &rti, ctx)
+}
+
 /// Converts serialized JSON to the syntax that [to_json] handles.
 ///
 /// `json` is assumed to have been produced by serializing an object of type
@@ -622,7 +624,7 @@ where
     C: TestDeserializeContext,
 {
     let (type_name, option_found) = normalize_type_name(type_name);
-    if let Some(result) = ctx.reverse_syntax_override(json, &type_name, rti) {
+    if let Some(result) = ctx.reverse_syntax_override(json, &type_name) {
         return result;
     }
     // If type is `Option<T>`, convert the value to "null" if it is null,

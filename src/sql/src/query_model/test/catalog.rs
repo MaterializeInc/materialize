@@ -44,11 +44,6 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     timestamp_frequency: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
 });
-static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
-    let mut rti = ReflectedTypeInfo::default();
-    TestCatalogCommand::add_to_reflected_type_info(&mut rti);
-    rti
-});
 
 /// A dummy [`CatalogItem`] implementation.
 ///
@@ -324,7 +319,6 @@ impl TestCatalog {
         while let Some(command) = deserialize_optional::<TestCatalogCommand, _, _>(
             &mut stream_iter,
             "TestCatalogCommand",
-            &RTI,
             &mut GenericTestDeserializeContext::default(),
         )? {
             match command {

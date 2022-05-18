@@ -46,7 +46,6 @@ mod tests {
         let scalar_types: Option<Vec<ScalarType>> = deserialize_optional(
             &mut stream_iter,
             "Vec<ScalarType>",
-            &RTI,
             &mut GenericTestDeserializeContext::default(),
         )?;
         let scalar_types = if let Some(scalar_types) = scalar_types {

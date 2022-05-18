@@ -19,7 +19,6 @@ use crate::query_model::Model;
 use catalog::TestCatalog;
 
 use crate::names::resolve_names_stmt;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -38,12 +37,6 @@ enum Directive {
     /// Ensure that the HIR ⇒ QGM ⇒ HIR round trip reaches a fixpoint after one iteration.
     RoundTrip,
 }
-
-pub static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
-    let mut rti = ReflectedTypeInfo::default();
-    Directive::add_to_reflected_type_info(&mut rti);
-    rti
-});
 
 /// Convert the input string to a Query Graph Model.
 fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, String> {
@@ -101,7 +94,6 @@ fn run_command(
     let directive: Directive = deserialize(
         &mut tokenize(command)?.into_iter(),
         "Directive",
-        &RTI,
         &mut GenericTestDeserializeContext::default(),
     )?;
 

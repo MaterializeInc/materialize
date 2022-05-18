@@ -9,7 +9,7 @@
 
 mod test {
     use mz_expr_test_util::*;
-    use mz_lowertest::{from_json, TestDeserializeContext};
+    use mz_lowertest::{serialize, MzReflect, TestDeserializeContext};
     use mz_ore::result::ResultExt;
     use serde::de::DeserializeOwned;
     use serde::Serialize;
@@ -24,14 +24,14 @@ mod test {
         ctx_gen: G,
     ) -> Result<T, String>
     where
-        T: DeserializeOwned + Serialize + Eq + Clone,
+        T: DeserializeOwned + MzReflect + Serialize + Eq + Clone,
         F: Fn(&str) -> Result<T, String>,
         C: TestDeserializeContext,
         G: Fn() -> C,
     {
         let result: T = build_obj(s)?;
         let json = serde_json::to_value(result.clone()).map_err_to_string()?;
-        let new_s = from_json(&json, type_name, &RTI, &mut ctx_gen());
+        let new_s = serialize::<T, _>(&json, type_name, &mut ctx_gen());
         let new_result = build_obj(&new_s)?;
         if new_result.eq(&result) {
             Ok(result)

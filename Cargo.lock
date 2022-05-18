@@ -3289,7 +3289,6 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-repr-test-util",
- "once_cell",
  "proc-macro2",
  "serde",
  "serde_json",
@@ -3390,7 +3389,6 @@ dependencies = [
  "datadriven",
  "mz-lowertest-derive",
  "mz-ore",
- "once_cell",
  "proc-macro2",
  "serde",
  "serde_json",
@@ -3777,7 +3775,6 @@ dependencies = [
  "mz-lowertest",
  "mz-ore",
  "mz-repr",
- "once_cell",
  "proc-macro2",
 ]
 
