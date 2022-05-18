@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
+use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, ReplicaId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, SourceInstanceDesc};
@@ -217,16 +217,16 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub async fn add_replica(&mut self, id: String, client: Box<dyn ComputeClient<T>>) {
+    pub async fn add_replica(&mut self, id: ReplicaId, client: Box<dyn ComputeClient<T>>) {
         self.compute.client.add_replica(id, client).await;
     }
 
-    pub fn get_replica_ids(&self) -> impl Iterator<Item = &String> {
-        self.compute.client.get_replica_identifiers()
+    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.compute.client.get_replica_ids()
     }
 
     /// Removes an existing instance replica, by name.
-    pub fn remove_replica(&mut self, id: &str) {
+    pub fn remove_replica(&mut self, id: ReplicaId) {
         self.compute.client.remove_replica(id);
     }
 
