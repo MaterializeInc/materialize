@@ -162,6 +162,10 @@ where
             vec![]
         };
 
+        if keys.is_empty() && desc.lower() == desc.upper() {
+            return Ok(Ok(Ok(())));
+        }
+
         loop {
             let res = self.machine.compare_and_append(&keys, &desc).await?;
             match res {
