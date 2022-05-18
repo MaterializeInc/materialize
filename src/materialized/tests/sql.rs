@@ -20,8 +20,8 @@ use std::net::Shutdown;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{env, thread};
 
 use chrono::{DateTime, Utc};
 use mz_ore::now::NowFn;
@@ -36,6 +36,94 @@ use mz_ore::assert_contains;
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
+
+#[test]
+fn test_linearizability() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+
+    let timestamp = Arc::new(Mutex::new(1_000));
+    let now = {
+        let timestamp = Arc::clone(&timestamp);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let config = util::Config::default().with_now(now);
+    let server = util::start_server(config)?;
+    let mut mz_client = server.connect(postgres::NoTls)?;
+    let runtime = &server.runtime;
+    let pg_runtime = Arc::<tokio::runtime::Runtime>::clone(&server.runtime);
+
+    let (pg_client, connection) = runtime.block_on(tokio_postgres::connect(
+        &env::var("POSTGRES_URL").unwrap_or_else(|_| "host=localhost user=postgres".into()),
+        postgres::NoTls,
+    ))?;
+
+    thread::spawn(move || {
+        if let Err(e) = pg_runtime.block_on(connection) {
+            panic!("connection error: {}", e);
+        }
+    });
+
+    // Create table in Postgres with publication
+    let _ = runtime.block_on(pg_client.execute("DROP TABLE IF EXISTS v;", &[]))?;
+    let _ = runtime.block_on(pg_client.execute("DROP PUBLICATION IF EXISTS mz_source;", &[]))?;
+    let _ = runtime.block_on(pg_client.execute("CREATE TABLE v (a INT);", &[]))?;
+    let _ = runtime.block_on(pg_client.execute("ALTER TABLE v REPLICA IDENTITY FULL;", &[]))?;
+    let _ =
+        runtime.block_on(pg_client.execute("CREATE PUBLICATION mz_source FOR TABLE v;", &[]))?;
+    let _ = runtime.block_on(pg_client.execute("INSERT INTO v VALUES (42);", &[]))?;
+
+    println!("Finished PG operations");
+
+    // Create postgres source in Materialize
+    mz_client.batch_execute(
+        &"CREATE SOURCE mz_source
+            FROM POSTGRES
+            CONNECTION 'host=localhost port=5432 user=postgres dbname=postgres'
+            PUBLICATION 'mz_source';",
+    )?;
+    mz_client.batch_execute(&"CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (v);")?;
+
+    // Create user table in Materialize
+    mz_client.batch_execute(&"DROP TABLE IF EXISTS t;")?;
+    mz_client.batch_execute(&"CREATE TABLE t (a INT);")?;
+
+    // Wait for the view to be populated
+    while mz_client.query_one("SELECT * FROM v;", &[]).is_err()
+        || mz_client
+            .query_one("SELECT COUNT(*) FROM v;", &[])?
+            .get::<_, i64>(0)
+            != 1
+    {
+        thread::sleep(Duration::from_millis(1))
+    }
+
+    fn extract_timestamp_from_explain(explain: &str) -> Result<u64, Box<dyn Error>> {
+        let re = Regex::new(r"timestamp:\s+(\d+)").unwrap();
+        let timestamp_str = re.captures(explain).unwrap().get(1).unwrap().as_str();
+        Ok(timestamp_str.parse()?)
+    }
+
+    // Get timestamp for query only involving postgres source
+    let view_explain: String = mz_client
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM v;", &[])?
+        .get(0);
+    // Get timestamp for query with both a user table and postgres source
+    let join_explain: String = mz_client
+        .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM v, t;", &[])?
+        .get(0);
+
+    let view_ts = extract_timestamp_from_explain(&view_explain)?;
+    let join_ts = extract_timestamp_from_explain(&join_explain)?;
+
+    mz_client.batch_execute(&"DROP VIEW v;")?;
+    mz_client.batch_execute(&"DROP SOURCE mz_source;")?;
+
+    // Since the query on the join was done after the query on the view, it should have a higher or
+    // equal timestamp
+    assert!(join_ts >= view_ts);
+
+    Ok(())
+}
 
 #[test]
 fn test_no_block() -> Result<(), anyhow::Error> {
