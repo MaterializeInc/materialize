@@ -1941,8 +1941,8 @@ pub mod sources {
 
                     let persist_client = location.open().await?;
 
-                    let (_write, read) = persist_client
-                        .open::<Row, Row, T, mz_repr::Diff>(persist_connector.shard_id)
+                    let read = persist_client
+                        .open_reader::<Row, Row, T, mz_repr::Diff>(persist_connector.shard_id)
                         .await?;
 
                     Some(read)
