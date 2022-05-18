@@ -829,16 +829,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     conn_id,
                 }) = self.pending_peeks.remove(&uuid)
                 {
-                    rows_tx
-                        .send(response)
-                        .expect("Peek endpoint terminated prematurely");
-                    let uuids = self
-                        .client_pending_peeks
-                        .get_mut(&conn_id)
-                        .unwrap_or_else(|| panic!("no client state for connection {conn_id}"));
-                    uuids.remove(&uuid);
-                    if uuids.is_empty() {
-                        self.client_pending_peeks.remove(&conn_id);
+                    // Peek cancellations are best effort, so we might still
+                    // receive a response, even though the recipient is gone.
+                    let _ = rows_tx.send(response);
+                    if let Some(uuids) = self.client_pending_peeks.get_mut(&conn_id) {
+                        uuids.remove(&uuid);
+                        if uuids.is_empty() {
+                            self.client_pending_peeks.remove(&conn_id);
+                        }
                     }
                 }
                 // Cancellation may cause us to receive responses for peeks no
