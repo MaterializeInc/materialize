@@ -21,6 +21,9 @@ use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3BlobConfig, S3BlobMulti};
 use crate::sqlite::SqliteConsensus;
 
+#[cfg(any(test, debug_assertions))]
+use crate::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+
 /// Config for an implementation of [BlobMulti].
 #[derive(Debug, Clone)]
 pub enum BlobMultiConfig {
@@ -28,6 +31,10 @@ pub enum BlobMultiConfig {
     File(FileBlobConfig),
     /// Config for [S3BlobMulti].
     S3(S3BlobConfig),
+    /// Config for [MemBlobMulti], only available in testing to prevent
+    /// footguns.
+    #[cfg(any(test, debug_assertions))]
+    Mem,
 }
 
 impl BlobMultiConfig {
@@ -40,6 +47,9 @@ impl BlobMultiConfig {
             BlobMultiConfig::S3(config) => S3BlobMulti::open(config)
                 .await
                 .map(|x| Arc::new(x) as Arc<dyn BlobMulti + Send + Sync>),
+            #[cfg(any(test, debug_assertions))]
+            BlobMultiConfig::Mem => Ok(Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()))
+                as Arc<dyn BlobMulti + Send + Sync>),
         }
     }
 
@@ -67,6 +77,11 @@ impl BlobMultiConfig {
                 let role_arn = query_params.remove("aws_role_arn").map(|x| x.into_owned());
                 let config = S3BlobConfig::new(bucket, prefix, role_arn).await?;
                 Ok(BlobMultiConfig::S3(config))
+            }
+            #[cfg(any(test, debug_assertions))]
+            "mem" => {
+                query_params.clear();
+                Ok(BlobMultiConfig::Mem)
             }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",
@@ -98,6 +113,9 @@ pub enum ConsensusConfig {
     Sqlite(String),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
+    /// Config for [MemConsensus], only available in testing.
+    #[cfg(any(test, debug_assertions))]
+    Mem,
 }
 
 impl ConsensusConfig {
@@ -110,6 +128,10 @@ impl ConsensusConfig {
             ConsensusConfig::Postgres(config) => PostgresConsensus::open(config)
                 .await
                 .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
+            #[cfg(any(test, debug_assertions))]
+            ConsensusConfig::Mem => {
+                Ok(Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>)
+            }
         }
     }
 
@@ -122,7 +144,7 @@ impl ConsensusConfig {
                 err
             )
         })?;
-        let query_params = url.query_pairs().collect::<HashMap<_, _>>();
+        let mut query_params = url.query_pairs().collect::<HashMap<_, _>>();
 
         let config = match url.scheme() {
             "sqlite" => {
@@ -142,6 +164,11 @@ impl ConsensusConfig {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(value).await?,
             )),
+            #[cfg(any(test, debug_assertions))]
+            "mem" => {
+                query_params.clear();
+                Ok(ConsensusConfig::Mem)
+            }
             p => Err(anyhow!(
                 "unknown persist consensus scheme {}: {}",
                 p,
