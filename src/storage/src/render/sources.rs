@@ -11,13 +11,6 @@
 //!
 //! See [`render_source`] for more details.
 
-<<<<<<< HEAD
-use std::any::Any;
-use std::cell::RefCell;
-use std::marker::{Send, Sync};
-use std::rc::Rc;
-=======
->>>>>>> d93000da5 (transit table data through persist)
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
@@ -25,7 +18,9 @@ use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Map, OkErr};
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::{encoding::*, *};
 use mz_dataflow_types::*;
 use mz_expr::PartitionId;
@@ -66,12 +61,13 @@ enum SourceType<Delimited, ByteStream, RowSource> {
 /// <https://github.com/MaterializeInc/materialize/pull/12109>
 // TODO(guswynn): Link to merged document
 pub fn render_source<G>(
-    dataflow_debug_name: &String,
-    as_of_frontier: &timely::progress::Antichain<mz_repr::Timestamp>,
-    src: SourceDesc,
-    storage_state: &mut crate::storage_state::StorageState,
     scope: &mut G,
+    dataflow_debug_name: &String,
+    as_of_frontier: &Antichain<G::Timestamp>,
     src_id: GlobalId,
+    source_desc: SourceDesc,
+    storage_metadata: CollectionMetadata,
+    storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
     Arc<dyn std::any::Any + Send + Sync>,
@@ -82,7 +78,7 @@ where
     let mut linear_operators: Option<LinearOperator> = None;
     // Blank out trivial linear operators.
     if let Some(operator) = &linear_operators {
-        if operator.is_trivial(src.desc.arity()) {
+        if operator.is_trivial(source_desc.desc.arity()) {
             linear_operators = None;
         }
     }
@@ -97,7 +93,7 @@ where
     // at the end of `src.optimized_expr`.
     //
     // This has a lot of potential for improvement in the near future.
-    match src.connector.clone() {
+    match source_desc.connector.clone() {
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands. Defers entirely to `render_table`
         SourceConnector::Local { .. } => unreachable!(),
@@ -153,8 +149,8 @@ where
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
-                storage_metadata,
                 as_of: as_of_frontier.clone(),
+                storage_metadata,
             };
 
             // Pubnub and Postgres are `SimpleSource`s, so they produce _raw_ sources
@@ -315,6 +311,7 @@ where
                             SourceEnvelope::Debezium(dbz_envelope) => {
                                 let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
                                     Some(tx_metadata) => {
+                                        //TODO(petrosagg): this should read from storage
                                         let tx_src_desc = storage_state
                                             .source_descriptions
                                             .get(&tx_metadata.tx_metadata_global_id)
@@ -330,12 +327,13 @@ where
                                         // TODO(#11667): reuse the existing arrangement if it exists
                                         let ((tx_source_ok, tx_source_err), tx_token) =
                                             render_source(
+                                                scope,
                                                 dataflow_debug_name,
                                                 as_of_frontier,
-                                                tx_src_desc,
-                                                storage_state,
-                                                scope,
                                                 tx_metadata.tx_metadata_global_id,
+                                                tx_src_desc,
+                                                tx_collection_metadata,
+                                                storage_state,
                                             );
                                         needed_tokens.push(tx_token);
                                         error_collections.push(tx_source_err);
@@ -363,7 +361,7 @@ where
 
                                 let as_of_frontier = as_of_frontier.clone();
 
-                                let source_arity = src.desc.typ().arity();
+                                let source_arity = source_desc.desc.typ().arity();
 
                                 let (upsert_ok, upsert_err) = super::upsert::upsert(
                                     &transformed_results,
@@ -432,7 +430,7 @@ where
                         .inner
                         .flat_map_fallible("SourceLinearOperators", {
                             // Produce an executable plan reflecting the linear operators.
-                            let source_type = src.desc.typ();
+                            let source_type = source_desc.desc.typ();
                             let linear_op_mfp =
                                 mz_dataflow_types::plan::linear_to_mfp(operators, source_type)
                                     .into_plan()

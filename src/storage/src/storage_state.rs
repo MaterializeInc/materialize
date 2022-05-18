@@ -12,7 +12,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::lattice::Lattice;
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistLocation;
@@ -23,8 +22,8 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{CreateSourceCommand, StorageCommand, StorageResponse};
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::client::{StorageCommand, StorageResponse};
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, SourceDesc};
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -47,7 +46,7 @@ pub struct StorageState {
     /// dropped, as this is used to check for rebinding of previous identifiers.
     /// Once we have a better mechanism to avoid that, for example that identifiers
     /// must strictly increase, we can clean up descriptions when sources are dropped.
-    pub source_descriptions: HashMap<GlobalId, mz_dataflow_types::sources::SourceDesc>,
+    pub source_descriptions: HashMap<GlobalId, SourceDesc>,
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the
@@ -167,10 +166,9 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                             crate::render::build_storage_dataflow(
                                 self.timely_worker,
                                 self.storage_state,
-                                "foobar",
-                                Some(Antichain::from_elem(0)),
-                                (source.id, source.desc.clone()),
-                                source.persist_shard,
+                                "foobar", //TODO(petrosagg): fix this
+                                Antichain::from_elem(0),
+                                source.clone(),
                             );
                         }
                     }
@@ -210,67 +208,8 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                 }
             }
 
-            StorageCommand::Append(_appends) => {
-                // for (id, updates, upper) in appends {
-                //     let table_state = match self.storage_state.table_state.get_mut(&id) {
-                //         Some(table_state) => table_state,
-                //         None => panic!(
-                //             "table state {} missing for insert at worker {}",
-                //             id,
-                //             self.timely_worker.index()
-                //         ),
-                //     };
-
-                //     // Add the new updates to all existing renders of the table.
-                //     for input in &mut table_state.inputs {
-                //         if let Some(capability) = input.capability.upgrade() {
-                //             let mut capability = capability.borrow_mut();
-                //             let mut session = input.handle.session(capability.clone());
-                //             for update in &updates {
-                //                 assert!(update.timestamp >= *capability.time());
-                //                 session.give((update.row.clone(), update.timestamp, update.diff));
-                //             }
-                //             capability.downgrade(&upper);
-                //         }
-                //     }
-
-                //     assert!(upper >= table_state.upper);
-                //     table_state.upper = upper;
-                //     // Announce the table updates as durably recorded. This is not correct,
-                //     // but it also hasn't been correct afaict.
-                //     // TODO(petrosagg): correct this once STORAGE owns table durability.
-                //     let mut borrow = self.storage_state.source_uppers[&id].borrow_mut();
-                //     let mut joined_frontier = Antichain::new();
-                //     for time1 in borrow.iter() {
-                //         joined_frontier.insert(time1.join(&upper));
-                //     }
-                //     *borrow = joined_frontier;
-
-                //     // Discard entries that are no longer active.
-                //     table_state
-                //         .inputs
-                //         .retain(|input| input.capability.upgrade().is_some());
-
-                //     // Stash the data for use by future renders of the table.
-                //     for update in updates {
-                //         table_state
-                //             .data
-                //             .push((update.row, update.timestamp, update.diff));
-                //     }
-
-                //     // Consolidate the data in the table if it's doubled in size
-                //     // since the last consolidation.
-                //     if table_state.data.len() > table_state.last_consolidated_size * 2 {
-                //         for (_data, time, _diff) in &mut table_state.data {
-                //             time.advance_by(table_state.since.borrow());
-                //         }
-                //         differential_dataflow::consolidation::consolidate_updates(
-                //             &mut table_state.data,
-                //         );
-                //         table_state.last_consolidated_size = table_state.data.len();
-                //     }
-                // }
-            }
+            // Nothing to do
+            StorageCommand::Append(_appends) => {}
         }
     }
 

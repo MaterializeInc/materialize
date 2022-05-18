@@ -100,25 +100,20 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::any::Any;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
-use differential_dataflow::{AsCollection, Hashable};
+use differential_dataflow::Hashable;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use timely::PartialOrder;
 
-use mz_dataflow_types::{sources::SourceDesc, client::controller::storage::CollectionMetadata, DataflowError};
-use mz_ore::collections::CollectionExt as IteratorExt;
-use mz_persist_client::ShardId;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_dataflow_types::{client::CreateSourceCommand, sources::SourceData};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::storage_state::StorageState;
@@ -135,9 +130,8 @@ pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     debug_name: &str,
-    as_of: Option<Antichain<mz_repr::Timestamp>>,
-    source_import: (GlobalId, SourceDesc),
-    persist_shard: ShardId,
+    as_of: Antichain<mz_repr::Timestamp>,
+    source: CreateSourceCommand<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
@@ -147,108 +141,22 @@ pub fn build_storage_dataflow<A: Allocate>(
         // so that other similar uses (e.g. with iterative scopes) do not require weird
         // alternate type signatures.
         scope.clone().region_named(&name, |region| {
-            let as_of = as_of.clone().unwrap();
             let debug_name = format!("{debug_name}-sources");
 
-            // Import declared source into the rendering context.
-            let (ref src_id, ref source) = source_import;
-            // If `as_of` is `None`, the rendering request is invalid. We still need to satisfy it,
-            // but we will do this with an empty source.
-            let valid = storage_state.source_uppers.contains_key(src_id);
-            let ((ok, err), token) = if valid {
-                let ((ok, err), token) = crate::render::sources::render_source(
-                    &debug_name,
-                    &as_of,
-                    source.clone(),
-                    storage_state,
-                    region,
-                    src_id.clone(),
-                );
+            let ((ok, err), token) = crate::render::sources::render_source(
+                region,
+                &debug_name,
+                &as_of,
+                source.id,
+                source.desc.clone(),
+                source.storage_metadata.clone(),
+                storage_state,
+            );
+            storage_state
+                .source_tokens
+                .insert(source.id, Arc::clone(&token));
 
-                // Capture the frontier of `ok` to present as the "source upper".
-                // TODO: remove this code when storage has a better holistic take on source progress.
-                // This shared frontier is set up in `CreateSource`, and must be present by the time we render as source.
-                let shared_frontier = Rc::clone(&storage_state.source_uppers[src_id]);
-                let weak_token = std::sync::Arc::downgrade(&token);
-                use timely::dataflow::operators::Operator;
-                ok.inner.sink(
-                    timely::dataflow::channels::pact::Pipeline,
-                    "frontier monitor",
-                    move |input| {
-                        // Drain the input; we don't need it.
-                        input.for_each(|_, _| {});
-
-                        // Only attempt the frontier update if the source is still live.
-                        // If it is shutting down, we shouldn't treat the frontier as correct.
-                        if let Some(_) = weak_token.upgrade() {
-                            // Read the input frontier, and join with the shared frontier.
-                            let mut joined_frontier = Antichain::new();
-                            let mut borrow = shared_frontier.borrow_mut();
-                            for time1 in borrow.iter() {
-                                for time2 in &input.frontier.frontier() {
-                                    use differential_dataflow::lattice::Lattice;
-                                    joined_frontier.insert(time1.join(time2));
-                                }
-                            }
-                            *borrow = joined_frontier;
-                        }
-                    },
-                );
-
-                ((ok, err), token)
-            } else {
-                // This branch exists only to set up a non-source that can be captured and replayed.
-                use timely::dataflow::operators::generic::operator::source;
-                use timely::dataflow::operators::ActivateCapability;
-                use timely::scheduling::Scheduler;
-
-                let mut tokens = Vec::new();
-                let ok = source(region, "InvalidSource", |cap, info| {
-                    let mut act_cap = Some(ActivateCapability::new(
-                        cap,
-                        &info.address,
-                        region.activations(),
-                    ));
-
-                    let drop_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-                    let drop_activator_weak = Arc::downgrade(&drop_activator);
-
-                    tokens.push(drop_activator);
-
-                    move |_handle| {
-                        if drop_activator_weak.upgrade().is_some() {
-                            act_cap.take();
-                        }
-                    }
-                })
-                .as_collection();
-                let err = source(region, "InvalidSource", |cap, info| {
-                    let mut act_cap = Some(ActivateCapability::new(
-                        cap,
-                        &info.address,
-                        region.activations(),
-                    ));
-
-                    let drop_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-                    let drop_activator_weak = Arc::downgrade(&drop_activator);
-
-                    tokens.push(drop_activator);
-
-                    move |_handle| {
-                        if drop_activator_weak.upgrade().is_some() {
-                            act_cap.take();
-                        }
-                    }
-                })
-                .as_collection();
-                ((ok, err), Arc::new(tokens) as Arc<dyn Any + Send + Sync>)
-            };
-
-            storage_state.source_tokens.insert(source_import.0, token);
-
-            //TODO handle err collection too
-            let sinked_collection = ok.map(Ok).concat(&err.map(Err));
-            let operator_name = format!("persist_sink({})", persist_shard);
+            let operator_name = format!("persist_sink({})", source.storage_metadata.persist_shard);
             let mut persist_op = OperatorBuilder::new(operator_name, region.clone());
 
             // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
@@ -259,60 +167,55 @@ pub fn build_storage_dataflow<A: Allocate>(
             // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
             // multiple persist shards. Then we should set it up such that each worker can write to one
             // shard.
-            let hashed_id = source_import.0.hashed();
+            let hashed_id = source.id.hashed();
             let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
 
-            let mut input =
-                persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
+            let source_data = ok.map(Ok).concat(&err.map(Err)).inner;
+            let mut input = persist_op.new_input(&source_data, Exchange::new(move |_| hashed_id));
 
-            // TODO(aljoscha): Configurable timeout? Or no timeout in the persist API?
-            let timeout = Duration::from_secs(60);
+            let shared_frontier = Rc::clone(&storage_state.source_uppers[&source.id]);
 
-            // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-
-            let (write, _read) = futures_executor::block_on(
-                storage_state
-                    .persist_client
-                    .open::<(), Result<Row, DataflowError>, mz_repr::Timestamp, mz_repr::Diff>(
-                        timeout,
-                        persist_shard,
-                    ),
-            )
-            .expect("could not open persist shard");
-
-            let write = Rc::new(RefCell::new(Some(write)));
+            let weak_token = Arc::downgrade(&token);
 
             persist_op.build_async(
                 region.clone(),
                 move |mut capabilities, frontiers, scheduler| async move {
                     capabilities.clear();
                     let mut buffer = Vec::new();
-                    let mut stash: HashMap<
-                        Timestamp,
-                        Vec<(Result<Row, DataflowError>, Timestamp, Diff)>,
-                    > = HashMap::new();
+                    let mut stash: HashMap<_, Vec<_>> = HashMap::new();
+
+                    let persist_client = source
+                        .storage_metadata
+                        .persist_location
+                        .open()
+                        .await
+                        .unwrap();
+
+                    let mut write = persist_client
+                        .open_writer::<(), SourceData, mz_repr::Timestamp, mz_repr::Diff>(
+                            source.storage_metadata.persist_shard,
+                        )
+                        .await
+                        .expect("could not open persist shard");
 
                     while scheduler.notified().await {
                         let frontier = frontiers.borrow()[0].clone();
 
-                        if !active_write_worker {
+                        if !active_write_worker
+                            || weak_token.upgrade().is_none()
+                            || shared_frontier.borrow().is_empty()
+                        {
                             return;
                         }
-
-                        let mut write = write.borrow_mut();
-                        let write = match &mut *write {
-                            Some(write) => write,
-                            None => {
-                                // We have been cancelled!
-                                return;
-                            }
-                        };
 
                         while let Some((_cap, data)) = input.next() {
                             data.swap(&mut buffer);
 
                             for (row, ts, diff) in buffer.drain(..) {
-                                stash.entry(ts).or_default().push((row, ts, diff));
+                                stash
+                                    .entry(ts)
+                                    .or_default()
+                                    .push((SourceData(row), ts, diff));
                             }
                         }
 
@@ -328,15 +231,19 @@ pub fn build_storage_dataflow<A: Allocate>(
                             })
                             .map(|&(ref row, ref ts, ref diff)| ((&(), row), ts, diff));
 
-                        // We always append, even in case we don't have any updates, because appending
-                        // also advances the frontier.
-                        // TODO(aljoscha): Figure out how errors from this should be reported.
-                        write
-                            .append(timeout, updates, frontier.clone())
-                            .await
-                            .expect("cannot append updates")
-                            .expect("cannot append updates")
-                            .expect("invalid/outdated upper");
+                        if PartialOrder::less_than(&*shared_frontier.borrow(), &frontier) {
+                            // We always append, even in case we don't have any updates, because appending
+                            // also advances the frontier.
+                            // TODO(aljoscha): Figure out how errors from this should be reported.
+                            write
+                                .append(updates, shared_frontier.borrow().clone(), frontier.clone())
+                                .await
+                                .expect("cannot append updates")
+                                .expect("cannot append updates")
+                                .expect("invalid/outdated upper");
+
+                            *shared_frontier.borrow_mut() = frontier.clone();
+                        }
 
                         stash.retain(|ts, _updates| frontier.less_equal(ts));
                     }

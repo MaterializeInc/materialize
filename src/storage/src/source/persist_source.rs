@@ -13,7 +13,6 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use futures_util::Stream as FuturesStream;
 use timely::dataflow::operators::OkErr;
@@ -21,10 +20,12 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tracing::trace;
 
-use mz_dataflow_types::DataflowError;
+use mz_dataflow_types::{
+    client::controller::storage::CollectionMetadata, sources::SourceData, DataflowError,
+};
 use mz_persist::location::ExternalError;
-use mz_persist_client::{read::ListenEvent, PersistClient, ShardId};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_persist_client::read::ListenEvent;
+use mz_repr::{Diff, Row, Timestamp};
 
 use crate::source::SourceStatus;
 
@@ -36,9 +37,7 @@ use crate::source::SourceStatus;
 // upper frontier from all shards.
 pub fn persist_source<G>(
     scope: &G,
-    source_id: GlobalId,
-    persist_client: PersistClient,
-    shard_id: ShardId,
+    storage_metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -68,16 +67,11 @@ where
             return;
         }
 
-        let persist_location = PersistLocation {
-            consensus_uri: consensus_uri,
-            blob_uri: blob_uri,
-        };
-
-        let persist_client = persist_location.open().await?;
+        let persist_client = storage_metadata.persist_location.open().await.unwrap();
 
         let mut read = persist_client
-            .open_reader::<(), Result<Row, DataflowError>, Timestamp, Diff>(shard_id)
-            .await?;
+            .open_reader::<(), SourceData, Timestamp, Diff>(storage_metadata.persist_shard)
+            .await.expect("TODO PETROSAGG");
 
         /// Aggressively downgrade `since`, to not hold back compaction.
         read.downgrade_since(as_of.clone()).await;
@@ -100,8 +94,7 @@ where
             .expect("cannot serve requested as_of");
 
         loop {
-            let next = listen.next().await;
-            for event in next {
+            for event in listen.next().await {
                 // TODO(aljoscha): We should introduce a method that consumes a `ReadHandle` and
                 // returns a `Listen` that automatically downgrades `since` as early as possible.
                 if let ListenEvent::Progress(upper) = &event {
@@ -129,29 +122,19 @@ where
             let mut current_ts = 0;
 
             move |cap, output| {
-                let waker = futures_util::task::waker_ref(&activator);
                 let mut context = Context::from_waker(&waker);
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
-                        Some(Ok(event)) => match event {
-                            ListenEvent::Progress(upper) => {
-                                // NOTE(aljoscha): Ideally, we would only get a CapabilitySet, that
-                                // we have to manage. Or the ability to drop the plain Capability
-                                // right at the start.
-                                if let Some(first_element) = upper.first() {
-                                    current_ts = *first_element;
-                                    cap.downgrade(first_element);
-                                }
+                        Some(Ok(ListenEvent::Progress(upper))) => {
+                            if upper.elements().is_empty() {
+                                return SourceStatus::Done;
                             }
-                            ListenEvent::Updates(updates) => {
-                                let cap = cap.delayed(&current_ts);
-                                let mut session = output.session(&cap);
-                                for update in updates {
-                                    session.give(Ok(update));
-                                }
+                            if let Some(first_element) = upper.first() {
+                                current_ts = *first_element;
+                                cap.downgrade(first_element);
                             }
-                        },
-                        Some(Err::<_, anyhow::Error>(e)) => {
+                        }
+                        Some(Ok(ListenEvent::Updates(mut updates))) => {
                             let cap = cap.delayed(&current_ts);
                             let mut session = output.session(&cap);
                             session.give_vec(&mut updates);
@@ -169,8 +152,8 @@ where
         });
 
     let (ok_stream, err_stream) = timely_stream.ok_err(|x| match x {
-        ((Ok(()), Ok(Ok(row))), ts, diff) => Ok((row, ts, diff)),
-        ((Ok(()), Ok(Err(err))), ts, diff) => Err((err, ts, diff)),
+        ((Ok(()), Ok(SourceData(Ok(row)))), ts, diff) => Ok((row, ts, diff)),
+        ((Ok(()), Ok(SourceData(Err(err)))), ts, diff) => Err((err, ts, diff)),
         // TODO(petrosagg): error handling
         _ => panic!("decoding failed"),
     });
