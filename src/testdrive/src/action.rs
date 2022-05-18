@@ -13,7 +13,6 @@ use std::fs;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,7 +24,7 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sqs::Client as SqsClient;
 use aws_types::credentials::ProvideCredentials;
 use aws_types::SdkConfig;
-use futures::future::FutureExt;
+use futures::future::{BoxFuture, FutureExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use mz_coord::catalog::{Catalog, ConnCatalog};
@@ -160,10 +159,8 @@ pub struct State {
     materialized_addr: String,
     materialized_user: String,
     pgclient: Arc<tokio_postgres::Client>,
-    pgclient_futures: HashMap<
-        String,
-        Mutex<Pin<Box<dyn Future<Output = Result<u64, tokio_postgres::Error>> + Send>>>,
-    >,
+    pgclient_futures:
+        HashMap<String, Mutex<BoxFuture<'static, Result<u64, tokio_postgres::Error>>>>,
 
     // === Confluent state. ===
     schema_registry_url: Url,
