@@ -1424,8 +1424,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 ) {
                     Ok(stmt) => mz_sql::pure::purify_create_source(
                         self.now(),
-                        self.catalog.config().aws_external_id.clone(),
                         stmt,
+                        self.connector_context.clone(),
                     ),
                     Err(e) => return tx.send(Err(e.into()), session),
                 };

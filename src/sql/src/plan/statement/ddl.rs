@@ -25,7 +25,7 @@ use itertools::Itertools;
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sinks::{
@@ -3080,12 +3080,12 @@ pub fn plan_create_connector(
                 if let Some(Some(WithOptionValue::Value(val))) = opts_map.remove("USERNAME") {
                     // For some reason this sometimes comes in single quoted, if so then strip both ends
                     let username = val.to_string();
-                    if username.starts_with("'") && username.ends_with("'") {
+                    if username.starts_with('\'') && username.ends_with('\'') {
                         Some(
                             username
-                                .strip_prefix("'")
+                                .strip_prefix('\'')
                                 .unwrap()
-                                .strip_suffix("'")
+                                .strip_suffix('\'')
                                 .unwrap()
                                 .to_string(),
                         )

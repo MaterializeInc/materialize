@@ -103,7 +103,6 @@ pub async fn purify_create_source(
                 // Verify that the provided security options are valid and then test them.
                 kafka_util::extract_config(&mut with_options_map)?
             };
-            info!("purify_create_source config_options: {:?}", config_options);
             let consumer = kafka_util::create_consumer(
                 &broker,
                 &topic,
@@ -201,10 +200,6 @@ async fn purify_source_format(
     {
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
-    info!(
-        "purify_source_format connector_options: {:?}      with_options: {:?}",
-        connector_options, with_options
-    );
 
     // For backwards compatibility, using ENVELOPE UPSERT with a bare FORMAT
     // BYTES or FORMAT TEXT uses the specified format for both the key and the
@@ -260,7 +255,6 @@ async fn purify_source_format_single(
         Format::Avro(schema) => {
             match schema {
                 AvroSchema::Csr { csr_connector } => {
-                    info!("purify_source_format_single avro csr_connector: {:?}, connector_options: {:?}", csr_connector, connector_options);
                     purify_csr_connector_avro(connector, csr_connector, envelope, connector_options)
                         .await?
                 }

@@ -47,7 +47,7 @@ use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_pid_file::PidFile;
-use mz_secrets::{SecretsController, SecretsReader};
+use mz_secrets::{LocalSecretsReader, SecretsController, SecretsReader, SecretsReaderConfig};
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
 
@@ -374,34 +374,21 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             .context("connecting to kubernetes")?,
         ),
     };
-    let secrets_reader: Arc<Box<dyn SecretsReader>> = match config.secrets_controller {
-        None | Some(SecretsControllerConfig::LocalFileSystem) => {
-            let secrets_storage = config.data_directory.join("secrets");
-            fs::create_dir_all(&secrets_storage).with_context(|| {
-                format!("creating secrets directory: {}", secrets_storage.display())
-            })?;
-            let permissions = Permissions::from_mode(0o700);
-            fs::set_permissions(secrets_storage.clone(), permissions)?;
-            Arc::new(Box::new(FilesystemSecretsController::new(secrets_storage)))
-        }
-        Some(SecretsControllerConfig::Kubernetes {
-            context,
-            user_defined_secret,
-            user_defined_secret_mount_path,
-            refresh_pod_name,
-        }) => Arc::new(Box::new(
-            KubernetesSecretsController::new(
-                context,
-                KubernetesSecretsControllerConfig {
-                    user_defined_secret,
+    let secrets_reader: Arc<Box<dyn SecretsReader>> =
+        Arc::new(Box::new(LocalSecretsReader::new(SecretsReaderConfig {
+            mount_path: match config.secrets_controller {
+                None | Some(SecretsControllerConfig::LocalFileSystem) => {
+                    let secrets_storage = config.data_directory.join("secrets");
+                    secrets_storage
+                }
+                Some(SecretsControllerConfig::Kubernetes {
+                    context: _,
+                    user_defined_secret: _,
                     user_defined_secret_mount_path,
-                    refresh_pod_name,
-                },
-            )
-            .await
-            .context("connecting to kubernetes")?,
-        )),
-    };
+                    refresh_pod_name: _,
+                }) => PathBuf::from(user_defined_secret_mount_path),
+            },
+        })));
 
     // Initialize dataflow controller.
     let storage_client = Box::new({

@@ -23,7 +23,7 @@ use tokio::io;
 use tracing::info;
 
 use mz_ore::retry::Retry;
-use mz_secrets::{SecretOp, SecretsController, SecretsReader};
+use mz_secrets::{SecretOp, SecretsController};
 
 const FIELD_MANAGER: &str = "materialized";
 const POD_ANNOTATION: &str = "materialized.materialize.cloud/secret-refresh";
@@ -174,17 +174,5 @@ impl SecretsController for KubernetesSecretsController {
         }
 
         return Ok(());
-    }
-}
-
-//TODO: this trait needs to be implemented appropriately for the KubernetesSecretsController
-//before this functionality will work in production
-impl SecretsReader for KubernetesSecretsController {
-    fn read(&self, _id: mz_repr::GlobalId) -> Result<Vec<u8>, Error> {
-        unreachable!()
-    }
-
-    fn canonical_path(&self, _id: mz_repr::GlobalId) -> Result<std::path::PathBuf, anyhow::Error> {
-        unreachable!()
     }
 }

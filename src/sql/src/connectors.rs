@@ -12,8 +12,7 @@ use std::sync::Arc;
 
 use lazy_static::lazy_static;
 use mz_repr::GlobalId;
-use mz_secrets::SecretsReader;
-use mz_secrets_filesystem::FilesystemSecretsController;
+use mz_secrets::{LocalSecretsReader, SecretsReader, SecretsReaderConfig};
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
     CsrConnector, CsrConnectorAvro, CsrConnectorProto, Format, KafkaConnector,
@@ -32,16 +31,20 @@ fn default_secrets_reader() -> Arc<Box<dyn SecretsReader>> {
     // This is a clumsy way of checking but based on the structop configuration in materialized/main.rs this looks accurate for detecting being in k8s
     match env::var("MZ_POD_NAME") {
         Ok(_) => {
-            // A Kubernetes compatible SecretsReader implementer should go here
+            //
             unreachable!()
         }
         Err(_) => {
-            let reader: Arc<Box<dyn SecretsReader>> = Arc::new(Box::new(
-                FilesystemSecretsController::new(match env::var("MZ_DATA_DIRECTORY") {
-                    Ok(d) => PathBuf::new().join(d),
-                    Err(_) => PathBuf::new().join("/share/mzdata/secrets"),
-                }),
-            ));
+            let reader: Arc<Box<dyn SecretsReader>> = Arc::new(Box::new(LocalSecretsReader::new(
+                match env::var("MZ_DATA_DIRECTORY") {
+                    Ok(d) => SecretsReaderConfig {
+                        mount_path: PathBuf::new().join(d),
+                    },
+                    Err(_) => SecretsReaderConfig {
+                        mount_path: PathBuf::new().join("/mzdata/secrets"),
+                    },
+                },
+            )));
             reader
         }
     }
