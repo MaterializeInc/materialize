@@ -238,14 +238,19 @@ impl Consensus for PostgresConsensus {
             tx.execute(&*q, &[&key, &new.seqno, &new.data]).await?
         };
 
+        tx.commit().await?;
+        drop(client);
+
         let ret = if result == 1 {
             Ok(())
         } else {
+            let mut client = self.client.lock().await;
+            let tx = self.tx(&mut client).await?;
             let current = self.head_tx(&tx, key).await?;
+            tx.commit().await?;
             Err(current)
         };
 
-        tx.commit().await?;
         Ok(ret)
     }
 
