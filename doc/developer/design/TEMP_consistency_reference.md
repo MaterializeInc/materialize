@@ -230,3 +230,28 @@ Informally we can use the transaction timestamps to provide a total ordering ove
   T2 is read-only.
 - Transaction T1 can be arbitrarily ordered with Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is
   read-only, and T2 is read-only.
+
+#### Strict Serializable
+
+See [https://jepsen.io/consistency/models/strict-serializable](https://jepsen.io/consistency/models/strict-serializable)
+for an in depth formal discussion of Strict Serializable. Strict Serializable is a combination of Serializable and
+Linearizable, which means that the total order formed by all transactions must be constrained by their real time
+occurrences. So if transaction t1 happened in real time before transaction t2, then t1 must be ordered before t2 in the
+total ordering.
+
+Operations that only include user tables, and include at least one user table, are currently Strict Serializable. This
+is accomplished by using a single global timestamp and a single thread in the coordinator to order operations. Writes
+happen at a timestamp larger than all previous operations. Reads happen at a timestamp equal to or larger than all
+previous operations.
+
+Operations that involve reading from objects over upstream data are not currently Strict Serializable. It is possible to
+read from a view at one timestamp and then later read from the same view at an earlier timestamp. Consider the following
+scenario:
+
+1. Client reads from view v1 that has an upper of `ts + 1` and a since of `ts - 10`. The read will happen at `ts`.
+2. Client reads from a join over v1 and view v2. v2 has an upper of `ts - 5` and some since less or equal to `ts - 6`.
+   The read will happen at `ts - 6`.
+
+Reference [Timestamp Selection](#Timestamp Selection) to see why these timestamps are selected. This is an obvious
+violation of strict serializability because the second read happens later than the first read in real time, but it is
+assigned an earlier timestamp.
