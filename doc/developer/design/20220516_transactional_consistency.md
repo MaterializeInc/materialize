@@ -15,6 +15,9 @@ LSN by a PostgresSQL source, etcetera)".
 This document does not take any opinion on whether the changes proposed should be the default behavior or an opt-in
 behavior via some configuration.
 
+Time units of second and millisecond are used below for convenience to reflect current implementations. However, this
+document does not take any opinion on what time units should be used for the design proposed.
+
 ## Goals
 
 The goal of this design document is to describe what changes are needed to provide Strict Serializability to the
@@ -93,11 +96,11 @@ Strict Serializability across restarts.
 
 Write read cycles (write followed by read followed by write followed by read etc) and consecutive writes currently cause
 the global timestamp to increase in an unbounded fashion. Instead, all writes across all sessions should be blocked and
-added to a queue. At the end of 1 millisecond all pending writes are sent in a batch to STORAGE and committed together
+added to a queue. At the end of X millisecond all pending writes are sent in a batch to STORAGE and committed together
 at the same timestamp. The commits are all assigned a timestamp 1 larger than the global timestamp and the global
 timestamp should be updated to this new value.
 
-This approach limits the per session write throughput to one write transaction per millisecond for user tables.
+This approach limits the per session write throughput to X write transaction per millisecond for user tables.
 
 This approach guarantees that when a write completes, the global timestamp is larger than or equal the timestamp of that
 write. Also, when a write completes, all previous reads were at a lower timestamp than the write.
@@ -152,10 +155,10 @@ that read.
   global timestamp on every write to a user table. However, this does not solve the problem if there are reads
   in-between the writes or if we read from a view that's ahead of the wall clock.
 - Hybrid Logical Timestamps are timestamps where the X most significant bits are used for the epoch and the Y least
-  significant bits are used for a counter. Every 1 millisecond the X bits are increased by 1 and the Y bytes are all
-  reset to 0. Every write increments the Y bits by 1. This would allow us to have 2^Y writes per millisecond per object,
-  without blocking any queries. Any write in excess of 2^Y per millisecond per object must be blocked until the next
-  millisecond. This way no object's `upper` would have to advance past the current global timestamp if the global
+  significant bits are used for a counter. Every clock tick the X bits are increased by 1 and the Y bytes are all
+  reset to 0. Every write increments the Y bits by 1. This would allow us to have 2^Y writes per clock tick per object,
+  without blocking any queries. Any write in excess of 2^Y per clock tick per object must be blocked until the next
+  clock tick. This way no object's `upper` would have to advance past the current global timestamp if the global
   timestamp tracked the wall clock. CockroachDB uses similar timestamps
   here: https://github.com/cockroachdb/cockroach/blob/711ccb5b8fba4e6a826ed6ba46c0fc346233a0f7/pkg/sql/sem/builtins/builtins.go#L8548-L8560
 
