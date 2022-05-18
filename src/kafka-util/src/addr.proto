@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+syntax = "proto3";
 
-//! Utilities for working with Kafka.
+package mz_kafka_util.addr;
 
-mod addr;
-
-pub mod admin;
-pub mod client;
-
-pub use addr::{KafkaAddrs, KafkaAddrsParseError, ProtoKafkaAddrs};
+message ProtoKafkaAddrs {
+    message ProtoKafkaAddr {
+        string host = 1;
+        uint32 port = 2;
+    }
+    repeated ProtoKafkaAddr addrs = 1;
+}

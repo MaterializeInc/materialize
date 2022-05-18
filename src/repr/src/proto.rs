@@ -185,6 +185,18 @@ impl ProtoRepr for u8 {
     }
 }
 
+impl ProtoRepr for u16 {
+    type Repr = u32;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        self as u32
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        u16::try_from(repr).map_err(TryFromProtoError::TryFromIntError)
+    }
+}
+
 impl ProtoRepr for u128 {
     type Repr = ProtoU128;
 
