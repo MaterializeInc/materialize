@@ -601,17 +601,21 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(security));
-                f.write_str(")");
+                if security.len() > 0 {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(security));
+                    f.write_str(")");
+                }
             }
             Self::CSR { registry, security } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY '");
                 f.write_node(&display::escape_single_quote_string(registry));
                 f.write_str("'");
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(security));
-                f.write_str(")");
+                if security.len() > 0 {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(security));
+                    f.write_str(")");
+                }
             }
         }
     }

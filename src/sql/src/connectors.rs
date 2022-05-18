@@ -154,7 +154,7 @@ fn populate_connector_for_format_with_secrets<T: AstInfo>(
                 },
         }) => {
             *connector = match connector {
-                CsrConnector::Inline { .. } => unreachable!(),
+                CsrConnector::Inline { .. } => return Ok(()),
                 CsrConnector::Reference { connector, .. } => populate_csr_connector_with_secrets(
                     connector,
                     catalog,
@@ -168,7 +168,7 @@ fn populate_connector_for_format_with_secrets<T: AstInfo>(
         }) => {
             let name = match connector {
                 CsrConnector::Reference { connector, .. } => connector,
-                _ => unreachable!(),
+                CsrConnector::Inline { .. } => return Ok(()),
             };
             *connector = populate_csr_connector_with_secrets(
                 &name,

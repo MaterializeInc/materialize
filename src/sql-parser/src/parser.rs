@@ -1906,7 +1906,11 @@ impl<'a> Parser<'a> {
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
-                let security = self.parse_with_options(false)?;
+                let security = if self.peek_token() == Some(Token::LParen) {
+                    self.parse_with_options(false)?
+                } else {
+                    vec![]
+                };
                 CreateConnector::CSR { registry, security }
             }
             _ => unreachable!(),
