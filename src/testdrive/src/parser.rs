@@ -30,6 +30,8 @@ pub enum Command {
     Builtin(BuiltinCommand),
     Sql(SqlCommand),
     FailSql(FailSqlCommand),
+    SendSql(SqlCommand),
+    ReapSql(ReapSqlCommand)
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +66,10 @@ pub struct FailSqlCommand {
 }
 
 #[derive(Debug, Clone)]
+pub struct ReapSqlCommand {
+}
+
+#[derive(Debug, Clone)]
 pub enum SqlErrorMatchType {
     Contains,
     Exact,
@@ -79,6 +85,8 @@ pub(crate) fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, Pos
             Some('>') => Command::Sql(parse_sql(line_reader)?),
             Some('?') => Command::Sql(parse_explain_sql(line_reader)?),
             Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
+            Some('S') => Command::SendSql(parse_sql(line_reader)?),
+            Some('R') => Command::ReapSql(parse_reap_sql(line_reader)?), 
             Some('#') => {
                 // Comment line.
                 line_reader.next();
@@ -267,6 +275,11 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
     })
 }
 
+fn parse_reap_sql(line_reader: &mut LineReader) -> Result<ReapSqlCommand, PosError> {
+    Ok(ReapSqlCommand {
+    })
+}
+
 fn split_line(pos: usize, line: &str) -> Result<Vec<String>, PosError> {
     let mut out = Vec::new();
     let mut field = String::new();
@@ -328,7 +341,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') | Some('?') => return None,
+            Some('$') | Some('>') | Some('!') | Some('?') | Some('S') | Some('R') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -428,7 +441,7 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn is_sigil(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!') | Some('?'))
+    matches!(c, Some('$') | Some('>') | Some('!') | Some('?') | Some('R') | Some('S'))
 }
 
 struct BuiltinReader<'a> {

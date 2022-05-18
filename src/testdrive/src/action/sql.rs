@@ -519,6 +519,80 @@ impl FailSqlAction {
     }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+pub struct SendSqlAction {
+    query: String,
+}
+
+pub fn build_send_sql(mut cmd: SqlCommand) -> Result<SendSqlAction, anyhow::Error> {
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
+        .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
+    if stmts.len() != 1 {
+        bail!("expected one statement, but got {}", stmts.len());
+    }
+    Ok(SendSqlAction {
+        query: cmd.query
+    })
+}
+
+#[async_trait]
+impl Action for SendSqlAction {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+        state.pgclient_futures.insert("foo".to_string(), Box::pin(async move { state.pgclient.execute(self.query.as_str(), &[]).await }));
+
+        Ok(ControlFlow::Continue)
+    }
+}
+
+
+
+
+
+
+pub struct ReapSqlAction {
+}
+
+pub fn build_reap_sql() -> Result<ReapSqlAction, anyhow::Error> {
+    Ok(ReapSqlAction {})
+}
+
+#[async_trait]
+impl Action for ReapSqlAction {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+//        let &mut pgclient_future = state.pgclient_futures.get_mut("foo").unwrap();
+//        pgclient_future.await?;
+
+        Ok(ControlFlow::Continue)
+    }
+}
+
+
+
+
 pub fn print_query(query: &str) {
     println!("> {}", query);
 }
