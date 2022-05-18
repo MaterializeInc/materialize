@@ -948,7 +948,7 @@ write frontier:[            0]\n",
 fn test_linearizability() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    let timestamp = Arc::new(Mutex::new(0));
+    let timestamp = Arc::new(Mutex::new(1_000));
     let now = {
         let timestamp = Arc::clone(&timestamp);
         NowFn::from(move || *timestamp.lock().unwrap())
