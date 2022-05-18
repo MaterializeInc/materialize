@@ -24,14 +24,17 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use timely::progress::{frontier::MutableAntichain, Antichain};
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::Antichain;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::client::Peek;
 use mz_repr::GlobalId;
 
+use crate::client::Peek;
+
 use super::PeekResponse;
+use super::ReplicaId;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
 
@@ -91,7 +94,7 @@ pub fn spawn_client_task<
 pub struct ActiveReplication<T> {
     /// Handles to the replicas themselves.
     replicas: HashMap<
-        String,
+        ReplicaId,
         (
             UnboundedSender<ComputeCommand<T>>,
             UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
@@ -102,7 +105,7 @@ pub struct ActiveReplication<T> {
     /// Reported frontier of each in-progress tail.
     tails: HashMap<GlobalId, Antichain<T>>,
     /// Frontier information, both unioned across all replicas and from each individual replica.
-    uppers: HashMap<GlobalId, (Antichain<T>, HashMap<String, MutableAntichain<T>>)>,
+    uppers: HashMap<GlobalId, (Antichain<T>, HashMap<ReplicaId, MutableAntichain<T>>)>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: crate::client::ComputeCommandHistory<T>,
     /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
@@ -135,13 +138,9 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub async fn add_replica<C: ComputeClient<T> + 'static>(
-        &mut self,
-        identifier: String,
-        client: C,
-    ) {
+    pub async fn add_replica<C: ComputeClient<T> + 'static>(&mut self, id: ReplicaId, client: C) {
         for (_, frontiers) in self.uppers.values_mut() {
-            frontiers.insert(identifier.clone(), {
+            frontiers.insert(id, {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
                 frontier.update_iter(Some((T::minimum(), 1)));
                 frontier
@@ -149,31 +148,30 @@ where
         }
         let (cmd_tx, resp_rx) =
             spawn_client_task(client, || "ActiveReplication client message pump");
-        self.replicas
-            .insert(identifier.clone(), (cmd_tx, resp_rx.into()));
-        self.hydrate_replica(&identifier);
+        self.replicas.insert(id, (cmd_tx, resp_rx.into()));
+        self.hydrate_replica(id);
     }
 
-    pub fn get_replica_identifiers(&self) -> impl Iterator<Item = &String> {
-        self.replicas.keys()
+    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.replicas.keys().copied()
     }
 
     /// Remove a replica by its identifier.
-    pub fn remove_replica(&mut self, id: &str) {
-        self.replicas.remove(id);
+    pub fn remove_replica(&mut self, id: ReplicaId) {
+        self.replicas.remove(&id);
         for (_frontier, frontiers) in self.uppers.iter_mut() {
-            frontiers.1.remove(id);
+            frontiers.1.remove(&id);
         }
     }
 
     /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
-    fn hydrate_replica(&mut self, replica_id: &str) {
+    fn hydrate_replica(&mut self, replica_id: ReplicaId) {
         // Zero out frontiers maintained by this replica.
         for (_id, (_, frontiers)) in self.uppers.iter_mut() {
-            *frontiers.get_mut(replica_id).unwrap() =
+            *frontiers.get_mut(&replica_id).unwrap() =
                 timely::progress::frontier::MutableAntichain::new();
             frontiers
-                .get_mut(replica_id)
+                .get_mut(&replica_id)
                 .unwrap()
                 .update_iter(Some((T::minimum(), 1)));
         }
@@ -181,7 +179,7 @@ where
         self.last_command_count = self.history.reduce(&self.peeks);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let (cmd_tx, _) = self.replicas.get_mut(replica_id).unwrap();
+        let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.history.iter() {
             let mut command = command.clone();
             // Replace dataflow identifiers with new unique ids.
@@ -390,7 +388,7 @@ where
                 }
                 drop(stream);
 
-                if let Some(replica_id) = &errored_replica {
+                if let Some(replica_id) = errored_replica {
                     tracing::warn!("Rehydrating replica {:?}", replica_id);
                     self.hydrate_replica(replica_id);
                 }

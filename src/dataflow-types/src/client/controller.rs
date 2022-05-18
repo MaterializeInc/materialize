@@ -133,9 +133,6 @@ impl Default for ClusterReplicaSizeMap {
 }
 
 /// Deterministically generates replica names based on inputs.
-///
-/// This function needs to be publicly accessible so other layers can ensure we
-/// do not attempt to create multiple replicas with the same name.
 fn generate_replica_service_name(instance_id: ComputeInstanceId, replica_id: ReplicaId) -> String {
     format!("cluster-{instance_id}-replica-{replica_id}")
 }
@@ -191,15 +188,13 @@ where
             "call Controller::create_instance before calling add_replica_to_instance"
         );
 
-        let replica_name = generate_replica_service_name(instance_id, replica_id);
-
         // Add replicas backing that instance.
         match config {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
                 let client = RemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                compute_instance.add_replica(replica_name, client).await;
+                compute_instance.add_replica(replica_id, client).await;
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config,
@@ -212,13 +207,14 @@ where
                     linger,
                 } = &self.orchestrator;
 
+                let service_name = generate_replica_service_name(instance_id, replica_id);
                 let default_listen_host = orchestrator.listen_host();
 
                 let service =
                     orchestrator
                         .namespace("compute")
                         .ensure_service(
-                            &replica_name,
+                            &service_name,
                             ServiceConfig {
                                 image: computed_image.clone(),
                                 args: &|hosts_ports, my_ports, my_index| {
@@ -276,7 +272,7 @@ where
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
                     .unwrap()
-                    .add_replica(replica_name, client)
+                    .add_replica(replica_id, client)
                     .await;
             }
         }
@@ -292,20 +288,20 @@ where
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        let replica_name = generate_replica_service_name(instance_id, replica_id);
         if let ConcreteComputeInstanceReplicaConfig::Managed {
             size_config: _size_config,
             availability_zone: _az,
         } = config
         {
             let OrchestratorConfig { orchestrator, .. } = &self.orchestrator;
+            let service_name = generate_replica_service_name(instance_id, replica_id);
             orchestrator
                 .namespace("compute")
-                .drop_service(&replica_name)
+                .drop_service(&service_name)
                 .await?;
         }
         let mut compute = self.compute_mut(instance_id).unwrap();
-        compute.remove_replica(&replica_name);
+        compute.remove_replica(replica_id);
         Ok(())
     }
 
@@ -319,7 +315,7 @@ where
     ) -> Result<(), anyhow::Error> {
         if let Some(mut compute) = self.compute.remove(&instance) {
             assert!(
-                compute.client.get_replica_identifiers().next().is_none(),
+                compute.client.get_replica_ids().next().is_none(),
                 "cannot drop instances with provisioned replicas; call `drop_replica` first"
             );
             self.orchestrator
