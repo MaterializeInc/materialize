@@ -2994,20 +2994,19 @@ pub fn plan_create_connector(
             .id())
     }
 
-    let mut resolve_and_track_option =
-        |source_map: &mut BTreeMap<String, Option<&WithOptionValue<Aug>>>,
-         option_key: &str|
-         -> Result<Option<String>, anyhow::Error> {
-            Ok(match source_map.remove(option_key) {
-                Some(Some(WithOptionValue::ObjectName(ref name))) => {
-                    let id = name_to_id(scx, name)?;
-                    depends_on.push(id);
-                    Some(id.to_string())
-                }
-                None => None,
-                _ => bail!("invalid {}", option_key),
-            })
-        };
+    let mut resolve_and_track_option = |source_map: &mut BTreeMap<String, WithOptionValue<Aug>>,
+                                        option_key: &str|
+     -> Result<Option<String>, anyhow::Error> {
+        Ok(match source_map.remove(option_key) {
+            Some(WithOptionValue::ObjectName(ref name)) => {
+                let id = name_to_id(scx, name)?;
+                depends_on.push(id);
+                Some(id.to_string())
+            }
+            None => None,
+            _ => bail!("Parameter {} expects a SECRET by name", option_key),
+        })
+    };
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
     let CreateConnectorStatement {
@@ -3017,17 +3016,27 @@ pub fn plan_create_connector(
     } = stmt;
     let connector_inner = match connector {
         CreateConnector::Kafka { broker, security } => {
-            let mut opts_map = BTreeMap::from_iter(
-                security
-                    .iter()
-                    .map(|o| (o.key.to_string().to_uppercase(), o.value.as_ref())),
-            );
+            let mut opts_map = BTreeMap::from_iter(security.iter().filter_map(|o| {
+                if let Some(val) = o.value.clone() {
+                    Some((o.key.to_string().to_uppercase(), val))
+                } else {
+                    None
+                }
+            }));
             if opts_map.len() < security.len() {
-                bail!("CONNECTOR configuration option specified more than once");
+                let dupes = security
+                    .iter()
+                    .skip(opts_map.len())
+                    .map(|e| e.key.to_string())
+                    .collect::<Vec<String>>();
+                bail!(
+                    "CONNECTOR configuration option specified more than once: {}",
+                    dupes.join(", ")
+                );
             }
             let security = match opts_map.remove("SECURITY")
             {
-                Some(Some(WithOptionValue::Value(Value::String(protocol)))) => match protocol.as_str() {
+                Some(WithOptionValue::Value(Value::String(protocol))) => match protocol.as_str() {
                     "SSL" => {
                         let key = resolve_and_track_option(&mut opts_map, "KEY")?;
                         let certificate = resolve_and_track_option( &mut opts_map, "CERTIFICATE")?;
@@ -3036,14 +3045,14 @@ pub fn plan_create_connector(
                         KafkaSecurityOptions::SSL { key, certificate, passphrase, authority }
                     }
                     "SASL-SSL" => {
-                        let mechanism = opts_map.remove("MECHANISM").expect("MECHANISM is expected if SECURITY = SASL-SSL").expect("MECHANISM must have a value if SECURITY is SASL-SSL").to_string();
-                        let username = opts_map.remove("USERNAME").expect("USERNAME is expected if SECURITY = SASL-SSL").expect("USERNAME must have a value if SECURITY is SASL-SSL").to_string();
+                        let mechanism = opts_map.remove("MECHANISM").expect("MECHANISM is expected if SECURITY = SASL-SSL").to_string();
+                        let username = opts_map.remove("USERNAME").expect("USERNAME is expected if SECURITY = SASL-SSL").to_string();
                         let password = resolve_and_track_option( &mut opts_map, "PASSWORD")?.expect("PASSWORD is required if SECURITY = SASL-SSL");
                         KafkaSecurityOptions::SASL { mechanism, ssl: true, username, password }
                     }
                     "SASL-PLAIN" => {
-                        let mechanism = opts_map.get("MECHANISM").expect("MECHANISM is expected if SECURITY = SASL-PLAIN").expect("MECHANISM is required if SECURITY = SASL-PLAIN").to_string();
-                        let username = opts_map.get("USERNAME").expect("USERNAME is expected if SECURITY = SASL-PLAIN").expect("USERNAME is required if SECURITY = SASL-PLAIN").to_string();
+                        let mechanism = opts_map.get("MECHANISM").expect("MECHANISM is expected if SECURITY = SASL-PLAIN").to_string();
+                        let username = opts_map.get("USERNAME").expect("USERNAME is expected if SECURITY = SASL-PLAIN").to_string();
                         let password = resolve_and_track_option(&mut opts_map, "PASSWORD")?.expect("PASSWORD is required if SECURITY = SASL-PLAIN");
                         KafkaSecurityOptions::SASL { mechanism, ssl: false, username, password }
                     }
@@ -3067,34 +3076,35 @@ pub fn plan_create_connector(
             }
         }
         CreateConnector::CSR { registry, security } => {
-            let mut opts_map = BTreeMap::from_iter(
-                security
-                    .iter()
-                    .map(|o| (o.key.to_string().to_uppercase(), o.value.as_ref())),
-            );
+            let mut opts_map = BTreeMap::from_iter(security.iter().filter_map(|o| {
+                if let Some(val) = o.value.clone() {
+                    Some((o.key.to_string().to_uppercase(), val))
+                } else {
+                    None
+                }
+            }));
             let password = resolve_and_track_option(&mut opts_map, "PASSWORD")?;
             let authority = resolve_and_track_option(&mut opts_map, "AUTHORITY")?;
             let certificate = resolve_and_track_option(&mut opts_map, "CERTIFICATE")?;
             let key = resolve_and_track_option(&mut opts_map, "KEY")?;
-            let username =
-                if let Some(Some(WithOptionValue::Value(val))) = opts_map.remove("USERNAME") {
-                    // For some reason this sometimes comes in single quoted, if so then strip both ends
-                    let username = val.to_string();
-                    if username.starts_with('\'') && username.ends_with('\'') {
-                        Some(
-                            username
-                                .strip_prefix('\'')
-                                .unwrap()
-                                .strip_suffix('\'')
-                                .unwrap()
-                                .to_string(),
-                        )
-                    } else {
-                        Some(username)
-                    }
+            let username = if let Some(WithOptionValue::Value(val)) = opts_map.remove("USERNAME") {
+                // For some reason this sometimes comes in single quoted, if so then strip both ends
+                let username = val.to_string();
+                if username.starts_with('\'') && username.ends_with('\'') {
+                    Some(
+                        username
+                            .strip_prefix('\'')
+                            .unwrap()
+                            .strip_suffix('\'')
+                            .unwrap()
+                            .to_string(),
+                    )
                 } else {
-                    None
-                };
+                    Some(username)
+                }
+            } else {
+                None
+            };
             if !opts_map.is_empty() {
                 bail!(
                     "invalid config: unused options: {}",

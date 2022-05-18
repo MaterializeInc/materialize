@@ -2103,7 +2103,6 @@ pub mod sources {
             &self,
             secrets_reader: Arc<Box<dyn SecretsReader>>,
         ) -> Result<BTreeMap<String, String>, anyhow::Error> {
-            const SECURITY_PROTOCOL: &str = "security.protocol";
             let mut with_options = BTreeMap::new();
             let fill_secret_value = |options: &mut BTreeMap<String, String>,
                                      field: &Option<String>,
@@ -2135,7 +2134,7 @@ pub mod sources {
             match self {
                 ConnectorInner::Kafka { security, .. } => match security {
                     KafkaSecurityOptions::PLAINTEXT => {
-                        with_options.insert(SECURITY_PROTOCOL.into(), "PLAINTEXT".into());
+                        with_options.insert("security.protocol".into(), "PLAINTEXT".into());
                     }
                     KafkaSecurityOptions::SSL {
                         key,
@@ -2143,7 +2142,7 @@ pub mod sources {
                         passphrase,
                         authority,
                     } => {
-                        with_options.insert(SECURITY_PROTOCOL.into(), "SSL".into());
+                        with_options.insert("security.protocol".into(), "SSL".into());
                         fill_secret_path(&mut with_options, key, "ssl.key.location")?;
                         fill_secret_path(
                             &mut with_options,
@@ -2160,7 +2159,7 @@ pub mod sources {
                         password,
                     } => {
                         with_options.insert(
-                            SECURITY_PROTOCOL.to_string(),
+                            "security.protocol".into(),
                             if *ssl {
                                 "SASL_SSL".to_string()
                             } else {
