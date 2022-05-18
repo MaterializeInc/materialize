@@ -138,10 +138,24 @@ impl PostgresConsensus {
         let tx = client.transaction().await?;
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
-        Ok(PostgresConsensus {
+        let ret = PostgresConsensus {
             client: Arc::new(Mutex::new(client)),
             _handle: handle,
-        })
+        };
+
+        ret.check_txn_isolation_level().await?;
+        Ok(ret)
+    }
+
+    /// Sanity check that the isolation level is indeed serializable
+    pub async fn check_txn_isolation_level(&self) -> Result<(), ExternalError> {
+        let q = "SHOW TRANSACTION ISOLATION LEVEL;";
+        let client = self.client.lock().await;
+        let row = client.query_one(&*q, &[]).await?;
+        let transaction_isolation: String = row.try_get("transaction_isolation")?;
+        assert_eq!(transaction_isolation, "serializable".to_owned());
+
+        Ok(())
     }
 }
 
@@ -153,7 +167,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
-
+        self.check_txn_isolation_level().await?;
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
         let client = self.client.lock().await;
@@ -177,6 +191,7 @@ impl Consensus for PostgresConsensus {
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
         // TODO: properly use the deadline argument.
+        self.check_txn_isolation_level().await?;
 
         if let Some(expected) = expected {
             if new.seqno <= expected {
@@ -242,6 +257,7 @@ impl Consensus for PostgresConsensus {
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
+        self.check_txn_isolation_level().await?;
 
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
@@ -272,6 +288,7 @@ impl Consensus for PostgresConsensus {
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
+        self.check_txn_isolation_level().await?;
         let q = "DELETE FROM consensus
                 WHERE shard = $1 AND sequence_number < $2 AND
                 EXISTS(
