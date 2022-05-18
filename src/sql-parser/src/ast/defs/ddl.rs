@@ -197,7 +197,7 @@ impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
         }
 
         if !&self.with_options.is_empty() {
-            f.write_str(" WITH (");
+            f.write_str(" (");
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
@@ -579,77 +579,44 @@ impl_display!(KafkaSecurityOptions);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]
-pub enum CreateConnector {
+pub enum CreateConnector<T: AstInfo> {
     Kafka {
         /// Kafka broker(s) as hostname:post\[,host2:port2\]
         broker: String,
-        security: KafkaSecurityOptions,
+        // security: KafkaSecurityOptions,
+        security: Vec<WithOption<T>>,
     },
     CSR {
         /// Full URI of the schema registry
         registry: String,
-        /// Optional username for HTTP BASIC Auth
-        username: Option<String>,
-        /// Optional password for auth supplied through a Secret in the catalog
-        password: Option<UnresolvedObjectName>,
-        // Optional certificate authority for validating
-        authority: Option<UnresolvedObjectName>,
-        // Optional client certificate for authentication
-        certificate: Option<UnresolvedObjectName>,
-        // Optional client private key for certificate authentication
-        key: Option<UnresolvedObjectName>,
+        // Options for authentication and transport security
+        security: Vec<WithOption<T>>,
     },
 }
 
-impl AstDisplay for CreateConnector {
+impl<T: AstInfo> AstDisplay for CreateConnector<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Kafka { broker, security } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
-                if *security != KafkaSecurityOptions::PLAINTEXT {
-                    f.write_str(" SECURITY");
-                    f.write_node(security);
-                }
+                f.write_str(" (");
+                f.write_node(&display::comma_separated(security));
+                f.write_str(")");
             }
-            Self::CSR {
-                registry,
-                username,
-                password,
-                authority,
-                certificate,
-                key,
-            } => {
+            Self::CSR { registry, security } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY '");
                 f.write_node(&display::escape_single_quote_string(registry));
                 f.write_str("'");
-                if let Some(username) = username {
-                    f.write_str(" USERNAME '");
-                    f.write_node(&display::escape_single_quote_string(username));
-                    f.write_str("'");
-                }
-                if let Some(password) = password {
-                    f.write_str(" PASSWORD ");
-                    f.write_node(password);
-                }
-                if let Some(authority) = authority {
-                    f.write_str(" AUTHORITY ");
-                    f.write_node(authority);
-                }
-                if let Some(certificate) = certificate {
-                    f.write_str(" CERTIFICATE ");
-                    f.write_node(certificate);
-                }
-                if let Some(key) = key {
-                    f.write_str(" KEY ");
-                    f.write_node(key);
-                }
+                f.write_str(" (");
+                f.write_node(&display::comma_separated(security));
+                f.write_str(")");
             }
         }
     }
 }
-impl_display!(CreateConnector);
+impl_display_t!(CreateConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnector {

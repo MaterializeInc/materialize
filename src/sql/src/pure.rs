@@ -103,6 +103,7 @@ pub async fn purify_create_source(
                 // Verify that the provided security options are valid and then test them.
                 kafka_util::extract_config(&mut with_options_map)?
             };
+            info!("purify_create_source config_options: {:?}", config_options);
             let consumer = kafka_util::create_consumer(
                 &broker,
                 &topic,
@@ -200,6 +201,10 @@ async fn purify_source_format(
     {
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
+    info!(
+        "purify_source_format connector_options: {:?}      with_options: {:?}",
+        connector_options, with_options
+    );
 
     // For backwards compatibility, using ENVELOPE UPSERT with a bare FORMAT
     // BYTES or FORMAT TEXT uses the specified format for both the key and the
@@ -252,37 +257,40 @@ async fn purify_source_format_single(
     with_options: &Vec<WithOption<Raw>>,
 ) -> Result<(), anyhow::Error> {
     match format {
-        Format::Avro(schema) => match schema {
-            AvroSchema::Csr { csr_connector } => {
-                purify_csr_connector_avro(connector, csr_connector, envelope, connector_options)
-                    .await?
-            }
-            AvroSchema::InlineSchema {
-                schema: mz_sql_parser::ast::Schema::File(path),
-                with_options,
-            } => {
-                let file_schema = tokio::fs::read_to_string(path).await?;
-                // Explicitly inject `confluent_wire_format = true`, if unset.
-                // This, in combination with the catalog migration that sets
-                // this option to true for sources created before this option
-                // existed, will make it easy to flip the default to `false`
-                // in the future, if we like.
-                if !with_options
-                    .iter()
-                    .any(|option| option.key.as_str() == "confluent_wire_format")
-                {
-                    with_options.push(WithOption {
-                        key: Ident::new("confluent_wire_format"),
-                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
-                    });
+        Format::Avro(schema) => {
+            match schema {
+                AvroSchema::Csr { csr_connector } => {
+                    info!("purify_source_format_single avro csr_connector: {:?}, connector_options: {:?}", csr_connector, connector_options);
+                    purify_csr_connector_avro(connector, csr_connector, envelope, connector_options)
+                        .await?
                 }
-                *schema = AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema::Inline(file_schema),
-                    with_options: with_options.clone(),
-                };
+                AvroSchema::InlineSchema {
+                    schema: mz_sql_parser::ast::Schema::File(path),
+                    with_options,
+                } => {
+                    let file_schema = tokio::fs::read_to_string(path).await?;
+                    // Explicitly inject `confluent_wire_format = true`, if unset.
+                    // This, in combination with the catalog migration that sets
+                    // this option to true for sources created before this option
+                    // existed, will make it easy to flip the default to `false`
+                    // in the future, if we like.
+                    if !with_options
+                        .iter()
+                        .any(|option| option.key.as_str() == "confluent_wire_format")
+                    {
+                        with_options.push(WithOption {
+                            key: Ident::new("confluent_wire_format"),
+                            value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                        });
+                    }
+                    *schema = AvroSchema::InlineSchema {
+                        schema: mz_sql_parser::ast::Schema::Inline(file_schema),
+                        with_options: with_options.clone(),
+                    };
+                }
+                _ => {}
             }
-            _ => {}
-        },
+        }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connector } => {
                 purify_csr_connector_proto(connector, csr_connector, envelope, with_options)
@@ -415,7 +423,6 @@ async fn purify_csr_connector_avro(
             } else {
                 normalize::options(ccsr_options)
             };
-
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(
                 url,
@@ -462,8 +469,8 @@ async fn get_remote_csr_schema(
         .await
         .with_context(|| {
             format!(
-                "fetching latest schema for subject '{}' from registry",
-                value_schema_name
+                "fetching latest schema for subject '{}' from registry using config {:?}",
+                value_schema_name, schema_registry_config
             )
         })?;
     let subject = format!("{}-key", topic);

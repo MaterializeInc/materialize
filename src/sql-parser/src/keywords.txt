@@ -33,7 +33,7 @@ Array
 As
 Asc
 At
-Authority
+# Authority
 Availability
 Avro
 Begin
@@ -50,7 +50,7 @@ Bytes
 Cascade
 Case
 Cast
-Certificate
+# Certificate
 Chain
 Channel
 Char
@@ -178,7 +178,7 @@ Map
 Matching
 Materialize
 Materialized
-Mechanism
+# Mechanism
 Message
 Minute
 Minutes
@@ -210,10 +210,10 @@ Ordinality
 Outer
 Over
 Partition
-Password
+# Password
 Persist
 Physical
-Plain
+# Plain
 Plan
 Plans
 Position
@@ -249,18 +249,18 @@ Rollback
 Row
 Rows
 S3
-Sasl
-SaslSsl
+# Sasl
+# SaslSsl
 Scan
 Schema
 Schemas
-ScramSha256
-ScramSha512
+# ScramSha256
+# ScramSha512
 Second
 Seconds
 Secret
 Secrets
-Security
+# Security
 Seed
 Select
 Sequences
@@ -279,7 +279,7 @@ Some
 Source
 Sources
 Sqs
-Ssl
+# Ssl
 Start
 Stdin
 Stdout
@@ -315,7 +315,7 @@ Unknown
 Update
 Upsert
 User
-Username
+# Username
 Users
 Using
 Value

@@ -1896,82 +1896,18 @@ impl<'a> Parser<'a> {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
-                let security = if self.peek_keyword(SECURITY) {
-                    self.expect_keyword(SECURITY)?;
-                    self.parse_kafka_security()?
+                let security = if self.peek_token() == Some(Token::LParen) {
+                    self.parse_with_options(false)?
                 } else {
-                    KafkaSecurityOptions::PLAINTEXT
+                    vec![]
                 };
                 CreateConnector::Kafka { broker, security }
             }
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
-                let (mut username, mut password, mut authority, mut key, mut certificate) =
-                    (None, None, None, None, None);
-                while let Ok(keyword) =
-                    self.expect_one_of_keywords(&[USERNAME, PASSWORD, AUTHORITY, CERTIFICATE, KEY])
-                {
-                    match keyword {
-                        Keyword::Username => {
-                            if username.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property USERNAME more than once".into(),
-                                ))?;
-                            }
-                            username = Some(self.parse_literal_string()?);
-                        }
-                        Keyword::Password => {
-                            if password.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property PASSWORD more than once".into(),
-                                ))?;
-                            }
-                            password = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Key => {
-                            if key.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property KEY more than once".into(),
-                                ))?;
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            key = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Certificate => {
-                            if certificate.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property CERTIFICATE more than once".into(),
-                                ))?;
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            certificate = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Authority => {
-                            if authority.is_some() {
-                                Err(self.error(
-                                    self.peek_prev_pos(),
-                                    "Cannot set property AUTHORITY more than once".into(),
-                                ))?;
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            authority = Some(self.parse_object_name()?);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                CreateConnector::CSR {
-                    registry,
-                    username,
-                    password,
-                    authority,
-                    key,
-                    certificate,
-                }
+                let security = self.parse_with_options(false)?;
+                CreateConnector::CSR { registry, security }
             }
             _ => unreachable!(),
         };
@@ -1980,99 +1916,6 @@ impl<'a> Parser<'a> {
             connector,
             if_not_exists,
         }))
-    }
-
-    fn parse_kafka_security(&mut self) -> Result<KafkaSecurityOptions, ParserError> {
-        Ok(match self.expect_one_of_keywords(&[SSL, SASL, SASLSSL])? {
-            Keyword::Ssl => {
-                let (mut key, mut certificate, mut password, mut authority) =
-                    (None, None, None, None);
-                while let Ok(keyword) =
-                    self.expect_one_of_keywords(&[KEY, CERTIFICATE, PASSWORD, AUTHORITY])
-                {
-                    match keyword {
-                        Keyword::Key => {
-                            if key.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property KEY twice!".into(),
-                                );
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            key = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Certificate => {
-                            if certificate.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property CERTIFICATE twice!".into(),
-                                );
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            certificate = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Password => {
-                            if password.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property PASSWORD twice!".into(),
-                                );
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            password = Some(self.parse_object_name()?);
-                        }
-                        Keyword::Authority => {
-                            if authority.is_some() {
-                                self.error(
-                                    self.peek_pos(),
-                                    "Cannot set property AUTHORITY twice!".into(),
-                                );
-                            }
-                            let _ = self.consume_token(&Token::Eq);
-                            authority = Some(self.parse_object_name()?);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                KafkaSecurityOptions::SSL {
-                    key,
-                    certificate,
-                    password,
-                    authority,
-                }
-            }
-            Keyword::Sasl => self.parse_kafka_sasl(false)?,
-            Keyword::SaslSsl => self.parse_kafka_sasl(true)?,
-            _ => unreachable!(),
-        })
-    }
-
-    fn parse_kafka_sasl(&mut self, ssl: bool) -> Result<KafkaSecurityOptions, ParserError> {
-        self.expect_keyword(MECHANISM)?;
-        let mechanism = match self.expect_one_of_keywords(&[PLAIN, SCRAMSHA256, SCRAMSHA512])? {
-            Keyword::Plain => "PLAIN".to_string(),
-            Keyword::ScramSha256 => "SCRAM-SHA-256".to_string(),
-            Keyword::ScramSha512 => "SCRAM-SHA-512".to_string(),
-            _ => unreachable!(),
-        };
-        let (mut username, mut password) = ("".to_string(), UnresolvedObjectName::unqualified(""));
-        while let Ok(keyword) = self.expect_one_of_keywords(&[USERNAME, PASSWORD]) {
-            match keyword {
-                Keyword::Username => {
-                    username = self.parse_literal_string()?;
-                }
-                Keyword::Password => {
-                    password = self.parse_object_name()?;
-                }
-                _ => unreachable!(),
-            }
-        }
-        Ok(KafkaSecurityOptions::SASL {
-            mechanism,
-            username,
-            password,
-            ssl,
-        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {

@@ -27,9 +27,9 @@ use mz_sql_parser::ast::{
     AstInfo, CreateConnector, CreateConnectorStatement, CreateIndexStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
     CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, KafkaConnector, KafkaSecurityOptions, KafkaSourceConnector, Op, Query,
-    Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOption, WithOptionValue,
+    IfExistsBehavior, KafkaConnector, KafkaSourceConnector, Op, Query, Statement, TableFactor,
+    TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOption,
+    WithOptionValue,
 };
 
 use crate::names::{
@@ -487,51 +487,40 @@ pub fn create_statement(
                 // Because failing to exhaustively resolve names leads to catalog corruption
                 // we choose to explicitly ignore the values that do not require normalization
                 CreateConnector::CSR {
-                    password,
                     registry: _registry,
-                    username: _username,
-                    certificate,
-                    key,
-                    authority,
+                    security,
                 } => {
-                    if let Some(inner) = password {
-                        *password = Some(allocate_name(inner)?);
-                    };
-                    if let Some(inner) = authority {
-                        *authority = Some(allocate_name(inner)?);
-                    }
-                    if let Some(inner) = certificate {
-                        *certificate = Some(allocate_name(inner)?);
-                    }
-                    if let Some(inner) = key {
-                        *key = Some(allocate_name(inner)?);
-                    }
-                }
-                CreateConnector::Kafka { security, .. } => match security {
-                    KafkaSecurityOptions::SSL {
-                        key,
-                        certificate,
-                        password: passphrase,
-                        authority,
-                    } => {
-                        if let Some(inner) = key {
-                            *key = Some(allocate_name(inner)?);
-                        };
-                        if let Some(inner) = certificate {
-                            *certificate = Some(allocate_name(inner)?);
-                        };
-                        if let Some(inner) = passphrase {
-                            *passphrase = Some(allocate_name(inner)?);
-                        };
-                        if let Some(inner) = authority {
-                            *authority = Some(allocate_name(inner)?);
+                    let mut resolved = vec![];
+                    for elem in security.clone() {
+                        if let Some(WithOptionValue::ObjectName(ref name)) = elem.value {
+                            resolved.push(WithOption {
+                                key: elem.key.clone(),
+                                value: Some(WithOptionValue::ObjectName(
+                                    allocate_name(name).unwrap(),
+                                )),
+                            });
+                        } else {
+                            resolved.push(elem.to_owned());
                         }
                     }
-                    KafkaSecurityOptions::SASL { password, .. } => {
-                        *password = allocate_name(password)?;
+                    *security = resolved;
+                }
+                CreateConnector::Kafka { security, .. } => {
+                    let mut resolved = vec![];
+                    for elem in security.clone() {
+                        if let Some(WithOptionValue::ObjectName(ref name)) = elem.value {
+                            resolved.push(WithOption {
+                                key: elem.key.clone(),
+                                value: Some(WithOptionValue::ObjectName(
+                                    allocate_name(name).unwrap(),
+                                )),
+                            });
+                        } else {
+                            resolved.push(elem.to_owned());
+                        }
                     }
-                    KafkaSecurityOptions::PLAINTEXT => {}
-                },
+                    *security = resolved;
+                }
             }
         }
         _ => unreachable!(),

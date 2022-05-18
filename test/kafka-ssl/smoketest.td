@@ -154,21 +154,25 @@ contains:self signed certificate in certificate chain
 # Ensure that connectors work with SSL basic_auth
 > CREATE CONNECTOR kafka_ssl
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
-  SECURITY SSL
-  CERTIFICATE client_cert
-  KEY client_key
-  AUTHORITY ca_cert
-  PASSWORD key_password
+  (
+    SECURITY 'SSL',
+    CERTIFICATE client_cert,
+    KEY client_key,
+    AUTHORITY ca_cert,
+    PASSWORD key_password
+  )
 
 > CREATE SECRET csr_pass AS 'sekurity'
 
 > CREATE CONNECTOR schema_reg
   FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  USERNAME 'materialize'
-  PASSWORD csr_pass
-  CERTIFICATE client_cert
-  KEY client_key
-  AUTHORITY ca_cert
+  (
+    USERNAME = 'materialize',
+    PASSWORD csr_pass,
+    CERTIFICATE client_cert,
+    KEY client_key,
+    AUTHORITY ca_cert
+  )
 
 > CREATE MATERIALIZED SOURCE connector_source
   FROM KAFKA CONNECTOR kafka_ssl

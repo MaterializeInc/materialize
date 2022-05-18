@@ -63,7 +63,7 @@ pub fn populate_connectors<T: AstInfo>(
     populate_connectors_with_secrets(stmt, catalog, depends_on, secrets_reader)
 }
 
-/// Same as populate_connectors, except also reads secret values instead of leaving secret GlobalIds in place
+/// Same as populate_connectors except it converts secret fields into either paths or string values as appropriate using the supplied SecretsReader
 pub fn populate_connectors_with_secrets<T: AstInfo>(
     mut stmt: CreateSourceStatement<T>,
     catalog: &dyn SessionCatalog,
@@ -135,7 +135,7 @@ pub fn populate_connectors_with_secrets<T: AstInfo>(
     Ok(stmt)
 }
 
-/// Helper function which reifies any connectors in a single [`Format`]
+/// Helper function which populates any connectors in a single [`Format`]
 fn populate_connector_for_format_with_secrets<T: AstInfo>(
     format: &mut Format<T>,
     catalog: &dyn SessionCatalog,
@@ -143,53 +143,42 @@ fn populate_connector_for_format_with_secrets<T: AstInfo>(
     secrets_reader: Arc<Box<dyn SecretsReader>>,
 ) -> Result<(), anyhow::Error> {
     Ok(match format {
-        Format::Avro(avro_schema) => match avro_schema {
-            AvroSchema::Csr {
-                csr_connector:
-                    CsrConnectorAvro {
-                        connector: csr_connector @ CsrConnector::Reference { .. },
-                        ..
-                    },
-            } => {
-                let name = match csr_connector {
-                    CsrConnector::Reference { connector, .. } => connector,
-                    _ => unreachable!(),
-                };
-                *csr_connector = populate_csr_connector_with_secrets(
-                    name,
+        Format::Avro(AvroSchema::Csr {
+            csr_connector:
+                CsrConnectorAvro {
+                    connector: connector @ CsrConnector::Reference { .. },
+                    ..
+                },
+        }) => {
+            *connector = match connector {
+                CsrConnector::Inline { .. } => unreachable!(),
+                CsrConnector::Reference { connector, .. } => populate_csr_connector_with_secrets(
+                    connector,
                     catalog,
                     depends_on,
                     Arc::clone(&secrets_reader),
-                )?;
+                )?,
             }
-            _ => {}
-        },
-        Format::Protobuf(proto_schema) => match proto_schema {
-            ProtobufSchema::Csr {
-                csr_connector:
-                    CsrConnectorProto {
-                        connector: csr_connector @ CsrConnector::Reference { .. },
-                        ..
-                    },
-            } => {
-                let name = match csr_connector {
-                    CsrConnector::Reference { connector, .. } => connector,
-                    _ => unreachable!(),
-                };
-                *csr_connector = populate_csr_connector_with_secrets(
-                    name,
-                    catalog,
-                    depends_on,
-                    Arc::clone(&secrets_reader),
-                )?;
-            }
-            _ => {}
-        },
+        }
+        Format::Protobuf(ProtobufSchema::Csr {
+            csr_connector: CsrConnectorProto { connector, .. },
+        }) => {
+            let name = match connector {
+                CsrConnector::Reference { connector, .. } => connector,
+                _ => unreachable!(),
+            };
+            *connector = populate_csr_connector_with_secrets(
+                &name,
+                catalog,
+                depends_on,
+                Arc::clone(&secrets_reader),
+            )?;
+        }
         _ => {}
     })
 }
 
-/// Helper function which reifies individual [`CsrConnector::Reference`] instances
+/// Helper function which populates individual [`CsrConnector::Reference`] instances
 fn populate_csr_connector_with_secrets(
     name: &UnresolvedObjectName,
     catalog: &dyn SessionCatalog,

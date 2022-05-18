@@ -27,6 +27,7 @@ use tokio::time::Duration;
 
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_sql_parser::ast::Value;
+use tracing::info;
 
 enum ValType {
     Path,
@@ -213,6 +214,7 @@ pub async fn create_consumer(
     for (k, v) in options {
         config.set(k, v);
     }
+    info!("creating kafka client with {:?}", config);
 
     let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> =
         Arc::new(config.create_with_context(KafkaErrCheckContext::default())?);
@@ -443,6 +445,7 @@ pub fn generate_ccsr_client_config(
         ccsr_options,
         &[Config::string("username"), Config::string("password")],
     )?;
+    info!("creating ccsr config with {:?}", ccsr_options);
 
     if let Some(username) = ccsr_options.remove("username") {
         client_config = client_config.auth(username, ccsr_options.remove("password"));

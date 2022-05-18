@@ -1143,7 +1143,6 @@ impl TryFrom<ProtoDataflowDescription>
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
-    use std::path::PathBuf;
     use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
@@ -2065,7 +2064,7 @@ pub mod sources {
             authority: Option<String>,
         },
         SASL {
-            /// Must be one of: PLAIN, SCRAMSHA256, SCRAMSHA512
+            /// Must be one of: PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
             mechanism: String,
             /// Specify SaslSsl instead of Sasl to enable transport layer security
             ssl: bool,
