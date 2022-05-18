@@ -184,19 +184,17 @@ pub fn build_storage_dataflow<A: Allocate>(
                     let mut buffer = Vec::new();
                     let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
-                    let persist_client = source
-                        .storage_metadata
-                        .persist_location
-                        .open()
-                        .await
-                        .unwrap();
-
-                    let mut write = persist_client
-                        .open_writer::<(), SourceData, mz_repr::Timestamp, mz_repr::Diff>(
-                            source.storage_metadata.persist_shard,
-                        )
-                        .await
-                        .expect("could not open persist shard");
+                    let (mut write, _) = crate::persist_cache::open::<
+                        (),
+                        SourceData,
+                        mz_repr::Timestamp,
+                        mz_repr::Diff,
+                    >(
+                        source.storage_metadata.persist_location,
+                        source.storage_metadata.persist_shard,
+                    )
+                    .await
+                    .expect("could not open persist shard");
 
                     while scheduler.notified().await {
                         let frontier = frontiers.borrow()[0].clone();

@@ -12,9 +12,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_persist_client::write::WriteHandle;
-use mz_persist_client::PersistLocation;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -22,10 +19,12 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::client::{StorageCommand, StorageResponse};
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, SourceDesc};
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
+use mz_persist_client::{write::WriteHandle, PersistLocation};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::decode::metrics::DecodeMetrics;
