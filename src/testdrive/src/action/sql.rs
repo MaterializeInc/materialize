@@ -11,6 +11,7 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{bail, Context};
@@ -18,6 +19,7 @@ use async_trait::async_trait;
 use md5::{Digest, Md5};
 use postgres_array::Array;
 use regex::Regex;
+use tokio::sync::Mutex;
 use tokio_postgres::error::DbError;
 use tokio_postgres::row::Row;
 use tokio_postgres::types::{FromSql, Type};
@@ -61,21 +63,21 @@ impl Action for SqlAction {
         match &self.stmt {
             Statement::CreateDatabase(CreateDatabaseStatement { name, .. }) => {
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!("DROP DATABASE IF EXISTS {}", name),
                 )
                 .await
             }
             Statement::CreateSchema(CreateSchemaStatement { name, .. }) => {
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!("DROP SCHEMA IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
             Statement::CreateSource(CreateSourceStatement { name, .. }) => {
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!("DROP SOURCE IF EXISTS {} CASCADE", name),
                 )
                 .await
@@ -85,14 +87,14 @@ impl Action for SqlAction {
                 ..
             }) => {
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!("DROP VIEW IF EXISTS {} CASCADE", name),
                 )
                 .await
             }
             Statement::CreateTable(CreateTableStatement { name, .. }) => {
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!("DROP TABLE IF EXISTS {} CASCADE", name),
                 )
                 .await
@@ -106,7 +108,7 @@ impl Action for SqlAction {
                     "testdrive cannot create default cluster"
                 );
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!("DROP CLUSTER IF EXISTS {} CASCADE", name),
                 )
                 .await
@@ -124,7 +126,7 @@ impl Action for SqlAction {
                     "testdrive cannot create default cluster replicas"
                 );
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!(
                         "DROP CLUSTER REPLICA IF EXISTS {} FROM {}",
                         name, of_cluster
@@ -134,7 +136,7 @@ impl Action for SqlAction {
             }
             Statement::CreateSecret(CreateSecretStatement { name, .. }) => {
                 self.try_drop(
-                    &mut state.pgclient,
+                    &state.pgclient,
                     &format!("DROP SECRET IF EXISTS {} CASCADE", name),
                 )
                 .await
@@ -249,7 +251,7 @@ impl Action for SqlAction {
 impl SqlAction {
     async fn try_drop(
         &self,
-        pgclient: &mut tokio_postgres::Client,
+        pgclient: &tokio_postgres::Client,
         query: &str,
     ) -> Result<(), anyhow::Error> {
         print_query(&query);
@@ -519,23 +521,6 @@ impl FailSqlAction {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 pub struct SendSqlAction {
     query: String,
 }
@@ -546,9 +531,7 @@ pub fn build_send_sql(mut cmd: SqlCommand) -> Result<SendSqlAction, anyhow::Erro
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
     }
-    Ok(SendSqlAction {
-        query: cmd.query
-    })
+    Ok(SendSqlAction { query: cmd.query })
 }
 
 #[async_trait]
@@ -558,19 +541,20 @@ impl Action for SendSqlAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        state.pgclient_futures.insert("foo".to_string(), Box::pin(async move { state.pgclient.execute(self.query.as_str(), &[]).await }));
+        let pgclient = Arc::clone(&state.pgclient);
+        let query = self.query.clone();
+        state.pgclient_futures.insert(
+            "foo".to_string(),
+            Mutex::new(Box::pin(async move {
+                pgclient.execute(query.as_str(), &[]).await
+            })),
+        );
 
         Ok(ControlFlow::Continue)
     }
 }
 
-
-
-
-
-
-pub struct ReapSqlAction {
-}
+pub struct ReapSqlAction {}
 
 pub fn build_reap_sql() -> Result<ReapSqlAction, anyhow::Error> {
     Ok(ReapSqlAction {})
@@ -583,15 +567,12 @@ impl Action for ReapSqlAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-//        let &mut pgclient_future = state.pgclient_futures.get_mut("foo").unwrap();
-//        pgclient_future.await?;
+        let mut pgclient_future = state.pgclient_futures.get_mut("foo").unwrap().lock().await;
+        (&mut *pgclient_future).await?;
 
         Ok(ControlFlow::Continue)
     }
 }
-
-
-
 
 pub fn print_query(query: &str) {
     println!("> {}", query);

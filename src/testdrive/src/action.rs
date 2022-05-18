@@ -14,6 +14,7 @@ use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ::http::Uri;
@@ -34,7 +35,8 @@ use mz_ore::now::NOW_ZERO;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
-use tokio_postgres::{NoTls};
+use tokio::sync::Mutex;
+use tokio_postgres::NoTls;
 use url::Url;
 
 use mz_ore::display::DisplayExt;
@@ -157,8 +159,11 @@ pub struct State {
     materialized_catalog_postgres_stash: Option<String>,
     materialized_addr: String,
     materialized_user: String,
-    pgclient: tokio_postgres::Client,
-    pgclient_futures: HashMap<String, Pin<Box<dyn Future<Output = Result<u64, tokio_postgres::Error>> + Send + Sync>>>,
+    pgclient: Arc<tokio_postgres::Client>,
+    pgclient_futures: HashMap<
+        String,
+        Mutex<Pin<Box<dyn Future<Output = Result<u64, tokio_postgres::Error>> + Send>>>,
+    >,
 
     // === Confluent state. ===
     schema_registry_url: Url,
@@ -655,13 +660,8 @@ pub(crate) async fn build(
                 };
                 Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?)
             }
-            Command::SendSql(sql) => {
-                Box::new(sql::build_send_sql(sql).map_err(wrap_err)?)
-            }
-            Command::ReapSql(sql) => {
-                Box::new(sql::build_reap_sql().map_err(wrap_err)?)
-            }
-
+            Command::SendSql(sql) => Box::new(sql::build_send_sql(sql).map_err(wrap_err)?),
+            Command::ReapSql(sql) => Box::new(sql::build_reap_sql().map_err(wrap_err)?),
         };
         out.push(PosAction {
             pos: cmd.pos,
@@ -867,7 +867,7 @@ pub async fn create_state(
         materialized_catalog_postgres_stash,
         materialized_addr,
         materialized_user,
-        pgclient,
+        pgclient: Arc::new(pgclient),
         pgclient_futures: HashMap::new(),
 
         // === Confluent state. ===
