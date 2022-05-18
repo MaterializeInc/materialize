@@ -14,7 +14,7 @@
 use chrono::NaiveDateTime;
 use proc_macro2::TokenTree;
 
-use mz_lowertest::{deserialize_optional, GenericTestDeserializeContext};
+use mz_lowertest::deserialize_optional_generic;
 use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, Row, RowArena, ScalarType};
@@ -114,11 +114,7 @@ pub fn get_scalar_type_or_default<I>(
 where
     I: Iterator<Item = TokenTree>,
 {
-    let typ: Option<ScalarType> = deserialize_optional(
-        scalar_type_stream,
-        "ScalarType",
-        &mut GenericTestDeserializeContext::default(),
-    )?;
+    let typ: Option<ScalarType> = deserialize_optional_generic(scalar_type_stream, "ScalarType")?;
     match typ {
         Some(typ) => Ok(typ),
         None => {

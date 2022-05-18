@@ -159,8 +159,8 @@ enums and structs are keyed by string.
 
 ### 3. Feeding in syntax extensions
 
-If you don't need to extend or override the syntax, give a
-`&mut GenericTestDeserializationContext::default()`.
+If you don't need to extend or override the syntax, call either
+`deserialize_generic` or `deserialize_optional_generic`.
 
 Otherwise, see ["Extending the syntax"](#extending-the-syntax).
 

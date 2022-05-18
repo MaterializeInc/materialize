@@ -316,10 +316,9 @@ pub enum TestCatalogCommand {
 impl TestCatalog {
     pub(crate) fn execute_commands(&mut self, spec: &str) -> Result<String, String> {
         let mut stream_iter = tokenize(spec)?.into_iter();
-        while let Some(command) = deserialize_optional::<TestCatalogCommand, _, _>(
+        while let Some(command) = deserialize_optional_generic::<TestCatalogCommand, _>(
             &mut stream_iter,
             "TestCatalogCommand",
-            &mut GenericTestDeserializeContext::default(),
         )? {
             match command {
                 TestCatalogCommand::Defsource { source_name, desc } => {

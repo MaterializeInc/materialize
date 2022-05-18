@@ -72,6 +72,22 @@ pub fn unquote(s: &str) -> String {
 
 /* #endregion */
 
+/// Simpler interface for [deserialize_optional] when no syntax overrides or extensions are needed.
+pub fn deserialize_optional_generic<D, I>(
+    stream_iter: &mut I,
+    type_name: &'static str,
+) -> Result<Option<D>, String>
+where
+    D: DeserializeOwned + MzReflect,
+    I: Iterator<Item = TokenTree>,
+{
+    deserialize_optional(
+        stream_iter,
+        type_name,
+        &mut GenericTestDeserializeContext::default(),
+    )
+}
+
 /// If the `stream_iter` is not empty, deserialize the next `TokenTree` into a `D`.
 ///
 /// See [`to_json`] for the object spec syntax.
@@ -97,6 +113,19 @@ where
         })?)),
         None => Ok(None),
     }
+}
+
+/// Simpler interface for [deserialize] when no syntax overrides or extensions are needed.
+pub fn deserialize_generic<D, I>(stream_iter: &mut I, type_name: &'static str) -> Result<D, String>
+where
+    D: DeserializeOwned + MzReflect,
+    I: Iterator<Item = TokenTree>,
+{
+    deserialize(
+        stream_iter,
+        type_name,
+        &mut GenericTestDeserializeContext::default(),
+    )
 }
 
 /// Deserialize the next `TokenTree` into a `D` object.
@@ -310,7 +339,7 @@ pub trait TestDeserializeContext {
 ///
 /// Does not override or extend any of the default syntax.
 #[derive(Default)]
-pub struct GenericTestDeserializeContext;
+struct GenericTestDeserializeContext;
 
 impl TestDeserializeContext for GenericTestDeserializeContext {
     fn override_syntax<I>(
@@ -602,6 +631,21 @@ where
 }
 
 /* #endregion */
+
+/// Simpler interface for [serialize] when no syntax overrides or extensions are needed.
+pub fn serialize_generic<M>(json: &Value, type_name: &str) -> String
+where
+    M: MzReflect,
+{
+    let mut rti = ReflectedTypeInfo::default();
+    M::add_to_reflected_type_info(&mut rti);
+    from_json(
+        json,
+        type_name,
+        &rti,
+        &mut GenericTestDeserializeContext::default(),
+    )
+}
 
 pub fn serialize<M, C>(json: &Value, type_name: &str, ctx: &mut C) -> String
 where

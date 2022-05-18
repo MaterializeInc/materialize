@@ -177,11 +177,7 @@ mod tests {
                 &mut TestOverrideDeserializeContext::default(),
             )
         } else {
-            deserialize_optional(
-                &mut stream.into_iter(),
-                "TestEnum",
-                &mut GenericTestDeserializeContext::default(),
-            )
+            deserialize_optional_generic(&mut stream.into_iter(), "TestEnum")
         }
     }
 
@@ -198,11 +194,7 @@ mod tests {
                     &mut TestOverrideDeserializeContext::default(),
                 )
             } else {
-                serialize::<TestEnum, _>(
-                    &json,
-                    "TestEnum",
-                    &mut GenericTestDeserializeContext::default(),
-                )
+                serialize_generic::<TestEnum>(&json, "TestEnum")
             };
             (json, new_s)
         } else {

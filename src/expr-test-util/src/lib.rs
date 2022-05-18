@@ -83,10 +83,9 @@ pub fn json_to_spec(rel_json: &str, catalog: &TestCatalog) -> (String, Vec<Strin
             format!(
                 "(defsource {} {})",
                 name,
-                serialize::<RelationType, _>(
+                serialize_generic::<RelationType>(
                     &serde_json::to_value(typ).unwrap(),
                     "RelationType",
-                    &mut GenericTestDeserializeContext::default()
                 )
             )
         })
@@ -158,10 +157,9 @@ impl<'a> TestCatalog {
     ///   insert a source into the catalog.
     pub fn handle_test_command(&mut self, spec: &str) -> Result<(), String> {
         let mut stream_iter = tokenize(spec)?.into_iter();
-        while let Some(command) = deserialize_optional::<TestCatalogCommand, _, _>(
+        while let Some(command) = deserialize_optional_generic::<TestCatalogCommand, _>(
             &mut stream_iter,
             "TestCatalogCommand",
-            &mut GenericTestDeserializeContext::default(),
         )? {
             match command {
                 TestCatalogCommand::Defsource { name, typ } => {
@@ -248,16 +246,9 @@ impl MirScalarExprDeserializeContext {
                 }
             }
             TokenTree::Ident(i) if i.to_string().to_ascii_lowercase() == "err" => {
-                let error = deserialize(
-                    rest_of_stream,
-                    "EvalError",
-                    &mut GenericTestDeserializeContext::default(),
-                )?;
-                let typ: Option<ScalarType> = deserialize_optional(
-                    rest_of_stream,
-                    "ScalarType",
-                    &mut GenericTestDeserializeContext::default(),
-                )?;
+                let error = deserialize_generic(rest_of_stream, "EvalError")?;
+                let typ: Option<ScalarType> =
+                    deserialize_optional_generic(rest_of_stream, "ScalarType")?;
                 Ok(Some(MirScalarExpr::literal(
                     Err(error),
                     typ.unwrap_or(ScalarType::Bool),
@@ -449,11 +440,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
     where
         I: Iterator<Item = TokenTree>,
     {
-        let error: EvalError = deserialize(
-            stream_iter,
-            "EvalError",
-            &mut GenericTestDeserializeContext::default(),
-        )?;
+        let error: EvalError = deserialize(stream_iter, "EvalError", self)?;
         let typ: RelationType = deserialize(stream_iter, "RelationType", self)?;
 
         Ok(MirRelationExpr::Constant {

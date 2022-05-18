@@ -91,11 +91,8 @@ fn run_command(
     catalog: &TestCatalog,
 ) -> Result<String, String> {
     let mut model = convert_input_to_model(input, catalog)?;
-    let directive: Directive = deserialize(
-        &mut tokenize(command)?.into_iter(),
-        "Directive",
-        &mut GenericTestDeserializeContext::default(),
-    )?;
+    let directive: Directive =
+        deserialize_generic(&mut tokenize(command)?.into_iter(), "Directive")?;
 
     if matches!(directive, Directive::Opt | Directive::EndToEnd) {
         model.optimize();
