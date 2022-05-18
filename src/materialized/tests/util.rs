@@ -22,10 +22,9 @@ use postgres::types::{FromSql, Type};
 use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
-use tower_http::cors::Origin;
+use tower_http::cors::AllowOrigin;
 
 use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
-use mz_dataflow_types::sources::AwsExternalId;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::id_gen::PortAllocator;
@@ -44,7 +43,6 @@ lazy_static! {
 #[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
-    aws_external_id: AwsExternalId,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     frontegg: Option<FronteggAuthentication>,
@@ -58,7 +56,6 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             data_directory: None,
-            aws_external_id: AwsExternalId::NotProvided,
             logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
             frontegg: None,
@@ -164,7 +161,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             linger: false,
         },
         secrets_controller: None,
-        aws_external_id: config.aws_external_id,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
         frontegg: config.frontegg,
@@ -172,9 +168,10 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: metrics_registry.clone(),
         metrics_listen_addr: None,
         now: config.now,
-        cors_allowed_origin: Origin::list([]).into(),
+        cors_allowed_origin: AllowOrigin::list([]),
         replica_sizes: Default::default(),
         availability_zones: Default::default(),
+        connector_context: Default::default(),
     }))?;
     let server = Server {
         inner,

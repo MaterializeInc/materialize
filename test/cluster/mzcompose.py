@@ -49,7 +49,7 @@ SERVICES = [
     Materialized(extra_ports=[2101]),
     Testdrive(
         volumes=[
-            "mzdata:/share/mzdata",
+            "mzdata:/mzdata",
             "tmp:/share/tmp",
             ".:/workdir/smoke",
             "../testdrive:/workdir/testdrive",

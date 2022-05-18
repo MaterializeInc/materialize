@@ -17,7 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 use proptest::prelude::{any, Arbitrary};
-use proptest::strategy::{BoxedStrategy, Strategy};
+use proptest::prop_oneof;
+use proptest::strategy::{BoxedStrategy, Just, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
@@ -27,6 +28,7 @@ use mz_repr::proto::{any_uuid, FromProtoIfSome, ProtoRepr, TryFromProtoError, Tr
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
+use crate::types::aws::AwsExternalId;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 use crate::Plan;
@@ -55,6 +57,73 @@ impl PeekResponse {
     }
 }
 
+impl From<&PeekResponse> for ProtoPeekResponse {
+    fn from(x: &PeekResponse) -> Self {
+        use proto_peek_response::Kind::*;
+        use proto_peek_response::*;
+        ProtoPeekResponse {
+            kind: Some(match x {
+                PeekResponse::Rows(rows) => Rows(ProtoRows {
+                    rows: rows
+                        .iter()
+                        .map(|(r, d)| ProtoRow {
+                            row: Some(r.into()),
+                            diff: d.into_proto(),
+                        })
+                        .collect(),
+                }),
+                PeekResponse::Error(err) => proto_peek_response::Kind::Error(err.clone()),
+                PeekResponse::Canceled => Canceled(()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoPeekResponse> for PeekResponse {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
+        use proto_peek_response::Kind::*;
+        match x.kind {
+            Some(Rows(rows)) => Ok(PeekResponse::Rows(
+                rows.rows
+                    .into_iter()
+                    .map(|row| {
+                        Ok((
+                            row.row.try_into_if_some("ProtoRow::row")?,
+                            NonZeroUsize::from_proto(row.diff)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+            )),
+            Some(proto_peek_response::Kind::Error(err)) => Ok(PeekResponse::Error(err)),
+            Some(Canceled(())) => Ok(PeekResponse::Canceled),
+            None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind")),
+        }
+    }
+}
+
+impl Arbitrary for PeekResponse {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec(
+                (
+                    any::<Row>(),
+                    (1..usize::MAX).prop_map(|u| NonZeroUsize::try_from(u).unwrap())
+                ),
+                1..11
+            )
+            .prop_map(PeekResponse::Rows),
+            ".*".prop_map(PeekResponse::Error),
+            Just(PeekResponse::Canceled),
+        ]
+        .boxed()
+    }
+}
+
 /// Various responses that can be communicated about the progress of a TAIL command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TailResponse<T = mz_repr::Timestamp> {
@@ -62,6 +131,45 @@ pub enum TailResponse<T = mz_repr::Timestamp> {
     Batch(TailBatch<T>),
     /// The TAIL dataflow was dropped, leaving updates from this frontier onward unspecified.
     DroppedAt(Antichain<T>),
+}
+
+impl From<&TailResponse<mz_repr::Timestamp>> for ProtoTailResponse {
+    fn from(x: &TailResponse<mz_repr::Timestamp>) -> Self {
+        use proto_tail_response::Kind::*;
+        ProtoTailResponse {
+            kind: Some(match x {
+                TailResponse::Batch(tail_batch) => Batch(tail_batch.into()),
+                TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into()),
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoTailResponse) -> Result<Self, Self::Error> {
+        use proto_tail_response::Kind::*;
+        match x.kind {
+            Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.try_into()?)),
+            Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into())),
+            None => Err(TryFromProtoError::missing_field("ProtoTailResponse::kind")),
+        }
+    }
+}
+
+impl Arbitrary for TailResponse<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            any::<TailBatch<mz_repr::Timestamp>>().prop_map(TailResponse::Batch),
+            proptest::collection::vec(any::<u64>(), 1..4)
+                .prop_map(|antichain| TailResponse::DroppedAt(Antichain::from(antichain)))
+        ]
+        .boxed()
+    }
 }
 
 /// A batch of updates for the interval `[lower, upper)`.
@@ -73,6 +181,75 @@ pub struct TailBatch<T> {
     pub upper: Antichain<T>,
     /// All updates greater than `lower` and not greater than `upper`.
     pub updates: Vec<(T, Row, Diff)>,
+}
+
+impl From<&TailBatch<mz_repr::Timestamp>> for ProtoTailBatch {
+    fn from(x: &TailBatch<mz_repr::Timestamp>) -> Self {
+        use proto_tail_batch::ProtoUpdate;
+        ProtoTailBatch {
+            lower: Some((&x.lower).into()),
+            upper: Some((&x.upper).into()),
+            updates: x
+                .updates
+                .iter()
+                .map(|(t, r, d)| ProtoUpdate {
+                    timestamp: *t,
+                    row: Some(r.into()),
+                    diff: *d,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoTailBatch) -> Result<Self, Self::Error> {
+        Ok(TailBatch {
+            lower: x
+                .lower
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::lower"))?,
+            upper: x
+                .upper
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::upper"))?,
+            updates: x
+                .updates
+                .into_iter()
+                .map(|update| {
+                    Ok((
+                        update.timestamp,
+                        update.row.try_into_if_some("ProtoUpdate::row")?,
+                        update.diff,
+                    ))
+                })
+                .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+        })
+    }
+}
+
+impl Arbitrary for TailBatch<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            proptest::collection::vec(any::<u64>(), 1..4),
+            proptest::collection::vec(any::<u64>(), 1..4),
+            proptest::collection::vec(
+                (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
+                1..4,
+            ),
+        )
+            .prop_map(|(lower, upper, updates)| TailBatch {
+                lower: Antichain::from(lower),
+                upper: Antichain::from(upper),
+                updates,
+            })
+            .boxed()
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -307,6 +484,183 @@ impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timest
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         any_dataflow_description().boxed()
+    }
+}
+
+/// AWS configuration for sources and sinks.
+pub mod aws {
+    use http::Uri;
+    use serde::{Deserialize, Serialize};
+
+    /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub struct SerdeUri(#[serde(with = "http_serde::uri")] pub Uri);
+
+    /// An [external ID] to use for all AWS AssumeRole operations.
+    ///
+    /// **WARNING:** it is critical for security that this ID is **not**
+    /// provided by end users of Materialize. It must be provided by the
+    /// operator of the Materialize service.
+    ///
+    /// This type protects against accidental construction of an
+    /// `AwsExternalId`. The only approved way to construct an `AwsExternalId`
+    /// is via [`ConnectorContext::from_cli_args`].
+    ///
+    /// [`ConnectorContext::from_cli_args`]: crate::ConnectorContext::from_cli_args
+    /// [external ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct AwsExternalId(pub(super) String);
+
+    /// AWS configuration overrides for a source or sink.
+    ///
+    /// This is a distinct type from any of the configuration types built into the
+    /// AWS SDK so that we can implement `Serialize` and `Deserialize`.
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct AwsConfig {
+        /// AWS Credentials, or where to find them
+        pub credentials: AwsCredentials,
+        /// The AWS region to use.
+        ///
+        /// Uses the default region (looking at env vars, config files, etc) if not provided.
+        pub region: Option<String>,
+        /// The AWS role to assume.
+        pub role: Option<AwsAssumeRole>,
+        /// The custom AWS endpoint to use, if any.
+        pub endpoint: Option<SerdeUri>,
+    }
+
+    /// AWS credentials for a source or sink.
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub enum AwsCredentials {
+        /// Look for credentials using the [default credentials chain][credchain]
+        ///
+        /// [credchain]: aws_config::default_provider::credentials::DefaultCredentialsChain
+        Default,
+        /// Load credentials using the given named profile
+        Profile { profile_name: String },
+        /// Use the enclosed static credentials
+        Static {
+            access_key_id: String,
+            secret_access_key: String,
+            session_token: Option<String>,
+        },
+    }
+
+    /// A role for Materialize to assume when performing AWS API calls.
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct AwsAssumeRole {
+        /// The Amazon Resource Name of the role to assume.
+        pub arn: String,
+    }
+
+    impl AwsConfig {
+        /// Loads the AWS SDK configuration object from the environment, then
+        /// applies the overrides from this object.
+        pub async fn load(&self, external_id: Option<&AwsExternalId>) -> aws_types::SdkConfig {
+            use aws_config::default_provider::credentials::DefaultCredentialsChain;
+            use aws_config::default_provider::region::DefaultRegionChain;
+            use aws_config::sts::AssumeRoleProvider;
+            use aws_smithy_http::endpoint::Endpoint;
+            use aws_types::credentials::SharedCredentialsProvider;
+            use aws_types::region::Region;
+
+            let region = match &self.region {
+                Some(region) => Some(Region::new(region.clone())),
+                _ => {
+                    let mut rc = DefaultRegionChain::builder();
+                    if let AwsCredentials::Profile { profile_name } = &self.credentials {
+                        rc = rc.profile_name(profile_name);
+                    }
+                    rc.build().region().await
+                }
+            };
+
+            let mut cred_provider = match &self.credentials {
+                AwsCredentials::Default => SharedCredentialsProvider::new(
+                    DefaultCredentialsChain::builder()
+                        .region(region.clone())
+                        .build()
+                        .await,
+                ),
+                AwsCredentials::Profile { profile_name } => SharedCredentialsProvider::new(
+                    DefaultCredentialsChain::builder()
+                        .profile_name(profile_name)
+                        .region(region.clone())
+                        .build()
+                        .await,
+                ),
+                AwsCredentials::Static {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
+                    access_key_id,
+                    secret_access_key,
+                    session_token.clone(),
+                )),
+            };
+
+            if let Some(AwsAssumeRole { arn }) = &self.role {
+                let mut role = AssumeRoleProvider::builder(arn).session_name("materialized");
+                // This affects which region to perform STS on, not where
+                // anything else happens.
+                if let Some(region) = &region {
+                    role = role.region(region.clone());
+                }
+                if let Some(external_id) = external_id {
+                    role = role.external_id(&external_id.0);
+                }
+                cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
+            }
+
+            let mut loader = aws_config::from_env()
+                .region(region)
+                .credentials_provider(cred_provider);
+            if let Some(endpoint) = &self.endpoint {
+                loader = loader.endpoint_resolver(Endpoint::immutable(endpoint.0.clone()));
+            }
+            loader.load().await
+        }
+    }
+}
+
+/// Extra context to pass through when instantiating a connector for a source or
+/// sink.
+///
+/// Should be kept cheaply cloneable.
+#[derive(Debug, Clone)]
+pub struct ConnectorContext {
+    /// The level for librdkafka's logs.
+    pub librdkafka_log_level: tracing::Level,
+    /// An external ID to use for all AWS AssumeRole operations.
+    pub aws_external_id: Option<AwsExternalId>,
+}
+
+impl ConnectorContext {
+    /// Constructs a new connector context from command line arguments.
+    ///
+    /// **WARNING:** it is critical for security that the `aws_external_id` be
+    /// provided by the operator of the Materialize service (i.e., via a CLI
+    /// argument or environment variable) and not the end user of Materialize
+    /// (e.g., via a configuration option in a SQL statement). See
+    /// [`AwsExternalId`] for details.
+    pub fn from_cli_args(
+        filter: &tracing_subscriber::filter::Targets,
+        aws_external_id: Option<String>,
+    ) -> ConnectorContext {
+        ConnectorContext {
+            librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
+            aws_external_id: aws_external_id.map(AwsExternalId),
+        }
+    }
+}
+
+impl Default for ConnectorContext {
+    fn default() -> ConnectorContext {
+        ConnectorContext {
+            librdkafka_log_level: tracing::Level::INFO,
+            aws_external_id: None,
+        }
     }
 }
 
@@ -664,7 +1018,7 @@ impl TryFrom<ProtoDataflowDescription>
 /// Types and traits related to the introduction of changing collections into `dataflow`.
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
-    use std::ops::{Add, Deref, DerefMut};
+    use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -672,7 +1026,6 @@ pub mod sources {
     use chrono::NaiveDateTime;
     use differential_dataflow::lattice::Lattice;
     use globset::Glob;
-    use http::Uri;
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
@@ -686,6 +1039,7 @@ pub mod sources {
     use mz_repr::proto::TryFromProtoError;
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
+    use crate::aws::AwsConfig;
     use crate::postgres_source::PostgresSourceDetails;
     use crate::DataflowError;
 
@@ -942,6 +1296,37 @@ pub mod sources {
             MzOffset {
                 offset: self.offset + x,
             }
+        }
+    }
+
+    impl Add<Self> for MzOffset {
+        type Output = Self;
+
+        fn add(self, x: Self) -> Self {
+            MzOffset {
+                offset: self.offset + x.offset,
+            }
+        }
+    }
+
+    impl AddAssign<i64> for MzOffset {
+        fn add_assign(&mut self, x: i64) {
+            self.offset += x;
+        }
+    }
+
+    impl AddAssign<Self> for MzOffset {
+        fn add_assign(&mut self, x: Self) {
+            self.offset += x.offset;
+        }
+    }
+
+    // Output is a diff but not itself an MzOffset
+    impl Sub<Self> for MzOffset {
+        type Output = i64;
+
+        fn sub(self, other: Self) -> i64 {
+            self.offset - other.offset
         }
     }
 
@@ -1556,8 +1941,8 @@ pub mod sources {
 
                     let persist_client = location.open().await?;
 
-                    let (_write, read) = persist_client
-                        .open::<Row, Row, T, mz_repr::Diff>(persist_connector.shard_id)
+                    let read = persist_client
+                        .open_reader::<Row, Row, T, mz_repr::Diff>(persist_connector.shard_id)
                         .await?;
 
                     Some(read)
@@ -1820,150 +2205,6 @@ pub mod sources {
         /// S3 notifications channels can be configured to go to SQS, which is the
         /// only target we currently support.
         SqsNotifications { queue: String },
-    }
-
-    /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
-    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    pub struct SerdeUri(#[serde(with = "http_serde::uri")] pub Uri);
-
-    /// AWS configuration overrides for a source or sink.
-    ///
-    /// This is a distinct type from any of the configuration types built into the
-    /// AWS SDK so that we can implement `Serialize` and `Deserialize`.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AwsConfig {
-        /// AWS Credentials, or where to find them
-        pub credentials: AwsCredentials,
-        /// The AWS region to use.
-        ///
-        /// Uses the default region (looking at env vars, config files, etc) if not provided.
-        pub region: Option<String>,
-        /// The AWS role to assume.
-        pub role: Option<AwsAssumeRole>,
-        /// The custom AWS endpoint to use, if any.
-        pub endpoint: Option<SerdeUri>,
-    }
-
-    /// AWS credentials for a source or sink.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub enum AwsCredentials {
-        /// Look for credentials using the [default credentials chain][credchain]
-        ///
-        /// [credchain]: aws_config::default_provider::credentials::DefaultCredentialsChain
-        Default,
-        /// Load credentials using the given named profile
-        Profile { profile_name: String },
-        /// Use the enclosed static credentials
-        Static {
-            access_key_id: String,
-            secret_access_key: String,
-            session_token: Option<String>,
-        },
-    }
-
-    /// A role for Materialize to assume when performing AWS API calls.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AwsAssumeRole {
-        /// The Amazon Resource Name of the role to assume.
-        pub arn: String,
-    }
-
-    /// An external ID to use for all AWS AssumeRole operations.
-    ///
-    /// Note that it is critical for security that this ID can **not** be provided by users running
-    /// in Materialize Cloud, it must be provided by Materialize. Currently this guarantee is
-    /// satisfied by only making this accessible from the CLI, which users do not have access to.
-    ///
-    /// <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub enum AwsExternalId {
-        NotProvided,
-        ISwearThisCameFromACliArgOrEnvVariable(String),
-    }
-
-    impl Default for AwsExternalId {
-        fn default() -> Self {
-            AwsExternalId::NotProvided
-        }
-    }
-
-    impl AwsExternalId {
-        fn get(&self) -> Option<&str> {
-            match self {
-                AwsExternalId::NotProvided => None,
-                AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable(v) => Some(v),
-            }
-        }
-    }
-
-    impl AwsConfig {
-        /// Loads the AWS SDK configuration object from the environment, then
-        /// applies the overrides from this object.
-        pub async fn load(&self, external_id: AwsExternalId) -> aws_types::SdkConfig {
-            use aws_config::default_provider::credentials::DefaultCredentialsChain;
-            use aws_config::default_provider::region::DefaultRegionChain;
-            use aws_config::sts::AssumeRoleProvider;
-            use aws_smithy_http::endpoint::Endpoint;
-            use aws_types::credentials::SharedCredentialsProvider;
-            use aws_types::region::Region;
-
-            let region = match &self.region {
-                Some(region) => Some(Region::new(region.clone())),
-                _ => {
-                    let mut rc = DefaultRegionChain::builder();
-                    if let AwsCredentials::Profile { profile_name } = &self.credentials {
-                        rc = rc.profile_name(profile_name);
-                    }
-                    rc.build().region().await
-                }
-            };
-
-            let mut cred_provider = match &self.credentials {
-                AwsCredentials::Default => SharedCredentialsProvider::new(
-                    DefaultCredentialsChain::builder()
-                        .region(region.clone())
-                        .build()
-                        .await,
-                ),
-                AwsCredentials::Profile { profile_name } => SharedCredentialsProvider::new(
-                    DefaultCredentialsChain::builder()
-                        .profile_name(profile_name)
-                        .region(region.clone())
-                        .build()
-                        .await,
-                ),
-                AwsCredentials::Static {
-                    access_key_id,
-                    secret_access_key,
-                    session_token,
-                } => SharedCredentialsProvider::new(aws_types::Credentials::from_keys(
-                    access_key_id,
-                    secret_access_key,
-                    session_token.clone(),
-                )),
-            };
-
-            if let Some(AwsAssumeRole { arn }) = &self.role {
-                let mut role = AssumeRoleProvider::builder(arn).session_name("materialized");
-                // This affects which region to perform STS on, not where
-                // anything else happens.
-                if let Some(region) = &region {
-                    role = role.region(region.clone());
-                }
-                if let Some(external_id) = external_id.get() {
-                    role = role.external_id(external_id);
-                }
-                cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
-            }
-
-            let mut loader = aws_config::from_env()
-                .region(region)
-                .credentials_provider(cred_provider);
-            if let Some(endpoint) = &self.endpoint {
-                loader = loader.endpoint_resolver(Endpoint::immutable(endpoint.0.clone()));
-            }
-            loader.load().await
-        }
     }
 
     #[derive(Debug, Clone)]

@@ -18,6 +18,9 @@ import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
 import "repr/src/proto.proto";
 import "repr/src/relation_and_scalar.proto";
+import "repr/src/row.proto";
+
+import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.types;
 
@@ -71,4 +74,40 @@ message ProtoSourceInstanceArguments {
 message ProtoLinearOperator {
     repeated mz_expr.scalar.ProtoMirScalarExpr predicates = 1;
     repeated uint64 projection = 2;
+}
+
+message ProtoPeekResponse {
+    message ProtoRow {
+        mz_repr.row.ProtoRow row = 1;
+        uint64 diff = 2;
+    }
+
+    message ProtoRows {
+        repeated ProtoRow rows = 1;
+    }
+
+    oneof kind {
+        ProtoRows rows = 1;
+        string error = 2;
+        google.protobuf.Empty canceled = 3;
+    }
+}
+
+message ProtoTailBatch {
+    message ProtoUpdate {
+        uint64 timestamp = 1;
+        mz_repr.row.ProtoRow row = 2;
+        int64 diff = 3;
+    }
+
+    mz_persist.gen.persist.ProtoU64Antichain lower = 1;
+    mz_persist.gen.persist.ProtoU64Antichain upper = 2;
+    repeated ProtoUpdate updates = 3;
+}
+
+message ProtoTailResponse {
+    oneof kind {
+        ProtoTailBatch batch = 1;
+        mz_persist.gen.persist.ProtoU64Antichain dropped_at = 2;
+    }
 }

@@ -1,19 +1,11 @@
-[advisories]
-ignore = [
-    # chrono calls localtime_r, which can result in memory unsafety if another
-    # thread is simultaneously calling setenv. The likelihood of this happening
-    # in Materialize is exceptionally low (we don't call setenv directly
-    # anywhere, and it is unlikely that our dependencies do either). There is
-    # no easy fix for chrono (https://github.com/chronotope/chrono/issues/499),
-    # so we're just ignoring the advisory for now.
-    "RUSTSEC-2020-0159",
-]
-
 [bans]
 multiple-versions = "deny"
 skip = [
     # Do not add to this list without good reason! Duplicate dependencies slow
     # down compilation and bloat the binary.
+
+    # Waiting on https://github.com/arcnmx/serde-value/pull/35.
+    { name = "ordered-float", version = "2.10.0" },
 
     # Waiting for csv, http, and aws_smithy_types to upgrade to v1.0.
     { name = "itoa", version = "0.4.1" },
@@ -30,6 +22,18 @@ skip = [
 
     # https://github.com/awslabs/smithy-rs/pull/1301
     { name = "urlencoding", version = "1.3.0" },
+
+    # WASI dependencies from multiple sources.
+    { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
+    { name = "windows-sys", version = "0.32.0" },
+    { name = "windows_aarch64_msvc", version = "0.32.0" },
+    { name = "windows_i686_gnu", version = "0.32.0" },
+    { name = "windows_i686_msvc", version = "0.32.0" },
+    { name = "windows_x86_64_gnu", version = "0.32.0" },
+    { name = "windows_x86_64_msvc", version = "0.32.0" },
+
+    # Waiting on many dependencies throughout the ecosystem.
+    { name = "uuid", version = "0.8.2" },
 ]
 
 # Use `tracing` instead.

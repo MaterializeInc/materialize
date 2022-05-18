@@ -64,7 +64,7 @@ struct Args {
     #[clap(long, value_name = "PATH")]
     temp_dir: Option<String>,
     /// Default timeout for cancellable operations.
-    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "10s", value_name = "DURATION")]
+    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "30s", value_name = "DURATION")]
     default_timeout: Duration,
     /// The default number of times to retry a query expecting it to converge to the desired result.
     #[clap(long, default_value = "18446744073709551615", value_name = "N")]

@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 askama = { version = "0.11.1", default-features = false, features = ["config", "serde-json"] }
 anyhow = "1.0.57"
-axum = { version = "0.5.3", features = ["headers"] }
+axum = { version = "0.5.6", features = ["headers"] }
 backtrace = "0.3.64"
 cfg-if = "1.0.0"
 headers = "0.3.7"
@@ -19,11 +19,11 @@ lazy_static = "1.4.0"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info" }
 mz-http-util = { path = "../http-util" }
-pprof = "0.8.0"
+pprof = "0.9.0"
 serde = { version = "1.0.137", features = ["derive"] }
 tempfile = "3.2.0"
 tracing = "0.1.34"
-tokio = { version = "1.17.0", features = ["time"] }
+tokio = { version = "1.18.2", features = ["time"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tikv-jemalloc-ctl = { version = "0.4.1", features = ["use_std"], optional = true }

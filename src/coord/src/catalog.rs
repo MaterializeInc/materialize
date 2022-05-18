@@ -31,7 +31,7 @@ use mz_dataflow_types::client::{
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    AwsExternalId, ConnectorInner, ExternalSourceConnector, SourceConnector, Timeline,
+    ConnectorInner, ExternalSourceConnector, SourceConnector, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -1377,7 +1377,6 @@ impl<S: Append> Catalog<S> {
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
-                    aws_external_id: config.aws_external_id.clone(),
                     timestamp_frequency: config.timestamp_frequency,
                     now: config.now.clone(),
                 },
@@ -1917,7 +1916,6 @@ impl<S: Append> Catalog<S> {
             storage,
             experimental_mode,
             build_info: &DUMMY_BUILD_INFO,
-            aws_external_id: AwsExternalId::NotProvided,
             timestamp_frequency: Duration::from_secs(1),
             now,
             skip_migrations: true,

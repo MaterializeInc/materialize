@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use anyhow::{bail, Context};
 use itertools::Itertools;
 
-use mz_dataflow_types::sources::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
+use mz_dataflow_types::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 use mz_repr::ColumnName;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};

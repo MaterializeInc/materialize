@@ -26,34 +26,35 @@ use std::panic;
 use std::panic::PanicInfo;
 use std::path::PathBuf;
 use std::process;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use clap::{AppSettings, ArgEnum, Parser};
 use fail::FailScenario;
-use http::header::HeaderValue;
+use http::header::{HeaderName, HeaderValue};
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
 use mz_persist_client::PersistLocation;
 use sysinfo::{ProcessorExt, SystemExt};
-use tower_http::cors::{self, Origin};
+use tower_http::cors::{self, AllowOrigin};
+use tracing_subscriber::filter::Targets;
 use url::Url;
 use uuid::Uuid;
 
 use materialized::{
     OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
+use mz_ore::cli::KeyValueArg;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -116,11 +117,11 @@ pub struct Args {
     /// Labels to apply to all services created by the orchestrator in the form
     /// `KEY=VALUE`.
     #[structopt(long, hide = true)]
-    orchestrator_service_label: Vec<KeyValue>,
+    orchestrator_service_label: Vec<KeyValueArg<String, String>>,
     /// Node selector to apply to all services created by the orchestrator in
     /// the form `KEY=VALUE`.
     #[structopt(long, hide = true)]
-    orchestrator_service_node_selector: Vec<KeyValue>,
+    orchestrator_service_node_selector: Vec<KeyValueArg<String, String>>,
     #[structopt(long)]
     kubernetes_service_account: Option<String>,
     /// The Kubernetes context to use with the Kubernetes orchestrator.
@@ -225,7 +226,7 @@ pub struct Args {
         value_name = "FILTER",
         default_value = "info"
     )]
-    log_filter: String,
+    log_filter: Targets,
 
     /// Prevent dumping of backtraces on SIGSEGV/SIGBUS
     ///
@@ -378,21 +379,22 @@ pub struct Args {
     /// If not provided, tracing is not sent.
     ///
     /// You most likely also need to provide
-    /// `--opentelemetry-headers`/`MZ_OPENTELEMETRY_HEADERS`
+    /// `--opentelemetry-header`/`MZ_OPENTELEMETRY_HEADER`
     /// depending on the collector you are talking to.
     #[clap(long, env = "MZ_OPENTELEMETRY_ENDPOINT", hide = true)]
     opentelemetry_endpoint: Option<String>,
 
-    /// Comma separated headers of the form `KEY=VALUE`
-    /// to pass through to the opentelemetry
-    /// collector
+    /// Headers to pass to the OpenTelemetry collector.
+    ///
+    /// May be specified multiple times.
     #[clap(
         long,
-        env = "MZ_OPENTELEMETRY_HEADERS",
+        value_name = "HEADER",
+        env = "MZ_OPENTELEMETRY_HEADER",
         requires = "opentelemetry-endpoint",
         hide = true
     )]
-    opentelemetry_headers: Option<String>,
+    opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
 
     #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: Option<String>,
@@ -426,27 +428,6 @@ impl Orchestrator {
             Self::Kubernetes => true,
             Self::Process => false,
         }
-    }
-}
-
-#[derive(Debug)]
-struct KeyValue {
-    key: String,
-    value: String,
-}
-
-impl FromStr for KeyValue {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<KeyValue, anyhow::Error> {
-        let mut parts = s.splitn(2, '=');
-        let key = parts.next().expect("always one part");
-        let value = parts
-            .next()
-            .ok_or_else(|| anyhow!("must have format KEY=VALUE"))?;
-        Ok(KeyValue {
-            key: key.into(),
-            value: value.into(),
-        })
     }
 }
 
@@ -490,15 +471,18 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // Avoid adding code above this point, because panics in that code won't get
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    let mut tracing_stream =
-        runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
-            log_filter: &args.log_filter,
-            opentelemetry_endpoint: args.opentelemetry_endpoint.as_deref(),
-            opentelemetry_headers: args.opentelemetry_headers.as_deref(),
-            prefix: None,
-            #[cfg(feature = "tokio-console")]
-            tokio_console: args.tokio_console,
-        }))?;
+    runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
+        log_filter: args.log_filter.clone(),
+        opentelemetry_endpoint: args.opentelemetry_endpoint,
+        opentelemetry_headers: args
+            .opentelemetry_header
+            .into_iter()
+            .map(|header| (header.key, header.value))
+            .collect(),
+        prefix: None,
+        #[cfg(feature = "tokio-console")]
+        tokio_console: args.tokio_console,
+    }))?;
     panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
@@ -573,10 +557,10 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     {
         cors::Any.into()
     } else if !args.cors_allowed_origin.is_empty() {
-        Origin::list(args.cors_allowed_origin).into()
+        AllowOrigin::list(args.cors_allowed_origin)
     } else {
         let port = args.listen_addr.port();
-        Origin::list([
+        AllowOrigin::list([
             HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://[::1]:{}", port)).unwrap(),
@@ -584,7 +568,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             HeaderValue::from_str(&format!("https://127.0.0.1:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("https://[::1]:{}", port)).unwrap(),
         ])
-        .into()
     };
 
     // Configure orchestrator.
@@ -651,12 +634,17 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             Some(blob_url) => blob_url.to_string(),
         },
         consensus_uri: match args.persist_consensus_url {
-            // TODO: need to handle non-UTF-8 paths here.
-            None => format!(
-                "sqlite://{}/{}/persist/consensus",
-                cwd.display(),
-                data_directory.display()
-            ),
+            None => {
+                #[cfg(target_os = "macos")]
+                let host = "/tmp";
+                #[cfg(not(target_os = "macos"))]
+                let host = "/var/run/postgresql";
+                format!(
+                    "postgres://{}@{}",
+                    urlencoding::encode(&whoami::username()),
+                    urlencoding::encode(host),
+                )
+            }
             Some(consensus_url) => consensus_url.to_string(),
         },
     };
@@ -683,8 +671,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut system = sysinfo::System::new();
     system.refresh_system();
 
-    writeln!(
-        tracing_stream,
+    eprintln!(
         "booting server
 materialized {mz_version}
 {dep_versions}
@@ -728,7 +715,7 @@ max log level: {max_log_level}",
         swap_used = system.used_swap(),
         swap_limit = swap_max_str,
         max_log_level = ::tracing::level_filters::LevelFilter::current(),
-    )?;
+    );
 
     sys::adjust_rlimits();
 
@@ -765,14 +752,11 @@ max log level: {max_log_level}",
         orchestrator,
         secrets_controller: Some(secrets_controller),
         experimental_mode: args.experimental,
-        aws_external_id: args
-            .aws_external_id
-            .map(AwsExternalId::ISwearThisCameFromACliArgOrEnvVariable)
-            .unwrap_or(AwsExternalId::NotProvided),
         metrics_registry,
         now: SYSTEM_TIME.clone(),
         replica_sizes,
         availability_zones: args.availability_zone,
+        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
     }))?;
 
     eprintln!(

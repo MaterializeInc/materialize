@@ -17,13 +17,11 @@ use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport, PubNub};
 use timely::scheduling::SyncActivator;
 use tracing::info;
 
-use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, MzOffset,
-};
+use mz_dataflow_types::sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset};
+use mz_dataflow_types::ConnectorContext;
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
-use super::metrics::SourceBaseMetrics;
 use crate::source::{SourceMessage, SourceReader, SourceReaderError};
 
 /// Information required to sync data from PubNub
@@ -45,10 +43,10 @@ impl SourceReader for PubNubSourceReader {
         _worker_count: usize,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _aws_external_id: AwsExternalId,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        _metrics: SourceBaseMetrics,
+        _: crate::source::metrics::SourceBaseMetrics,
+        _: ConnectorContext,
     ) -> Result<Self, anyhow::Error> {
         let pubnub_conn = match connector {
             ExternalSourceConnector::PubNub(pubnub_conn) => pubnub_conn,

@@ -9,18 +9,17 @@
 
 //! Utilities for configuring [`tracing`]
 
-use std::io::{self, Write};
-use std::str::FromStr;
+use std::io;
 use std::time::Duration;
 
-use anyhow::Context as _;
+use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
-use tonic::metadata::{MetadataKey, MetadataMap};
+use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
-use tracing::{Event, Subscriber};
+use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::format::{format, Format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
@@ -53,8 +52,8 @@ async fn configure_opentelemetry_and_init<
     S: Subscriber + Send + Sync + 'static,
 >(
     stack: Layered<L, S>,
-    opentelemetry_endpoint: Option<&str>,
-    opentelemetry_headers: Option<&str>,
+    opentelemetry_endpoint: Option<String>,
+    opentelemetry_headers: HeaderMap,
 ) -> Result<(), anyhow::Error>
 where
     Layered<L, S>: tracing_subscriber::util::SubscriberInitExt,
@@ -64,7 +63,7 @@ where
         // Manually setup an openssl-backed, h2, proxied `Channel`,
         // and setup the timeout according to
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
-        let endpoint = Endpoint::from_shared(endpoint.to_owned())?.timeout(Duration::from_secs(
+        let endpoint = Endpoint::from_shared(endpoint)?.timeout(Duration::from_secs(
             opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
         ));
 
@@ -72,25 +71,8 @@ where
         let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector());
         let otlp_exporter = opentelemetry_otlp::new_exporter()
             .tonic()
-            .with_channel(channel);
-
-        let otlp_exporter = if let Some(headers) = opentelemetry_headers {
-            let mut mmap = MetadataMap::new();
-            for header in headers.split(',') {
-                let mut splits = header.splitn(2, '=');
-                let k = splits
-                    .next()
-                    .context("opentelemetry-headers must be of the form key=value")?;
-                let v = splits
-                    .next()
-                    .context("opentelemetry-headers must be of the form key=value")?;
-
-                mmap.insert(MetadataKey::from_str(k)?, v.parse()?);
-            }
-            otlp_exporter.with_metadata(mmap)
-        } else {
-            otlp_exporter
-        };
+            .with_channel(channel)
+            .with_metadata(MetadataMap::from_headers(opentelemetry_headers));
 
         let tracer =
             opentelemetry_otlp::new_pipeline()
@@ -115,38 +97,34 @@ where
 
 /// Configuration for setting up [`tracing`]
 #[derive(Debug)]
-pub struct TracingConfig<'a> {
+pub struct TracingConfig {
     /// `Targets` filter string.
-    pub log_filter: &'a str,
+    pub log_filter: Targets,
     /// When `Some(_)`, the https endpoint to send
     /// opentelemetry traces.
-    pub opentelemetry_endpoint: Option<&'a str>,
+    pub opentelemetry_endpoint: Option<String>,
     /// When `opentelemetry_endpoint` is `Some(_)`,
     /// configure additional comma separated
     /// headers.
-    pub opentelemetry_headers: Option<&'a str>,
+    pub opentelemetry_headers: HeaderMap,
     /// Optional prefix for log lines
-    pub prefix: Option<&'a str>,
+    pub prefix: Option<String>,
     /// When enabled, optionally turn on the
     /// tokio console.
     #[cfg(feature = "tokio-console")]
     pub tokio_console: bool,
 }
 
-/// Configures tracing according to the provided command-line arguments.
-/// Returns a `Write` stream that represents the main place `tracing` will
-/// log to.
-pub async fn configure(config: TracingConfig<'_>) -> Result<Box<dyn Write>, anyhow::Error> {
+/// Configures [`tracing`] and OpenTelemetry.
+pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
     // NOTE: Try harder than usual to avoid panicking in this function. It runs
     // before our custom panic hook is installed (because the panic hook needs
     // tracing configured to execute), so a panic here will not direct the
     // user to file a bug report.
 
-    let filter = Targets::from_str(config.log_filter)
-        .context("parsing --log-filter option")?
-        // Ensure panics are logged, even if the user has specified
-        // otherwise.
-        .with_target("panic", LevelFilter::ERROR);
+    // Ensure panics are logged, even if the user has specified
+    // otherwise.
+    let filter = config.log_filter.with_target("panic", LevelFilter::ERROR);
 
     let stack = tracing_subscriber::registry().with(
         fmt::layer()
@@ -166,7 +144,22 @@ pub async fn configure(config: TracingConfig<'_>) -> Result<Box<dyn Write>, anyh
     )
     .await?;
 
-    Ok(Box::new(io::stderr()))
+    Ok(())
+}
+
+/// Returns the level of a specific target from a [`Targets`].
+pub fn target_level(targets: &Targets, target: &str) -> Level {
+    if targets.would_enable(target, &Level::TRACE) {
+        Level::TRACE
+    } else if targets.would_enable(target, &Level::DEBUG) {
+        Level::DEBUG
+    } else if targets.would_enable(target, &Level::INFO) {
+        Level::INFO
+    } else if targets.would_enable(target, &Level::WARN) {
+        Level::WARN
+    } else {
+        Level::ERROR
+    }
 }
 
 /// A wrapper around a `tracing_subscriber` `Format` that
@@ -180,10 +173,10 @@ pub struct SubprocessFormat<F> {
 impl SubprocessFormat<Format> {
     /// Make a new `SubprocessFormat` that wraps
     /// the `tracing_subscriber` default [`FormatEvent`].
-    pub fn new_default(process_name: Option<impl Into<String>>) -> Self {
+    pub fn new_default(process_name: Option<String>) -> Self {
         SubprocessFormat {
             inner: format(),
-            process_name: process_name.map(|pn| pn.into()),
+            process_name,
         }
     }
 }

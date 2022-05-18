@@ -53,11 +53,10 @@ use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
-use tower_http::cors::Origin;
+use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
 use materialized::{OrchestratorBackend, OrchestratorConfig};
-use mz_dataflow_types::sources::AwsExternalId;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
@@ -579,17 +578,17 @@ impl Runner {
                 linger: false,
             },
             secrets_controller: None,
-            aws_external_id: AwsExternalId::NotProvided,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
-            cors_allowed_origin: Origin::list([]).into(),
+            cors_allowed_origin: AllowOrigin::list([]),
             experimental_mode: true,
             metrics_registry: MetricsRegistry::new(),
             metrics_listen_addr: None,
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
+            connector_context: Default::default(),
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;

@@ -9,8 +9,14 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get -qy install ca-certificates tini
+RUN apt-get update \
+    && apt-get -qy install ca-certificates tini \
+    && useradd --system --create-home materialize \
+    && mkdir /mzdata \
+    && chown materialize /mzdata
 
 COPY materialized /usr/local/bin/
+
+USER materialize
 
 ENTRYPOINT ["tini", "--", "materialized", "--listen-addr=0.0.0.0:6875"]

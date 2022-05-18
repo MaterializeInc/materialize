@@ -12,4 +12,4 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 
 [dev-dependencies]
-tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.18.2", features = ["macros", "rt-multi-thread", "time"] }

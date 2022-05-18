@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
 use mz_dataflow_types::logging::LoggingConfig;
+use mz_dataflow_types::ConnectorContext;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage::boundary::ComputeReplay;
@@ -63,6 +64,9 @@ pub struct ComputeState {
     pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub materialized_logger: Option<logging::materialized::Logger>,
+    /// Configuration for sink connectors.
+    // TODO: remove when sinks move to storage.
+    pub connector_context: ConnectorContext,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.

@@ -183,7 +183,7 @@ def test_upgrade_from_version(
         f"--var=upgrade-from-version={from_version}",
         temp_dir,
         seed,
-        "--validate-data-dir=/share/mzdata",
+        "--validate-data-dir=/mzdata",
         f"check-{style}from-{version_glob}-{filter}.td",
     )
 

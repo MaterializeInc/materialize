@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.57"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.1.15", features = ["derive"] }
+clap = { version = "3.1.18", features = ["derive"] }
 fallible-iterator = "0.2.0"
 futures = "0.3.21"
 junit-report = "0.7.1"
@@ -24,13 +24,14 @@ mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 regex = "1.5.4"
-serde_json = "1.0.80"
+serde_json = "1.0.81"
 tempfile = "3.2.0"
 time = "0.3.9"
-tokio = "1.17.0"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4", "with-uuid-0_8", "with-serde_json-1"] }
-tower-http = { version = "0.2.5", features = ["cors"] }
-uuid = "0.8.2"
+tokio = "1.18.2"
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
+tower-http = { version = "0.3.3", features = ["cors"] }
+tracing = "0.1.34"
+uuid = "1.0.0"
 walkdir = "2.3.2"

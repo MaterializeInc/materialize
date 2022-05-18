@@ -178,7 +178,8 @@ done
 
 echo $SSL_SECRET > secrets/cert_creds
 
-# Ensure files are readable for any user
+# Ensure files are readable for any user.
 chmod -R a+r secrets/
-# Keys are only user-accessible
-chmod -R og-rwx secrets/*.key
+# The PostgreSQL key must be only user accessible to satisfy PostgreSQL's
+# security checks.
+chmod -R og-rwx secrets/postgres.key

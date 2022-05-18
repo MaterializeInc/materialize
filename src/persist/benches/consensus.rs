@@ -9,14 +9,16 @@
 
 //! Benchmarks for different persistent Write implementations.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
-use rand::Rng;
 use tokio::runtime::Runtime;
+use uuid::Uuid;
+
+use mz_ore::cast::CastFrom;
+use mz_ore::task::RuntimeExt;
 
 use mz_persist::location::{Consensus, SeqNo, VersionedData};
 use mz_persist::mem::MemConsensus;
@@ -24,85 +26,130 @@ use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::sqlite::SqliteConsensus;
 use mz_persist::workload::{self, DataGenerator};
 
-fn new_sqlite_consensus(path: &Path) -> SqliteConsensus {
-    SqliteConsensus::open(&path.join("sqlite_consensus"))
-        .expect("creating a SqliteConsensus cannot fail")
-}
-
-// Benchmark the write throughput of Consensus::compare_and_set.
-fn bench_compare_and_set<C: Consensus>(consensus: &mut C, data: Vec<u8>, b: &mut Bencher) {
+fn bench_compare_and_set<C: Consensus + Send + Sync + 'static>(
+    runtime: &Runtime,
+    consensus: Arc<C>,
+    data: Vec<u8>,
+    b: &mut Bencher,
+    concurrency: usize,
+) {
     let deadline = Instant::now() + Duration::from_secs(3600);
+    b.iter_custom(|iters| {
+        // We need to pick random keys because Criterion likes to run this
+        // function many times as part of a warmup, and if we deterministically
+        // use the same keys we will overwrite previously set values.
+        let keys = (0..concurrency)
+            .map(|_| Uuid::new_v4().to_string())
+            .collect::<Vec<_>>();
 
-    // We need to pick random keys because Criterion likes to run this function
-    // many times as part of a warmup, and if we deterministically use the same
-    // keys we will overwrite previously set values.
-    let mut rng = rand::thread_rng();
-    let key = format!("{}", rng.gen::<usize>());
-    let mut current = SeqNo(0);
-    // Set an initial value in case that has different performance characteristics
-    // for some Consensus implementations.
-    futures_executor::block_on(consensus.compare_and_set(
-        deadline,
-        &key,
-        None,
-        VersionedData {
-            seqno: current,
-            data: data.clone(),
-        },
-    ))
-    .expect("gave invalid inputs")
-    .expect("failed to compare_and_set");
-
-    b.iter(|| {
-        let next = current.next();
-        futures_executor::block_on(consensus.compare_and_set(
-            deadline,
-            &key,
-            Some(current),
-            VersionedData {
-                seqno: next,
-                data: data.clone(),
-            },
-        ))
-        .expect("gave invalid inputs")
-        .expect("failed to compare_and_set");
-        current = next;
-    })
+        let start = Instant::now();
+        let mut handles = Vec::new();
+        for (idx, key) in keys.into_iter().enumerate() {
+            let consensus = Arc::clone(&consensus);
+            let data = data.clone();
+            let handle = runtime.handle().spawn_named(
+                || format!("bench_compare_and_set-{}", idx),
+                async move {
+                    let mut current: Option<SeqNo> = None;
+                    while current.map_or(0, |x| x.0) < iters {
+                        let next = current.map_or_else(SeqNo::minimum, |x| x.next());
+                        consensus
+                            .compare_and_set(
+                                deadline,
+                                &key,
+                                current,
+                                VersionedData {
+                                    seqno: next,
+                                    data: data.clone(),
+                                },
+                            )
+                            .await
+                            .expect("gave invalid inputs")
+                            .expect("failed to compare_and_set");
+                        current = Some(next);
+                    }
+                },
+            );
+            handles.push(handle);
+        }
+        for handle in handles.into_iter() {
+            runtime.block_on(handle).expect("task failed");
+        }
+        start.elapsed()
+    });
 }
 
-pub fn bench_consensus_compare_and_set(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
+pub fn bench_consensus_compare_and_set(
+    data: &DataGenerator,
+    g: &mut BenchmarkGroup<'_, WallTime>,
+    concurrency: usize,
+) {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(concurrency)
+        .enable_all()
+        .build()
+        .expect("failed to create async runtime");
     let blob_val = workload::flat_blob(&data);
-    g.throughput(Throughput::Bytes(data.goodput_bytes()));
+    g.throughput(Throughput::Bytes(
+        data.goodput_bytes() * u64::cast_from(concurrency),
+    ));
 
-    let mut mem_consensus = MemConsensus::default();
+    let mem_consensus = Arc::new(MemConsensus::default());
     g.bench_with_input(
         BenchmarkId::new("mem", data.goodput_pretty()),
         &blob_val,
-        |b, blob_val| bench_compare_and_set(&mut mem_consensus, blob_val.clone(), b),
+        |b, blob_val| {
+            bench_compare_and_set(
+                &runtime,
+                Arc::clone(&mem_consensus),
+                blob_val.clone(),
+                b,
+                concurrency,
+            )
+        },
     );
 
     // Create a directory that will automatically be dropped after the test finishes.
-    let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-    let mut sqlite_consensus = new_sqlite_consensus(&temp_dir.path());
-    g.bench_with_input(
-        BenchmarkId::new("sqlite", data.goodput_pretty()),
-        &blob_val,
-        |b, blob_val| bench_compare_and_set(&mut sqlite_consensus, blob_val.clone(), b),
-    );
+    {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let sqlite_consensus = SqliteConsensus::open(temp_dir.path().join("db"))
+            .expect("creating a SqliteConsensus cannot fail");
+        let sqlite_consensus = Arc::new(sqlite_consensus);
+        g.bench_with_input(
+            BenchmarkId::new("sqlite", data.goodput_pretty()),
+            &blob_val,
+            |b, blob_val| {
+                bench_compare_and_set(
+                    &runtime,
+                    Arc::clone(&sqlite_consensus),
+                    blob_val.clone(),
+                    b,
+                    concurrency,
+                )
+            },
+        );
+    }
 
     // Only run Postgres benchmarks if the magic env vars are set.
     if let Some(config) = futures_executor::block_on(PostgresConsensusConfig::new_for_test())
         .expect("failed to load postgres config")
     {
-        let async_runtime = Arc::new(Runtime::new().expect("failed to create async runtime"));
-        let async_guard = async_runtime.enter();
-        let mut postgres_consensus = futures_executor::block_on(PostgresConsensus::open(config))
+        let postgres_consensus = runtime
+            .block_on(PostgresConsensus::open(config))
             .expect("failed to create PostgresConsensus");
+        let postgres_consensus = Arc::new(postgres_consensus);
         g.bench_with_input(
             BenchmarkId::new("postgres", data.goodput_pretty()),
             &blob_val,
-            |b, blob_val| bench_compare_and_set(&mut postgres_consensus, blob_val.clone(), b),
+            |b, blob_val| {
+                bench_compare_and_set(
+                    &runtime,
+                    Arc::clone(&postgres_consensus),
+                    blob_val.clone(),
+                    b,
+                    concurrency,
+                )
+            },
         );
-        drop(async_guard);
     }
 }

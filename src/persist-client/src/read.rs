@@ -19,7 +19,7 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::retry::Retry;
+use futures::Stream;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::BlobMulti;
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
@@ -238,6 +239,17 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
+    /// Convert listener into futures::Stream
+    pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<K, V, T, D>> {
+        async_stream::stream! {
+            loop{
+                for msg in self.next().await {
+                    yield msg;
+                }
+            }
+        }
+    }
+
     /// Attempt to pull out the next values of this subscription.
     ///
     /// The returned updates might or might not be consolidated. If you have a

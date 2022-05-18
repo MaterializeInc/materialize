@@ -22,7 +22,7 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use timely::progress::{frontier::MutableAntichain, Antichain};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -31,6 +31,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use crate::client::Peek;
 use mz_repr::GlobalId;
 
+use super::PeekResponse;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
 
@@ -106,6 +107,11 @@ pub struct ActiveReplication<T> {
     history: crate::client::ComputeCommandHistory<T>,
     /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
     last_command_count: usize,
+    /// Responses that should be emitted on the next `recv` call.
+    ///
+    /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
+    /// responding with the response itself, which allows us to compact away the peek in `self.history`.
+    pending_response: VecDeque<ComputeResponse<T>>,
 }
 
 impl<T> Default for ActiveReplication<T> {
@@ -117,6 +123,7 @@ impl<T> Default for ActiveReplication<T> {
             uppers: Default::default(),
             history: Default::default(),
             last_command_count: 0,
+            pending_response: Default::default(),
         }
     }
 }
@@ -196,9 +203,24 @@ where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        // Register an interest in the peek.
-        if let ComputeCommand::Peek(Peek { uuid, .. }) = &cmd {
-            self.peeks.insert(*uuid);
+        // Update our tracking of peek commands.
+        match &cmd {
+            ComputeCommand::Peek(Peek { uuid, .. }) => {
+                self.peeks.insert(*uuid);
+            }
+            ComputeCommand::CancelPeeks { uuids } => {
+                // Canceled peeks should not be further responded to.
+                for uuid in uuids.iter() {
+                    self.peeks.remove(uuid);
+                }
+                // Enqueue the response to the cancelation.
+                self.pending_response.extend(
+                    uuids
+                        .iter()
+                        .map(|uuid| ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled)),
+                );
+            }
+            _ => {}
         }
 
         // Initialize any necessary frontier tracking.
@@ -251,6 +273,11 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        // If we have a pending response, we should send it immediately.
+        if let Some(response) = self.pending_response.pop_front() {
+            return Ok(Some(response));
+        }
+
         if self.replicas.is_empty() {
             // We want to communicate that the result is not ready
             futures::future::pending().await

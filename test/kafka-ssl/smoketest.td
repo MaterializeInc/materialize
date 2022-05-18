@@ -97,7 +97,7 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
       ssl_key_location = '/share/secrets/materialized.key',
       ssl_certificate_location = '/share/secrets/materialized.crt',
       ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password_env = 'SSL_KEY_PASSWORD'
+      ssl_key_password = 'mzmzmz'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
@@ -121,7 +121,7 @@ $ kafka-verify format=avro sink=materialize.public.env_pw_snk sort-messages=true
       ssl_key_location = '/share/secrets/materialized.key',
       ssl_certificate_location = '/share/secrets/materialized.crt',
       ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password_env = 'SSL_KEY_PASSWORD'
+      ssl_key_password = 'mzmzmz'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
@@ -140,7 +140,7 @@ exact:error publishing kafka schemas for sink: unable to publish value schema to
       ssl_key_location = '/share/secrets/materialized.key',
       ssl_certificate_location = '/share/secrets/materialized.crt',
       ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password_env = 'SSL_KEY_PASSWORD'
+      ssl_key_password = 'mzmzmz'
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM

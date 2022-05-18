@@ -28,7 +28,7 @@ use futures::StreamExt;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
 use mz_dataflow_types::client::RemoteClient;
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
@@ -38,7 +38,7 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
-use tower_http::cors::{AnyOr, Origin};
+use tower_http::cors::AllowOrigin;
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -87,7 +87,7 @@ pub struct Config {
     pub frontegg: Option<FronteggAuthentication>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
-    pub cors_allowed_origin: AnyOr<Origin>,
+    pub cors_allowed_origin: AllowOrigin,
 
     // === Storage options. ===
     /// The directory in which `materialized` should store its own metadata.
@@ -98,6 +98,12 @@ pub struct Config {
     /// stash instead of sqlite from the `data_directory`.
     pub catalog_postgres_stash: Option<String>,
 
+    // === Connector options. ===
+    /// Configuration for source and sink connectors created by the storage
+    /// layer. This can include configuration for external
+    /// sources.
+    pub connector_context: ConnectorContext,
+
     // === Platform options. ===
     /// Configuration of service orchestration.
     pub orchestrator: OrchestratorConfig,
@@ -105,12 +111,6 @@ pub struct Config {
     // === Secrets Storage options. ===
     /// Optional configuration for a secrets controller.
     pub secrets_controller: Option<SecretsControllerConfig>,
-
-    // === AWS options. ===
-    /// An [external ID] to be supplied to all AWS AssumeRole operations.
-    ///
-    /// [external id]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
-    pub aws_external_id: AwsExternalId,
 
     // === Mode switches. ===
     /// Whether to permit usage of experimental features.
@@ -302,6 +302,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
                         ),
+                        format!(
+                            "--http-console-addr={}:{}",
+                            default_listen_host, my_ports["http"]
+                        ),
                         "--log-process-name".to_string(),
                     ];
                     if config.orchestrator.linger {
@@ -317,6 +321,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                     ServicePort {
                         name: "compute".into(),
                         port_hint: 2101,
+                    },
+                    ServicePort {
+                        name: "http".into(),
+                        port_hint: 6875,
                     },
                 ],
                 // TODO: limits?
@@ -388,12 +396,12 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         logical_compaction_window: config.logical_compaction_window,
         experimental_mode: config.experimental_mode,
         build_info: &BUILD_INFO,
-        aws_external_id: config.aws_external_id.clone(),
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller,
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
+        connector_context: config.connector_context,
     })
     .await?;
 

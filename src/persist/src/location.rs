@@ -657,6 +657,7 @@ pub mod tests {
 
     use anyhow::anyhow;
     use mz_persist_types::Codec;
+    use uuid::Uuid;
 
     use crate::error::Error;
     use crate::gen::persist::ProtoMeta;
@@ -1063,19 +1064,21 @@ pub mod tests {
     ) -> Result<(), ExternalError> {
         let consensus = new_fn()?;
 
-        let key = "heyo!";
+        // Use a random key so independent runs of this test don't interfere
+        // with each other.
+        let key = Uuid::new_v4().to_string();
 
         // Enforce that this entire test completes within 10 minutes.
         let deadline = Instant::now() + Duration::from_secs(600);
 
         // Starting value of consensus data is None.
-        assert_eq!(consensus.head(deadline, key).await, Ok(None));
+        assert_eq!(consensus.head(deadline, &key).await, Ok(None));
 
         // Cannot scan a key that has no data.
-        assert!(consensus.scan(deadline, key, SeqNo(0)).await.is_err());
+        assert!(consensus.scan(deadline, &key, SeqNo(0)).await.is_err());
 
         // Cannot truncate data from a key that doesn't have any data
-        assert!(consensus.truncate(deadline, key, SeqNo(0)).await.is_err(),);
+        assert!(consensus.truncate(deadline, &key, SeqNo(0)).await.is_err(),);
 
         let state = VersionedData {
             seqno: SeqNo(5),
@@ -1085,7 +1088,7 @@ pub mod tests {
         // Incorrectly setting the data with a non-None expected should fail.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(SeqNo(0)), state.clone())
+                .compare_and_set(deadline, &key, Some(SeqNo(0)), state.clone())
                 .await,
             Ok(Err(None))
         );
@@ -1093,36 +1096,39 @@ pub mod tests {
         // Correctly updating the state with the correct expected value should succeed.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, None, state.clone())
+                .compare_and_set(deadline, &key, None, state.clone())
                 .await,
             Ok(Ok(()))
         );
 
         // We can observe the a recent value on successful update.
-        assert_eq!(consensus.head(deadline, key).await, Ok(Some(state.clone())));
+        assert_eq!(
+            consensus.head(deadline, &key).await,
+            Ok(Some(state.clone()))
+        );
 
         // Can scan a key that has data with a lower bound sequence number < head.
         assert_eq!(
-            consensus.scan(deadline, key, SeqNo(0)).await,
+            consensus.scan(deadline, &key, SeqNo(0)).await,
             Ok(vec![state.clone()])
         );
 
         // Can scan a key that has data with a lower bound sequence number == head.
         assert_eq!(
-            consensus.scan(deadline, key, SeqNo(5)).await,
+            consensus.scan(deadline, &key, SeqNo(5)).await,
             Ok(vec![state.clone()])
         );
 
         // Cannot scan a key that has data with a lower bound sequence number > head.
-        assert!(consensus.scan(deadline, key, SeqNo(6)).await.is_err());
+        assert!(consensus.scan(deadline, &key, SeqNo(6)).await.is_err());
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
-        assert_eq!(consensus.truncate(deadline, key, SeqNo(0)).await, Ok(()));
-        assert_eq!(consensus.truncate(deadline, key, SeqNo(5)).await, Ok(()));
+        assert_eq!(consensus.truncate(deadline, &key, SeqNo(0)).await, Ok(()));
+        assert_eq!(consensus.truncate(deadline, &key, SeqNo(5)).await, Ok(()));
 
         // Cannot truncate data with an upper bound > head.
-        assert!(consensus.truncate(deadline, key, SeqNo(6)).await.is_err(),);
+        assert!(consensus.truncate(deadline, &key, SeqNo(6)).await.is_err(),);
 
         let new_state = VersionedData {
             seqno: SeqNo(10),
@@ -1132,7 +1138,7 @@ pub mod tests {
         // Trying to update without the correct expected seqno fails, (even if expected > current)
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(SeqNo(7)), new_state.clone())
+                .compare_and_set(deadline, &key, Some(SeqNo(7)), new_state.clone())
                 .await,
             Ok(Err(Some(state.clone())))
         );
@@ -1140,7 +1146,7 @@ pub mod tests {
         // Trying to update without the correct expected seqno fails, (even if expected < current)
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(SeqNo(3)), new_state.clone())
+                .compare_and_set(deadline, &key, Some(SeqNo(3)), new_state.clone())
                 .await,
             Ok(Err(Some(state.clone())))
         );
@@ -1154,7 +1160,7 @@ pub mod tests {
         // expected is correct.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(state.seqno), invalid_constant_seqno)
+                .compare_and_set(deadline, &key, Some(state.seqno), invalid_constant_seqno)
                 .await,
             Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)")))
         );
@@ -1168,7 +1174,7 @@ pub mod tests {
         // expected is correct.
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(state.seqno), invalid_regressing_seqno)
+                .compare_and_set(deadline, &key, Some(state.seqno), invalid_regressing_seqno)
                 .await,
             Err(ExternalError::from(anyhow!("new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)")))
         );
@@ -1176,57 +1182,57 @@ pub mod tests {
         // Can correctly update to a new state if we provide the right expected seqno
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(state.seqno), new_state.clone())
+                .compare_and_set(deadline, &key, Some(state.seqno), new_state.clone())
                 .await,
             Ok(Ok(()))
         );
 
         // We can observe the a recent value on successful update.
         assert_eq!(
-            consensus.head(deadline, key).await,
+            consensus.head(deadline, &key).await,
             Ok(Some(new_state.clone()))
         );
 
         // We can observe both states in the correct order with scan if pass
         // in a suitable lower bound.
         assert_eq!(
-            consensus.scan(deadline, key, SeqNo(5)).await,
+            consensus.scan(deadline, &key, SeqNo(5)).await,
             Ok(vec![state.clone(), new_state.clone()])
         );
 
         // We can observe only the most recent state if the lower bound is higher
         // than the previous insertion's sequence number.
         assert_eq!(
-            consensus.scan(deadline, key, SeqNo(6)).await,
+            consensus.scan(deadline, &key, SeqNo(6)).await,
             Ok(vec![new_state.clone()])
         );
 
         // We can still observe the most recent insert as long as the provided
         // lower bound == most recent 's sequence number.
         assert_eq!(
-            consensus.scan(deadline, key, SeqNo(10)).await,
+            consensus.scan(deadline, &key, SeqNo(10)).await,
             Ok(vec![new_state.clone()])
         );
 
         // We cannot scan if the provided lower bound > head's sequence number.
-        assert!(consensus.scan(deadline, key, SeqNo(11)).await.is_err());
+        assert!(consensus.scan(deadline, &key, SeqNo(11)).await.is_err());
 
         // Can remove the previous write with the appropriate truncation.
-        assert_eq!(consensus.truncate(deadline, key, SeqNo(6)).await, Ok(()));
+        assert_eq!(consensus.truncate(deadline, &key, SeqNo(6)).await, Ok(()));
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
-            consensus.scan(deadline, key, SeqNo(0)).await,
+            consensus.scan(deadline, &key, SeqNo(0)).await,
             Ok(vec![new_state.clone()])
         );
 
         // Truncate is idempotent and can be repeated.
-        assert_eq!(consensus.truncate(deadline, key, SeqNo(6)).await, Ok(()));
+        assert_eq!(consensus.truncate(deadline, &key, SeqNo(6)).await, Ok(()));
 
         // Make sure entries under different keys don't clash.
-        let other_key = "heyo_two!";
+        let other_key = Uuid::new_v4().to_string();
 
-        assert_eq!(consensus.head(deadline, other_key).await, Ok(None));
+        assert_eq!(consensus.head(deadline, &other_key).await, Ok(None));
 
         let state = VersionedData {
             seqno: SeqNo(1),
@@ -1235,19 +1241,19 @@ pub mod tests {
 
         assert_eq!(
             consensus
-                .compare_and_set(deadline, other_key, None, state.clone())
+                .compare_and_set(deadline, &other_key, None, state.clone())
                 .await,
             Ok(Ok(()))
         );
 
         assert_eq!(
-            consensus.head(deadline, other_key).await,
+            consensus.head(deadline, &other_key).await,
             Ok(Some(state.clone()))
         );
 
         // State for the first key is still as expected.
         assert_eq!(
-            consensus.head(deadline, key).await,
+            consensus.head(deadline, &key).await,
             Ok(Some(new_state.clone()))
         );
 
@@ -1258,7 +1264,7 @@ pub mod tests {
         };
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(state.seqno), invalid_jump_forward)
+                .compare_and_set(deadline, &key, Some(state.seqno), invalid_jump_forward)
                 .await,
             Ok(Err(Some(new_state.clone())))
         );
@@ -1270,7 +1276,7 @@ pub mod tests {
         };
         assert_eq!(
             consensus
-                .compare_and_set(deadline, key, Some(new_state.seqno), large_state)
+                .compare_and_set(deadline, &key, Some(new_state.seqno), large_state)
                 .await,
             Ok(Ok(()))
         );
@@ -1281,7 +1287,7 @@ pub mod tests {
             consensus
                 .compare_and_set(
                     deadline,
-                    &"zero",
+                    &Uuid::new_v4().to_string(),
                     None,
                     VersionedData {
                         seqno: SeqNo(0),
@@ -1295,7 +1301,7 @@ pub mod tests {
             consensus
                 .compare_and_set(
                     deadline,
-                    &"i64_max",
+                    &Uuid::new_v4().to_string(),
                     None,
                     VersionedData {
                         seqno: SeqNo(i64::MAX.try_into().expect("i64::MAX fits in u64")),
@@ -1308,7 +1314,7 @@ pub mod tests {
         assert!(consensus
             .compare_and_set(
                 deadline,
-                &"i64_max_plus_one",
+                &Uuid::new_v4().to_string(),
                 None,
                 VersionedData {
                     seqno: SeqNo(1 << 63),
@@ -1320,7 +1326,7 @@ pub mod tests {
         assert!(consensus
             .compare_and_set(
                 deadline,
-                &"u64_max",
+                &Uuid::new_v4().to_string(),
                 None,
                 VersionedData {
                     seqno: SeqNo(u64::MAX),

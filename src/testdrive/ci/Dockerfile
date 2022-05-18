@@ -23,7 +23,7 @@ ENV PROTOC /usr/local/bin/protoc
 WORKDIR /workdir
 
 RUN mkdir -p /share/tmp && chmod 777 /share/tmp
-RUN mkdir -p /share/mzdata && chmod 777 /share/mzdata
+RUN mkdir -p /mzdata && chmod 777 /mzdata
 
 VOLUME /share/tmp
-VOLUME /share/mzdata
+VOLUME /mzdata

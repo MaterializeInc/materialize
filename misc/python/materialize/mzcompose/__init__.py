@@ -220,6 +220,7 @@ class Composition:
         compose.setdefault("volumes", {}).update(
             {
                 "mzdata": None,
+                "postgres": None,
                 "tmp": None,
                 "secrets": None,
             }

@@ -20,7 +20,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_storage::boundary::ComputeReplay;
@@ -42,8 +42,9 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// An external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id: AwsExternalId,
+    /// Configuration for sink connectors.
+    // TODO: remove when sinks move to storage.
+    pub connector_context: ConnectorContext,
 }
 
 /// A handle to a running dataflow server.
@@ -106,6 +107,7 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
             compute_boundary,
             compute_response_tx,
             metrics_bundle: metrics_bundle.clone(),
+            connector_context: config.connector_context.clone(),
         }
         .run()
     })
@@ -143,6 +145,9 @@ where
     compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
     metrics_bundle: (SinkBaseMetrics, TraceMetrics),
+    /// Configuration for sink connectors.
+    // TODO: remove when sinks move to storage.
+    pub connector_context: ConnectorContext,
 }
 
 impl<'w, A, CR> Worker<'w, A, CR>
@@ -201,6 +206,7 @@ where
                             reported_frontiers: HashMap::new(),
                             sink_metrics: self.metrics_bundle.0.clone(),
                             materialized_logger: None,
+                            connector_context: self.connector_context.clone(),
                         });
                     }
                     ComputeCommand::DropInstance => {

@@ -19,7 +19,7 @@ csv = "1.1.6"
 dec = "0.4.8"
 derivative = "2.2.0"
 encoding = "0.2.0"
-enum-iterator = "0.7.0"
+enum-iterator = "0.8.1"
 fallible-iterator = "0.2.0"
 hex = "0.4.3"
 hmac = "0.12.1"
@@ -33,18 +33,18 @@ mz-repr = { path = "../repr" }
 mz-persist-types = { path = "../persist-types" }
 num = "0.4.0"
 num_enum = "0.5.7"
-ordered-float = { version = "2.10.0", features = ["serde"] }
+ordered-float = { version = "3.0.0", features = ["serde"] }
 paste = "1.0.7"
-prost = "0.10.1"
+prost = "0.10.3"
 regex = "1.5.4"
 regex-syntax = "0.6.25"
 serde = { version = "1.0.137", features = ["derive"] }
-serde_json = "1.0.80"
+serde_json = "1.0.81"
 serde_regex = "1.1.0"
 sha-1 = "0.10.0"
 sha2 = "0.10.2"
-uncased = "0.9.6"
-uuid = "0.8.2"
+uncased = "0.9.7"
+uuid = "1.0.0"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 
