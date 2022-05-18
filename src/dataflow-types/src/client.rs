@@ -199,6 +199,43 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
 }
 
+/// Trait for a timestamp T that indicates it has a supported for proto serialization
+pub trait ProtoSerializableTimestamp: Sized {
+    fn compute_command_into_proto(x: ComputeCommand<Self>) -> ProtoComputeCommand;
+
+    fn compute_command_into_rust(
+        x: ProtoComputeCommand,
+    ) -> Result<ComputeCommand<Self>, TryFromProtoError>;
+
+    fn compute_response_into_proto(x: ComputeResponse<Self>) -> ProtoComputeResponse;
+
+    fn compute_response_into_rust(
+        x: ProtoComputeResponse,
+    ) -> Result<ComputeResponse<Self>, TryFromProtoError>;
+}
+
+impl ProtoSerializableTimestamp for u64 {
+    fn compute_command_into_proto(x: ComputeCommand<Self>) -> ProtoComputeCommand {
+        (&x).into_proto()
+    }
+
+    fn compute_command_into_rust(
+        x: ProtoComputeCommand,
+    ) -> Result<ComputeCommand<Self>, TryFromProtoError> {
+        x.into_rust()
+    }
+
+    fn compute_response_into_proto(x: ComputeResponse<Self>) -> ProtoComputeResponse {
+        (&x).into_proto()
+    }
+
+    fn compute_response_into_rust(
+        x: ProtoComputeResponse,
+    ) -> Result<ComputeResponse<Self>, TryFromProtoError> {
+        x.into_rust()
+    }
+}
+
 impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoComputeCommand {
         use proto_compute_command::Kind::*;
@@ -815,33 +852,51 @@ pub trait Reconnect {
     async fn reconnect(&mut self);
 }
 
+/// Trait for clients that can connect to an address
+pub trait FromAddr {
+    fn from_addr(addr: String) -> Self;
+}
+
 /// A convenience type for compatibility.
 #[derive(Debug)]
-pub struct RemoteClient<C, R>
+pub struct RemoteClient<C, R, G = tcp::TcpClient<C, R>>
 where
     (C, R): partitioned::Partitionable<C, R>,
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
+    G: GenericClient<C, R> + Reconnect + FromAddr,
 {
     // (LH) This is what I tried:
     // client: partitioned::Partitioned<tcp::GrpcComputedClient, C, R>,
     // Maybe we could do here GenericClient?
-    client: partitioned::Partitioned<tcp::TcpClient<C, R>, C, R>,
+    client: partitioned::Partitioned<G, C, R>,
 }
 
-impl<C, R> RemoteClient<C, R>
+pub type ComputedRemoteClient<T> = RemoteClient<
+    ComputeCommand<T>,
+    ComputeResponse<T>,
+    //tcp::TcpClient<ComputeCommand<T>, ComputeResponse<T>>,
+    tcp::GrpcComputedClient<T>,
+>;
+
+pub type StoragedRemoteClient<T> = RemoteClient<
+    StorageCommand<T>,
+    StorageResponse<T>,
+    tcp::TcpClient<StorageCommand<T>, StorageResponse<T>>,
+>;
+
+impl<C, R, G> RemoteClient<C, R, G>
 where
     (C, R): partitioned::Partitionable<C, R>,
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
+    G: GenericClient<C, R> + Reconnect + FromAddr,
 {
     /// Construct a client backed by multiple tcp connections
     pub fn new(addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display]) -> Self {
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {
-            remotes.push(tcp::TcpClient::new(addr.to_string()));
-            // (LH):
-            //remotes.push(tcp::GrpcComputedClient::new(addr.to_string()));
+            remotes.push(G::from_addr(addr.to_string()));
         }
         Self {
             client: partitioned::Partitioned::new(remotes),
@@ -855,28 +910,13 @@ where
     }
 }
 
-// (LH): With the changes above, this gets me one step closer
-//#[async_trait]
-//impl GenericClient<ComputeCommand, ComputeResponse>
-//    for RemoteClient<ComputeCommand, ComputeResponse>
-//{
-//    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-//        trace!("Sending dataflow command: {:?}", cmd);
-//        self.client.send(cmd).await
-//    }
-//    async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
-//        let response = self.client.recv().await;
-//        trace!("Receiving dataflow response: {:?}", response);
-//        response
-//    }
-//}
-
 #[async_trait]
-impl<C, R> GenericClient<C, R> for RemoteClient<C, R>
+impl<C, R, G> GenericClient<C, R> for RemoteClient<C, R, G>
 where
     (C, R): partitioned::Partitionable<C, R>,
     C: Serialize + fmt::Debug + Unpin + Send,
     R: DeserializeOwned + fmt::Debug + Unpin + Send,
+    G: GenericClient<C, R> + Reconnect + FromAddr,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!("Sending dataflow command: {:?}", cmd);
@@ -976,7 +1016,7 @@ pub mod tcp {
     use std::time::Duration;
     use tokio::sync::mpsc;
     use tokio::sync::Mutex;
-    use tokio::time::sleep;
+    use tracing::info;
 
     use async_trait::async_trait;
     use futures::sink::SinkExt;
@@ -1003,6 +1043,8 @@ pub mod tcp {
     use super::proto_compute_client::ProtoComputeClient;
     use super::ComputeCommand;
     use super::ComputeResponse;
+    use super::FromAddr;
+    use super::ProtoSerializableTimestamp;
     use crate::client::GenericClient;
 
     use super::Reconnect;
@@ -1029,38 +1071,54 @@ pub mod tcp {
     }
 
     #[derive(Debug)]
-    pub struct GrpcComputedClient {
+    pub struct GrpcComputedClient<T> {
         addr: String,
         state: GrpcComputedTcpConn,
         backoff: Duration,
+        _dummy: Vec<T>,
     }
 
-    impl GrpcComputedClient {
-        pub fn new(addr: String) -> GrpcComputedClient {
+    impl<T> FromAddr for GrpcComputedClient<T> {
+        fn from_addr(addr: String) -> GrpcComputedClient<T> {
+            info!("GrpcComputedClient::from_addr {}", &addr);
             GrpcComputedClient {
-                addr,
+                addr: format!("http://{}", addr),
                 state: GrpcComputedTcpConn::Disconnected,
                 backoff: Duration::from_millis(10),
+                _dummy: vec![],
             }
         }
+    }
 
+    impl<T> GrpcComputedClient<T>
+    where
+        T: ProtoSerializableTimestamp,
+        // super::ProtoComputeCommand: From<ComputeCommand<T>>,
+        // ComputeResponse<T>: TryFrom<super::ProtoComputeResponse>,
+        // <ComputeResponse<T> as TryFrom<super::ProtoComputeResponse>>::Error:
+        //     Send + Sync + std::error::Error,
+    {
         // Cancellation safe
         pub async fn connect(&mut self) -> () {
+            info!("GrpcComputedClient::connect called");
             loop {
                 match &mut self.state {
                     GrpcComputedTcpConn::Disconnected => {
+                        info!("Attempt to connect to {}", self.addr.clone());
                         match ProtoComputeClient::connect(self.addr.clone()).await {
                             Ok(client) => {
                                 self.backoff = Duration::from_millis(10);
                                 self.state = GrpcComputedTcpConn::AwaitResponse(client);
-                                break;
                             }
                             Err(e) => {
-                                println!("Connection refused: {}", e);
                                 self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
+                                info!(
+                                    "Connection refused: {}. Backoff {}ms",
+                                    e,
+                                    self.backoff.as_millis()
+                                );
                                 self.state =
                                     GrpcComputedTcpConn::Backoff(Instant::now() + self.backoff);
-                                sleep(Duration::from_millis(1000)).await;
                             }
                         }
                     }
@@ -1071,34 +1129,46 @@ pub mod tcp {
                             .await
                             .unwrap()
                             .into_inner();
+                        info!("GrpcComputedClient connected");
                         self.state = GrpcComputedTcpConn::Connected((tx, resp_rx));
                     }
                     GrpcComputedTcpConn::Connected(_) => break,
                     GrpcComputedTcpConn::Backoff(deadline) => {
                         time::sleep_until(*deadline).await;
+                        self.state = GrpcComputedTcpConn::Disconnected;
                     }
                 }
             }
         }
+    }
 
-        pub fn connected(&self) -> bool {
-            matches!(self.state, GrpcComputedTcpConn::Connected(_))
-        }
-
-        pub async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
+    #[async_trait]
+    impl<T: ProtoSerializableTimestamp> GenericClient<ComputeCommand<T>, ComputeResponse<T>>
+        for GrpcComputedClient<T>
+    where
+        T: std::fmt::Debug + Send,
+    {
+        async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+            //info!("GrpcComputedClient::send called");
             let sender = if let GrpcComputedTcpConn::Connected((sender, _)) = &self.state {
                 sender
             } else {
                 return Err(anyhow::anyhow!("Sent into disconnected channel"));
             };
-            sender.send((&cmd).into_proto()).await.expect("Ok");
+            sender
+                .send(ProtoSerializableTimestamp::compute_command_into_proto(cmd))
+                .await
+                .expect("Ok");
             Ok(())
         }
 
-        pub async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
+        async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+            //info!("GrpcComputedClient::recv called");
             if let GrpcComputedTcpConn::Connected(channels) = &mut self.state {
                 match channels.1.next().await {
-                    Some(Ok(x)) => Ok(Some(x.into_rust()?)),
+                    Some(Ok(x)) => Ok(Some(
+                        ProtoSerializableTimestamp::compute_response_into_rust(x)?,
+                    )),
                     other => {
                         match other {
                             Some(Ok(_)) => unreachable!("handled above"),
@@ -1107,26 +1177,25 @@ pub mod tcp {
                         }
 
                         self.state = GrpcComputedTcpConn::Disconnected;
-                        self.connect().await;
-                        Err(anyhow::anyhow!("Connection severed; reconnected"))
+                        Err(anyhow::anyhow!("Connection severed"))
                     }
                 }
             } else {
-                self.connect().await;
-                Err(anyhow::anyhow!("Connection severed; reconnected"))
+                Err(anyhow::anyhow!("Connection severed"))
             }
         }
     }
 
-    // (LH): Needs some + Send or so....
     #[async_trait]
-    impl GenericClient<ComputeCommand, ComputeResponse> for GrpcComputedClient {
-        async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
-            self.send(cmd).await
+    impl<T: Send + ProtoSerializableTimestamp> Reconnect for GrpcComputedClient<T> {
+        fn disconnect(&mut self) {
+            info!("GrpcComputedClient::disconnect called");
+            self.state = GrpcComputedTcpConn::Disconnected;
         }
 
-        async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
-            self.recv().await
+        async fn reconnect(&mut self) {
+            info!("GrpcComputedClient::reconnect called");
+            self.connect().await
         }
     }
 
@@ -1156,21 +1225,16 @@ pub mod tcp {
         addr: String,
     }
 
-    impl<C, R> TcpClient<C, R> {
+    impl<C, R> FromAddr for TcpClient<C, R> {
         /// Creates a new `TcpClient` initially in a disconnected state.
         ///
-        /// Use the `connect()` method to put the client into a connected state.
-        pub fn new(addr: String) -> TcpClient<C, R> {
+        /// Use the `reconnect()` of the Reconnect trait method to put the client into a connected state.
+        fn from_addr(addr: String) -> TcpClient<C, R> {
             Self {
                 connection: TcpConn::Disconnected,
                 backoff: Duration::from_millis(10),
                 addr,
             }
-        }
-
-        /// Reports whether the client is actively connected.
-        pub fn connected(&self) -> bool {
-            matches!(self.connection, TcpConn::Connected(_))
         }
     }
 
@@ -1340,11 +1404,11 @@ pub mod tcp {
 
                     // Other end absent, wait for connection
                     None => {
-                        println!("In recv, queue is None, retry");
+                        info!("recv called while no coordinator connectedioo, waiting for coordinator connection.");
                     }
                 }
 
-                self.shared.queue_change.notified().await
+                self.shared.queue_change.notified().await;
             }
         }
     }
@@ -1383,7 +1447,7 @@ pub mod tcp {
             &self,
             req: Request<Streaming<super::ProtoComputeCommand>>,
         ) -> Result<tonic::Response<Self::HandleStream>, tonic::Status> {
-            println!("GrpcComputedServer::handle");
+            info!("GrpcComputedServer::handle - a remote client has connected");
 
             let mut in_stream = req.into_inner();
             let (cmd_tx, cmd_rx) = mpsc::channel(4);
@@ -1447,9 +1511,11 @@ pub mod tcp {
         };
 
         mz_ore::task::spawn(|| "ComputedProtoServer", async move {
+            info!("Starting to listen on {}", listen_addr);
             Server::builder()
                 .add_service(super::proto_compute_server::ProtoComputeServer::new(server))
                 .serve(listen_addr.to_socket_addrs().unwrap().next().unwrap())
+                //.serve_with_incoming(listen_addr.to_socket_addrs().unwrap().next().unwrap())
                 // call serve_with_incoming for TLS
                 .await
                 .unwrap();

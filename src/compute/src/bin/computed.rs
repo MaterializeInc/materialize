@@ -232,6 +232,7 @@ where
             }
         }
         if !config.linger {
+            info!("coordinator connection gone; exiting");
             break;
         } else {
             info!("coordinator connection gone; lingering");
