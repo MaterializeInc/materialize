@@ -18,8 +18,8 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures_executor::block_on;
-use libsqlite3_sys::ErrorCode;
 use mz_persist_types::Codec;
+use rusqlite::ffi::ErrorCode;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::error::SqlState;
 use tracing::info;
@@ -226,7 +226,7 @@ impl From<std::io::Error> for ExternalError {
 impl From<rusqlite::Error> for ExternalError {
     fn from(x: rusqlite::Error) -> Self {
         let code = match x {
-            rusqlite::Error::SqliteFailure(libsqlite3_sys::Error { code, .. }, _) => code,
+            rusqlite::Error::SqliteFailure(rusqlite::ffi::Error { code, .. }, _) => code,
             _ => {
                 return ExternalError::Indeterminate(Indeterminate {
                     inner: anyhow::Error::new(x),

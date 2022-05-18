@@ -3617,7 +3617,6 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "lazy_static",
- "libsqlite3-sys",
  "md-5",
  "mz-build-info",
  "mz-ore",
