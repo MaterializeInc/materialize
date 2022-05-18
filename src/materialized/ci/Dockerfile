@@ -21,9 +21,12 @@ RUN apt-get update \
     && pg_dropcluster 14 main \
     && pg_createcluster 14 materialize --user=materialize \
     && pg_ctlcluster 14 materialize start \
+    && echo "listen_addresses = '*'" >> /etc/postgresql/14/materialize/postgresql.conf \
     && su materialize -c "createdb materialize" \
     && mkdir /mzdata \
     && chown materialize /mzdata
+
+COPY pg_hba.conf /etc/postgresql/14/materialize/pg_hba.conf
 
 COPY storaged computed materialized entrypoint.sh /usr/local/bin/
 

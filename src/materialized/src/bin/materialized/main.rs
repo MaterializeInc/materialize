@@ -21,6 +21,7 @@ use std::cmp;
 use std::env;
 use std::ffi::CStr;
 use std::fs;
+use std::iter;
 use std::net::SocketAddr;
 use std::panic;
 use std::panic::PanicInfo;
@@ -33,7 +34,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use backtrace::Backtrace;
-use clap::{AppSettings, ArgEnum, Parser};
+use clap::{ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::{HeaderName, HeaderValue};
 use itertools::Itertools;
@@ -73,6 +74,15 @@ mod sys;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+lazy_static! {
+    pub static ref VERSION: String = materialized::BUILD_INFO.human_version();
+    pub static ref LONG_VERSION: String = {
+        iter::once(materialized::BUILD_INFO.human_version())
+            .chain(build_info())
+            .join("\n")
+    };
+}
+
 type OptionalDuration = Option<Duration>;
 
 fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
@@ -84,15 +94,13 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 
 /// The streaming SQL materialized view engine.
 #[derive(Parser, Debug)]
-#[clap(next_line_help = true, args_override_self = true, global_setting = AppSettings::NoAutoVersion)]
+#[clap(
+    next_line_help = true,
+    args_override_self = true,
+    version = VERSION.as_str(),
+    long_version = LONG_VERSION.as_str(),
+)]
 pub struct Args {
-    // === Special modes. ===
-    /// Print version information and exit.
-    ///
-    /// Specify twice to additionally print version information for selected
-    /// dependencies.
-    #[clap(short, long, parse(from_occurrences))]
-    version: usize,
     /// [DANGEROUS] Enable experimental features.
     #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
@@ -359,14 +367,11 @@ pub struct Args {
     #[clap(long, env = "MZ_PERSIST_BLOB_URL")]
     persist_blob_url: Option<Url>,
     /// Where the persist library should perform consensus.
-    ///
-    /// Defaults to the `persist/consensus` SQLite database in the data
-    /// directory.
     #[clap(long, env = "MZ_PERSIST_CONSENSUS_URL")]
-    persist_consensus_url: Option<Url>,
+    persist_consensus_url: Url,
     /// Postgres catalog stash connection string.
     #[clap(long, env = "MZ_CATALOG_POSTGRES_STASH", value_name = "POSTGRES_URL")]
-    catalog_postgres_stash: Option<String>,
+    catalog_postgres_stash: String,
 
     // === AWS options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -487,16 +492,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
-
-    if args.version > 0 {
-        println!("materialized {}", materialized::BUILD_INFO.human_version());
-        if args.version > 1 {
-            for bi in build_info() {
-                println!("{}", bi);
-            }
-        }
-        return Ok(());
-    }
 
     // Configure connections.
     let tls = if args.tls_mode == "disable" {
@@ -633,22 +628,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             ),
             Some(blob_url) => blob_url.to_string(),
         },
-        consensus_uri: match args.persist_consensus_url {
-            None => {
-                #[cfg(target_os = "macos")]
-                let host = "/tmp";
-                #[cfg(not(target_os = "macos"))]
-                let host = "/var/run/postgresql";
-                format!(
-                    "postgres://{}@{}",
-                    urlencoding::encode(&whoami::username()),
-                    urlencoding::encode(host),
-                )
-            }
-            Some(consensus_url) => consensus_url.to_string(),
-        },
+        consensus_uri: args.persist_consensus_url.to_string(),
     };
-    let catalog_postgres_stash = args.catalog_postgres_stash;
+    let catalog_postgres_stash = Some(args.catalog_postgres_stash);
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.

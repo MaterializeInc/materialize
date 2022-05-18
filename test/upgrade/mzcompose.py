@@ -138,7 +138,7 @@ def test_upgrade_from_version(
     print(">>> Version glob pattern: " + version_glob)
 
     c.rm("materialized", "testdrive", stop=True)
-    c.rm_volumes("mzdata", "tmp")
+    c.rm_volumes("mzdata", "pgdata", "tmp")
 
     if from_version != "current_source":
         mz_from = Materialized(

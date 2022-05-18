@@ -19,7 +19,7 @@ LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
-    "postgres:/var/lib/postgresql",
+    "pgdata:/var/lib/postgresql",
     "tmp:/share/tmp",
 ]
 
@@ -107,7 +107,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port, *extra_ports],
+                "ports": [port, 5432, *extra_ports],
                 "environment": environment,
                 "volumes": volumes,
             }
@@ -559,7 +559,7 @@ class Testdrive(Service):
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://postgres:postgres@postgres/postgres"
+                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=catalog"
             )
 
         if no_reset:

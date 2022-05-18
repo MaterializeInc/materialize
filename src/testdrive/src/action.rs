@@ -43,7 +43,6 @@ use mz_ore::task;
 use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
 use crate::util;
-use crate::util::mz_data::catalog_copy;
 
 mod file;
 mod http;
@@ -60,7 +59,6 @@ mod skip_if;
 mod sleep;
 mod sql;
 mod sql_server;
-mod verify_timestamp_compaction;
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -100,8 +98,6 @@ pub struct Config {
     pub materialized_pgconfig: tokio_postgres::Config,
     /// Session parameters to set after connecting to materialized.
     pub materialized_params: Vec<(String, String)>,
-    /// An optional path to the data directory for the materialized instance.
-    pub materialized_data_path: Option<PathBuf>,
     /// An optional Postgres connection string to the catalog stash.
     pub materialized_catalog_postgres_stash: Option<String>,
 
@@ -152,7 +148,6 @@ pub struct State {
     regex_replacement: String,
 
     // === Materialize state. ===
-    materialized_data_path: Option<PathBuf>,
     materialized_catalog_postgres_stash: Option<String>,
     materialized_addr: String,
     materialized_user: String,
@@ -203,6 +198,9 @@ impl State {
                 }
             });
 
+            let current_schema: String =
+                client.query_one("SELECT current_schema", &[]).await?.get(0);
+
             client
                 .execute(format!("CREATE SCHEMA {schema}").as_str(), &[])
                 .await?;
@@ -210,15 +208,16 @@ impl State {
                 .execute(format!("SET search_path TO {schema}").as_str(), &[])
                 .await?;
             client
-                .batch_execute(
+                .batch_execute(&format!(
                     "
-                                CREATE TABLE fence AS SELECT * FROM public.fence;
-                                CREATE TABLE collections AS SELECT * FROM public.collections;
-                                CREATE TABLE data AS SELECT * FROM public.data;
-                                CREATE TABLE sinces AS SELECT * FROM public.sinces;
-                                CREATE TABLE uppers AS SELECT * FROM public.uppers;
-                            ",
-                )
+                    CREATE TABLE fence AS SELECT * FROM {0}.fence;
+                    CREATE TABLE collections AS SELECT * FROM {0}.collections;
+                    CREATE TABLE data AS SELECT * FROM {0}.data;
+                    CREATE TABLE sinces AS SELECT * FROM {0}.sinces;
+                    CREATE TABLE uppers AS SELECT * FROM {0}.uppers;
+                    ",
+                    current_schema,
+                ))
                 .await?;
 
             let catalog =
@@ -229,11 +228,6 @@ impl State {
                 .execute(format!("DROP SCHEMA {schema} CASCADE").as_str(), &[])
                 .await?;
             Ok(Some(res))
-        } else if let Some(path) = &self.materialized_data_path {
-            let temp_mzdata = catalog_copy(path)?;
-            let path = temp_mzdata.path();
-            let catalog = Catalog::open_debug_sqlite(&path, NOW_ZERO.clone()).await?;
-            Ok(Some(f(catalog.for_session(&Session::dummy()))))
         } else {
             Ok(None)
         }
@@ -618,12 +612,12 @@ pub(crate) async fn build(
                         }
                         continue;
                     }
-                    "verify-timestamp-compaction" => Box::new(
-                        verify_timestamp_compaction::build_verify_timestamp_compaction_action(
-                            builtin,
-                        )
-                        .map_err(wrap_err)?,
-                    ),
+                    // "verify-timestamp-compaction" => Box::new(
+                    //     verify_timestamp_compaction::build_verify_timestamp_compaction_action(
+                    //         builtin,
+                    //     )
+                    //     .map_err(wrap_err)?,
+                    // ),
                     _ => {
                         return Err(PosError::new(
                             anyhow!("unknown built-in command {}", builtin.name),
@@ -723,17 +717,6 @@ pub async fn create_state(
             let temp_path = tempfile_handle.path().to_path_buf();
             (Some(tempfile_handle), temp_path)
         }
-    };
-
-    let materialized_data_path = match config.materialized_data_path.clone() {
-        Some(path) => match fs::metadata(&path) {
-            Ok(m) if !m.is_dir() => {
-                bail!("materialized data path is not a directory");
-            }
-            Ok(_) => Some(path),
-            Err(e) => return Err(e).context("opening materialized data directory"),
-        },
-        None => None,
     };
 
     let materialized_catalog_postgres_stash = config.materialized_catalog_postgres_stash.clone();
@@ -854,7 +837,6 @@ pub async fn create_state(
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
 
         // === Materialize state. ===
-        materialized_data_path,
         materialized_catalog_postgres_stash,
         materialized_addr,
         materialized_user,

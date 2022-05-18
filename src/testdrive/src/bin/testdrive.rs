@@ -274,7 +274,6 @@ async fn main() {
         // === Materialize options. ===
         materialized_pgconfig: args.materialized_url,
         materialized_params: args.materialized_param,
-        materialized_data_path: args.validate_data_dir,
         materialized_catalog_postgres_stash: args.validate_postgres_stash,
 
         // === Confluent options. ===

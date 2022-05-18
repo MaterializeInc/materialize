@@ -158,7 +158,7 @@ def stop_services(c: Composition, cluster_services: List[Service]) -> None:
     c.kill(*service_names)
     c.rm(*service_names)
 
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")
 
 
 def run_one_scenario(

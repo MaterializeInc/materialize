@@ -15,7 +15,6 @@ from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
-    Postgres,
     Redpanda,
     SchemaRegistry,
     Testdrive,
@@ -29,7 +28,6 @@ SERVICES = [
     SchemaRegistry(),
     Redpanda(),
     Localstack(),
-    Postgres(),
     Materialized(),
     Testdrive(),
 ]
@@ -81,7 +79,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.aws_region is None:
         dependencies += ["localstack"]
 
-    options = ["--catalog-postgres-stash", "postgres://postgres:postgres@postgres"]
+    options = []
     if args.persistent_user_tables:
         options.append("--persistent-user-tables")
 
@@ -96,11 +94,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_postgres_stash=True,
     )
 
-    postgres = Postgres(image="postgres:13.6")
-
-    with c.override(materialized, testdrive, postgres):
-        c.up("postgres")
-        c.wait_for_postgres()
+    with c.override(materialized, testdrive):
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
         try:
