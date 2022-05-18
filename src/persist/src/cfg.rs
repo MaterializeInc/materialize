@@ -125,7 +125,20 @@ impl ConsensusConfig {
         let query_params = url.query_pairs().collect::<HashMap<_, _>>();
 
         let config = match url.scheme() {
-            "sqlite" => Ok(ConsensusConfig::Sqlite(url.path().to_owned())),
+            "sqlite" => {
+                if !query_params.is_empty() {
+                    return Err(ExternalError::from(anyhow!(
+                        "unknown consensus location params {}: {}",
+                        query_params
+                            .keys()
+                            .map(|x| x.to_owned())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        url.as_str(),
+                    )));
+                }
+                Ok(ConsensusConfig::Sqlite(url.path().to_owned()))
+            }
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(value).await?,
             )),
@@ -135,19 +148,6 @@ impl ConsensusConfig {
                 url.as_str()
             )),
         }?;
-
-        if !query_params.is_empty() {
-            return Err(ExternalError::from(anyhow!(
-                "unknown consensus location params {}: {}",
-                query_params
-                    .keys()
-                    .map(|x| x.to_owned())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                url.as_str(),
-            )));
-        }
-
         Ok(config)
     }
 }

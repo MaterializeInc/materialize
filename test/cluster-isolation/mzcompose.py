@@ -230,4 +230,4 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.kill(*cleanup_list)
         c.rm(*cleanup_list, destroy_volumes=True)
 
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")
