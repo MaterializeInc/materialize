@@ -344,8 +344,11 @@ impl Consensus for PostgresConsensus {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::location::tests::consensus_impl_test;
     use tracing::info;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -363,5 +366,89 @@ mod tests {
         };
 
         consensus_impl_test(|| PostgresConsensus::open(config.clone())).await
+    }
+
+    pub async fn retry_external<R, F, WorkFn>(name: &str, mut work_fn: WorkFn) -> R
+    where
+        F: std::future::Future<Output = Result<R, ExternalError>>,
+        WorkFn: FnMut() -> F,
+    {
+        loop {
+            match work_fn().await {
+                Ok(x) => return x,
+                Err(err) => {
+                    info!("external operation {} failed, retrying in: {}", name, err);
+                }
+            }
+        }
+    }
+
+    // A failed attempt to reproduce #12560, but it seems useful on it's own.
+    // Perhaps we should make a `consensus_concurrency_test` so we can have this
+    // coverage for all impls?
+    #[tokio::test(flavor = "multi_thread")]
+    async fn postgres_concurrent() -> Result<(), ExternalError> {
+        mz_ore::test::init_logging();
+        let config = match PostgresConsensusConfig::new_for_test().await? {
+            Some(config) => config,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    PostgresConsensusConfig::EXTERNAL_TESTS_POSTGRES_URL
+                );
+                return Ok(());
+            }
+        };
+
+        const NUM_WORKERS: usize = 10;
+        const NUM_OPS: u64 = 100;
+        let key = Uuid::new_v4().to_string();
+
+        let mut handles = Vec::new();
+        for idx in 0..NUM_WORKERS {
+            let config = config.clone();
+            let key = key.clone();
+            let handle =
+                mz_ore::task::spawn(|| format!("postgres_concurrent-{}", idx), async move {
+                    let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+                    let mut current: Option<SeqNo> = None;
+                    loop {
+                        // Intentionally exercise `open` concurrently as well by
+                        // grabbing a new one every time we successfully CaS
+                        // something.
+                        let client = PostgresConsensus::open(config.clone())
+                            .await
+                            .expect("failed to connect");
+                        loop {
+                            let new = current.map_or_else(SeqNo::minimum, |x| x.next());
+                            if new.0 > NUM_OPS {
+                                return;
+                            }
+                            let res = retry_external("postgres_concurrent::cas", || {
+                                client.compare_and_set(
+                                    deadline,
+                                    &key,
+                                    current,
+                                    VersionedData {
+                                        seqno: new,
+                                        data: vec![],
+                                    },
+                                )
+                            })
+                            .await;
+                            match res {
+                                Ok(()) => current = Some(new),
+                                Err(x) => current = x.map(|x| x.seqno),
+                            };
+                        }
+                    }
+                });
+            handles.push(handle);
+        }
+        for handle in handles {
+            handle.await.expect("worker failed");
+        }
+
+        Ok(())
     }
 }
