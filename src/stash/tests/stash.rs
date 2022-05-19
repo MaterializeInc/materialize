@@ -15,9 +15,26 @@ use timely::progress::Antichain;
 use tokio_postgres::Config;
 
 use mz_stash::{
-    Append, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction, Timestamp,
-    TypedCollection,
+    Append, Memory, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction,
+    Timestamp, TypedCollection,
 };
+
+#[tokio::test]
+async fn test_stash_memory() -> Result<(), anyhow::Error> {
+    {
+        let file = NamedTempFile::new()?;
+        let conn = Sqlite::open(file.path())?;
+        let mut memory = Memory::new(conn);
+        test_stash(&mut memory).await?;
+    }
+    {
+        let file = NamedTempFile::new()?;
+        let conn = Sqlite::open(file.path())?;
+        let mut memory = Memory::new(conn);
+        test_append(&mut memory).await?;
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn test_stash_sqlite() -> Result<(), anyhow::Error> {

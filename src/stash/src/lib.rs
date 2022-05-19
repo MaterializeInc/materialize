@@ -26,9 +26,11 @@ use timely::PartialOrder;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;
 
+mod memory;
 mod postgres;
 mod sqlite;
 
+pub use crate::memory::Memory;
 pub use crate::postgres::Postgres;
 pub use crate::sqlite::Sqlite;
 
