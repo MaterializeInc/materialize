@@ -149,12 +149,6 @@ url = "/integrations/#libraries-and-drivers"
 weight = 30
 
 [[menu.main]]
-identifier = "advanced"
-name = "Advanced Concepts"
-parent = "overview"
-weight = 80
-
-[[menu.main]]
 identifier = "about"
 name = "About"
 weight = 70
