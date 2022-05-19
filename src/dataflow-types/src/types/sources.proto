@@ -39,6 +39,17 @@ message ProtoKafkaSourceConnector {
     ProtoIncludedColumnPos include_headers = 11;
 }
 
+message ProtoExternalSourceConnector {
+    oneof kind {
+        ProtoKafkaSourceConnector kafka = 1;
+        ProtoKinesisSourceConnector kinesis = 2;
+        ProtoS3SourceConnector s3 = 3;
+        ProtoPostgresSourceConnector postgres = 4;
+        ProtoPubNubSourceConnector pubnub = 5;
+        ProtoPersistSourceConnector persist = 6;
+    }
+}
+
 message ProtoSourceData {
     oneof kind {
         mz_repr.row.ProtoRow ok = 1;

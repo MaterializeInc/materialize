@@ -2222,7 +2222,7 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum ExternalSourceConnector {
         Kafka(KafkaSourceConnector),
         Kinesis(KinesisSourceConnector),
@@ -2230,6 +2230,41 @@ pub mod sources {
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
         Persist(PersistSourceConnector),
+    }
+
+    impl From<&ExternalSourceConnector> for ProtoExternalSourceConnector {
+        fn from(x: &ExternalSourceConnector) -> Self {
+            use proto_external_source_connector::Kind;
+            ProtoExternalSourceConnector {
+                kind: Some(match x {
+                    ExternalSourceConnector::Kafka(kafka) => Kind::Kafka(kafka.into()),
+                    ExternalSourceConnector::Kinesis(kinesis) => Kind::Kinesis(kinesis.into()),
+                    ExternalSourceConnector::S3(s3) => Kind::S3(s3.into()),
+                    ExternalSourceConnector::Postgres(postgres) => Kind::Postgres(postgres.into()),
+                    ExternalSourceConnector::PubNub(pubnub) => Kind::Pubnub(pubnub.into()),
+                    ExternalSourceConnector::Persist(persist) => Kind::Persist(persist.into()),
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoExternalSourceConnector> for ExternalSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoExternalSourceConnector) -> Result<Self, Self::Error> {
+            use proto_external_source_connector::Kind;
+            let kind = x.kind.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoExternalSourceConnector::kind")
+            })?;
+            Ok(match kind {
+                Kind::Kafka(kafka) => ExternalSourceConnector::Kafka(kafka.try_into()?),
+                Kind::Kinesis(kinesis) => ExternalSourceConnector::Kinesis(kinesis.try_into()?),
+                Kind::S3(s3) => ExternalSourceConnector::S3(s3.try_into()?),
+                Kind::Postgres(postgres) => ExternalSourceConnector::Postgres(postgres.try_into()?),
+                Kind::Pubnub(pubnub) => ExternalSourceConnector::PubNub(pubnub.try_into()?),
+                Kind::Persist(persist) => ExternalSourceConnector::Persist(persist.try_into()?),
+            })
+        }
     }
 
     impl ExternalSourceConnector {
