@@ -119,7 +119,7 @@ use crate::nemesis::{
 };
 use crate::operators::source::PersistedSource;
 use crate::pfuture::PFuture;
-use crate::unreliable::UnreliableHandle;
+use crate::unreliable::UnreliableHandleOld;
 
 /// A handle to the "ingestd" (input) side of a persisted collection.
 #[derive(Debug, Clone)]
@@ -140,7 +140,7 @@ struct Dataflow {
 #[derive(Debug)]
 struct DirectCore {
     start_fn: Box<dyn StartRuntime>,
-    unreliable: UnreliableHandle,
+    unreliable: UnreliableHandleOld,
     runtime: RuntimeClient,
     streams: HashMap<String, (Ingest, Dataflow)>,
 }
@@ -231,7 +231,7 @@ impl DirectCore {
 
 #[derive(Debug)]
 struct DirectShared {
-    unreliable: UnreliableHandle,
+    unreliable: UnreliableHandleOld,
     snapshots: Arc<Mutex<HashMap<SnapshotId, DecodedSnapshot<String, ()>>>>,
 
     core: Mutex<DirectCore>,
@@ -247,7 +247,7 @@ struct DirectShared {
 
 impl DirectShared {
     fn new(mut start_fn: Box<dyn StartRuntime>) -> Result<Self, Error> {
-        let unreliable = UnreliableHandle::default();
+        let unreliable = UnreliableHandleOld::default();
         let runtime = start_fn.start_runtime(unreliable.clone())?;
         let core = DirectCore {
             start_fn,
@@ -363,7 +363,7 @@ impl Runtime for Direct {
 }
 
 pub trait StartRuntime: fmt::Debug + Send + 'static {
-    fn start_runtime(&mut self, unreliable: UnreliableHandle) -> Result<RuntimeClient, Error>;
+    fn start_runtime(&mut self, unreliable: UnreliableHandleOld) -> Result<RuntimeClient, Error>;
 }
 
 impl Direct {
@@ -383,7 +383,7 @@ impl Direct {
 #[derive(Debug)]
 pub struct DirectWorker {
     shared: Arc<DirectShared>,
-    unreliable: UnreliableHandle,
+    unreliable: UnreliableHandleOld,
 
     // The generation of the persist runtime these cached handles are from. Used
     // for lock-free invalidation of the cached copy of the persist handles that
@@ -539,7 +539,7 @@ impl DirectWorker {
     }
 }
 
-struct StartFn(Box<dyn FnMut(UnreliableHandle) -> Result<RuntimeClient, Error>>);
+struct StartFn(Box<dyn FnMut(UnreliableHandleOld) -> Result<RuntimeClient, Error>>);
 
 impl fmt::Debug for StartFn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -580,7 +580,10 @@ mod tests {
     use super::*;
 
     impl StartRuntime for MemRegistry {
-        fn start_runtime(&mut self, unreliable: UnreliableHandle) -> Result<RuntimeClient, Error> {
+        fn start_runtime(
+            &mut self,
+            unreliable: UnreliableHandleOld,
+        ) -> Result<RuntimeClient, Error> {
             self.runtime_unreliable(unreliable)
         }
     }
@@ -593,7 +596,10 @@ mod tests {
     }
 
     impl StartRuntime for TempDir {
-        fn start_runtime(&mut self, unreliable: UnreliableHandle) -> Result<RuntimeClient, Error> {
+        fn start_runtime(
+            &mut self,
+            unreliable: UnreliableHandleOld,
+        ) -> Result<RuntimeClient, Error> {
             let blob_dir = self.path().join("blob");
             let log = ErrorLog;
             let log = UnreliableLog::from_handle(log, unreliable.clone());
@@ -622,7 +628,10 @@ mod tests {
     }
 
     impl StartRuntime for (Arc<AsyncRuntime>, S3BlobConfig) {
-        fn start_runtime(&mut self, unreliable: UnreliableHandle) -> Result<RuntimeClient, Error> {
+        fn start_runtime(
+            &mut self,
+            unreliable: UnreliableHandleOld,
+        ) -> Result<RuntimeClient, Error> {
             let (runtime, config) = self;
             let (runtime, config) = (Arc::clone(runtime), config.clone());
             let guard = runtime.enter();

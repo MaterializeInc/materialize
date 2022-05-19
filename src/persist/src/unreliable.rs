@@ -24,26 +24,26 @@ use crate::location::{
 };
 
 #[derive(Debug)]
-struct UnreliableCore {
+struct UnreliableCoreOld {
     unavailable: bool,
     // TODO: Delays, what else?
 }
 
 /// A handle for controlling the behavior of an unreliable delegate.
 #[derive(Clone, Debug)]
-pub struct UnreliableHandle {
-    core: Arc<Mutex<UnreliableCore>>,
+pub struct UnreliableHandleOld {
+    core: Arc<Mutex<UnreliableCoreOld>>,
 }
 
-impl Default for UnreliableHandle {
+impl Default for UnreliableHandleOld {
     fn default() -> Self {
-        UnreliableHandle {
-            core: Arc::new(Mutex::new(UnreliableCore { unavailable: false })),
+        UnreliableHandleOld {
+            core: Arc::new(Mutex::new(UnreliableCoreOld { unavailable: false })),
         }
     }
 }
 
-impl UnreliableHandle {
+impl UnreliableHandleOld {
     fn check_unavailable(&self, details: &str) -> Result<(), Error> {
         let unavailable = self
             .core
@@ -58,7 +58,7 @@ impl UnreliableHandle {
     }
 
     /// Cause all later operators to return an "unavailable" error.
-    pub fn make_unavailable(&mut self) -> &mut UnreliableHandle {
+    pub fn make_unavailable(&mut self) -> &mut UnreliableHandleOld {
         self.core
             .lock()
             .expect("never panics while holding lock")
@@ -67,7 +67,7 @@ impl UnreliableHandle {
     }
 
     /// Cause all later operators to succeed.
-    pub fn make_available(&mut self) -> &mut UnreliableHandle {
+    pub fn make_available(&mut self) -> &mut UnreliableHandleOld {
         self.core
             .lock()
             .expect("never panics while holding lock")
@@ -79,20 +79,20 @@ impl UnreliableHandle {
 /// An unreliable delegate to [Log].
 #[derive(Debug)]
 pub struct UnreliableLog<L> {
-    handle: UnreliableHandle,
+    handle: UnreliableHandleOld,
     log: L,
 }
 
 impl<L: Log> UnreliableLog<L> {
     /// Returns a new [UnreliableLog] and a handle for controlling it.
-    pub fn new(log: L) -> (Self, UnreliableHandle) {
-        let h = UnreliableHandle::default();
+    pub fn new(log: L) -> (Self, UnreliableHandleOld) {
+        let h = UnreliableHandleOld::default();
         let log = Self::from_handle(log, h.clone());
         (log, h)
     }
 
     /// Returns a new [UnreliableLog] sharing the given handle.
-    pub fn from_handle(log: L, handle: UnreliableHandle) -> Self {
+    pub fn from_handle(log: L, handle: UnreliableHandleOld) -> Self {
         UnreliableLog { handle, log }
     }
 }
@@ -131,27 +131,27 @@ impl<L: Log> Log for UnreliableLog<L> {
 /// Configuration for opening an [UnreliableBlob].
 #[derive(Debug)]
 pub struct UnreliableBlobConfig<B: Blob> {
-    handle: UnreliableHandle,
+    handle: UnreliableHandleOld,
     blob: B::Config,
 }
 
 /// An unreliable delegate to [Blob].
 #[derive(Debug)]
 pub struct UnreliableBlob<B> {
-    handle: UnreliableHandle,
+    handle: UnreliableHandleOld,
     blob: B,
 }
 
 impl<B: BlobRead> UnreliableBlob<B> {
     /// Returns a new [UnreliableBlob] and a handle for controlling it.
-    pub fn new(blob: B) -> (Self, UnreliableHandle) {
-        let h = UnreliableHandle::default();
+    pub fn new(blob: B) -> (Self, UnreliableHandleOld) {
+        let h = UnreliableHandleOld::default();
         let blob = Self::from_handle(blob, h.clone());
         (blob, h)
     }
 
     /// Returns a new [UnreliableLog] sharing the given handle.
-    pub fn from_handle(blob: B, handle: UnreliableHandle) -> Self {
+    pub fn from_handle(blob: B, handle: UnreliableHandleOld) -> Self {
         UnreliableBlob { handle, blob }
     }
 }
@@ -229,10 +229,10 @@ impl UnreliableBlobMulti {
     /// Returns a new [UnreliableBlobMulti].
     ///
     /// TODO: Once we turn down the old persist API, return an
-    /// [UnreliableHandle] with the previous totally available or unavailable
+    /// [UnreliableHandleOld] with the previous totally available or unavailable
     /// behavior, plus the new partially available behavior
     ///
-    /// TODO: Ditto the unreliability should be set via [UnreliableHandle].
+    /// TODO: Ditto the unreliability should be set via [UnreliableHandleOld].
     pub fn new_from_seed(
         seed: u64,
         should_happen: f64,
@@ -322,10 +322,10 @@ impl UnreliableConsensus {
     /// Returns a new [UnreliableConsensus].
     ///
     /// TODO: Once we turn down the old persist API, return an
-    /// [UnreliableHandle] with the previous totally available or unavailable
+    /// [UnreliableHandleOld] with the previous totally available or unavailable
     /// behavior, plus the new partially available behavior
     ///
-    /// TODO: Ditto the unreliability should be set via [UnreliableHandle].
+    /// TODO: Ditto the unreliability should be set via [UnreliableHandleOld].
     pub fn new_from_seed(
         seed: u64,
         should_happen: f64,

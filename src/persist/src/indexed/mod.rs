@@ -1424,7 +1424,7 @@ mod tests {
     use crate::indexed::snapshot::SnapshotExt;
     use crate::mem::{MemBlob, MemLog, MemRegistry};
     use crate::pfuture::PFuture;
-    use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
+    use crate::unreliable::{UnreliableBlob, UnreliableHandleOld, UnreliableLog};
 
     use super::*;
 
@@ -1463,7 +1463,7 @@ mod tests {
     }
 
     fn indexed_and_maintainer(
-        unreliable: UnreliableHandle,
+        unreliable: UnreliableHandleOld,
     ) -> Result<
         (
             Indexed<UnreliableLog<MemLog>, UnreliableBlob<MemBlob>>,
@@ -1599,7 +1599,7 @@ mod tests {
     }
 
     fn trace_compaction_setup(
-        unreliable: UnreliableHandle,
+        unreliable: UnreliableHandleOld,
     ) -> Result<
         (
             Indexed<UnreliableLog<MemLog>, UnreliableBlob<MemBlob>>,
@@ -1658,7 +1658,7 @@ mod tests {
     /// specifically for trace compaction requests.
     #[test]
     fn trace_compaction() -> Result<(), Error> {
-        let mut unreliable = UnreliableHandle::default();
+        let mut unreliable = UnreliableHandleOld::default();
         let (mut i, maintainer, id) = trace_compaction_setup(unreliable.clone())?;
 
         let reqs = i.step()?;
@@ -1749,7 +1749,7 @@ mod tests {
     /// request). This test is expected to panic when run with
     /// cfg!(debug_assertions).
     fn trace_compaction_unexpected_nonmatching_response() -> Result<(), Error> {
-        let unreliable = UnreliableHandle::default();
+        let unreliable = UnreliableHandleOld::default();
         let (mut i, maintainer, _) = trace_compaction_setup(unreliable)?;
 
         let reqs = i.step()?;
@@ -1772,7 +1772,7 @@ mod tests {
     /// no request is in flight for the given stream. This test is expected to panic when
     /// run with cfg!(debug_assertions).
     fn trace_compaction_unexpected_response() -> Result<(), Error> {
-        let unreliable = UnreliableHandle::default();
+        let unreliable = UnreliableHandleOld::default();
         let (mut i, maintainer, id) = trace_compaction_setup(unreliable)?;
 
         let reqs = i.step()?;
@@ -1797,7 +1797,7 @@ mod tests {
     /// even when no requests are in flight for that stream. This test is expected to
     /// panic when run with cfg!(debug_assertions).
     fn trace_compaction_unexpected_error_response() -> Result<(), Error> {
-        let unreliable = UnreliableHandle::default();
+        let unreliable = UnreliableHandleOld::default();
         let (mut i, _, id) = trace_compaction_setup(unreliable)?;
 
         let reqs = i.step()?;
@@ -2085,7 +2085,7 @@ mod tests {
             (("2".into(), "".into()), 1, 1),
         ];
 
-        let mut unreliable = UnreliableHandle::default();
+        let mut unreliable = UnreliableHandleOld::default();
         let mut i = MemRegistry::new().indexed_unreliable(unreliable.clone())?;
         let id = block_on(|res| i.register("0", "", "", res))?;
 

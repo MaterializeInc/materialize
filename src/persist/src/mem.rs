@@ -31,7 +31,7 @@ use crate::location::{
     VersionedData,
 };
 use crate::runtime::{self, RuntimeConfig};
-use crate::unreliable::{UnreliableBlob, UnreliableHandle, UnreliableLog};
+use crate::unreliable::{UnreliableBlob, UnreliableHandleOld, UnreliableLog};
 
 #[derive(Debug)]
 struct MemLogCore {
@@ -451,10 +451,10 @@ impl MemRegistry {
     }
 
     /// Returns a [RuntimeClient] with unreliable storage backed by the given
-    /// [`UnreliableHandle`].
+    /// [`UnreliableHandleOld`].
     pub fn indexed_unreliable(
         &mut self,
-        unreliable: UnreliableHandle,
+        unreliable: UnreliableHandleOld,
     ) -> Result<Indexed<UnreliableLog<MemLog>, UnreliableBlob<MemBlob>>, Error> {
         let log = self.log_no_reentrance()?;
         let log = UnreliableLog::from_handle(log, unreliable.clone());
@@ -488,10 +488,10 @@ impl MemRegistry {
     }
 
     /// Open a [RuntimeClient] with unreliable storage backed by the given
-    /// [`UnreliableHandle`].
+    /// [`UnreliableHandleOld`].
     pub fn runtime_unreliable(
         &mut self,
-        unreliable: UnreliableHandle,
+        unreliable: UnreliableHandleOld,
     ) -> Result<RuntimeClient, Error> {
         let log = self.log_no_reentrance()?;
         let log = UnreliableLog::from_handle(log, unreliable.clone());
