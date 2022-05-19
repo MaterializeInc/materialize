@@ -62,20 +62,19 @@ disruptions = [
 """,
         ),
     ),
-]
-
-# computed: adapter hangs if cluster has panicked during INSERT ... SELECT #12251
-disruptions_disabled = [
     Disruption(
         name="panic-in-insert-select",
         disruption=lambda c: c.testdrive(
             """
+> SET cluster=cluster1
+> SET statement_timeout='1s'
+
 > CREATE TABLE panic_table (f1 TEXT);
 
 > INSERT INTO panic_table VALUES ('panic!');
 
 ! INSERT INTO panic_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
-timeout
+contains: statement timeout
 """,
         ),
     ),
@@ -98,6 +97,8 @@ def populate(c: Composition) -> None:
         """
 > SET cluster=cluster1
 
+> DROP TABLE IF EXISTS t1 CASCADE;
+
 > CREATE TABLE t1 (f1 TEXT);
 
 > INSERT INTO t1 VALUES (1), (2);
@@ -114,6 +115,8 @@ def validate(c: Composition) -> None:
     c.testdrive(
         """
 # Dataflows
+
+> SET cluster=cluster2
 
 > SELECT * FROM v1;
 2
@@ -204,11 +207,17 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.up(*[n.name for n in nodes])
 
         c.sql(
-            "CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100'));"
+            """
+            DROP CLUSTER IF EXISTS cluster1 CASCADE;
+            CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100'));
+            """
         )
 
         c.sql(
-            "CREATE CLUSTER cluster2 REPLICA replica1 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'));"
+            """
+            DROP CLUSTER IF EXISTS cluster2 CASCADE;
+            CREATE CLUSTER cluster2 REPLICA replica1 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'));
+            """
         )
 
         with c.override(
