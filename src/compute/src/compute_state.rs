@@ -164,7 +164,10 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 }
             }
 
-            ComputeCommand::Peek(peek) => {
+            ComputeCommand::Peek {
+                peek,
+                on_replica: _,
+            } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
                 let timestamp_frontier = Antichain::from_elem(peek.timestamp);

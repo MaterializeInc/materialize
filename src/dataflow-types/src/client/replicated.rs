@@ -31,8 +31,6 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use mz_repr::GlobalId;
 
-use crate::client::Peek;
-
 use super::PeekResponse;
 use super::ReplicaId;
 use super::{ComputeClient, GenericClient};
@@ -181,6 +179,10 @@ where
         // Replay the commands at the client, creating new dataflow identifiers.
         let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.history.iter() {
+            if !command.targets_replica(replica_id) {
+                continue;
+            }
+
             let mut command = command.clone();
             // Replace dataflow identifiers with new unique ids.
             if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
@@ -203,8 +205,8 @@ where
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         // Update our tracking of peek commands.
         match &cmd {
-            ComputeCommand::Peek(Peek { uuid, .. }) => {
-                self.peeks.insert(*uuid);
+            ComputeCommand::Peek { peek, .. } => {
+                self.peeks.insert(peek.uuid);
             }
             ComputeCommand::CancelPeeks { uuids } => {
                 // Canceled peeks should not be further responded to.
@@ -252,8 +254,12 @@ where
             self.last_command_count = self.history.reduce(&self.peeks);
         }
 
-        // Clone the command for each active replica.
-        for (_id, (tx, _)) in self.replicas.iter_mut() {
+        // Clone the command for each target replica.
+        for (id, (tx, _)) in self.replicas.iter_mut() {
+            if !cmd.targets_replica(*id) {
+                continue;
+            }
+
             let mut command = cmd.clone();
             // Replace dataflow identifiers with new unique ids.
             if let ComputeCommand::CreateDataflows(dataflows) = &mut command {

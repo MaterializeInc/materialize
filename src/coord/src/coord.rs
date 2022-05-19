@@ -3037,6 +3037,20 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(session.vars().cluster())?;
 
+        let replica_name = session.vars().cluster_replica();
+        let replica_id = replica_name
+            .map(|name| {
+                compute_instance
+                    .replica_id_by_name
+                    .get(name)
+                    .copied()
+                    .ok_or(CoordError::UnknownClusterReplica {
+                        cluster_name: compute_instance.name.clone(),
+                        replica_name: name.to_string(),
+                    })
+            })
+            .transpose()?;
+
         if compute_instance.replicas_by_id.is_empty() {
             return Err(CoordError::NoClusterReplicasAvailable(
                 compute_instance.name.clone(),
@@ -3231,6 +3245,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 conn_id,
                 source.arity(),
                 compute_instance,
+                replica_id,
             )
             .await?;
 
@@ -4920,7 +4935,7 @@ pub fn describe<S: Append>(
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use mz_dataflow_types::client::ComputeInstanceId;
+    use mz_dataflow_types::client::{ComputeInstanceId, ReplicaId};
     use mz_stash::Append;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
@@ -5058,6 +5073,7 @@ pub mod fast_path_peek {
             conn_id: u32,
             source_arity: usize,
             compute_instance: ComputeInstanceId,
+            replica_id: Option<ReplicaId>,
         ) -> Result<crate::ExecuteResponse, CoordError> {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             if let Plan::Constant(rows) = fast_path {
@@ -5195,6 +5211,7 @@ pub mod fast_path_peek {
                     timestamp,
                     finishing.clone(),
                     map_filter_project,
+                    replica_id,
                 )
                 .await
                 .unwrap();

@@ -32,11 +32,11 @@ message ProtoPeek {
 }
 
 message ProtoComputeCommand {
-    message ProtoCreateInstance {
+    message ProtoCreateInstanceKind {
         mz_dataflow_types.logging.ProtoLoggingConfig logging = 1;
     }
 
-    message ProtoCreateDataflows {
+    message ProtoCreateDataflowsKind {
         repeated mz_dataflow_types.types.ProtoDataflowDescription dataflows = 1;
     }
 
@@ -45,21 +45,26 @@ message ProtoComputeCommand {
         mz_persist.gen.persist.ProtoU64Antichain frontier = 2;
     }
 
-    message ProtoAllowCompaction {
+    message ProtoAllowCompactionKind {
         repeated ProtoCompaction collections = 1;
     }
 
-    message ProtoCancelPeeks {
+    message ProtoPeekKind {
+        ProtoPeek peek = 1;
+        optional int64 on_replica = 2;
+    }
+
+    message ProtoCancelPeeksKind {
         repeated mz_repr.proto.ProtoU128 uuids = 1;
     }
 
     oneof kind {
-        ProtoCreateInstance create_instance = 1;
+        ProtoCreateInstanceKind create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
-        ProtoCreateDataflows create_dataflows = 3;
-        ProtoAllowCompaction allow_compaction = 4;
-        ProtoPeek peek = 5;
-        ProtoCancelPeeks cancel_peeks = 6;
+        ProtoCreateDataflowsKind create_dataflows = 3;
+        ProtoAllowCompactionKind allow_compaction = 4;
+        ProtoPeekKind peek = 5;
+        ProtoCancelPeeksKind cancel_peeks = 6;
     }
 }
 
