@@ -490,7 +490,12 @@ impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timest
 /// AWS configuration for sources and sinks.
 pub mod aws {
     use http::Uri;
+    use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
+
+    use mz_repr::proto::TryFromProtoError;
+
+    include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
     /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -530,7 +535,7 @@ pub mod aws {
     }
 
     /// AWS credentials for a source or sink.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum AwsCredentials {
         /// Look for credentials using the [default credentials chain][credchain]
         ///
@@ -544,6 +549,51 @@ pub mod aws {
             secret_access_key: String,
             session_token: Option<String>,
         },
+    }
+
+    impl From<&AwsCredentials> for ProtoAwsCredentials {
+        fn from(x: &AwsCredentials) -> Self {
+            use proto_aws_credentials::{Kind, ProtoStatic};
+            ProtoAwsCredentials {
+                kind: Some(match x {
+                    AwsCredentials::Default => Kind::Default(()),
+                    AwsCredentials::Profile { profile_name } => Kind::Profile(profile_name.clone()),
+                    AwsCredentials::Static {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    } => Kind::Static(ProtoStatic {
+                        access_key_id: access_key_id.clone(),
+                        secret_access_key: secret_access_key.clone(),
+                        session_token: session_token.clone(),
+                    }),
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoAwsCredentials> for AwsCredentials {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoAwsCredentials) -> Result<Self, Self::Error> {
+            use proto_aws_credentials::{Kind, ProtoStatic};
+            let kind = x
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoAwsCredentials::kind"))?;
+            Ok(match kind {
+                Kind::Default(()) => AwsCredentials::Default,
+                Kind::Profile(profile_name) => AwsCredentials::Profile { profile_name },
+                Kind::Static(ProtoStatic {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                }) => AwsCredentials::Static {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                },
+            })
+        }
     }
 
     /// A role for Materialize to assume when performing AWS API calls.

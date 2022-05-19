@@ -29,6 +29,7 @@ fn main() {
                 "dataflow-types/src/errors.proto",
                 "dataflow-types/src/logging.proto",
                 "dataflow-types/src/postgres_source.proto",
+                "dataflow-types/src/types/aws.proto",
                 "dataflow-types/src/types/sources.proto",
                 "dataflow-types/src/plan.proto",
                 "dataflow-types/src/plan/join.proto",
