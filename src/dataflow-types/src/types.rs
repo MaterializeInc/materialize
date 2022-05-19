@@ -1150,10 +1150,11 @@ pub mod sources {
     use bytes::BufMut;
     use chrono::NaiveDateTime;
     use differential_dataflow::lattice::Lattice;
-    use globset::Glob;
+    use globset::{Glob, GlobBuilder};
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
+    use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
     use proptest_derive::Arbitrary;
     use prost::Message;
     use serde::{Deserialize, Serialize};
@@ -2428,6 +2429,77 @@ pub mod sources {
         pub pattern: Option<Glob>,
         pub aws: AwsConfig,
         pub compression: Compression,
+    }
+
+    fn any_glob() -> impl Strategy<Value = Glob> {
+        r"[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}".prop_map(|s| {
+            GlobBuilder::new(&s)
+                .literal_separator(true)
+                .backslash_escape(true)
+                .build()
+                .unwrap()
+        })
+    }
+
+    impl Arbitrary for S3SourceConnector {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (
+                any::<Vec<S3KeySource>>(),
+                proptest::option::of(any_glob()),
+                any::<AwsConfig>(),
+                any::<Compression>(),
+            )
+                .prop_map(
+                    |(key_sources, pattern, aws, compression)| S3SourceConnector {
+                        key_sources,
+                        pattern,
+                        aws,
+                        compression,
+                    },
+                )
+                .boxed()
+        }
+    }
+
+    impl From<&S3SourceConnector> for ProtoS3SourceConnector {
+        fn from(x: &S3SourceConnector) -> Self {
+            ProtoS3SourceConnector {
+                key_sources: x.key_sources.iter().map(Into::into).collect(),
+                pattern: x.pattern.as_ref().map(|g| g.glob().into()),
+                aws: Some((&x.aws).into()),
+                compression: Some((&x.compression).into()),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoS3SourceConnector> for S3SourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoS3SourceConnector) -> Result<Self, Self::Error> {
+            Ok(S3SourceConnector {
+                key_sources: x
+                    .key_sources
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                pattern: x
+                    .pattern
+                    .map(|p| {
+                        GlobBuilder::new(&p)
+                            .literal_separator(true)
+                            .backslash_escape(true)
+                            .build()
+                    })
+                    .transpose()?,
+                aws: x.aws.try_into_if_some("ProtoS3SourceConnector::aws")?,
+                compression: x
+                    .compression
+                    .try_into_if_some("ProtoS3SourceConnector::compression")?,
+            })
+        }
     }
 
     impl S3SourceConnector {

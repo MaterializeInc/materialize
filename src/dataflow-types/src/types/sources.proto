@@ -48,6 +48,13 @@ message ProtoPersistSourceConnector {
     string shard_id = 3;
 }
 
+message ProtoS3SourceConnector {
+    repeated ProtoS3KeySource key_sources = 1;
+    optional string pattern = 2;
+    mz_dataflow_types.types.aws.ProtoAwsConfig aws = 3;
+    ProtoCompression compression = 4;
+}
+
 message ProtoS3KeySource {
     oneof kind {
         string scan = 1;

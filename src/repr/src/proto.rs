@@ -41,6 +41,8 @@ pub enum TryFromProtoError {
     InvalidShardId(String),
     /// Failed to parse a serialized URI
     InvalidUri(http::uri::InvalidUri),
+    /// Failed to read back a serialized Glob
+    GlobError(globset::Error),
 }
 
 impl TryFromProtoError {
@@ -80,6 +82,12 @@ impl From<http::uri::InvalidUri> for TryFromProtoError {
     }
 }
 
+impl From<globset::Error> for TryFromProtoError {
+    fn from(error: globset::Error) -> Self {
+        TryFromProtoError::GlobError(error)
+    }
+}
+
 impl std::fmt::Display for TryFromProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TryFromProtoError::*;
@@ -93,6 +101,7 @@ impl std::fmt::Display for TryFromProtoError {
             MissingField(field) => write!(f, "Missing value for `{}`", field),
             InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
             InvalidUri(error) => error.fmt(f),
+            GlobError(error) => error.fmt(f),
         }
     }
 }
@@ -110,6 +119,7 @@ impl std::error::Error for TryFromProtoError {
             MissingField(_) => None,
             InvalidShardId(_) => None,
             InvalidUri(error) => Some(error),
+            GlobError(error) => Some(error),
         }
     }
 }
