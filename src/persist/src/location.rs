@@ -112,7 +112,7 @@ impl SeqNo {
 /// that the operation _definitely did NOT succeed_ (e.g. permission denied).
 #[derive(Debug)]
 pub struct Determinate {
-    inner: anyhow::Error,
+    pub(crate) inner: anyhow::Error,
 }
 
 impl std::fmt::Display for Determinate {
@@ -127,7 +127,7 @@ impl std::error::Error for Determinate {}
 /// that the operation _might have succeeded_ (e.g. timeout).
 #[derive(Debug)]
 pub struct Indeterminate {
-    inner: anyhow::Error,
+    pub(crate) inner: anyhow::Error,
 }
 
 impl std::fmt::Display for Indeterminate {
