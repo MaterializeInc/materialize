@@ -22,7 +22,9 @@ use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::{Datum, ScalarType};
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
-pub use crate::relation_and_scalar::{ProtoColumnName, ProtoColumnType, ProtoRelationType};
+pub use crate::relation_and_scalar::{
+    ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
+};
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -319,10 +321,26 @@ impl RustType<ProtoColumnName> for ColumnName {
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
     typ: RelationType,
     names: Vec<ColumnName>,
+}
+
+impl RustType<ProtoRelationDesc> for RelationDesc {
+    fn into_proto(self: &Self) -> ProtoRelationDesc {
+        ProtoRelationDesc {
+            typ: Some(self.typ.into_proto()),
+            names: self.names.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRelationDesc) -> Result<Self, TryFromProtoError> {
+        Ok(RelationDesc {
+            typ: proto.typ.into_rust_if_some("ProtoRelationDesc::typ")?,
+            names: proto.names.into_rust()?,
+        })
+    }
 }
 
 impl RelationDesc {
