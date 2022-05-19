@@ -95,9 +95,7 @@ Primary keys are **automatically** inferred for Kafka sources using the `UPSERT`
 
 ### Using Debezium
 
-{{< note >}}
-Currently, Materialize only supports Avro-encoded Debezium records. If you're interested in JSON support, please reach out in the community Slack or leave a comment in [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
-{{</ note >}}
+{{< debezium-json >}}
 
 Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka messages produced by [Debezium](https://debezium.io/). To create a source that interprets Debezium messages:
 

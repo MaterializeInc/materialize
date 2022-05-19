@@ -25,6 +25,17 @@ use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const SCHEMA: &str = "
+-- Obtain an advisory lock before attempting to create the schema. This is
+-- necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
+-- in PostgreSQL.
+--
+-- See: https://github.com/MaterializeInc/materialize/issues/12560
+-- See: https://www.postgresql.org/message-id/CA%2BTgmoZAdYVtwBfp1FL2sMZbiHCWT4UPrzRLNnX1Nb30Ku3-gg%40mail.gmail.com
+-- See: https://stackoverflow.com/a/29908840
+--
+-- The lock ID was randomly generated.
+SELECT pg_advisory_xact_lock(135664303235462630);
+
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
