@@ -2761,6 +2761,24 @@ pub mod sources {
             Self::try_from(proto).map_err(|err| err.to_string())
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use mz_repr::proto::protobuf_roundtrip;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(32))]
+
+            #[test]
+            fn external_source_connector_protobuf_roundtrip(expect in any::<ExternalSourceConnector>()) {
+                let actual = protobuf_roundtrip::<_, ProtoExternalSourceConnector>(&expect);
+                assert!(actual.is_ok());
+                assert_eq!(actual.unwrap(), expect);
+            }
+        }
+    }
 }
 
 /// Types and traits related to reporting changing collections out of `dataflow`.
