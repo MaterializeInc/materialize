@@ -7,10 +7,11 @@ Operations include: `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but n
 
 This design document is in service of [Epic #11631](https://github.com/MaterializeInc/materialize/issues/11631)
 and [Correctness Property #1](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/platform/ux.md#correctness)
-. Specifically for the first bullet point from the correctness property, “`SELECT`, `INSERT`, `UPDATE`, and `DELETE`
-statements (but not `TAIL`)". A follow-up design document will be created for the second bullet point, "Materialize
-initiated acknowledgements of upstream sources (e.g., the commit of an offset by a Kafka source, the acknowledge of an
-LSN by a PostgresSQL source, etcetera)".
+(copied below).
+
+> *Transactions in Materialize are strictly serializable with respect to the operations that occur inside of Materialize.* Operations include:
+> - `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
+> - Materialize initiated acknowledgements of upstream sources (*e.g., the commit of an offset by a Kafka source, the acknowledge of an LSN by a PostgresSQL source, etcetera*)
 
 This document does not take any opinion on whether the changes proposed should be the default behavior or an opt-in
 behavior via some configuration.
@@ -21,7 +22,7 @@ does not take any opinion on what time units should be used for the design propo
 ## Goals
 
 The goal of this design document is to describe what changes are needed to provide Strict Serializability to the
-operations mentioned above.
+operations mentioned in correctness property 1.
 
 ## Non-Goals
 
@@ -32,12 +33,6 @@ Sinks are left out of this document and not considered for consistency.
 `AS OF` allows clients to specify the timestamp of a query. Queries with `AS OF` do not constrain the timestamp
 selection of other queries. These properties allow clients to circumvent our consistency guarantees, so `AS OF` is left
 out of this document.
-
-This document does not include Materialize initiated acknowledgements of upstream sources (e.g., the commit of an offset
-by a Kafka source, the acknowledgment of an LSN by a PostgresSQL source, etcetera) or the data being acknowledged. For
-the purposes of this document we will consider all of these events to have happened at the timestamp assigned to them by
-STORAGE. This is not accurate for varius reasons. There will be a follow-up design document that goes into depth for
-these operations.
 
 ## Description
 
@@ -117,7 +112,8 @@ global timestamp to increase in an unbounded fashion.
 
 Proposal: All writes across all sessions should be blocked and added to a queue. At the end of X millisecond all pending
 writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits are all assigned a
-timestamp 1 larger than the current global timestamp and the global timestamp should be increased to this new value.
+timestamp 1 larger than the current global timestamp. Once all commits have been made durable or aborted then the global
+timestamp should be increased to timestamp of the commit.
 
 This approach limits the per session write throughput to 1 write transaction per X milliseconds for user tables.
 
@@ -141,6 +137,57 @@ goes down, and vice versa.
 This approach guarantees that when a read completes, the global timestamp is equal to or larger than the timestamp of
 that read.
 
+### Upstream Source Acknowledgements
+
+There are two interpretations for this section. For now I've included proposals for both interpretations 
+
+Acknowledging data from an upstream source should behave the same as a write transaction. The data being acknowledged is
+the write of the transaction and the acknowledgement is the commit.
+
+For these acknowledgements to be Strictly Serializable, Materialize must satisfy the following properties:
+
+1. For data with a timestamp `ts`, that has been acknowledged, all reads must have a timestamp greater than or equal
+   to `ts`.
+2. For data with a timestamp `ts` that has not been acknowledged, no read can have a timestamp greater than or equal
+   to `ts`.
+
+Proposal: The following proposal is loosely based off of [Google Percolator](https://research.google/pubs/pub36726/)
+transactions which are based off of Two Phase Commit.
+
+1. STORAGE does not assign a timestamp to ingested data until it is read to acknowledge the data (data that doesn't
+   require acknowledgements can still be timestamped by STORAGE).
+2. When STORAGE is ready to acknowledge some data it sends an `ACK` request to the Coordinator.
+3. The Coordinator will add the `ACK` request to the queue of writes as described
+   in [Group Commit/Write Coalesce](#Group Commit/Write Coalesce).
+4. The Coordinator includes an `ACK` response with a timestamp for the ingested data with the pending writes to STORAGE.
+5. Once STORAGE responds that all writes have been made durable AND upstream data has been acknowledged then the
+   Coordinator can increase the global timestamp.
+
+---
+
+Proposal: When STORAGE wants to acknowledge some data that has a timestamp `ts`, it must wait until it knows that the
+global timestamp is larger than or equal to `ts`. STORAGE can discover this by one of the following ways (NOTE: these
+aren't separate proposals, they will all work together):
+
+- STORAGE will send an `ACK` request to the Coordinator timestamped with `ts`. The Coordinator will wait for the
+  global timestamp to advance to `ts` and then send a response back to STORAGE indicating that it's OK to send the
+  acknowledgement.
+- If STORAGE receives a read with a timestamp larger than or equal to `ts`, then it knows that the global timestamp must
+  have advanced to `ts` or greater, and it's safe to send the acknowledgement.
+- If STORAGE receives an updated Read Capability for the global timestamp (
+  see [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp)) larger than or equal to `ts`,
+  then it knows that the global timestamp must have advanced to `ts` or greater, and it's safe to send the
+  acknowledgement.
+
+NOTE: There are some race conditions here such as:
+
+1. STORAGE sends an ACK request for `ts`.
+2. STORAGE receives a read at `ts`.
+3. STORAGE sends the ACK for `ts`.
+4. STORAGES receives ACK OK response.
+
+This is fine and STORAGE should just ignore the ACK OK response.
+
 ## Alternatives
 
 - We don't hold read capabilities at the global timestamp. Instead, we block all queries that require a timestamp larger
@@ -163,13 +210,29 @@ that read.
   read the unsent writes from the durable logs after starting back up. This prevents us from having to increment the
   global timestamp on every write to a user table. However, this does not solve the problem if there are reads
   in-between the writes or if we read from a view that's ahead of the wall clock.
-- Hybrid Logical Timestamps are timestamps where the X most significant bits are used for the epoch and the Y least
-  significant bits are used for a counter. Every clock tick the X bits are increased by 1 and the Y bytes are all reset
-  to 0. Every write increments the Y bits by 1. This would allow us to have 2^Y writes per clock tick per object,
+- Hybrid Logical Timestamps (HLT) are timestamps where the X most significant bits are used for the epoch and the Y
+  least significant bits are used for a counter. Every clock tick the X bits are increased by 1 and the Y bytes are all
+  reset to 0. Every write increments the Y bits by 1. This would allow us to have 2^Y writes per clock tick per object,
   without blocking any queries. Any write in excess of 2^Y per clock tick per object must be blocked until the next
   clock tick. This way no object's `upper` would have to advance past the current global timestamp if the global
   timestamp tracked the wall clock. CockroachDB uses similar timestamps
   here: https://github.com/cockroachdb/cockroach/blob/711ccb5b8fba4e6a826ed6ba46c0fc346233a0f7/pkg/sql/sem/builtins/builtins.go#L8548-L8560
+- Instead of STORAGE nodes requesting timestamps every time it needs to acknowledge data, the Coordinator can send every
+  global timestamp to STORAGE. The Coordinator would wait for STORAGE to acknowledge the new timestamp before
+  incrementing it. This would work well in combination with HLTs.
+- Instead of STORAGE nodes requesting timestamps every time it needs to acknowledge data, the Coordinator would wait to
+  increase the global timestamp until it is certain that STORAGE has acknowledged all data at or below the new
+  timestamp. This would require some form of communication between the Coordinator and STORAGE for every global
+  timestamp increase.
+- The current architecture has every node responsible for generating their own timestamps. This makes timestamps
+  incomparable across nodes, which makes it more difficult to order events across nodes. Instead, if we alter how we
+  generate timestamps so that all timestamps are comparable, this would become easier. Some potential options are:
+    - Timestamp Oracle (TSO) like [Google Percolator](https://research.google/pubs/pub36726/)
+      , [TiDB](https://tikv.org/deep-dive/distributed-transaction/timestamp-oracle/),
+      and [Apache Fluo](https://fluo.apache.org//docs/fluo/1.2/getting-started/design).
+    - Logical Vector Clocks
+    - Hybrid Logical Clocks like [CockroachDB](https://fluo.apache.org//docs/fluo/1.2/getting-started/design)
+      and [YugabtyeDB](https://fluo.apache.org//docs/fluo/1.2/getting-started/design)
 
 ## Open Questions
 
