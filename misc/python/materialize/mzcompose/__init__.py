@@ -513,6 +513,12 @@ class Composition:
                 print(f"> {statement}")
                 cursor.execute(statement)
 
+    def sql_query(self, sql: str) -> Any:
+        """Execute and return results of a SQL query."""
+        with self.sql_cursor() as cursor:
+            cursor.execute(sql)
+            return cursor.fetchall()
+
     def create_cluster(
         self,
         cluster: List,

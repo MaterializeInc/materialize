@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
 use tracing::{info, trace};
 
+use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
@@ -1732,6 +1733,11 @@ impl<S: Append> Catalog<S> {
                 ));
             }
         }
+        let audit_logs = storage.load_audit_log().await?;
+        for event in audit_logs {
+            let event = VersionedEvent::deserialize(&event).unwrap();
+            builtin_table_updates.push(catalog.state.pack_audit_log_update(&event)?);
+        }
 
         Ok((catalog, builtin_table_updates))
     }
@@ -2333,8 +2339,63 @@ impl<S: Append> Catalog<S> {
         Ok(temporary_ids)
     }
 
+    // TODO(mjibson): Is there a way to make this a closure to avoid explicitly
+    // passing tx, session, and builtin_table_updates?
+    fn add_to_audit_log(
+        &self,
+        session: Option<&Session>,
+        tx: &mut storage::Transaction<S>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        event_type: EventType,
+        object_type: ObjectType,
+        event_details: EventDetails,
+    ) -> Result<(), Error> {
+        let session = match session {
+            Some(session) => session,
+            None => return Ok(()),
+        };
+        let user = session.user().to_string();
+        let occurred_at = self.state.config.start_time.timestamp_nanos() as u64
+            + self.state.config.start_instant.elapsed().as_nanos() as u64;
+        let event = VersionedEvent::new(event_type, object_type, event_details, user, occurred_at);
+        builtin_table_updates.push(self.state.pack_audit_log_update(&event)?);
+        tx.insert_audit_log_event(event);
+        Ok(())
+    }
+
+    fn should_audit_log_item(item: &CatalogItem) -> bool {
+        !item.is_temporary()
+            && matches!(
+                item.typ(),
+                SqlCatalogItemType::View
+                    | SqlCatalogItemType::Source
+                    | SqlCatalogItemType::Sink
+                    | SqlCatalogItemType::Index
+            )
+    }
+
+    fn resolve_full_name_detail(
+        &self,
+        name: &QualifiedObjectName,
+        session: Option<&Session>,
+    ) -> FullNameV1 {
+        let name = self
+            .state
+            .resolve_full_name(name, session.map(|session| session.conn_id()));
+        self.full_name_detail(&name)
+    }
+
+    fn full_name_detail(&self, name: &FullObjectName) -> FullNameV1 {
+        FullNameV1 {
+            database: name.database.to_string(),
+            schema: name.schema.clone(),
+            item: name.item.clone(),
+        }
+    }
+
     pub async fn transact<F, T>(
         &mut self,
+        session: Option<&Session>,
         ops: Vec<Op>,
         f: F,
     ) -> Result<(Vec<BuiltinTableUpdate>, T), CoordError>
@@ -2428,6 +2489,17 @@ impl<S: Append> Catalog<S> {
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage().await;
         let mut tx = storage.transaction().await?;
+
+        fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
+            match sql_type {
+                SqlCatalogItemType::View => ObjectType::View,
+                SqlCatalogItemType::Source => ObjectType::Source,
+                SqlCatalogItemType::Sink => ObjectType::Sink,
+                SqlCatalogItemType::Index => ObjectType::Index,
+                _ => unreachable!(),
+            }
+        }
+
         for op in ops {
             actions.extend(match op {
                 Op::CreateDatabase {
@@ -2497,6 +2569,14 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
+                    self.add_to_audit_log(
+                        session,
+                        &mut tx,
+                        &mut builtin_table_updates,
+                        EventType::Create,
+                        ObjectType::Cluster,
+                        EventDetails::NameV1(mz_audit_log::NameV1 { name: name.clone() }),
+                    )?;
                     vec![Action::CreateComputeInstance {
                         id: tx.insert_compute_instance(&name, &config, &introspection_sources)?,
                         name,
@@ -2508,11 +2588,29 @@ impl<S: Append> Catalog<S> {
                     name,
                     on_cluster_name,
                     config,
+                    logical_size,
                 } => {
                     if is_reserved_name(&name) {
                         return Err(CoordError::Catalog(Error::new(
                             ErrorKind::ReservedReplicaName(name),
                         )));
+                    }
+                    if let Some(logical_size) = logical_size {
+                        let details = EventDetails::CreateComputeInstanceReplicaV1(
+                            mz_audit_log::CreateComputeInstanceReplicaV1 {
+                                cluster_name: on_cluster_name.clone(),
+                                replica_name: name.clone(),
+                                logical_size,
+                            },
+                        );
+                        self.add_to_audit_log(
+                            session,
+                            &mut tx,
+                            &mut builtin_table_updates,
+                            EventType::Create,
+                            ObjectType::ClusterReplica,
+                            details,
+                        )?;
                     }
                     vec![Action::CreateComputeInstanceReplica {
                         id: tx.insert_compute_instance_replica(&on_cluster_name, &name, &config)?,
@@ -2559,6 +2657,17 @@ impl<S: Append> Catalog<S> {
                         tx.insert_item(id, schema_id, &name.item, &serialized_item)?;
                     }
 
+                    if Self::should_audit_log_item(&item) {
+                        self.add_to_audit_log(
+                            session,
+                            &mut tx,
+                            &mut builtin_table_updates,
+                            EventType::Create,
+                            sql_type_to_object_type(item.typ()),
+                            EventDetails::FullNameV1(self.resolve_full_name_detail(&name, session)),
+                        )?;
+                    }
+
                     vec![Action::CreateItem {
                         id,
                         oid,
@@ -2597,6 +2706,14 @@ impl<S: Append> Catalog<S> {
                     for id in &introspection_source_index_ids {
                         builtin_table_updates.extend(self.state.pack_item_update(*id, -1));
                     }
+                    self.add_to_audit_log(
+                        session,
+                        &mut tx,
+                        &mut builtin_table_updates,
+                        EventType::Drop,
+                        ObjectType::Cluster,
+                        EventDetails::NameV1(mz_audit_log::NameV1 { name: name.clone() }),
+                    )?;
                     vec![Action::DropComputeInstance {
                         name,
                         introspection_source_index_ids,
@@ -2608,13 +2725,45 @@ impl<S: Append> Catalog<S> {
                         self.state
                             .pack_compute_instance_replica_update(compute_id, &name, -1),
                     );
+                    let instance = self
+                        .state
+                        .compute_instances_by_id
+                        .get(&compute_id)
+                        .expect("must exist");
+                    let details = EventDetails::DropComputeInstanceReplicaV1(
+                        mz_audit_log::DropComputeInstanceReplicaV1 {
+                            cluster_name: instance.name.clone(),
+                            replica_name: name.clone(),
+                        },
+                    );
+                    self.add_to_audit_log(
+                        session,
+                        &mut tx,
+                        &mut builtin_table_updates,
+                        EventType::Drop,
+                        ObjectType::ClusterReplica,
+                        details,
+                    )?;
                     vec![Action::DropComputeInstanceReplica { name, compute_id }]
                 }
                 Op::DropItem(id) => {
-                    if !self.get_entry(&id).item().is_temporary() {
+                    let entry = self.get_entry(&id);
+                    if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
                     }
                     builtin_table_updates.extend(self.state.pack_item_update(id, -1));
+                    if Self::should_audit_log_item(&entry.item) {
+                        self.add_to_audit_log(
+                            session,
+                            &mut tx,
+                            &mut builtin_table_updates,
+                            EventType::Drop,
+                            sql_type_to_object_type(entry.item().typ()),
+                            EventDetails::FullNameV1(
+                                self.resolve_full_name_detail(&entry.name, session),
+                            ),
+                        )?;
+                    }
                     vec![Action::DropItem(id)]
                 }
                 Op::RenameItem {
@@ -2629,6 +2778,21 @@ impl<S: Append> Catalog<S> {
                         return Err(CoordError::Catalog(Error::new(ErrorKind::TypeRename(
                             current_full_name.to_string(),
                         ))));
+                    }
+
+                    let details = EventDetails::RenameItemV1(mz_audit_log::RenameItemV1 {
+                        previous_name: self.full_name_detail(&current_full_name),
+                        new_name: to_name.clone(),
+                    });
+                    if Self::should_audit_log_item(&entry.item) {
+                        self.add_to_audit_log(
+                            session,
+                            &mut tx,
+                            &mut builtin_table_updates,
+                            EventType::Rename,
+                            sql_type_to_object_type(entry.item().typ()),
+                            details,
+                        )?;
                     }
 
                     let mut to_full_name = current_full_name.clone();
@@ -3176,6 +3340,7 @@ pub enum Op {
         name: String,
         config: ConcreteComputeInstanceReplicaConfig,
         on_cluster_name: String,
+        logical_size: Option<String>,
     },
     CreateItem {
         id: GlobalId,
@@ -3768,6 +3933,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
+                None,
                 vec![Op::CreateDatabase {
                     name: "test".to_string(),
                     oid: 1,
