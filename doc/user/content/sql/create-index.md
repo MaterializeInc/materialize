@@ -8,10 +8,6 @@ menu:
     parent: 'commands'
 ---
 
-{{< warning >}} This is an advanced feature. Running `CREATE MATERIALIZED VIEW` automatically
-creates an index which will eagerly materialize a view, so most users **will not**
-need to manually create indexes. {{< /warning >}}
-
 `CREATE INDEX` creates an in-memory index on a source or view.
 
 -   For materialized views, this creates additional indexes.
