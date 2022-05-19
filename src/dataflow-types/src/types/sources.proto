@@ -48,6 +48,13 @@ message ProtoPersistSourceConnector {
     string shard_id = 3;
 }
 
+message ProtoS3KeySource {
+    oneof kind {
+        string scan = 1;
+        string sqs_notifications = 2;
+    }
+}
+
 message ProtoCompression {
     oneof kind {
         google.protobuf.Empty gzip = 1;

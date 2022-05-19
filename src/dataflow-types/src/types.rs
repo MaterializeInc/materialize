@@ -2441,7 +2441,7 @@ pub mod sources {
     }
 
     /// A Source of Object Key names, the argument of the `DISCOVER OBJECTS` clause
-    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[derive(Arbitrary, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub enum S3KeySource {
         /// Scan the S3 Bucket to discover keys to download
         Scan { bucket: String },
@@ -2450,6 +2450,37 @@ pub mod sources {
         /// S3 notifications channels can be configured to go to SQS, which is the
         /// only target we currently support.
         SqsNotifications { queue: String },
+    }
+
+    impl From<&S3KeySource> for ProtoS3KeySource {
+        fn from(x: &S3KeySource) -> Self {
+            use proto_s3_key_source::Kind;
+            ProtoS3KeySource {
+                kind: Some(match x {
+                    S3KeySource::Scan { bucket } => Kind::Scan(bucket.clone()),
+                    S3KeySource::SqsNotifications { queue } => {
+                        Kind::SqsNotifications(queue.clone())
+                    }
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoS3KeySource> for S3KeySource {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoS3KeySource) -> Result<Self, Self::Error> {
+            use proto_s3_key_source::Kind;
+            Ok(match x.kind {
+                Some(Kind::Scan(s)) => S3KeySource::Scan { bucket: s },
+                Some(Kind::SqsNotifications(s)) => S3KeySource::SqsNotifications { queue: s },
+                None => {
+                    return Err(TryFromProtoError::MissingField(
+                        "ProtoS3KeySource::kind".into(),
+                    ))
+                }
+            })
+        }
     }
 
     #[derive(Debug, Clone)]
