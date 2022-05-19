@@ -134,6 +134,8 @@ pub enum CoordError {
     WriteOnlyTransaction,
     /// The transaction only supports single table writes
     MultiTableWriteTransaction,
+    /// The transaction is in secrets-only mode.
+    SecretsOnlyTransaction,
 }
 
 impl CoordError {
@@ -369,6 +371,7 @@ impl fmt::Display for CoordError {
             CoordError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }
+            CoordError::SecretsOnlyTransaction => f.write_str("transaction in secrets-only mode"),
         }
     }
 }
