@@ -1162,7 +1162,7 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::TryFromProtoError;
+    use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -2305,10 +2305,30 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct KinesisSourceConnector {
         pub stream_name: String,
         pub aws: AwsConfig,
+    }
+
+    impl From<&KinesisSourceConnector> for ProtoKinesisSourceConnector {
+        fn from(x: &KinesisSourceConnector) -> Self {
+            ProtoKinesisSourceConnector {
+                stream_name: x.stream_name.clone(),
+                aws: Some((&x.aws).into()),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoKinesisSourceConnector> for KinesisSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoKinesisSourceConnector) -> Result<Self, Self::Error> {
+            Ok(KinesisSourceConnector {
+                stream_name: x.stream_name,
+                aws: x.aws.try_into_if_some("ProtoKinesisSourceConnector::aws")?,
+            })
+        }
     }
 
     #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
