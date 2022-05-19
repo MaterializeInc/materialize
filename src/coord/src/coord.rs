@@ -240,6 +240,7 @@ pub struct Config<S> {
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
     pub connector_context: ConnectorContext,
+    pub strict_serializability: bool,
 }
 
 struct PendingPeek {
@@ -370,6 +371,9 @@ pub struct Coordinator<S> {
 
     /// Extra context to pass through to connector creation.
     connector_context: ConnectorContext,
+
+    /// TODO
+    strict_serializability: bool,
 }
 
 /// Metadata about an active connection.
@@ -4857,6 +4861,7 @@ pub async fn serve<S: Append + 'static>(
         replica_sizes,
         availability_zones,
         connector_context,
+        strict_serializability,
     }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -4907,6 +4912,7 @@ pub async fn serve<S: Append + 'static>(
                 replica_sizes,
                 availability_zones,
                 connector_context,
+                strict_serializability,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

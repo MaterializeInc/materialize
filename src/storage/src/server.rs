@@ -46,6 +46,8 @@ pub struct Config {
     pub metrics_registry: MetricsRegistry,
     /// Configuration for source and sink connectors.
     pub connector_context: ConnectorContext,
+    /// TODO
+    pub strict_serializable: bool,
 }
 
 /// A handle to a running dataflow server.

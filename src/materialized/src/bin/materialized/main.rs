@@ -403,6 +403,9 @@ pub struct Args {
     /// Prefix commands issued by the process orchestrator with the supplied value.
     #[clap(long, env = "MZ_PROCESS_ORCHESTRATOR_WRAPPER")]
     process_orchestrator_wrapper: Option<String>,
+
+    #[clap(long)]
+    strict_serializability: bool,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -734,6 +737,7 @@ max log level: {max_log_level}",
             &args.log_filter,
             args.aws_external_id_prefix,
         ),
+        strict_serializability: args.strict_serializability,
     }))?;
 
     eprintln!(

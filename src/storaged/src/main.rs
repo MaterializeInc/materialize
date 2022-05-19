@@ -114,6 +114,10 @@ struct Args {
     /// Add the process name to the tracing logs
     #[clap(long, hide = true)]
     log_process_name: bool,
+
+    /// TODO
+    #[clap(long)]
+    strict_serializability: bool,
 }
 
 #[tokio::main]
@@ -182,6 +186,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
         connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
+        strict_serializable: args.strict_serializability,
     };
 
     let serve_config = ServeConfig {

@@ -123,6 +123,8 @@ pub struct Config {
     pub replica_sizes: ClusterReplicaSizeMap,
     /// Availability zones compute resources may be deployed in.
     pub availability_zones: Vec<String>,
+    /// TODO
+    pub strict_serializability: bool,
 }
 
 /// Configures TLS encryption for connections.
@@ -312,6 +314,9 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                     if config.orchestrator.linger {
                         storage_opts.push(format!("--linger"))
                     }
+                    if config.strict_serializability {
+                        storage_opts.push(format!("--strict-serializability"))
+                    }
                     storage_opts
                 },
                 ports: vec![
@@ -421,6 +426,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
         connector_context: config.connector_context,
+        strict_serializability: config.strict_serializability,
     })
     .await?;
 
