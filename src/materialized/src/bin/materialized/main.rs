@@ -703,6 +703,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         })
     };
 
+    // Configure prometheus process metrics.
+    mz_process_collector::register_default_process_collector(&metrics_registry);
+
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
     let memory_limit = detect_memory_limit().unwrap_or(MemoryLimit {

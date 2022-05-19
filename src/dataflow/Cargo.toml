@@ -45,7 +45,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-prometheus = { version = "0.13.0", default-features = false }
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prost = "0.9.0"
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false }
 rand = "0.8.5"

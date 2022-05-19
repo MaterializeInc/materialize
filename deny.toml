@@ -139,6 +139,7 @@ allow-git = [
     # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
     "https://github.com/MaterializeInc/rust-postgres.git",
     "https://github.com/MaterializeInc/rust-postgres-array.git",
+    "https://github.com/MaterializeInc/rust-prometheus.git",
 
     # Waiting on https://github.com/tokio-rs/prost/pull/576.
     "https://github.com/MaterializeInc/prost.git",

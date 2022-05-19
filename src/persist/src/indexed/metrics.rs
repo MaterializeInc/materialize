@@ -10,16 +10,16 @@
 //! Persistence related monitoring metrics.
 
 use mz_ore::metric;
-use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry, ThirdPartyMetric, UIntGauge};
+use mz_ore::metrics::{Counter, MetricsRegistry, ThirdPartyMetric, UIntCounter, UIntGauge};
 
 /// Persistence related monitoring metrics for blob storage.
 #[derive(Clone, Debug)]
 pub struct BlobMetricsByType {
-    pub(crate) blob_write_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) blob_write_bytes: ThirdPartyMetric<IntCounter>,
+    pub(crate) blob_write_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) blob_write_bytes: ThirdPartyMetric<UIntCounter>,
     pub(crate) blob_write_seconds: ThirdPartyMetric<Counter>,
-    pub(crate) blob_delete_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) blob_delete_bytes: ThirdPartyMetric<IntCounter>,
+    pub(crate) blob_delete_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) blob_delete_bytes: ThirdPartyMetric<UIntCounter>,
     pub(crate) blob_delete_seconds: ThirdPartyMetric<Counter>,
 }
 
@@ -71,39 +71,39 @@ pub struct Metrics {
     pub(crate) trace_blob_bytes: ThirdPartyMetric<UIntGauge>,
 
     // TODO: pub(crate) cmd_queue_seconds: ThirdPartyMetric<UIntGauge>,
-    pub(crate) cmd_queue_in: ThirdPartyMetric<IntCounter>,
+    pub(crate) cmd_queue_in: ThirdPartyMetric<UIntCounter>,
 
-    pub(crate) cmd_run_count: ThirdPartyMetric<IntCounter>,
+    pub(crate) cmd_run_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) cmd_run_seconds: ThirdPartyMetric<Counter>,
-    pub(crate) cmd_failed_count: ThirdPartyMetric<IntCounter>,
+    pub(crate) cmd_failed_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) cmd_step_seconds: ThirdPartyMetric<Counter>,
-    pub(crate) cmd_step_error_count: ThirdPartyMetric<IntCounter>,
+    pub(crate) cmd_step_error_count: ThirdPartyMetric<UIntCounter>,
 
     // TODO: Break these down by unsealed/trace/meta? We'll have to restructure
     // the code a bit but that seems fine.
-    pub(crate) compaction_count: ThirdPartyMetric<IntCounter>,
+    pub(crate) compaction_count: ThirdPartyMetric<UIntCounter>,
     pub(crate) compaction_seconds: ThirdPartyMetric<Counter>,
-    pub(crate) compaction_write_bytes: ThirdPartyMetric<IntCounter>,
-    pub(crate) trace_compaction_error_response_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) trace_compaction_skipped_count: ThirdPartyMetric<IntCounter>,
+    pub(crate) compaction_write_bytes: ThirdPartyMetric<UIntCounter>,
+    pub(crate) trace_compaction_error_response_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) trace_compaction_skipped_count: ThirdPartyMetric<UIntCounter>,
 
     // TODO: Tag cmd_process_count with cmd type and remove this?
-    pub(crate) cmd_write_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) cmd_write_record_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) cmd_write_record_bytes: ThirdPartyMetric<IntCounter>,
+    pub(crate) cmd_write_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) cmd_write_record_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) cmd_write_record_bytes: ThirdPartyMetric<UIntCounter>,
 
     pub(crate) unsealed: BlobMetricsByType,
     pub(crate) trace: BlobMetricsByType,
     pub(crate) meta: BlobMetricsByType,
-    pub(crate) blob_write_error_quota_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) blob_write_error_other_count: ThirdPartyMetric<IntCounter>,
+    pub(crate) blob_write_error_quota_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) blob_write_error_other_count: ThirdPartyMetric<UIntCounter>,
 
     // TODO: pub(crate) blob_read_cache_bytes: ThirdPartyMetric<UIntGauge>,
     // TODO: pub(crate) blob_read_cache_entry_count: ThirdPartyMetric<UIntGauge>,
-    pub(crate) blob_read_cache_hit_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) blob_read_cache_miss_count: ThirdPartyMetric<IntCounter>,
-    pub(crate) blob_read_cache_fetch_bytes: ThirdPartyMetric<IntCounter>,
-    // TODO: pub(crate) blob_read_error_count: ThirdPartyMetric<IntCounter>,
+    pub(crate) blob_read_cache_hit_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) blob_read_cache_miss_count: ThirdPartyMetric<UIntCounter>,
+    pub(crate) blob_read_cache_fetch_bytes: ThirdPartyMetric<UIntCounter>,
+    // TODO: pub(crate) blob_read_error_count: ThirdPartyMetric<UIntCounter>,
 }
 
 impl Metrics {

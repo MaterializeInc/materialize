@@ -437,7 +437,7 @@ pub fn responsible_for(
 /// Source-specific Prometheus metrics
 pub struct SourceMetrics {
     /// Number of times an operator gets scheduled
-    operator_scheduled_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+    operator_scheduled_counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
     /// Value of the capability associated with this source
     capability: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Per-partition Prometheus metrics.

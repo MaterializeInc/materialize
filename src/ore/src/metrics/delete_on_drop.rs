@@ -376,7 +376,7 @@ impl<P: Atomic> GaugeVecExt for GenericGaugeVec<P> {
 
 #[cfg(test)]
 mod test {
-    use prometheus::core::{AtomicI64, AtomicU64};
+    use prometheus::core::AtomicI64;
     use prometheus::IntGaugeVec;
 
     use super::super::{IntCounterVec, MetricsRegistry};
@@ -409,7 +409,7 @@ mod test {
 
         let string_labels: Vec<String> = ["owned"].iter().map(ToString::to_string).collect();
         struct Ownership {
-            counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
+            counter: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
         }
         let metric_owned = Ownership {
             counter: vec.get_delete_on_drop_counter(string_labels),

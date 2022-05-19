@@ -39,7 +39,7 @@ mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-transform = { path = "../transform" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-prometheus = { version = "0.13.0", default-features = false }
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prost = "0.9.0"
 protobuf-native = "0.2.1"
 rand = "0.8.5"

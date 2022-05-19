@@ -2871,6 +2871,7 @@ dependencies = [
  "mz-pgtest",
  "mz-pgwire",
  "mz-pid-file",
+ "mz-process-collector",
  "mz-prof",
  "mz-repr",
  "mz-sql",
@@ -3881,6 +3882,17 @@ dependencies = [
  "postgres-openssl",
  "tokio",
  "tokio-postgres",
+]
+
+[[package]]
+name = "mz-process-collector"
+version = "0.0.0"
+dependencies = [
+ "lazy_static",
+ "libc",
+ "mz-ore",
+ "procfs",
+ "prometheus",
 ]
 
 [[package]]
@@ -4986,13 +4998,12 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.10.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95e344cafeaeefe487300c361654bcfc85db3ac53619eeccced29f5ea18c4c70"
+checksum = "0941606b9934e2d98a3677759a971756eb821f75764d0e0d26946d08e74d9104"
 dependencies = [
  "bitflags",
  "byteorder",
- "flate2",
  "hex",
  "lazy_static",
  "libc",
@@ -5000,17 +5011,14 @@ dependencies = [
 
 [[package]]
 name = "prometheus"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7f64969ffd5dd8f39bd57a68ac53c163a095ed9d0fb707146da1b27025a3504"
+version = "0.10.0"
+source = "git+https://github.com/MaterializeInc/rust-prometheus.git#8bd8207fd0ac3ebb594a0832e5e5a70ddd8e1a60"
 dependencies = [
  "cfg-if",
  "fnv",
  "lazy_static",
- "libc",
- "memchr",
  "parking_lot 0.11.1",
- "procfs",
+ "regex",
  "thiserror",
 ]
 

@@ -9,15 +9,15 @@
 
 use mz_ore::{
     metric,
-    metrics::{raw::HistogramVec, IntCounter, MetricsRegistry},
+    metrics::{raw::HistogramVec, MetricsRegistry, UIntCounter},
 };
 
 #[derive(Clone, Debug)]
 pub struct Metrics {
     pub command_durations: HistogramVec,
-    pub bytes_sent: IntCounter,
-    pub rows_returned: IntCounter,
-    pub query_count: IntCounter,
+    pub bytes_sent: UIntCounter,
+    pub rows_returned: UIntCounter,
+    pub query_count: UIntCounter,
 }
 
 impl Metrics {

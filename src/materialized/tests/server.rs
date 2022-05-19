@@ -294,6 +294,27 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[test]
+fn test_metrics_registry_hygiene() -> Result<(), Box<dyn Error>> {
+    // Minor setup chores to ensure the server has done at least a little work:
+    let server = util::start_server(util::Config::default())?;
+    let source_file = NamedTempFile::new()?;
+    let mut client = server.connect(postgres::NoTls)?;
+    client.batch_execute(&format!(
+        "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
+        source_file.path().display()
+    ))?;
+    client.batch_execute(
+        "CREATE MATERIALIZED VIEW mat (a, a_data, c, c_data) AS SELECT 'a', data, 'c' AS c, data FROM src",
+    )?;
+
+    // Check that metrics are where we expect them:
+    let default_metrics = prometheus::default_registry().gather();
+    assert_eq!(0, default_metrics.len());
+    assert_ne!(0, server.metrics_registry.gather().len());
+    Ok(())
+}
+
 // Test that the server properly handles cancellation requests.
 #[test]
 fn test_cancel_long_running_query() -> Result<(), Box<dyn Error>> {
