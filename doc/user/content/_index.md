@@ -27,7 +27,7 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 - [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 - [dbt &amp; Materialize](/integrations/dbt/)
 - [Materialize &amp; Node.js](/integrations/node-js/)
-- [Time-windowed computation](/sql/patterns/temporal-filters/)
+- [Time-windowed computation](/patterns/temporal-filters/)
 {{</ linkbox >}}
 {{< linkbox icon="book" title="Reference" >}}
 - [`CREATE SOURCE`](/sql/create-source/)
@@ -48,4 +48,3 @@ accepts input data from a variety of streaming sources (like Kafka), data stores
 - [**Check out the Materialize blog**](https://www.materialize.com/blog/) for neat things our developers wrote.
 - [**What is Materialize?**](./overview/what-is-materialize) to learn
 more about what Materialize does and how it works.
-- [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.
