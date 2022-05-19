@@ -64,6 +64,7 @@ mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-pgwire = { path = "../pgwire" }
 mz-pid-file = { path = "../pid-file" }
+mz-process-collector = { path = "../process-collector" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
@@ -72,7 +73,7 @@ num_cpus = "1.13.1"
 openssl = { version = "0.10.38", features = ["vendored"] }
 openssl-sys = { version = "0.9.72", features = ["vendored"] }
 os_info = "3.2.0"
-prometheus = { version = "0.13.0", default-features = false, features = ["process"] }
+prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 reqwest = { version = "0.11.10", features = ["json"] }
 rlimit = "0.8.1"

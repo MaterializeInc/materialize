@@ -22,7 +22,6 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use mz_interchange::json::JsonEncoder;
-use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
@@ -63,6 +62,7 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use super::KafkaBaseMetrics;
 use crate::compute::render::sinks::SinkRender;
+use prometheus::core::{AtomicI64 as PrometheusAtomicI64, AtomicU64 as PrometheusAtomicU64};
 
 impl<G> SinkRender<G> for KafkaSinkConnector
 where
@@ -152,10 +152,10 @@ where
 
 /// Per-Kafka sink metrics.
 pub struct SinkMetrics {
-    messages_sent_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    message_send_errors_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    message_delivery_errors_counter: DeleteOnDropCounter<'static, AtomicU64, Vec<String>>,
-    rows_queued: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
+    messages_sent_counter: DeleteOnDropCounter<'static, PrometheusAtomicI64, Vec<String>>,
+    message_send_errors_counter: DeleteOnDropCounter<'static, PrometheusAtomicI64, Vec<String>>,
+    message_delivery_errors_counter: DeleteOnDropCounter<'static, PrometheusAtomicI64, Vec<String>>,
+    rows_queued: DeleteOnDropGauge<'static, PrometheusAtomicU64, Vec<String>>,
 }
 
 impl SinkMetrics {

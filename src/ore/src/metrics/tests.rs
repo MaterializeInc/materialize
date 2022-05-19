@@ -18,7 +18,7 @@ use super::*;
 #[test]
 fn metrics_registry() {
     let reg = MetricsRegistry::new();
-    let counter: IntCounter = reg.register(metric!(
+    let counter: UIntCounter = reg.register(metric!(
         name: "test_counter",
         help: "a counter for testing"
     ));
@@ -31,11 +31,11 @@ fn metrics_registry() {
 #[test]
 fn anon_metrics_registry() {
     let reg = MetricsRegistry::new();
-    let counter_anon: ThirdPartyMetric<IntCounter> = reg.register_third_party_visible(metric!(
+    let counter_anon: ThirdPartyMetric<UIntCounter> = reg.register_third_party_visible(metric!(
         name: "test_counter_third_party",
         help: "an third_party counter for testing"
     ));
-    let counter_reg: IntCounter = reg.register(metric!(
+    let counter_reg: UIntCounter = reg.register(metric!(
         name: "test_counter_normal",
         help: "a regular counter for testing"
     ));
@@ -53,7 +53,7 @@ fn anon_metrics_registry() {
 #[test]
 fn thirdparty_metric_vecs() {
     let reg = MetricsRegistry::new();
-    let cv: ThirdPartyMetric<raw::IntCounterVec> = reg.register_third_party_visible(metric!(
+    let cv: ThirdPartyMetric<raw::UIntCounterVec> = reg.register_third_party_visible(metric!(
         name: "test_counter_third_party",
         help: "an third_party counter for testing",
         var_labels: ["label"],

@@ -22,11 +22,11 @@
 //! reduce the verbosity a little bit. A typical subsystem will look like the following:
 //!
 //! ```rust
-//! # use mz_ore::metrics::{MetricsRegistry, IntCounter};
+//! # use mz_ore::metrics::{MetricsRegistry, UIntCounter};
 //! # use mz_ore::metric;
 //! #[derive(Debug, Clone)] // Note that prometheus metrics can safely be cloned
 //! struct Metrics {
-//!     pub bytes_sent: IntCounter,
+//!     pub bytes_sent: UIntCounter,
 //! }
 //!
 //! impl Metrics {
@@ -161,10 +161,6 @@ impl<M: HistogramVecExt> HistogramVecExt for DeleteOnDropWrapper<M> {
     }
 }
 
-/// The unsigned integer version of [`Gauge`]. Provides better performance if
-/// metric values are all unsigned integers.
-pub type UIntGauge = GenericGauge<AtomicU64>;
-
 /// Delete-on-drop shadow of Prometheus [prometheus::CounterVec].
 pub type CounterVec = DeleteOnDropWrapper<prometheus::CounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::Gauge].
@@ -175,20 +171,17 @@ pub type HistogramVec = DeleteOnDropWrapper<prometheus::HistogramVec>;
 pub type IntCounterVec = DeleteOnDropWrapper<prometheus::IntCounterVec>;
 /// Delete-on-drop shadow of Prometheus [prometheus::IntGaugeVec].
 pub type IntGaugeVec = DeleteOnDropWrapper<prometheus::IntGaugeVec>;
-/// Delete-on-drop shadow of Prometheus [raw::UIntGaugeVec].
-pub type UIntGaugeVec = DeleteOnDropWrapper<raw::UIntGaugeVec>;
+/// Delete-on-drop shadow of Prometheus [prometheus::UIntCounterVec].
+pub type UIntCounterVec = DeleteOnDropWrapper<prometheus::UIntCounterVec>;
+/// Delete-on-drop shadow of Prometheus [prometheus::UIntGaugeVec].
+pub type UIntGaugeVec = DeleteOnDropWrapper<prometheus::UIntGaugeVec>;
 
-pub use prometheus::{Counter, Histogram, IntCounter, IntGauge};
-
-/// Access to non-delete-on-drop vector types
+pub use prometheus::{Counter, Histogram, IntCounter, IntGauge, UIntCounter, UIntGauge};
 pub mod raw {
-    use prometheus::core::{AtomicU64, GenericGaugeVec};
-
-    /// The unsigned integer version of [`GaugeVec`](prometheus::GaugeVec).
-    /// Provides better performance if metric values are all unsigned integers.
-    pub type UIntGaugeVec = GenericGaugeVec<AtomicU64>;
-
-    pub use prometheus::{CounterVec, HistogramVec, IntCounterVec, IntGaugeVec};
+    //! Access to non-delete-on-drop vector types
+    pub use prometheus::{
+        CounterVec, HistogramVec, IntCounterVec, IntGaugeVec, UIntCounterVec, UIntGaugeVec,
+    };
 }
 
 impl MetricsRegistry {
