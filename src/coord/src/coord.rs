@@ -236,7 +236,7 @@ pub struct Config<S> {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
-    pub secrets_reader: Arc<Box<dyn SecretsReader>>,
+    pub secrets_reader: Arc<dyn SecretsReader>,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
     pub connector_context: ConnectorContext,
@@ -361,7 +361,7 @@ pub struct Coordinator<S> {
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
     // Handle to secrets reader, wrapped in an arc so it can be used in async code like purification
-    secrets_reader: Arc<Box<dyn SecretsReader>>,
+    secrets_reader: Arc<dyn SecretsReader>,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -878,7 +878,12 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let plan = match self
-            .handle_statement(&mut session, Statement::CreateSource(stmt), &params)
+            .handle_statement(
+                &mut session,
+                Statement::CreateSource(stmt),
+                &params,
+                Arc::clone(&self.secrets_reader),
+            )
             .await
         {
             Ok(Plan::CreateSource(plan)) => plan,
@@ -1146,10 +1151,16 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         stmt: mz_sql::ast::Statement<Raw>,
         params: &mz_sql::plan::Params,
+        secrets: Arc<dyn SecretsReader>,
     ) -> Result<mz_sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
-        let plan =
-            mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
+        let plan = mz_sql::plan::plan(
+            Some(&pcx),
+            &self.catalog.for_session(session),
+            stmt,
+            params,
+            Some(Arc::clone(&secrets)),
+        )?;
         Ok(plan)
     }
 
@@ -1416,11 +1427,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
                 let catalog = self.catalog.for_session(&session);
-                let purify_fut = match mz_sql::connectors::populate_connectors_with_secrets(
+                let purify_fut = match mz_sql::connectors::populate_connectors(
                     stmt,
                     &catalog,
                     &mut vec![],
-                    Arc::clone(&self.secrets_reader),
+                    Some(Arc::clone(&self.secrets_reader)),
                 ) {
                     Ok(stmt) => mz_sql::pure::purify_create_source(
                         self.now(),
@@ -1445,7 +1456,15 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // All other statements are handled immediately.
-            _ => match self.handle_statement(&mut session, stmt, &params).await {
+            _ => match self
+                .handle_statement(
+                    &mut session,
+                    stmt,
+                    &params,
+                    Arc::clone(&self.secrets_reader),
+                )
+                .await
+            {
                 Ok(plan) => self.sequence_plan(tx, session, plan).await,
                 Err(e) => tx.send(Err(e), session),
             },

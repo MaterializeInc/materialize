@@ -2101,7 +2101,7 @@ pub mod sources {
 
         pub fn options(
             &self,
-            secrets_reader: Arc<Box<dyn SecretsReader>>,
+            secrets: Option<Arc<dyn SecretsReader>>,
         ) -> Result<BTreeMap<String, String>, anyhow::Error> {
             let mut with_options = BTreeMap::new();
             let fill_secret_value = |options: &mut BTreeMap<String, String>,
@@ -2111,7 +2111,11 @@ pub mod sources {
                 if let Some(secret_id) = field {
                     options.insert(
                         key.into(),
-                        String::from_utf8(secrets_reader.read(GlobalId::from_str(secret_id)?)?)?,
+                        if let Some(secrets_reader) = &secrets {
+                            String::from_utf8(secrets_reader.read(GlobalId::from_str(secret_id)?)?)?
+                        } else {
+                            secret_id.to_string()
+                        },
                     );
                 }
                 Ok(())
@@ -2120,15 +2124,20 @@ pub mod sources {
                                     field: &Option<String>,
                                     key: &str|
              -> Result<(), anyhow::Error> {
-                if let Some(secret_id) = field {
+                if let Some(secret_path) = field {
                     options.insert(
                         key.into(),
-                        secrets_reader
-                            .canonical_path(GlobalId::from_str(secret_id)?)?
-                            .display()
-                            .to_string(),
+                        if let Some(secrets_reader) = &secrets {
+                            secrets_reader
+                                .canonical_path(GlobalId::from_str(secret_path)?)?
+                                .display()
+                                .to_string()
+                        } else {
+                            secret_path.to_string()
+                        },
                     );
                 }
+
                 Ok(())
             };
             match self {
@@ -2186,12 +2195,7 @@ pub mod sources {
                     if let Some(username) = username {
                         with_options.insert("username".into(), username.to_owned());
                     }
-                    if let Some(password) = password {
-                        with_options.insert(
-                            "password".into(),
-                            String::from_utf8(secrets_reader.read(GlobalId::from_str(password)?)?)?,
-                        );
-                    }
+                    fill_secret_value(&mut with_options, password, "password")?;
                     fill_secret_path(&mut with_options, authority, "ssl_ca_location")?;
                     fill_secret_path(&mut with_options, certificate, "ssl_certificate_location")?;
                     fill_secret_path(&mut with_options, key, "ssl_key_location")?;

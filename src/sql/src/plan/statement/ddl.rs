@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Error};
@@ -22,6 +23,7 @@ use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_secrets::SecretsReader;
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -305,9 +307,10 @@ pub fn describe_create_source(
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
+    secrets: Option<Arc<dyn SecretsReader>>,
 ) -> Result<Plan, anyhow::Error> {
     let mut depends_on = vec![];
-    let stmt = connectors::populate_connectors(stmt, scx.catalog, &mut depends_on, None)?;
+    let stmt = connectors::populate_connectors(stmt, scx.catalog, &mut depends_on, secrets)?;
     let CreateSourceStatement {
         name,
         col_names,
@@ -3045,15 +3048,15 @@ pub fn plan_create_connector(
                         KafkaSecurityOptions::SSL { key, certificate, passphrase, authority }
                     }
                     "SASL-SSL" => {
-                        let mechanism = opts_map.remove("MECHANISM").expect("MECHANISM is expected if SECURITY = SASL-SSL").to_string();
-                        let username = opts_map.remove("USERNAME").expect("USERNAME is expected if SECURITY = SASL-SSL").to_string();
-                        let password = resolve_and_track_option( &mut opts_map, "PASSWORD")?.expect("PASSWORD is required if SECURITY = SASL-SSL");
+                        let mechanism = opts_map.remove("MECHANISM").ok_or_else(||anyhow!("MECHANISM is required if SECURITY = SASL-SSL"))?.to_string();
+                        let username = opts_map.remove("USERNAME").ok_or_else(||anyhow!("USERNAME is required if SECURITY = SASL-SSL"))?.to_string();
+                        let password = resolve_and_track_option( &mut opts_map, "PASSWORD")?.ok_or_else(||anyhow!("PASSWORD is required if SECURITY = SASL-SSL"))?;
                         KafkaSecurityOptions::SASL { mechanism, ssl: true, username, password }
                     }
                     "SASL-PLAIN" => {
-                        let mechanism = opts_map.get("MECHANISM").expect("MECHANISM is expected if SECURITY = SASL-PLAIN").to_string();
-                        let username = opts_map.get("USERNAME").expect("USERNAME is expected if SECURITY = SASL-PLAIN").to_string();
-                        let password = resolve_and_track_option(&mut opts_map, "PASSWORD")?.expect("PASSWORD is required if SECURITY = SASL-PLAIN");
+                        let mechanism = opts_map.get("MECHANISM").ok_or_else(|| anyhow!("MECHANISM is required if SECURITY = SASL-SSL"))?.to_string();
+                        let username = opts_map.get("USERNAME").ok_or_else(||anyhow!("USERNAME is required if SECURITY = SASL-SSL"))?.to_string();
+                        let password = resolve_and_track_option(&mut opts_map, "PASSWORD")?.ok_or_else(||anyhow!("PASSWORD is required if SECURITY = SASL-SSL"))?;
                         KafkaSecurityOptions::SASL { mechanism, ssl: false, username, password }
                     }
                     "PLAINTEXT" => {

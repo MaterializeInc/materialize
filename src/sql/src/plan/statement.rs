@@ -13,10 +13,12 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::bail;
 
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
+use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::{RawObjectName, UnresolvedDatabaseName, UnresolvedSchemaName};
 
 use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
@@ -240,6 +242,7 @@ pub fn plan(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
     params: &Params,
+    secrets: Option<Arc<dyn SecretsReader>>,
 ) -> Result<Plan, anyhow::Error> {
     macro_rules! resolve_stmt {
         ($statement_type:path, $scx:expr, $stmt:expr) => {{
@@ -291,7 +294,7 @@ pub fn plan(
         }
         stmt @ Statement::CreateSource(_) => {
             let (stmt, _) = resolve_stmt!(Statement::CreateSource, scx, stmt);
-            ddl::plan_create_source(scx, stmt)
+            ddl::plan_create_source(scx, stmt, secrets)
         }
         stmt @ Statement::CreateView(_) => {
             let (stmt, depends_on) = resolve_stmt!(Statement::CreateView, scx, stmt);

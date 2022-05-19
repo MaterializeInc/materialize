@@ -389,10 +389,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         }
     };
 
-    let secrets_reader: Arc<Box<dyn SecretsReader>> =
-        Arc::new(Box::new(LocalSecretsReader::new(SecretsReaderConfig {
+    let secrets_reader: Arc<dyn SecretsReader> =
+        Arc::new(LocalSecretsReader::new(SecretsReaderConfig {
             mount_path: secrets_reader_path,
-        })));
+        }));
 
     // Initialize dataflow controller.
     let storage_client = Box::new({

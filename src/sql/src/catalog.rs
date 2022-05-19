@@ -276,7 +276,7 @@ pub trait CatalogConnector {
     /// Returns the options associated with this connector with secret GlobalIds replaced with values
     fn options(
         &self,
-        secret_reader: Arc<Box<dyn SecretsReader>>,
+        secret_reader: Option<Arc<dyn SecretsReader>>,
     ) -> Result<std::collections::BTreeMap<String, String>, anyhow::Error>;
 }
 

@@ -18,6 +18,7 @@ use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use mz_secrets::SecretsReader;
 use mz_stash::{Append, Postgres, Sqlite};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1529,6 +1530,7 @@ impl<S: Append> Catalog<S> {
                         .parse_item(
                             view.sql.into(),
                             None,
+                            None
                         )
                         .unwrap_or_else(|e| {
                             panic!(
@@ -2989,7 +2991,9 @@ impl<S: Append> Catalog<S> {
             create_sql,
             eval_env: _,
         } = serde_json::from_slice(&bytes)?;
-        self.parse_item(create_sql, Some(&PlanContext::zero()))
+        // FIXME: parse_item takes an optional because this should be ok being None
+        // however all evidence is that this call path actually needs a SecretsReader instead
+        self.parse_item(create_sql, Some(&PlanContext::zero()), None)
     }
 
     // Parses the given SQL string into a `CatalogItem`.
@@ -2997,9 +3001,16 @@ impl<S: Append> Catalog<S> {
         &self,
         create_sql: String,
         pcx: Option<&PlanContext>,
+        secrets: Option<Arc<dyn SecretsReader>>,
     ) -> Result<CatalogItem, anyhow::Error> {
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
-        let plan = mz_sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let plan = mz_sql::plan::plan(
+            pcx,
+            &self.for_system_session(),
+            stmt,
+            &Params::empty(),
+            secrets,
+        )?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
@@ -3554,7 +3565,7 @@ impl mz_sql::catalog::CatalogConnector for Connector {
 
     fn options(
         &self,
-        secret_reader: Arc<Box<dyn mz_secrets::SecretsReader>>,
+        secret_reader: Option<Arc<dyn mz_secrets::SecretsReader>>,
     ) -> Result<BTreeMap<String, String>, anyhow::Error> {
         self.connector.options(secret_reader)
     }
