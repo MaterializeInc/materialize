@@ -361,7 +361,8 @@ pub struct Coordinator<S> {
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
     /// Handle to secrets reader that gives us access to user secrets
-    _secrets_reader: SecretsReader,
+    #[allow(dead_code)]
+    secrets_reader: SecretsReader,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -4776,7 +4777,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 secrets_controller,
-                _secrets_reader: secrets_reader,
+                secrets_reader,
                 replica_sizes,
                 availability_zones,
                 connector_context,

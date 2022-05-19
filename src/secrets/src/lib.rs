@@ -1,3 +1,4 @@
+use std::fs;
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
 // Use of this software is governed by the Business Source License
@@ -6,8 +7,6 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
-use std::fs::OpenOptions;
-use std::io::Read;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -58,14 +57,13 @@ impl SecretsReader {
         Self { config }
     }
 
+    #[allow(dead_code)]
     fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
         let file_path = self.config.mount_path.join(id.to_string());
-        let mut file = OpenOptions::new().read(true).open(file_path)?;
-        let mut buf: Vec<u8> = Vec::new();
-        file.read_to_end(&mut buf)?;
-        Ok(buf)
+        Ok(fs::read(file_path)?)
     }
 
+    #[allow(dead_code)]
     fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error> {
         let path = self.config.mount_path.join(id.to_string());
         Ok(path)
