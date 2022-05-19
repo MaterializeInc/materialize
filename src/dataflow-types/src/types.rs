@@ -494,7 +494,7 @@ pub mod aws {
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
-    use mz_repr::proto::TryFromProtoError;
+    use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
@@ -554,7 +554,7 @@ pub mod aws {
     ///
     /// This is a distinct type from any of the configuration types built into the
     /// AWS SDK so that we can implement `Serialize` and `Deserialize`.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct AwsConfig {
         /// AWS Credentials, or where to find them
         pub credentials: AwsCredentials,
@@ -566,6 +566,32 @@ pub mod aws {
         pub role: Option<AwsAssumeRole>,
         /// The custom AWS endpoint to use, if any.
         pub endpoint: Option<SerdeUri>,
+    }
+
+    impl From<&AwsConfig> for ProtoAwsConfig {
+        fn from(x: &AwsConfig) -> Self {
+            ProtoAwsConfig {
+                credentials: Some((&x.credentials).into()),
+                region: x.region.clone(),
+                role: x.role.as_ref().map(Into::into),
+                endpoint: x.endpoint.as_ref().map(Into::into),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoAwsConfig> for AwsConfig {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoAwsConfig) -> Result<Self, Self::Error> {
+            Ok(AwsConfig {
+                credentials: x
+                    .credentials
+                    .try_into_if_some("ProtoAwsConfig::credentials")?,
+                region: x.region,
+                role: x.role.map(|c| c.try_into()).transpose()?,
+                endpoint: x.endpoint.map(|c| c.try_into()).transpose()?,
+            })
+        }
     }
 
     /// AWS credentials for a source or sink.

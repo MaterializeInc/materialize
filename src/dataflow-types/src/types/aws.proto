@@ -17,6 +17,13 @@ message ProtoSerdeUri {
     string uri = 1;
 }
 
+message ProtoAwsConfig {
+    ProtoAwsCredentials credentials = 1;
+    optional string region = 2;
+    ProtoAwsAssumeRole role = 3;
+    ProtoSerdeUri endpoint = 4;
+}
+
 message ProtoAwsCredentials {
     message ProtoStatic {
         string access_key_id = 1;
