@@ -490,6 +490,7 @@ impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timest
 /// AWS configuration for sources and sinks.
 pub mod aws {
     use http::Uri;
+    use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
@@ -500,6 +501,39 @@ pub mod aws {
     /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct SerdeUri(#[serde(with = "http_serde::uri")] pub Uri);
+
+    /// Generate a random `SerdeUri` based on an arbitrary URL
+    /// It doesn't cover the full spectrum of valid URIs, but just a wide enough sample
+    /// to test our Protobuf roundtripping logic.
+    fn any_serde_uri() -> impl Strategy<Value = SerdeUri> {
+        r"(http|https)://[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}"
+            .prop_map(|s| SerdeUri(s.parse().unwrap()))
+    }
+
+    impl Arbitrary for SerdeUri {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any_serde_uri().boxed()
+        }
+    }
+
+    impl From<&SerdeUri> for ProtoSerdeUri {
+        fn from(x: &SerdeUri) -> Self {
+            ProtoSerdeUri {
+                uri: x.0.to_string(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoSerdeUri> for SerdeUri {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoSerdeUri) -> Result<Self, Self::Error> {
+            Ok(SerdeUri(x.uri.parse()?))
+        }
+    }
 
     /// An [external ID] to use for all AWS AssumeRole operations.
     ///

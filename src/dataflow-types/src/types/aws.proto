@@ -13,6 +13,10 @@ import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.types.aws;
 
+message ProtoSerdeUri {
+    string uri = 1;
+}
+
 message ProtoAwsCredentials {
     message ProtoStatic {
         string access_key_id = 1;

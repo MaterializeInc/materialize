@@ -3805,6 +3805,7 @@ dependencies = [
  "enum-kinds",
  "fast-float",
  "hex",
+ "http",
  "itertools",
  "lazy_static",
  "mz-lowertest",

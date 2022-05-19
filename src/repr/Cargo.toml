@@ -23,6 +23,7 @@ dec = "0.4.8"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
 hex = "0.4.3"
+http = "0.2.7"
 itertools = "0.10.3"
 lazy_static = "1.4.0"
 mz-lowertest = { path = "../lowertest" }

@@ -39,6 +39,8 @@ pub enum TryFromProtoError {
     /// Indicates that the serialized ShardId value failed to deserialize, according
     /// to its custom deserialization logic.
     InvalidShardId(String),
+    /// Failed to parse a serialized URI
+    InvalidUri(http::uri::InvalidUri),
 }
 
 impl TryFromProtoError {
@@ -72,6 +74,12 @@ impl From<serde_json::Error> for TryFromProtoError {
     }
 }
 
+impl From<http::uri::InvalidUri> for TryFromProtoError {
+    fn from(error: http::uri::InvalidUri) -> Self {
+        TryFromProtoError::InvalidUri(error)
+    }
+}
+
 impl std::fmt::Display for TryFromProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TryFromProtoError::*;
@@ -84,6 +92,7 @@ impl std::fmt::Display for TryFromProtoError {
             RowConversionError(msg) => write!(f, "Row packing failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
             InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
+            InvalidUri(error) => error.fmt(f),
         }
     }
 }
@@ -100,6 +109,7 @@ impl std::error::Error for TryFromProtoError {
             RowConversionError(_) => None,
             MissingField(_) => None,
             InvalidShardId(_) => None,
+            InvalidUri(error) => Some(error),
         }
     }
 }
