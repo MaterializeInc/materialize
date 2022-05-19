@@ -69,6 +69,11 @@ versions = [
 ]
 
 [[menu.main]]
+name = "SQL Patterns"
+identifier = 'sql-patterns'
+weight = 20
+
+[[menu.main]]
 name = "Tables"
 parent = "reference"
 url = "/sql/create-table/"
@@ -115,12 +120,6 @@ identifier = "commands"
 parent = "reference"
 weight = 100
 name = "SQL Commands"
-
-[[menu.main]]
-name = "SQL Patterns"
-parent = 'reference'
-identifier = 'sql-patterns'
-weight = 85
 
 [[menu.main]]
 name = "CREATE SOURCE"
