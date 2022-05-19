@@ -490,11 +490,50 @@ impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timest
 /// AWS configuration for sources and sinks.
 pub mod aws {
     use http::Uri;
+    use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
+    use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
+
+    use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
+
+    include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
     /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct SerdeUri(#[serde(with = "http_serde::uri")] pub Uri);
+
+    /// Generate a random `SerdeUri` based on an arbitrary URL
+    /// It doesn't cover the full spectrum of valid URIs, but just a wide enough sample
+    /// to test our Protobuf roundtripping logic.
+    fn any_serde_uri() -> impl Strategy<Value = SerdeUri> {
+        r"(http|https)://[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}"
+            .prop_map(|s| SerdeUri(s.parse().unwrap()))
+    }
+
+    impl Arbitrary for SerdeUri {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any_serde_uri().boxed()
+        }
+    }
+
+    impl From<&SerdeUri> for ProtoSerdeUri {
+        fn from(x: &SerdeUri) -> Self {
+            ProtoSerdeUri {
+                uri: x.0.to_string(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoSerdeUri> for SerdeUri {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoSerdeUri) -> Result<Self, Self::Error> {
+            Ok(SerdeUri(x.uri.parse()?))
+        }
+    }
 
     /// An [external ID] to use for all AWS AssumeRole operations.
     ///
@@ -515,7 +554,7 @@ pub mod aws {
     ///
     /// This is a distinct type from any of the configuration types built into the
     /// AWS SDK so that we can implement `Serialize` and `Deserialize`.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct AwsConfig {
         /// AWS Credentials, or where to find them
         pub credentials: AwsCredentials,
@@ -529,8 +568,34 @@ pub mod aws {
         pub endpoint: Option<SerdeUri>,
     }
 
+    impl From<&AwsConfig> for ProtoAwsConfig {
+        fn from(x: &AwsConfig) -> Self {
+            ProtoAwsConfig {
+                credentials: Some((&x.credentials).into()),
+                region: x.region.clone(),
+                role: x.role.as_ref().map(Into::into),
+                endpoint: x.endpoint.as_ref().map(Into::into),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoAwsConfig> for AwsConfig {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoAwsConfig) -> Result<Self, Self::Error> {
+            Ok(AwsConfig {
+                credentials: x
+                    .credentials
+                    .try_into_if_some("ProtoAwsConfig::credentials")?,
+                region: x.region,
+                role: x.role.map(|c| c.try_into()).transpose()?,
+                endpoint: x.endpoint.map(|c| c.try_into()).transpose()?,
+            })
+        }
+    }
+
     /// AWS credentials for a source or sink.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum AwsCredentials {
         /// Look for credentials using the [default credentials chain][credchain]
         ///
@@ -546,11 +611,70 @@ pub mod aws {
         },
     }
 
+    impl From<&AwsCredentials> for ProtoAwsCredentials {
+        fn from(x: &AwsCredentials) -> Self {
+            use proto_aws_credentials::{Kind, ProtoStatic};
+            ProtoAwsCredentials {
+                kind: Some(match x {
+                    AwsCredentials::Default => Kind::Default(()),
+                    AwsCredentials::Profile { profile_name } => Kind::Profile(profile_name.clone()),
+                    AwsCredentials::Static {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    } => Kind::Static(ProtoStatic {
+                        access_key_id: access_key_id.clone(),
+                        secret_access_key: secret_access_key.clone(),
+                        session_token: session_token.clone(),
+                    }),
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoAwsCredentials> for AwsCredentials {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoAwsCredentials) -> Result<Self, Self::Error> {
+            use proto_aws_credentials::{Kind, ProtoStatic};
+            let kind = x
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoAwsCredentials::kind"))?;
+            Ok(match kind {
+                Kind::Default(()) => AwsCredentials::Default,
+                Kind::Profile(profile_name) => AwsCredentials::Profile { profile_name },
+                Kind::Static(ProtoStatic {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                }) => AwsCredentials::Static {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                },
+            })
+        }
+    }
+
     /// A role for Materialize to assume when performing AWS API calls.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct AwsAssumeRole {
         /// The Amazon Resource Name of the role to assume.
         pub arn: String,
+    }
+
+    impl From<&AwsAssumeRole> for ProtoAwsAssumeRole {
+        fn from(x: &AwsAssumeRole) -> Self {
+            ProtoAwsAssumeRole { arn: x.arn.clone() }
+        }
+    }
+
+    impl TryFrom<ProtoAwsAssumeRole> for AwsAssumeRole {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoAwsAssumeRole) -> Result<Self, Self::Error> {
+            Ok(AwsAssumeRole { arn: x.arn })
+        }
     }
 
     impl AwsConfig {
@@ -1019,16 +1143,19 @@ impl TryFrom<ProtoDataflowDescription>
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
+    use std::str::FromStr;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
     use bytes::BufMut;
     use chrono::NaiveDateTime;
     use differential_dataflow::lattice::Lattice;
-    use globset::Glob;
+    use globset::{Glob, GlobBuilder};
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
+    use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+    use proptest_derive::Arbitrary;
     use prost::Message;
     use serde::{Deserialize, Serialize};
     use timely::progress::Timestamp;
@@ -1036,7 +1163,7 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::TryFromProtoError;
+    use mz_repr::proto::{any_uuid, ProtoRepr, TryFromProtoError, TryIntoIfSome};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -1386,10 +1513,30 @@ pub mod sources {
     }
 
     /// A column that was created via an `INCLUDE` expression
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct IncludedColumnPos {
         pub name: String,
         pub pos: usize,
+    }
+
+    impl From<&IncludedColumnPos> for ProtoIncludedColumnPos {
+        fn from(x: &IncludedColumnPos) -> Self {
+            ProtoIncludedColumnPos {
+                name: x.name.clone(),
+                pos: x.pos.into_proto(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoIncludedColumnPos> for IncludedColumnPos {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoIncludedColumnPos) -> Result<Self, Self::Error> {
+            Ok(IncludedColumnPos {
+                name: x.name,
+                pos: usize::from_proto(x.pos)?,
+            })
+        }
     }
 
     /// The meaning of the timestamp number produced by data sources. This type
@@ -1788,6 +1935,97 @@ pub mod sources {
         pub include_headers: Option<IncludedColumnPos>,
     }
 
+    impl Arbitrary for KafkaSourceConnector {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (
+                any::<KafkaAddrs>(),
+                any::<String>(),
+                any::<BTreeMap<String, String>>(),
+                any::<HashMap<i32, i64>>(),
+                any::<Option<String>>(),
+                any_uuid(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+            )
+                .prop_map(
+                    |(
+                        addrs,
+                        topic,
+                        config_options,
+                        start_offsets,
+                        group_id_prefix,
+                        cluster_id,
+                        include_timestamp,
+                        include_partition,
+                        include_topic,
+                        include_offset,
+                        include_headers,
+                    )| KafkaSourceConnector {
+                        addrs,
+                        topic,
+                        config_options,
+                        start_offsets,
+                        group_id_prefix,
+                        cluster_id,
+                        include_timestamp,
+                        include_partition,
+                        include_topic,
+                        include_offset,
+                        include_headers,
+                    },
+                )
+                .boxed()
+        }
+    }
+
+    impl From<&KafkaSourceConnector> for ProtoKafkaSourceConnector {
+        fn from(x: &KafkaSourceConnector) -> Self {
+            ProtoKafkaSourceConnector {
+                addrs: Some((&x.addrs).into()),
+                topic: x.topic.clone(),
+                config_options: x.config_options.clone().into_iter().collect(),
+                start_offsets: x.start_offsets.clone(),
+                group_id_prefix: x.group_id_prefix.clone(),
+                cluster_id: Some(x.cluster_id.into_proto()),
+                include_timestamp: x.include_timestamp.as_ref().map(Into::into),
+                include_partition: x.include_partition.as_ref().map(Into::into),
+                include_topic: x.include_topic.as_ref().map(Into::into),
+                include_offset: x.include_offset.as_ref().map(Into::into),
+                include_headers: x.include_headers.as_ref().map(Into::into),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoKafkaSourceConnector> for KafkaSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoKafkaSourceConnector) -> Result<Self, Self::Error> {
+            Ok(KafkaSourceConnector {
+                addrs: x
+                    .addrs
+                    .try_into_if_some("ProtoKafkaSourceConnector::addrs")?,
+                topic: x.topic,
+                config_options: x.config_options.into_iter().collect(),
+                start_offsets: x.start_offsets,
+                group_id_prefix: x.group_id_prefix,
+                cluster_id: Uuid::from_proto(x.cluster_id.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoPostgresSourceConnector::details")
+                })?)?,
+                include_timestamp: x.include_timestamp.map(TryInto::try_into).transpose()?,
+                include_partition: x.include_partition.map(TryInto::try_into).transpose()?,
+                include_topic: x.include_topic.map(TryInto::try_into).transpose()?,
+                include_offset: x.include_offset.map(TryInto::try_into).transpose()?,
+                include_headers: x.include_headers.map(TryInto::try_into).transpose()?,
+            })
+        }
+    }
+
     /// Legacy logic included something like an offset into almost data streams
     ///
     /// Eventually we will require `INCLUDE <metadata>` for everything.
@@ -1832,10 +2070,39 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum Compression {
         Gzip,
         None,
+    }
+
+    impl From<&Compression> for ProtoCompression {
+        fn from(x: &Compression) -> Self {
+            use proto_compression::Kind;
+            ProtoCompression {
+                kind: Some(match x {
+                    Compression::Gzip => Kind::Gzip(()),
+                    Compression::None => Kind::None(()),
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoCompression> for Compression {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoCompression) -> Result<Self, Self::Error> {
+            use proto_compression::Kind;
+            Ok(match x.kind {
+                Some(Kind::Gzip(())) => Compression::Gzip,
+                Some(Kind::None(())) => Compression::None,
+                None => {
+                    return Err(TryFromProtoError::MissingField(
+                        "ProtoCompression::kind".into(),
+                    ))
+                }
+            })
+        }
     }
 
     /// A source of updates for a relational collection.
@@ -1955,7 +2222,7 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum ExternalSourceConnector {
         Kafka(KafkaSourceConnector),
         Kinesis(KinesisSourceConnector),
@@ -1963,6 +2230,41 @@ pub mod sources {
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
         Persist(PersistSourceConnector),
+    }
+
+    impl From<&ExternalSourceConnector> for ProtoExternalSourceConnector {
+        fn from(x: &ExternalSourceConnector) -> Self {
+            use proto_external_source_connector::Kind;
+            ProtoExternalSourceConnector {
+                kind: Some(match x {
+                    ExternalSourceConnector::Kafka(kafka) => Kind::Kafka(kafka.into()),
+                    ExternalSourceConnector::Kinesis(kinesis) => Kind::Kinesis(kinesis.into()),
+                    ExternalSourceConnector::S3(s3) => Kind::S3(s3.into()),
+                    ExternalSourceConnector::Postgres(postgres) => Kind::Postgres(postgres.into()),
+                    ExternalSourceConnector::PubNub(pubnub) => Kind::Pubnub(pubnub.into()),
+                    ExternalSourceConnector::Persist(persist) => Kind::Persist(persist.into()),
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoExternalSourceConnector> for ExternalSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoExternalSourceConnector) -> Result<Self, Self::Error> {
+            use proto_external_source_connector::Kind;
+            let kind = x.kind.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoExternalSourceConnector::kind")
+            })?;
+            Ok(match kind {
+                Kind::Kafka(kafka) => ExternalSourceConnector::Kafka(kafka.try_into()?),
+                Kind::Kinesis(kinesis) => ExternalSourceConnector::Kinesis(kinesis.try_into()?),
+                Kind::S3(s3) => ExternalSourceConnector::S3(s3.try_into()?),
+                Kind::Postgres(postgres) => ExternalSourceConnector::Postgres(postgres.try_into()?),
+                Kind::Pubnub(pubnub) => ExternalSourceConnector::PubNub(pubnub.try_into()?),
+                Kind::Persist(persist) => ExternalSourceConnector::Persist(persist.try_into()?),
+            })
+        }
     }
 
     impl ExternalSourceConnector {
@@ -2150,13 +2452,33 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct KinesisSourceConnector {
         pub stream_name: String,
         pub aws: AwsConfig,
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    impl From<&KinesisSourceConnector> for ProtoKinesisSourceConnector {
+        fn from(x: &KinesisSourceConnector) -> Self {
+            ProtoKinesisSourceConnector {
+                stream_name: x.stream_name.clone(),
+                aws: Some((&x.aws).into()),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoKinesisSourceConnector> for KinesisSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoKinesisSourceConnector) -> Result<Self, Self::Error> {
+            Ok(KinesisSourceConnector {
+                stream_name: x.stream_name,
+                aws: x.aws.try_into_if_some("ProtoKinesisSourceConnector::aws")?,
+            })
+        }
+    }
+
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PostgresSourceConnector {
         pub conn: String,
         pub publication: String,
@@ -2164,17 +2486,87 @@ pub mod sources {
         pub details: PostgresSourceDetails,
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    impl From<&PostgresSourceConnector> for ProtoPostgresSourceConnector {
+        fn from(x: &PostgresSourceConnector) -> Self {
+            ProtoPostgresSourceConnector {
+                conn: x.conn.clone(),
+                publication: x.publication.clone(),
+                slot_name: x.slot_name.clone(),
+                details: Some(x.details.clone()),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoPostgresSourceConnector> for PostgresSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoPostgresSourceConnector) -> Result<Self, Self::Error> {
+            Ok(PostgresSourceConnector {
+                conn: x.conn,
+                publication: x.publication,
+                slot_name: x.slot_name,
+                // try_into_if_some doesn't work because PostgresSourceDetails doesn't implement ToString/Display
+                details: x.details.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoPostgresSourceConnector::details")
+                })?,
+            })
+        }
+    }
+
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PubNubSourceConnector {
         pub subscribe_key: String,
         pub channel: String,
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    impl From<&PubNubSourceConnector> for ProtoPubNubSourceConnector {
+        fn from(x: &PubNubSourceConnector) -> Self {
+            ProtoPubNubSourceConnector {
+                subscribe_key: x.subscribe_key.clone(),
+                channel: x.channel.clone(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoPubNubSourceConnector> for PubNubSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoPubNubSourceConnector) -> Result<Self, Self::Error> {
+            Ok(PubNubSourceConnector {
+                subscribe_key: x.subscribe_key,
+                channel: x.channel,
+            })
+        }
+    }
+
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PersistSourceConnector {
         pub consensus_uri: String,
         pub blob_uri: String,
         pub shard_id: ShardId,
+    }
+
+    impl From<&PersistSourceConnector> for ProtoPersistSourceConnector {
+        fn from(x: &PersistSourceConnector) -> Self {
+            ProtoPersistSourceConnector {
+                consensus_uri: x.consensus_uri.clone(),
+                blob_uri: x.blob_uri.clone(),
+                shard_id: x.shard_id.to_string(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoPersistSourceConnector> for PersistSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoPersistSourceConnector) -> Result<Self, Self::Error> {
+            Ok(PersistSourceConnector {
+                consensus_uri: x.consensus_uri,
+                blob_uri: x.blob_uri,
+                shard_id: ShardId::from_str(&x.shard_id)
+                    .map_err(|_| TryFromProtoError::InvalidShardId(x.shard_id))?,
+            })
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2183,6 +2575,77 @@ pub mod sources {
         pub pattern: Option<Glob>,
         pub aws: AwsConfig,
         pub compression: Compression,
+    }
+
+    fn any_glob() -> impl Strategy<Value = Glob> {
+        r"[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}".prop_map(|s| {
+            GlobBuilder::new(&s)
+                .literal_separator(true)
+                .backslash_escape(true)
+                .build()
+                .unwrap()
+        })
+    }
+
+    impl Arbitrary for S3SourceConnector {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (
+                any::<Vec<S3KeySource>>(),
+                proptest::option::of(any_glob()),
+                any::<AwsConfig>(),
+                any::<Compression>(),
+            )
+                .prop_map(
+                    |(key_sources, pattern, aws, compression)| S3SourceConnector {
+                        key_sources,
+                        pattern,
+                        aws,
+                        compression,
+                    },
+                )
+                .boxed()
+        }
+    }
+
+    impl From<&S3SourceConnector> for ProtoS3SourceConnector {
+        fn from(x: &S3SourceConnector) -> Self {
+            ProtoS3SourceConnector {
+                key_sources: x.key_sources.iter().map(Into::into).collect(),
+                pattern: x.pattern.as_ref().map(|g| g.glob().into()),
+                aws: Some((&x.aws).into()),
+                compression: Some((&x.compression).into()),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoS3SourceConnector> for S3SourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoS3SourceConnector) -> Result<Self, Self::Error> {
+            Ok(S3SourceConnector {
+                key_sources: x
+                    .key_sources
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                pattern: x
+                    .pattern
+                    .map(|p| {
+                        GlobBuilder::new(&p)
+                            .literal_separator(true)
+                            .backslash_escape(true)
+                            .build()
+                    })
+                    .transpose()?,
+                aws: x.aws.try_into_if_some("ProtoS3SourceConnector::aws")?,
+                compression: x
+                    .compression
+                    .try_into_if_some("ProtoS3SourceConnector::compression")?,
+            })
+        }
     }
 
     impl S3SourceConnector {
@@ -2196,7 +2659,7 @@ pub mod sources {
     }
 
     /// A Source of Object Key names, the argument of the `DISCOVER OBJECTS` clause
-    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[derive(Arbitrary, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub enum S3KeySource {
         /// Scan the S3 Bucket to discover keys to download
         Scan { bucket: String },
@@ -2205,6 +2668,37 @@ pub mod sources {
         /// S3 notifications channels can be configured to go to SQS, which is the
         /// only target we currently support.
         SqsNotifications { queue: String },
+    }
+
+    impl From<&S3KeySource> for ProtoS3KeySource {
+        fn from(x: &S3KeySource) -> Self {
+            use proto_s3_key_source::Kind;
+            ProtoS3KeySource {
+                kind: Some(match x {
+                    S3KeySource::Scan { bucket } => Kind::Scan(bucket.clone()),
+                    S3KeySource::SqsNotifications { queue } => {
+                        Kind::SqsNotifications(queue.clone())
+                    }
+                }),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoS3KeySource> for S3KeySource {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoS3KeySource) -> Result<Self, Self::Error> {
+            use proto_s3_key_source::Kind;
+            Ok(match x.kind {
+                Some(Kind::Scan(s)) => S3KeySource::Scan { bucket: s },
+                Some(Kind::SqsNotifications(s)) => S3KeySource::SqsNotifications { queue: s },
+                None => {
+                    return Err(TryFromProtoError::MissingField(
+                        "ProtoS3KeySource::kind".into(),
+                    ))
+                }
+            })
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -2265,6 +2759,24 @@ pub mod sources {
         fn decode(buf: &[u8]) -> Result<Self, String> {
             let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
             Self::try_from(proto).map_err(|err| err.to_string())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use mz_repr::proto::protobuf_roundtrip;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(32))]
+
+            #[test]
+            fn external_source_connector_protobuf_roundtrip(expect in any::<ExternalSourceConnector>()) {
+                let actual = protobuf_roundtrip::<_, ProtoExternalSourceConnector>(&expect);
+                assert!(actual.is_ok());
+                assert_eq!(actual.unwrap(), expect);
+            }
         }
     }
 }

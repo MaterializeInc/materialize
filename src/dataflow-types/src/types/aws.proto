@@ -1,0 +1,42 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package mz_dataflow_types.types.aws;
+
+message ProtoSerdeUri {
+    string uri = 1;
+}
+
+message ProtoAwsConfig {
+    ProtoAwsCredentials credentials = 1;
+    optional string region = 2;
+    ProtoAwsAssumeRole role = 3;
+    ProtoSerdeUri endpoint = 4;
+}
+
+message ProtoAwsCredentials {
+    message ProtoStatic {
+        string access_key_id = 1;
+        string secret_access_key = 2;
+        optional string session_token = 3;
+    }
+    oneof kind {
+        google.protobuf.Empty default = 1;
+        string profile = 2;
+        ProtoStatic static = 3;
+    }
+}
+
+message ProtoAwsAssumeRole {
+    string arn = 1;
+}

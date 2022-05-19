@@ -36,6 +36,13 @@ pub enum TryFromProtoError {
     /// Indicates an `Option<U>` field in the `Proto$T` that should be set,
     /// but for some reason it is not. In practice this should never occur.
     MissingField(String),
+    /// Indicates that the serialized ShardId value failed to deserialize, according
+    /// to its custom deserialization logic.
+    InvalidShardId(String),
+    /// Failed to parse a serialized URI
+    InvalidUri(http::uri::InvalidUri),
+    /// Failed to read back a serialized Glob
+    GlobError(globset::Error),
 }
 
 impl TryFromProtoError {
@@ -69,6 +76,18 @@ impl From<serde_json::Error> for TryFromProtoError {
     }
 }
 
+impl From<http::uri::InvalidUri> for TryFromProtoError {
+    fn from(error: http::uri::InvalidUri) -> Self {
+        TryFromProtoError::InvalidUri(error)
+    }
+}
+
+impl From<globset::Error> for TryFromProtoError {
+    fn from(error: globset::Error) -> Self {
+        TryFromProtoError::GlobError(error)
+    }
+}
+
 impl std::fmt::Display for TryFromProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TryFromProtoError::*;
@@ -80,6 +99,9 @@ impl std::fmt::Display for TryFromProtoError {
             DeserializationError(error) => error.fmt(f),
             RowConversionError(msg) => write!(f, "Row packing failed: `{}`", msg),
             MissingField(field) => write!(f, "Missing value for `{}`", field),
+            InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
+            InvalidUri(error) => error.fmt(f),
+            GlobError(error) => error.fmt(f),
         }
     }
 }
@@ -95,6 +117,9 @@ impl std::error::Error for TryFromProtoError {
             DateConversionError(_) => None,
             RowConversionError(_) => None,
             MissingField(_) => None,
+            InvalidShardId(_) => None,
+            InvalidUri(error) => Some(error),
+            GlobError(error) => Some(error),
         }
     }
 }
@@ -157,6 +182,18 @@ impl ProtoRepr for u8 {
 
     fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
         u8::try_from(repr).map_err(TryFromProtoError::TryFromIntError)
+    }
+}
+
+impl ProtoRepr for u16 {
+    type Repr = u32;
+
+    fn into_proto(self: Self) -> Self::Repr {
+        self as u32
+    }
+
+    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
+        u16::try_from(repr).map_err(TryFromProtoError::TryFromIntError)
     }
 }
 

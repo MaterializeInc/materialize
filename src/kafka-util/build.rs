@@ -7,13 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
-
-//! Utilities for working with Kafka.
-
-mod addr;
-
-pub mod admin;
-pub mod client;
-
-pub use addr::{KafkaAddrs, KafkaAddrsParseError, ProtoKafkaAddrs};
+fn main() {
+    prost_build::Config::new()
+        .type_attribute(".", "#[allow(missing_docs)]")
+        .compile_protos(&["kafka-util/src/addr.proto"], &[".."])
+        .unwrap();
+}

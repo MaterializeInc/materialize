@@ -26,6 +26,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
 use tracing::{debug, trace};
@@ -111,7 +112,7 @@ impl PersistLocation {
 /// The [std::string::ToString::to_string] format of this may be stored durably
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
