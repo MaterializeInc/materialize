@@ -25,3 +25,7 @@ message ProtoAwsCredentials {
         ProtoStatic static = 3;
     }
 }
+
+message ProtoAwsAssumeRole {
+    string arn = 1;
+}

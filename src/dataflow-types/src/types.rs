@@ -597,10 +597,24 @@ pub mod aws {
     }
 
     /// A role for Materialize to assume when performing AWS API calls.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct AwsAssumeRole {
         /// The Amazon Resource Name of the role to assume.
         pub arn: String,
+    }
+
+    impl From<&AwsAssumeRole> for ProtoAwsAssumeRole {
+        fn from(x: &AwsAssumeRole) -> Self {
+            ProtoAwsAssumeRole { arn: x.arn.clone() }
+        }
+    }
+
+    impl TryFrom<ProtoAwsAssumeRole> for AwsAssumeRole {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoAwsAssumeRole) -> Result<Self, Self::Error> {
+            Ok(AwsAssumeRole { arn: x.arn })
+        }
     }
 
     impl AwsConfig {
