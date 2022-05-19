@@ -373,9 +373,9 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                 KubernetesSecretsController::new(
                     context.to_owned(),
                     KubernetesSecretsControllerConfig {
-                        user_defined_secret: user_defined_secret.to_owned(),
-                        user_defined_secret_mount_path: user_defined_secret_mount_path.to_owned(),
-                        refresh_pod_name: refresh_pod_name.to_owned(),
+                        user_defined_secret,
+                        user_defined_secret_mount_path: user_defined_secret_mount_path.clone(),
+                        refresh_pod_name,
                     },
                 )
                 .await
