@@ -1163,7 +1163,7 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
+    use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -1513,10 +1513,30 @@ pub mod sources {
     }
 
     /// A column that was created via an `INCLUDE` expression
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct IncludedColumnPos {
         pub name: String,
         pub pos: usize,
+    }
+
+    impl From<&IncludedColumnPos> for ProtoIncludedColumnPos {
+        fn from(x: &IncludedColumnPos) -> Self {
+            ProtoIncludedColumnPos {
+                name: x.name.clone(),
+                pos: x.pos.into_proto(),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoIncludedColumnPos> for IncludedColumnPos {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoIncludedColumnPos) -> Result<Self, Self::Error> {
+            Ok(IncludedColumnPos {
+                name: x.name,
+                pos: usize::from_proto(x.pos)?,
+            })
+        }
     }
 
     /// The meaning of the timestamp number produced by data sources. This type

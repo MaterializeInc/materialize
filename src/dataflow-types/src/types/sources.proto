@@ -18,6 +18,11 @@ import "dataflow-types/src/types/aws.proto";
 
 package mz_dataflow_types.types.sources;
 
+message ProtoIncludedColumnPos {
+    string name = 1;
+    uint64 pos = 2;
+}
+
 message ProtoSourceData {
     oneof kind {
         mz_repr.row.ProtoRow ok = 1;
