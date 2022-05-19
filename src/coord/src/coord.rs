@@ -156,6 +156,7 @@ use crate::command::{
 };
 use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprPrepStyle};
 use crate::coord::id_bundle::CollectionIdBundle;
+use crate::coord::read_holds::ReadHolds;
 use crate::error::CoordError;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
@@ -344,6 +345,9 @@ pub struct Coordinator<S> {
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
     txn_reads: HashMap<u32, TxnReads>,
+
+    //TODO(jkosh44)
+    global_timeline_hold: read_holds::ReadHolds<mz_repr::Timestamp>,
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
@@ -582,6 +586,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.logical_compaction_window_ms,
                     )
                     .await;
+                    self.global_timeline_hold
+                        .id_bundle
+                        .storage_ids
+                        .insert(entry.id());
                 }
                 CatalogItem::Table(_) => {
                     let since_ts = self.get_local_write_ts();
@@ -626,6 +634,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 _ => (), // Handled in next loop.
             }
         }
+
+        // TODO(jkosh44) ugh
+        let global_timeline_hold = ReadHolds {
+            time: self.global_timeline_hold.time.clone(),
+            id_bundle: CollectionIdBundle {
+                storage_ids: self.global_timeline_hold.id_bundle.storage_ids.clone(),
+                compute_ids: BTreeSet::new(),
+            },
+            compute_instance: None,
+        };
+        self.acquire_read_holds(&global_timeline_hold).await;
 
         for entry in entries {
             match entry.item() {
@@ -793,9 +812,28 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
                 Message::AdvanceLocalInputs => {
+                    let now = self.now();
+                    let source_ids = self
+                        .catalog
+                        .entries()
+                        .filter(|entry| matches!(entry.item().typ(), CatalogItemType::Source))
+                        .map(|entry| entry.id())
+                        .collect();
+                    let mut read_holds = ReadHolds {
+                        time: now,
+                        id_bundle: CollectionIdBundle {
+                            storage_ids: source_ids,
+                            compute_ids: BTreeSet::new(),
+                        },
+                        compute_instance: None,
+                    };
+                    self.acquire_read_holds(&read_holds).await;
+                    std::mem::swap(&mut read_holds, &mut self.global_timeline_hold);
+                    self.release_read_hold(read_holds).await;
+
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
-                    self.global_timeline.fast_forward(self.now());
+                    self.global_timeline.fast_forward(now);
                 }
             }
 
@@ -3196,7 +3234,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let read_holds = read_holds::ReadHolds {
                         time: timestamp,
                         id_bundle,
-                        compute_instance,
+                        compute_instance: Some(compute_instance),
                     };
                     self.acquire_read_holds(&read_holds).await;
                     let txn_reads = TxnReads {
@@ -4887,6 +4925,8 @@ pub async fn serve<S: Append + 'static>(
     let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
     let handle = TokioHandle::current();
 
+    let now_ts = now();
+
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
         .spawn(move || {
@@ -4897,7 +4937,7 @@ pub async fn serve<S: Append + 'static>(
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
                 internal_cmd_tx,
-                global_timeline: timeline::TimestampOracle::new(now(), move || (&*now)()),
+                global_timeline: timeline::TimestampOracle::new(now_ts, move || (&*now)()),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -4913,6 +4953,14 @@ pub async fn serve<S: Append + 'static>(
                 availability_zones,
                 connector_context,
                 strict_serializability,
+                global_timeline_hold: ReadHolds {
+                    time: now_ts,
+                    id_bundle: CollectionIdBundle {
+                        storage_ids: BTreeSet::new(),
+                        compute_ids: BTreeSet::new(),
+                    },
+                    compute_instance: None,
+                },
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -5395,7 +5443,7 @@ pub mod read_holds {
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
         pub(super) id_bundle: CollectionIdBundle,
-        pub(super) compute_instance: ComputeInstanceId,
+        pub(super) compute_instance: Option<ComputeInstanceId>,
     }
 
     impl<S> crate::coord::Coordinator<S> {
@@ -5422,22 +5470,21 @@ pub mod read_holds {
             }
             storage.set_read_policy(policy_changes).await.unwrap();
             // Update COMPUTE read policies
-            let mut policy_changes = Vec::new();
-            let mut compute = self
-                .dataflow_client
-                .compute_mut(read_holds.compute_instance)
-                .unwrap();
-            for id in read_holds.id_bundle.compute_ids.iter() {
-                let collection = compute.as_ref().collection(*id).unwrap();
-                assert!(collection
-                    .read_capabilities
-                    .frontier()
-                    .less_equal(&read_holds.time));
-                let read_needs = self.read_capability.get_mut(id).unwrap();
-                read_needs.holds.update_iter(Some((read_holds.time, 1)));
-                policy_changes.push((*id, read_needs.policy()));
+            if let Some(compute_instance) = read_holds.compute_instance {
+                let mut policy_changes = Vec::new();
+                let mut compute = self.dataflow_client.compute_mut(compute_instance).unwrap();
+                for id in read_holds.id_bundle.compute_ids.iter() {
+                    let collection = compute.as_ref().collection(*id).unwrap();
+                    assert!(collection
+                        .read_capabilities
+                        .frontier()
+                        .less_equal(&read_holds.time));
+                    let read_needs = self.read_capability.get_mut(id).unwrap();
+                    read_needs.holds.update_iter(Some((read_holds.time, 1)));
+                    policy_changes.push((*id, read_needs.policy()));
+                }
+                compute.set_read_policy(policy_changes).await.unwrap();
             }
-            compute.set_read_policy(policy_changes).await.unwrap();
         }
         /// Release read holds on the indicated collections at the indicated time.
         ///
@@ -5473,20 +5520,22 @@ pub mod read_holds {
                 .await
                 .unwrap();
             // Update COMPUTE read policies
-            let mut policy_changes = Vec::new();
-            for id in compute_ids.iter() {
-                // It's possible that a concurrent DDL statement has already dropped this GlobalId
-                if let Some(read_needs) = self.read_capability.get_mut(id) {
-                    read_needs.holds.update_iter(Some((time, -1)));
-                    policy_changes.push((*id, read_needs.policy()));
+            if let Some(compute_instance) = compute_instance {
+                let mut policy_changes = Vec::new();
+                for id in compute_ids.iter() {
+                    // It's possible that a concurrent DDL statement has already dropped this GlobalId
+                    if let Some(read_needs) = self.read_capability.get_mut(id) {
+                        read_needs.holds.update_iter(Some((time, -1)));
+                        policy_changes.push((*id, read_needs.policy()));
+                    }
                 }
+                self.dataflow_client
+                    .compute_mut(compute_instance)
+                    .expect("Reference to absent compute instance")
+                    .set_read_policy(policy_changes)
+                    .await
+                    .unwrap();
             }
-            self.dataflow_client
-                .compute_mut(compute_instance)
-                .expect("Reference to absent compute instance")
-                .set_read_policy(policy_changes)
-                .await
-                .unwrap();
         }
     }
 }
