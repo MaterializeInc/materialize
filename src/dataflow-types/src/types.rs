@@ -1163,7 +1163,7 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+    use mz_repr::proto::{any_uuid, ProtoRepr, TryFromProtoError, TryIntoIfSome};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -1933,6 +1933,97 @@ pub mod sources {
         /// If present, include the offset as an output column of the source with the given name.
         pub include_offset: Option<IncludedColumnPos>,
         pub include_headers: Option<IncludedColumnPos>,
+    }
+
+    impl Arbitrary for KafkaSourceConnector {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (
+                any::<KafkaAddrs>(),
+                any::<String>(),
+                any::<BTreeMap<String, String>>(),
+                any::<HashMap<i32, i64>>(),
+                any::<Option<String>>(),
+                any_uuid(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+                any::<Option<IncludedColumnPos>>(),
+            )
+                .prop_map(
+                    |(
+                        addrs,
+                        topic,
+                        config_options,
+                        start_offsets,
+                        group_id_prefix,
+                        cluster_id,
+                        include_timestamp,
+                        include_partition,
+                        include_topic,
+                        include_offset,
+                        include_headers,
+                    )| KafkaSourceConnector {
+                        addrs,
+                        topic,
+                        config_options,
+                        start_offsets,
+                        group_id_prefix,
+                        cluster_id,
+                        include_timestamp,
+                        include_partition,
+                        include_topic,
+                        include_offset,
+                        include_headers,
+                    },
+                )
+                .boxed()
+        }
+    }
+
+    impl From<&KafkaSourceConnector> for ProtoKafkaSourceConnector {
+        fn from(x: &KafkaSourceConnector) -> Self {
+            ProtoKafkaSourceConnector {
+                addrs: Some((&x.addrs).into()),
+                topic: x.topic.clone(),
+                config_options: x.config_options.clone().into_iter().collect(),
+                start_offsets: x.start_offsets.clone(),
+                group_id_prefix: x.group_id_prefix.clone(),
+                cluster_id: Some(x.cluster_id.into_proto()),
+                include_timestamp: x.include_timestamp.as_ref().map(Into::into),
+                include_partition: x.include_partition.as_ref().map(Into::into),
+                include_topic: x.include_topic.as_ref().map(Into::into),
+                include_offset: x.include_offset.as_ref().map(Into::into),
+                include_headers: x.include_headers.as_ref().map(Into::into),
+            }
+        }
+    }
+
+    impl TryFrom<ProtoKafkaSourceConnector> for KafkaSourceConnector {
+        type Error = TryFromProtoError;
+
+        fn try_from(x: ProtoKafkaSourceConnector) -> Result<Self, Self::Error> {
+            Ok(KafkaSourceConnector {
+                addrs: x
+                    .addrs
+                    .try_into_if_some("ProtoKafkaSourceConnector::addrs")?,
+                topic: x.topic,
+                config_options: x.config_options.into_iter().collect(),
+                start_offsets: x.start_offsets,
+                group_id_prefix: x.group_id_prefix,
+                cluster_id: Uuid::from_proto(x.cluster_id.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoPostgresSourceConnector::details")
+                })?)?,
+                include_timestamp: x.include_timestamp.map(TryInto::try_into).transpose()?,
+                include_partition: x.include_partition.map(TryInto::try_into).transpose()?,
+                include_topic: x.include_topic.map(TryInto::try_into).transpose()?,
+                include_offset: x.include_offset.map(TryInto::try_into).transpose()?,
+                include_headers: x.include_headers.map(TryInto::try_into).transpose()?,
+            })
+        }
     }
 
     /// Legacy logic included something like an offset into almost data streams

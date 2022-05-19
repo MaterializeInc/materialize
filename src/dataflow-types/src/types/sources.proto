@@ -11,16 +11,32 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
+import "repr/src/proto.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
 import "dataflow-types/src/postgres_source.proto";
 import "dataflow-types/src/types/aws.proto";
+import "kafka-util/src/addr.proto";
 
 package mz_dataflow_types.types.sources;
 
 message ProtoIncludedColumnPos {
     string name = 1;
     uint64 pos = 2;
+}
+
+message ProtoKafkaSourceConnector {
+    mz_kafka_util.addr.ProtoKafkaAddrs addrs = 1;
+    string topic = 2;
+    map<string, string> config_options = 3;
+    map<int32, int64> start_offsets = 4;
+    optional string group_id_prefix = 5;
+    mz_repr.proto.ProtoU128 cluster_id = 6;
+    ProtoIncludedColumnPos include_timestamp = 7;
+    ProtoIncludedColumnPos include_partition = 8;
+    ProtoIncludedColumnPos include_topic = 9;
+    ProtoIncludedColumnPos include_offset = 10;
+    ProtoIncludedColumnPos include_headers = 11;
 }
 
 message ProtoSourceData {
