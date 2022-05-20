@@ -926,6 +926,9 @@ class ServiceConfig(TypedDict, total=False):
     TODO(benesch): this should use a nested TypedDict.
     """
 
+    ulimits: Dict[str, Any]
+    """Override the default ulimits for a container."""
+
     working_dir: str
     """Overrides the container's working directory."""
 

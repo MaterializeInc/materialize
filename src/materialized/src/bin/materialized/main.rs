@@ -23,24 +23,20 @@ use std::ffi::CStr;
 use std::fs;
 use std::iter;
 use std::net::SocketAddr;
-use std::panic;
-use std::panic::PanicInfo;
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use backtrace::Backtrace;
 use clap::{ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::{HeaderName, HeaderValue};
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
-use mz_persist_client::PersistLocation;
 use sysinfo::{ProcessorExt, SystemExt};
 use tower_http::cors::{self, AllowOrigin};
 use tracing_subscriber::filter::Targets;
@@ -59,6 +55,7 @@ use mz_ore::cli::KeyValueArg;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::PersistLocation;
 
 mod sys;
 
@@ -235,14 +232,6 @@ pub struct Args {
         default_value = "info"
     )]
     log_filter: Targets,
-
-    /// Prevent dumping of backtraces on SIGSEGV/SIGBUS
-    ///
-    /// In the case of OOMs and memory corruptions, it may be advantageous to NOT dump backtraces,
-    /// as the attempt to dump the backtraces will segfault on its own, corrupting the core file
-    /// further and obfuscating the original bug.
-    #[clap(long, hide = true, env = "MZ_NO_SIGBUS_SIGSEGV_BACKTRACES")]
-    no_sigbus_sigsegv_backtraces: bool,
 
     // == Connection options.
     /// The address on which to listen for connections.
@@ -444,11 +433,10 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
+    mz_ore::panic::set_abort_on_panic();
+
     // Configure signal handling as soon as possible. We want signals to be
     // handled to our liking ASAP.
-    if !args.no_sigbus_sigsegv_backtraces {
-        sys::enable_sigbus_sigsegv_backtraces()?;
-    }
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
@@ -488,7 +476,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         #[cfg(feature = "tokio-console")]
         tokio_console: args.tokio_console,
     }))?;
-    panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -789,57 +776,6 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
     loop {
         thread::park();
     }
-}
-
-lazy_static! {
-    static ref PANIC_MUTEX: Mutex<()> = Mutex::new(());
-}
-
-fn handle_panic(panic_info: &PanicInfo) {
-    let _guard = PANIC_MUTEX.lock();
-
-    let thr = thread::current();
-    let thr_name = thr.name().unwrap_or("<unnamed>");
-
-    let msg = match panic_info.payload().downcast_ref::<&'static str>() {
-        Some(s) => *s,
-        None => match panic_info.payload().downcast_ref::<String>() {
-            Some(s) => &s[..],
-            None => "Box<Any>",
-        },
-    };
-
-    let location = if let Some(loc) = panic_info.location() {
-        loc.to_string()
-    } else {
-        "<unknown>".to_string()
-    };
-
-    ::tracing::error!(
-        target: "panic",
-        "{msg}
-thread: {thr_name}
-location: {location}
-version: {version} ({sha})
-backtrace:
-{backtrace:?}",
-        msg = msg,
-        thr_name = thr_name,
-        location = location,
-        version = materialized::BUILD_INFO.version,
-        sha = materialized::BUILD_INFO.sha,
-        backtrace = Backtrace::new(),
-    );
-    eprintln!(
-        r#"materialized encountered an internal error and crashed.
-
-We rely on bug reports to diagnose and fix these errors. Please
-copy and paste the above details and file a report at:
-
-    https://materialize.com/s/bug
-"#,
-    );
-    process::exit(1);
 }
 
 fn build_info() -> Vec<String> {
