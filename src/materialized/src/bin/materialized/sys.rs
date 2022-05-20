@@ -9,13 +9,7 @@
 
 //! System support functions.
 
-use std::alloc::{self, Layout};
-use std::io::{self, Write};
-use std::process;
-use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-use anyhow::{bail, Context};
+use anyhow::Context;
 use nix::errno;
 use nix::sys::signal;
 use tracing::trace;
@@ -101,70 +95,6 @@ pub fn adjust_rlimits() {
     }
 }
 
-/// Attempts to enable backtraces when SIGBUS or SIGSEGV occurs.
-///
-/// In particular, this means producing backtraces on stack overflow, as stack
-/// overflow raises SIGBUS or SIGSEGV via guard pages. The approach here
-/// involves making system calls to handle SIGBUS/SIGSEGV on an alternate signal
-/// stack, which seems to work well in practice but may technically be undefined
-/// behavior.
-///
-/// Rust may someday do this by default. Follow:
-/// https://github.com/rust-lang/rust/issues/51405.
-pub fn enable_sigbus_sigsegv_backtraces() -> Result<(), anyhow::Error> {
-    // This code is derived from the code in the backtrace-on-stack-overflow
-    // crate, which is freely available under the terms of the Apache 2.0
-    // license. The modifications here provide better error messages if any of
-    // the various system calls fail.
-    //
-    // See: https://github.com/matklad/backtrace-on-stack-overflow
-
-    // NOTE(benesch): The stack size was chosen to match the default Rust thread
-    // stack size of 2MiB. Probably overkill, but we'd much rather have
-    // backtraces on stack overflow than squabble over a few megabytes. Using
-    // libc::SIGSTKSZ is tempting, but its default of 8KiB on my system makes me
-    // nervous. Rust code isn't used to running with a stack that small.
-    const STACK_SIZE: usize = 2 << 20;
-
-    // x86_64 and aarch64 require 16-byte alignment. Its hard to imagine other
-    // platforms that would have more stringent requirements.
-    const STACK_ALIGN: usize = 16;
-
-    // Allocate a stack.
-    let buf_layout =
-        Layout::from_size_align(STACK_SIZE, STACK_ALIGN).expect("layout known to be valid");
-    // SAFETY: layout has non-zero size and the uninitialized memory that is
-    // returned is never read (at least, not by Rust).
-    let buf = unsafe { alloc::alloc(buf_layout) };
-
-    // Request that signals be delivered to this alternate stack.
-    let stack = libc::stack_t {
-        ss_sp: buf as *mut libc::c_void,
-        ss_flags: 0,
-        ss_size: STACK_SIZE,
-    };
-    // SAFETY: `stack` is a valid pointer to a `stack_t` object and the second
-    // parameter, `old_ss`, is permitted to be `NULL` according to POSIX.
-    let ret = unsafe { libc::sigaltstack(&stack, ptr::null_mut()) };
-    if ret == -1 {
-        let errno = errno::from_i32(errno::errno());
-        bail!("failed to configure alternate signal stack: {}", errno);
-    }
-
-    // Install a handler for SIGSEGV.
-    let action = signal::SigAction::new(
-        signal::SigHandler::Handler(handle_sigbus_sigsegv),
-        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
-        signal::SigSet::empty(),
-    );
-    // SAFETY: see `handle_sigbus_sigsegv`.
-    unsafe { signal::sigaction(signal::SIGBUS, &action) }
-        .context("failed to install SIGBUS handler")?;
-    unsafe { signal::sigaction(signal::SIGSEGV, &action) }
-        .context("failed to install SIGSEGV handler")?;
-    Ok(())
-}
-
 pub fn enable_sigusr2_coverage_dump() -> Result<(), anyhow::Error> {
     let action = signal::SigAction::new(
         signal::SigHandler::Handler(handle_sigusr2_signal),
@@ -176,37 +106,6 @@ pub fn enable_sigusr2_coverage_dump() -> Result<(), anyhow::Error> {
         .context("failed to install SIGUSR2 handler")?;
 
     Ok(())
-}
-
-extern "C" fn handle_sigbus_sigsegv(_: i32) {
-    // SAFETY: this is is a signal handler function and technically must be
-    // "async-signal safe" [0]. That typically means no memory allocation, which
-    // means no panics or backtraces... but if we're here, we're already doomed
-    // by a segfault. So there is little harm to ignoring the rules and
-    // panicking. If we're successful, as we often are, the panic will be caught
-    // by our panic handler and displayed nicely with a backtrace that traces
-    // *through* the signal handler and includes the frames that led to the
-    // SIGSEGV.
-    //
-    // [0]: https://man7.org/linux/man-pages/man7/signal-safety.7.html
-
-    static SEEN: AtomicUsize = AtomicUsize::new(0);
-    match SEEN.fetch_add(1, Ordering::SeqCst) {
-        0 => {
-            // First SIGSEGV. See if we can defer to our slick panic handler,
-            // which will emit a backtrace and details on where to submit bugs.
-            panic!("received SIGSEGV or SIGBUS (maybe a stack overflow?)");
-        }
-        _ => {
-            // Second SIGSEGV, which means the panic handler itself segfaulted.
-            // This usually indicates that the memory allocator state is
-            // corrupt, which can happen if we overflow the stack while inside
-            // the allocator. Just try to eke out a message and crash.
-            let _ = io::stderr().write_all(b"SIGBUS or SIGSEGV while handling SIGSEGV or SIGBUS\n");
-            let _ = io::stderr().write_all(b"(maybe a stack overflow while allocating?)\n");
-            process::abort();
-        }
-    }
 }
 
 pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
