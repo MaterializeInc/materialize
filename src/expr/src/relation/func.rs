@@ -2014,8 +2014,8 @@ impl From<&TableFunc> for ProtoTableFunc {
                 TableFunc::GenerateSeriesTimestamp => Kind::GenerateSeriesTimestamp(()),
                 TableFunc::GenerateSeriesTimestampTz => Kind::GenerateSeriesTimestampTz(()),
                 TableFunc::Repeat => Kind::Repeat(()),
-                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into()),
-                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into()),
+                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into_proto()),
+                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into_proto()),
                 TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
                     types: types.into_proto(),
                     width: width.into_proto(),
@@ -2048,10 +2048,10 @@ impl TryFrom<ProtoTableFunc> for TableFunc {
             Kind::GenerateSeriesTimestampTz(()) => TableFunc::GenerateSeriesTimestampTz,
             Kind::Repeat(()) => TableFunc::Repeat,
             Kind::UnnestArray(x) => TableFunc::UnnestArray {
-                el_typ: x.try_into()?,
+                el_typ: x.into_rust()?,
             },
             Kind::UnnestList(x) => TableFunc::UnnestList {
-                el_typ: x.try_into()?,
+                el_typ: x.into_rust()?,
             },
             Kind::Wrap(x) => TableFunc::Wrap {
                 width: x.width.into_rust()?,

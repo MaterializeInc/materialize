@@ -3826,19 +3826,19 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastStringToDate(_) => CastStringToDate(()),
             UnaryFunc::CastStringToArray(inner) => {
                 CastStringToArray(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
             UnaryFunc::CastStringToList(inner) => {
                 CastStringToList(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
             UnaryFunc::CastStringToMap(inner) => {
                 CastStringToMap(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
@@ -3890,23 +3890,23 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastJsonbToNumeric(func) => CastJsonbToNumeric(func.0.into_proto()),
             UnaryFunc::CastJsonbToBool(_) => CastJsonbToBool(()),
             UnaryFunc::CastUuidToString(_) => CastUuidToString(()),
-            UnaryFunc::CastRecordToString(func) => CastRecordToString((&func.ty).into()),
+            UnaryFunc::CastRecordToString(func) => CastRecordToString(func.ty.into_proto()),
             UnaryFunc::CastRecord1ToRecord2(inner) => {
                 CastRecord1ToRecord2(ProtoCastRecord1ToRecord2 {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_exprs: inner.cast_exprs.iter().map(Into::into).collect(),
                 })
             }
-            UnaryFunc::CastArrayToString(func) => CastArrayToString((&func.ty).into()),
-            UnaryFunc::CastListToString(func) => CastListToString((&func.ty).into()),
+            UnaryFunc::CastArrayToString(func) => CastArrayToString(func.ty.into_proto()),
+            UnaryFunc::CastListToString(func) => CastListToString(func.ty.into_proto()),
             UnaryFunc::CastList1ToList2(inner) => {
                 CastList1ToList2(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
             UnaryFunc::CastArrayToListOneDim(_) => CastArrayToListOneDim(()),
-            UnaryFunc::CastMapToString(func) => CastMapToString((&func.ty).into()),
+            UnaryFunc::CastMapToString(func) => CastMapToString(func.ty.into_proto()),
             UnaryFunc::CastInt2VectorToString(_) => CastInt2VectorToString(()),
             UnaryFunc::CeilFloat32(_) => CeilFloat32(()),
             UnaryFunc::CeilFloat64(_) => CeilFloat64(()),
@@ -4100,7 +4100,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToArray(inner) => Ok(impls::CastStringToArray {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastStringToArray::return_ty")?,
+                        .into_rust_if_some("ProtoCastStringToArray::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastStringToArray::cast_expr")?,
@@ -4109,7 +4109,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToList(inner) => Ok(impls::CastStringToList {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastStringToList::return_ty")?,
+                        .into_rust_if_some("ProtoCastStringToList::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastStringToList::cast_expr")?,
@@ -4118,7 +4118,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToMap(inner) => Ok(impls::CastStringToMap {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastStringToMap::return_ty")?,
+                        .into_rust_if_some("ProtoCastStringToMap::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastStringToMap::cast_expr")?,
@@ -4179,13 +4179,14 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 }
                 CastJsonbToBool(()) => Ok(impls::CastJsonbToBool.into()),
                 CastUuidToString(()) => Ok(impls::CastUuidToString.into()),
-                CastRecordToString(ty) => {
-                    Ok(impls::CastRecordToString { ty: ty.try_into()? }.into())
+                CastRecordToString(ty) => Ok(impls::CastRecordToString {
+                    ty: ty.into_rust()?,
                 }
+                .into()),
                 CastRecord1ToRecord2(inner) => Ok(impls::CastRecord1ToRecord2 {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastRecord1ToRecord2::return_ty")?,
+                        .into_rust_if_some("ProtoCastRecord1ToRecord2::return_ty")?,
                     cast_exprs: inner
                         .cast_exprs
                         .into_iter()
@@ -4193,19 +4194,28 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                         .collect::<Result<Vec<_>, _>>()?,
                 }
                 .into()),
-                CastArrayToString(ty) => Ok(impls::CastArrayToString { ty: ty.try_into()? }.into()),
-                CastListToString(ty) => Ok(impls::CastListToString { ty: ty.try_into()? }.into()),
+                CastArrayToString(ty) => Ok(impls::CastArrayToString {
+                    ty: ty.into_rust()?,
+                }
+                .into()),
+                CastListToString(ty) => Ok(impls::CastListToString {
+                    ty: ty.into_rust()?,
+                }
+                .into()),
                 CastList1ToList2(inner) => Ok(impls::CastList1ToList2 {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastList1ToList2::return_ty")?,
+                        .into_rust_if_some("ProtoCastList1ToList2::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastList1ToList2::cast_expr")?,
                 }
                 .into()),
                 CastArrayToListOneDim(()) => Ok(impls::CastArrayToListOneDim.into()),
-                CastMapToString(ty) => Ok(impls::CastMapToString { ty: ty.try_into()? }.into()),
+                CastMapToString(ty) => Ok(impls::CastMapToString {
+                    ty: ty.into_rust()?,
+                }
+                .into()),
                 CastInt2VectorToString(_) => Ok(impls::CastInt2VectorToString.into()),
                 CeilFloat32(_) => Ok(impls::CeilFloat32.into()),
                 CeilFloat64(_) => Ok(impls::CeilFloat64.into()),
@@ -5752,10 +5762,10 @@ impl From<&VariadicFunc> for ProtoVariadicFunc {
             VariadicFunc::Replace => Replace(()),
             VariadicFunc::JsonbBuildArray => JsonbBuildArray(()),
             VariadicFunc::JsonbBuildObject => JsonbBuildObject(()),
-            VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into()),
-            VariadicFunc::ArrayToString { elem_type } => ArrayToString(elem_type.into()),
+            VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into_proto()),
+            VariadicFunc::ArrayToString { elem_type } => ArrayToString(elem_type.into_proto()),
             VariadicFunc::ArrayIndex { offset } => ArrayIndex(offset.into_proto()),
-            VariadicFunc::ListCreate { elem_type } => ListCreate(elem_type.into()),
+            VariadicFunc::ListCreate { elem_type } => ListCreate(elem_type.into_proto()),
             VariadicFunc::RecordCreate { field_names } => RecordCreate(ProtoRecordCreate {
                 field_names: field_names.into_proto(),
             }),
@@ -5792,16 +5802,16 @@ impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
                 JsonbBuildArray(()) => Ok(VariadicFunc::JsonbBuildArray),
                 JsonbBuildObject(()) => Ok(VariadicFunc::JsonbBuildObject),
                 ArrayCreate(elem_type) => Ok(VariadicFunc::ArrayCreate {
-                    elem_type: elem_type.try_into()?,
+                    elem_type: elem_type.into_rust()?,
                 }),
                 ArrayToString(elem_type) => Ok(VariadicFunc::ArrayToString {
-                    elem_type: elem_type.try_into()?,
+                    elem_type: elem_type.into_rust()?,
                 }),
                 ArrayIndex(offset) => Ok(VariadicFunc::ArrayIndex {
                     offset: usize::from_proto(offset)?,
                 }),
                 ListCreate(elem_type) => Ok(VariadicFunc::ListCreate {
-                    elem_type: elem_type.try_into()?,
+                    elem_type: elem_type.into_rust()?,
                 }),
                 RecordCreate(ProtoRecordCreate { field_names }) => Ok(VariadicFunc::RecordCreate {
                     field_names: field_names.into_rust()?,

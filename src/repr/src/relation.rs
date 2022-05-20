@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 
+use crate::proto::newapi::IntoRustIfSome;
 use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
-use crate::proto::TryIntoIfSome;
 use crate::{Datum, ScalarType};
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
@@ -119,7 +119,7 @@ impl RustType<ProtoColumnType> for ColumnType {
     fn into_proto(&self) -> ProtoColumnType {
         ProtoColumnType {
             nullable: self.nullable,
-            scalar_type: Some((&self.scalar_type).into()),
+            scalar_type: Some(self.scalar_type.into_proto()),
         }
     }
 
@@ -128,7 +128,7 @@ impl RustType<ProtoColumnType> for ColumnType {
             nullable: proto.nullable,
             scalar_type: proto
                 .scalar_type
-                .try_into_if_some("ProtoColumnType::scalar_type")?,
+                .into_rust_if_some("ProtoColumnType::scalar_type")?,
         })
     }
 }

@@ -32,7 +32,6 @@ use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
 use crate::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use crate::proto::TryIntoIfSome;
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -985,41 +984,33 @@ pub enum ScalarType {
     Int2Vector,
 }
 
-impl From<&(ColumnName, ColumnType)> for ProtoRecordField {
-    fn from(x: &(ColumnName, ColumnType)) -> Self {
+impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
+    fn into_proto(&self) -> ProtoRecordField {
         ProtoRecordField {
-            column_name: Some(x.0.into_proto()),
-            column_type: Some(x.1.into_proto()),
+            column_name: Some(self.0.into_proto()),
+            column_type: Some(self.1.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoRecordField> for (ColumnName, ColumnType) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoRecordField) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoRecordField) -> Result<Self, TryFromProtoError> {
         Ok((
-            x.column_name
+            proto
+                .column_name
                 .into_rust_if_some("ProtoRecordField::column_name")?,
-            x.column_type
+            proto
+                .column_type
                 .into_rust_if_some("ProtoRecordField::column_type")?,
         ))
     }
 }
 
-impl From<&ScalarType> for Box<ProtoScalarType> {
-    fn from(value: &ScalarType) -> Self {
-        Box::new(value.into())
-    }
-}
-
-impl From<&ScalarType> for ProtoScalarType {
-    fn from(value: &ScalarType) -> Self {
+impl RustType<ProtoScalarType> for ScalarType {
+    fn into_proto(&self) -> ProtoScalarType {
         use crate::relation_and_scalar::proto_scalar_type::Kind::*;
         use crate::relation_and_scalar::proto_scalar_type::*;
 
         ProtoScalarType {
-            kind: Some(match value {
+            kind: Some(match self {
                 ScalarType::Bool => Bool(()),
                 ScalarType::Int16 => Int16(()),
                 ScalarType::Int32 => Int32(()),
@@ -1054,33 +1045,29 @@ impl From<&ScalarType> for ProtoScalarType {
                     element_type,
                     custom_id,
                 } => List(Box::new(ProtoList {
-                    element_type: Some(element_type.as_ref().into()),
+                    element_type: Some(element_type.into_proto()),
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
                 ScalarType::Record { custom_id, fields } => Record(ProtoRecord {
                     custom_id: custom_id.map(|id| id.into_proto()),
-                    fields: fields.into_iter().map(Into::into).collect(),
+                    fields: fields.into_proto(),
                 }),
-                ScalarType::Array(typ) => Array(typ.as_ref().into()),
+                ScalarType::Array(typ) => Array(typ.into_proto()),
                 ScalarType::Map {
                     value_type,
                     custom_id,
                 } => Map(Box::new(ProtoMap {
-                    value_type: Some(value_type.as_ref().into()),
+                    value_type: Some(value_type.into_proto()),
                     custom_id: custom_id.map(|id| id.into_proto()),
                 })),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoScalarType> for ScalarType {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: ProtoScalarType) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoScalarType) -> Result<Self, TryFromProtoError> {
         use crate::relation_and_scalar::proto_scalar_type::Kind::*;
 
-        let kind = value
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoScalarType::Kind"))?;
 
@@ -1118,30 +1105,26 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                 max_length: x.max_length.into_rust()?,
             }),
             Array(x) => Ok(ScalarType::Array({
-                let st: ScalarType = (*x).try_into()?;
+                let st: ScalarType = (*x).into_rust()?;
                 st.into()
             })),
             List(x) => Ok(ScalarType::List {
                 element_type: Box::new(
                     x.element_type
                         .map(|x| *x)
-                        .try_into_if_some("ProtoList::element_type")?,
+                        .into_rust_if_some("ProtoList::element_type")?,
                 ),
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
             Record(x) => Ok(ScalarType::Record {
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
-                fields: x
-                    .fields
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<_, _>>()?,
+                fields: x.fields.into_rust()?,
             }),
             Map(x) => Ok(ScalarType::Map {
                 value_type: Box::new(
                     x.value_type
                         .map(|x| *x)
-                        .try_into_if_some("ProtoMap::value_type")?,
+                        .into_rust_if_some("ProtoMap::value_type")?,
                 ),
                 custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
@@ -2311,7 +2294,7 @@ fn verify_base_eq_record_nullability() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use crate::proto::newapi::protobuf_roundtrip;
 
     proptest! {
        #[test]
