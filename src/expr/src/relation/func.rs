@@ -2017,7 +2017,7 @@ impl From<&TableFunc> for ProtoTableFunc {
                 TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into()),
                 TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into()),
                 TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
-                    types: types.iter().map(Into::into).collect(),
+                    types: types.into_proto(),
                     width: width.into_proto(),
                 }),
                 TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
@@ -2055,11 +2055,7 @@ impl TryFrom<ProtoTableFunc> for TableFunc {
             },
             Kind::Wrap(x) => TableFunc::Wrap {
                 width: x.width.into_rust()?,
-                types: x
-                    .types
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
+                types: x.types.into_rust()?,
             },
             Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
         })

@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
+use mz_repr::proto::newapi::IntoRustIfSome;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -144,7 +145,7 @@ impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
             Column(i) => MirScalarExpr::Column(usize::from_proto(i)?),
             Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
                 lit.try_into_if_some("ProtoLiteral::lit")?,
-                typ.try_into_if_some("ProtoLiteral::typ")?,
+                typ.into_rust_if_some("ProtoLiteral::typ")?,
             ),
             CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.try_into()?),
             CallUnary(call_unary) => MirScalarExpr::CallUnary {
@@ -192,7 +193,7 @@ impl From<&MirScalarExpr> for ProtoMirScalarExpr {
                 MirScalarExpr::Column(i) => Column(i.into_proto()),
                 MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
                     lit: Some(lit.into()),
-                    typ: Some(typ.into()),
+                    typ: Some(typ.into_proto()),
                 }),
                 MirScalarExpr::CallUnmaterializable(func) => CallUnmaterializable(func.into()),
                 MirScalarExpr::CallUnary { func, expr } => CallUnary(Box::new(ProtoCallUnary {

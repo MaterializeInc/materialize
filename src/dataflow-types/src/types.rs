@@ -1041,7 +1041,7 @@ impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
                 .map(|(id, (index_desc, typ))| ProtoIndex {
                     id: Some(id.into_proto()),
                     index_desc: Some(index_desc.into()),
-                    typ: Some(typ.into()),
+                    typ: Some(typ.into_proto()),
                 })
                 .collect(),
             objects_to_build: x.objects_to_build.iter().map(Into::into).collect(),
@@ -1051,7 +1051,7 @@ impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
                 .map(|(id, (index_desc, typ))| ProtoIndex {
                     id: Some(id.into_proto()),
                     index_desc: Some(index_desc.into()),
-                    typ: Some(typ.into()),
+                    typ: Some(typ.into_proto()),
                 })
                 .collect(),
             sink_exports: x
@@ -1098,7 +1098,7 @@ impl TryFrom<ProtoDataflowDescription>
                             inner
                                 .index_desc
                                 .try_into_if_some("ProtoIndex::index_desc")?,
-                            inner.typ.try_into_if_some("ProtoIndex::typ")?,
+                            inner.typ.into_rust_if_some("ProtoIndex::typ")?,
                         ),
                     ))
                 })
@@ -1118,7 +1118,7 @@ impl TryFrom<ProtoDataflowDescription>
                             inner
                                 .index_desc
                                 .try_into_if_some("ProtoIndex::index_desc")?,
-                            inner.typ.try_into_if_some("ProtoIndex::typ")?,
+                            inner.typ.into_rust_if_some("ProtoIndex::typ")?,
                         ),
                     ))
                 })

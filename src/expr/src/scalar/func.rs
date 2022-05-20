@@ -5757,7 +5757,7 @@ impl From<&VariadicFunc> for ProtoVariadicFunc {
             VariadicFunc::ArrayIndex { offset } => ArrayIndex(offset.into_proto()),
             VariadicFunc::ListCreate { elem_type } => ListCreate(elem_type.into()),
             VariadicFunc::RecordCreate { field_names } => RecordCreate(ProtoRecordCreate {
-                field_names: field_names.iter().map(Into::into).collect(),
+                field_names: field_names.into_proto(),
             }),
             VariadicFunc::ListIndex => ListIndex(()),
             VariadicFunc::ListSliceLinear => ListSliceLinear(()),
@@ -5804,10 +5804,7 @@ impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
                     elem_type: elem_type.try_into()?,
                 }),
                 RecordCreate(ProtoRecordCreate { field_names }) => Ok(VariadicFunc::RecordCreate {
-                    field_names: field_names
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<_, TryFromProtoError>>()?,
+                    field_names: field_names.into_rust()?,
                 }),
                 ListIndex(()) => Ok(VariadicFunc::ListIndex),
                 ListSliceLinear(()) => Ok(VariadicFunc::ListSliceLinear),

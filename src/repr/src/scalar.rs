@@ -31,7 +31,7 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use crate::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::proto::TryIntoIfSome;
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
@@ -988,8 +988,8 @@ pub enum ScalarType {
 impl From<&(ColumnName, ColumnType)> for ProtoRecordField {
     fn from(x: &(ColumnName, ColumnType)) -> Self {
         ProtoRecordField {
-            column_name: Some((&x.0).into()),
-            column_type: Some((&x.1).into()),
+            column_name: Some(x.0.into_proto()),
+            column_type: Some(x.1.into_proto()),
         }
     }
 }
@@ -1000,9 +1000,9 @@ impl TryFrom<ProtoRecordField> for (ColumnName, ColumnType) {
     fn try_from(x: ProtoRecordField) -> Result<Self, Self::Error> {
         Ok((
             x.column_name
-                .try_into_if_some("ProtoRecordField::column_name")?,
+                .into_rust_if_some("ProtoRecordField::column_name")?,
             x.column_type
-                .try_into_if_some("ProtoRecordField::column_type")?,
+                .into_rust_if_some("ProtoRecordField::column_type")?,
         ))
     }
 }
