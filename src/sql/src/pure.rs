@@ -28,7 +28,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::Schema as CcsrSchema;
-use mz_ccsr::{Client, GetBySubjectError};
+use mz_ccsr::{Client, GetByIdError, GetBySubjectError};
 use mz_proto::RustType;
 use mz_repr::strconv;
 use mz_storage::client::connections::aws::{AwsConfig, AwsExternalIdPrefix};
