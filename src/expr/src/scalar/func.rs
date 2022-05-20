@@ -3787,10 +3787,10 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastRegTypeToOid(_) => CastRegTypeToOid(()),
             UnaryFunc::CastInt64ToInt16(_) => CastInt64ToInt16(()),
             UnaryFunc::CastInt64ToInt32(_) => CastInt64ToInt32(()),
-            UnaryFunc::CastInt16ToNumeric(func) => CastInt16ToNumeric((&func.0).into()),
-            UnaryFunc::CastInt32ToNumeric(func) => CastInt32ToNumeric((&func.0).into()),
+            UnaryFunc::CastInt16ToNumeric(func) => CastInt16ToNumeric(func.0.into_proto()),
+            UnaryFunc::CastInt32ToNumeric(func) => CastInt32ToNumeric(func.0.into_proto()),
             UnaryFunc::CastInt64ToBool(_) => CastInt64ToBool(()),
-            UnaryFunc::CastInt64ToNumeric(func) => CastInt64ToNumeric((&func.0).into()),
+            UnaryFunc::CastInt64ToNumeric(func) => CastInt64ToNumeric(func.0.into_proto()),
             UnaryFunc::CastInt64ToFloat32(_) => CastInt64ToFloat32(()),
             UnaryFunc::CastInt64ToFloat64(_) => CastInt64ToFloat64(()),
             UnaryFunc::CastInt64ToOid(_) => CastInt64ToOid(()),
@@ -3800,8 +3800,8 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastFloat32ToInt64(_) => CastFloat32ToInt64(()),
             UnaryFunc::CastFloat32ToFloat64(_) => CastFloat32ToFloat64(()),
             UnaryFunc::CastFloat32ToString(_) => CastFloat32ToString(()),
-            UnaryFunc::CastFloat32ToNumeric(func) => CastFloat32ToNumeric((&func.0).into()),
-            UnaryFunc::CastFloat64ToNumeric(func) => CastFloat64ToNumeric((&func.0).into()),
+            UnaryFunc::CastFloat32ToNumeric(func) => CastFloat32ToNumeric(func.0.into_proto()),
+            UnaryFunc::CastFloat64ToNumeric(func) => CastFloat64ToNumeric(func.0.into_proto()),
             UnaryFunc::CastFloat64ToInt16(_) => CastFloat64ToInt16(()),
             UnaryFunc::CastFloat64ToInt32(_) => CastFloat64ToInt32(()),
             UnaryFunc::CastFloat64ToInt64(_) => CastFloat64ToInt64(()),
@@ -3846,7 +3846,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastStringToTimestamp(_) => CastStringToTimestamp(()),
             UnaryFunc::CastStringToTimestampTz(_) => CastStringToTimestampTz(()),
             UnaryFunc::CastStringToInterval(_) => CastStringToInterval(()),
-            UnaryFunc::CastStringToNumeric(func) => CastStringToNumeric((&func.0).into()),
+            UnaryFunc::CastStringToNumeric(func) => CastStringToNumeric(func.0.into_proto()),
             UnaryFunc::CastStringToUuid(_) => CastStringToUuid(()),
             UnaryFunc::CastStringToChar(func) => CastStringToChar(ProtoCastStringToChar {
                 length: func.length.as_ref().map(Into::into),
@@ -3887,7 +3887,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastJsonbToInt64(_) => CastJsonbToInt64(()),
             UnaryFunc::CastJsonbToFloat32(_) => CastJsonbToFloat32(()),
             UnaryFunc::CastJsonbToFloat64(_) => CastJsonbToFloat64(()),
-            UnaryFunc::CastJsonbToNumeric(func) => CastJsonbToNumeric((&func.0).into()),
+            UnaryFunc::CastJsonbToNumeric(func) => CastJsonbToNumeric(func.0.into_proto()),
             UnaryFunc::CastJsonbToBool(_) => CastJsonbToBool(()),
             UnaryFunc::CastUuidToString(_) => CastUuidToString(()),
             UnaryFunc::CastRecordToString(func) => CastRecordToString((&func.ty).into()),
@@ -3983,7 +3983,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::ExpNumeric(_) => ExpNumeric(()),
             UnaryFunc::Sleep(_) => Sleep(()),
             UnaryFunc::Panic(_) => Panic(()),
-            UnaryFunc::RescaleNumeric(func) => RescaleNumeric((&func.0).into()),
+            UnaryFunc::RescaleNumeric(func) => RescaleNumeric(func.0.into_proto()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
@@ -4051,14 +4051,14 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastInt64ToInt16(()) => Ok(impls::CastInt64ToInt16.into()),
                 CastInt64ToInt32(()) => Ok(impls::CastInt64ToInt32.into()),
                 CastInt16ToNumeric(max_scale) => {
-                    Ok(impls::CastInt16ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastInt16ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastInt32ToNumeric(max_scale) => {
-                    Ok(impls::CastInt32ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastInt32ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastInt64ToBool(()) => Ok(impls::CastInt64ToBool.into()),
                 CastInt64ToNumeric(max_scale) => {
-                    Ok(impls::CastInt64ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastInt64ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastInt64ToFloat32(()) => Ok(impls::CastInt64ToFloat32.into()),
                 CastInt64ToFloat64(()) => Ok(impls::CastInt64ToFloat64.into()),
@@ -4070,10 +4070,10 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastFloat32ToFloat64(()) => Ok(impls::CastFloat32ToFloat64.into()),
                 CastFloat32ToString(()) => Ok(impls::CastFloat32ToString.into()),
                 CastFloat32ToNumeric(max_scale) => {
-                    Ok(impls::CastFloat32ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastFloat32ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastFloat64ToNumeric(max_scale) => {
-                    Ok(impls::CastFloat64ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastFloat64ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastFloat64ToInt16(()) => Ok(impls::CastFloat64ToInt16.into()),
                 CastFloat64ToInt32(()) => Ok(impls::CastFloat64ToInt32.into()),
@@ -4129,7 +4129,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToTimestampTz(()) => Ok(impls::CastStringToTimestampTz.into()),
                 CastStringToInterval(()) => Ok(impls::CastStringToInterval.into()),
                 CastStringToNumeric(max_scale) => {
-                    Ok(impls::CastStringToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastStringToNumeric(max_scale.into_rust()?).into())
                 }
                 CastStringToUuid(()) => Ok(impls::CastStringToUuid.into()),
                 CastStringToChar(func) => Ok(impls::CastStringToChar {
@@ -4175,7 +4175,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastJsonbToFloat32(()) => Ok(impls::CastJsonbToFloat32.into()),
                 CastJsonbToFloat64(()) => Ok(impls::CastJsonbToFloat64.into()),
                 CastJsonbToNumeric(max_scale) => {
-                    Ok(impls::CastJsonbToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastJsonbToNumeric(max_scale.into_rust()?).into())
                 }
                 CastJsonbToBool(()) => Ok(impls::CastJsonbToBool.into()),
                 CastUuidToString(()) => Ok(impls::CastUuidToString.into()),
@@ -4294,7 +4294,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 Sleep(()) => Ok(impls::Sleep.into()),
                 Panic(()) => Ok(impls::Panic.into()),
                 RescaleNumeric(max_scale) => {
-                    Ok(impls::RescaleNumeric(max_scale.try_into()?).into())
+                    Ok(impls::RescaleNumeric(max_scale.into_rust()?).into())
                 }
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),

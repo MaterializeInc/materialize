@@ -1042,7 +1042,7 @@ impl From<&ScalarType> for ProtoScalarType {
                 ScalarType::RegClass => RegClass(()),
                 ScalarType::Int2Vector => Int2Vector(()),
 
-                ScalarType::Numeric { max_scale } => Numeric(max_scale.into()),
+                ScalarType::Numeric { max_scale } => Numeric(max_scale.into_proto()),
                 ScalarType::Char { length } => Char(ProtoChar {
                     length: length.as_ref().map(Into::into),
                 }),
@@ -1108,7 +1108,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
             Int2Vector(()) => Ok(ScalarType::Int2Vector),
 
             Numeric(x) => Ok(ScalarType::Numeric {
-                max_scale: x.try_into()?,
+                max_scale: x.into_rust()?,
             }),
             Char(x) => Ok(ScalarType::Char {
                 length: x.length.map(TryInto::try_into).transpose()?,
