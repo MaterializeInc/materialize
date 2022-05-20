@@ -16,12 +16,6 @@ autobenches = false
 [lib]
 bench = false
 
-# We intentionally have only a single bench target because it saves on linking
-# time.
-[[bench]]
-name = "benches"
-harness = false
-
 # NB: This is meant to be a strong, independent abstraction boundary. Please
 # don't leak in dependencies on other Materialize packages.
 [dependencies]

@@ -16,8 +16,6 @@ use std::mem::size_of;
 
 use mz_ore::cast::CastFrom;
 
-use crate::client::StreamWriteHandle;
-use crate::error::Error;
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 
 /// A configurable data generator for benchmarking.
@@ -230,43 +228,6 @@ impl Iterator for DataGeneratorBatchIter {
         self.batch_idx += 1;
         self.config.gen_batch(batch_idx)
     }
-}
-
-/// Load the dataset into a persist collection.
-///
-/// The data is loaded with one concurrent write call per generated data batch.
-/// If `do_seals` is true, data is sealed as it's loaded.
-///
-/// The "goodput" bytes represented by this data load are returned on success.
-pub fn load(
-    handle: &StreamWriteHandle<Vec<u8>, Vec<u8>>,
-    data: &DataGenerator,
-    do_seals: bool,
-) -> Result<u64, Error> {
-    let mut writes = Vec::new();
-    let mut seals = Vec::new();
-    for batch in data.batches() {
-        // It's unfortunate to turn this into a Vec just to turn it back into a
-        // columnar batch.
-        let batch = batch
-            .iter()
-            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-            .collect::<Vec<_>>();
-        writes.push(handle.write(&batch));
-        if let Some((_, batch_largest_ts, _)) = batch.get(batch.len() - 1) {
-            if do_seals {
-                let seal_ts = batch_largest_ts + 1;
-                seals.push(handle.seal(seal_ts));
-            }
-        }
-    }
-    for write in writes {
-        write.recv()?;
-    }
-    for seal in seals {
-        seal.recv()?;
-    }
-    Ok(data.goodput_bytes())
 }
 
 /// Encodes the given data into a flat buffer that is exactly

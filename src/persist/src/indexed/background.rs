@@ -23,12 +23,10 @@ use mz_ore::task::RuntimeExt;
 
 use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
-use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
-use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta, UnsealedSnapshotMeta};
+use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta};
 use crate::indexed::metrics::Metrics;
-use crate::location::{Blob, BlobRead};
 use crate::pfuture::PFuture;
 
 /// A request to merge two trace batches and write the results to blob storage.
@@ -50,25 +48,6 @@ pub struct CompactTraceRes {
     pub req: CompactTraceReq,
     /// The compacted batch.
     pub merged: TraceBatchMeta,
-}
-
-/// A request to copy part of unsealed into a trace batch and write the results
-/// to blob storage.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrainUnsealedReq {
-    /// The description of the trace batch to create.
-    pub desc: Description<u64>,
-    /// A consistent view of data in sealed as of some time.
-    pub snap: UnsealedSnapshotMeta,
-}
-
-/// A successful drain.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrainUnsealedRes {
-    /// The original request, so the caller doesn't have to do this matching.
-    pub req: DrainUnsealedReq,
-    /// The compacted batch.
-    pub drained: Option<TraceBatchMeta>,
 }
 
 /// A runtime for background asynchronous maintenance of stored data.
