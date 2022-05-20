@@ -76,11 +76,7 @@ The horizontal axis:
 | file_pg | 5.5ms | 5.6ms | 6.4ms | 6.5ms |
 | s3_pg | 45ms | 47ms | 79ms | 82ms |
 
-These numbers are from our micro-benchmarks. (Note that if you update these
-numbers or look at raw benchmark numbers in commit messages, you need to divide
-the output by however many batches are used because each repeats the operation
-for each batch to shake out issues that don't otherwise surface. The default
-number of batches is 8.)
+These numbers are from our micro-benchmarks.
 
 ```sh
 cargo bench -p mz-persist-client --bench=benches

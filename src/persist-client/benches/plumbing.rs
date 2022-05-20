@@ -12,27 +12,45 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use criterion::measurement::WallTime;
-use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
+use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist_types::Codec;
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use mz_ore::cast::CastFrom;
 use mz_ore::task::RuntimeExt;
-
-use mz_persist::location::{Consensus, SeqNo, VersionedData};
-use mz_persist::mem::MemConsensus;
-use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
-use mz_persist::sqlite::SqliteConsensus;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::workload::{self, DataGenerator};
+use mz_persist_client::ShardId;
+use mz_persist_types::Codec;
 
-fn bench_compare_and_set<C: Consensus + Send + Sync + 'static>(
+use crate::{bench_all_blob, bench_all_consensus};
+
+pub fn bench_consensus_compare_and_set(
+    name: &str,
+    c: &mut Criterion,
     runtime: &Runtime,
-    consensus: Arc<C>,
+    data: &DataGenerator,
+    concurrency: usize,
+) {
+    let mut g = c.benchmark_group(name);
+    let blob_val = workload::flat_blob(&data);
+
+    bench_all_consensus(&mut g, runtime, data, |b, consensus| {
+        bench_consensus_compare_and_set_all_iters(
+            &runtime,
+            Arc::clone(&consensus),
+            blob_val.clone(),
+            b,
+            concurrency,
+        )
+    });
+}
+
+fn bench_consensus_compare_and_set_all_iters(
+    runtime: &Runtime,
+    consensus: Arc<dyn Consensus + Send + Sync>,
     data: Vec<u8>,
     b: &mut Bencher,
     concurrency: usize,
@@ -83,85 +101,78 @@ fn bench_compare_and_set<C: Consensus + Send + Sync + 'static>(
     });
 }
 
-pub fn bench_consensus_compare_and_set(
+pub fn bench_blob_get(
+    name: &str,
+    throughput: bool,
+    c: &mut Criterion,
+    runtime: &Runtime,
     data: &DataGenerator,
-    g: &mut BenchmarkGroup<'_, WallTime>,
-    concurrency: usize,
 ) {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(concurrency)
-        .enable_all()
-        .build()
-        .expect("failed to create async runtime");
-    let blob_val = workload::flat_blob(&data);
-    g.throughput(Throughput::Bytes(
-        data.goodput_bytes() * u64::cast_from(concurrency),
-    ));
-
-    let mem_consensus = Arc::new(MemConsensus::default());
-    g.bench_with_input(
-        BenchmarkId::new("mem", data.goodput_pretty()),
-        &blob_val,
-        |b, blob_val| {
-            bench_compare_and_set(
-                &runtime,
-                Arc::clone(&mem_consensus),
-                blob_val.clone(),
-                b,
-                concurrency,
-            )
-        },
-    );
-
-    // Create a directory that will automatically be dropped after the test finishes.
-    {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-        let sqlite_consensus = runtime
-            .block_on(SqliteConsensus::open(temp_dir.path().join("db")))
-            .expect("creating a SqliteConsensus cannot fail");
-        let sqlite_consensus = Arc::new(sqlite_consensus);
-        g.bench_with_input(
-            BenchmarkId::new("sqlite", data.goodput_pretty()),
-            &blob_val,
-            |b, blob_val| {
-                bench_compare_and_set(
-                    &runtime,
-                    Arc::clone(&sqlite_consensus),
-                    blob_val.clone(),
-                    b,
-                    concurrency,
-                )
-            },
-        );
+    let mut g = c.benchmark_group(name);
+    if throughput {
+        g.throughput(Throughput::Bytes(data.goodput_bytes()));
     }
+    let payload = workload::flat_blob(&data);
 
-    // Only run Postgres benchmarks if the magic env vars are set.
-    if let Some(config) = runtime
-        .block_on(PostgresConsensusConfig::new_for_test())
-        .expect("failed to load postgres config")
-    {
-        let postgres_consensus = runtime
-            .block_on(PostgresConsensus::open(config))
-            .expect("failed to create PostgresConsensus");
-        let postgres_consensus = Arc::new(postgres_consensus);
-        g.bench_with_input(
-            BenchmarkId::new("postgres", data.goodput_pretty()),
-            &blob_val,
-            |b, blob_val| {
-                bench_compare_and_set(
-                    &runtime,
-                    Arc::clone(&postgres_consensus),
-                    blob_val.clone(),
-                    b,
-                    concurrency,
-                )
-            },
-        );
-    }
+    bench_all_blob(&mut g, runtime, data, |b, blob| {
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        let key = ShardId::new().to_string();
+        runtime
+            .block_on(blob.set(deadline, &key, payload.to_owned(), Atomicity::RequireAtomic))
+            .expect("failed to set blob");
+        b.iter(|| {
+            runtime
+                .block_on(bench_blob_get_one_iter(blob.as_ref(), &key))
+                .expect("failed to run iter")
+        })
+    });
 }
 
-pub fn bench_encode_batch(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
-    g.throughput(Throughput::Bytes(data.goodput_bytes()));
+async fn bench_blob_get_one_iter(blob: &dyn BlobMulti, key: &str) -> Result<(), ExternalError> {
+    let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+    let value = blob.get(deadline, &key).await?;
+    assert!(value.is_some());
+    Ok(())
+}
+
+pub fn bench_blob_set(
+    name: &str,
+    throughput: bool,
+    c: &mut Criterion,
+    runtime: &Runtime,
+    data: &DataGenerator,
+) {
+    let mut g = c.benchmark_group(name);
+    if throughput {
+        g.throughput(Throughput::Bytes(data.goodput_bytes()));
+    }
+    let payload = workload::flat_blob(&data);
+
+    bench_all_blob(&mut g, runtime, data, |b, blob| {
+        b.iter(|| {
+            runtime
+                .block_on(bench_blob_set_one_iter(blob.as_ref(), &payload))
+                .expect("failed to run iter")
+        })
+    });
+}
+
+async fn bench_blob_set_one_iter(
+    blob: &dyn BlobMulti,
+    payload: &[u8],
+) -> Result<(), ExternalError> {
+    let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+    let key = ShardId::new().to_string();
+    blob.set(deadline, &key, payload.to_owned(), Atomicity::RequireAtomic)
+        .await
+}
+
+pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data: &DataGenerator) {
+    let mut g = c.benchmark_group(name);
+    if throughput {
+        g.throughput(Throughput::Bytes(data.goodput_bytes()));
+    }
+
     let trace = BlobTraceBatchPart {
         desc: Description::new(
             Antichain::from_elem(0),
