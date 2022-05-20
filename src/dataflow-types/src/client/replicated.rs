@@ -31,10 +31,10 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use mz_repr::GlobalId;
 
-use super::PeekResponse;
 use super::ReplicaId;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
+use super::{Peek, PeekResponse};
 
 /// Spawns a task that repeatedly sends messages back and forth
 /// between a client and its owner, and return channels to communicate with it.
@@ -197,8 +197,8 @@ where
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         // Update our tracking of peek commands.
         match &cmd {
-            ComputeCommand::Peek { peek, .. } => {
-                self.peeks.insert(peek.uuid);
+            ComputeCommand::Peek(Peek { uuid, .. }) => {
+                self.peeks.insert(*uuid);
             }
             ComputeCommand::CancelPeeks { uuids } => {
                 // Canceled peeks should not be further responded to.

@@ -230,11 +230,9 @@ where
                 }
                 self.client.send(AllowCompaction(frontiers)).await
             }
-            Peek { peek, on_replica } => {
+            Peek(peek) => {
                 self.peeks.insert(peek.uuid);
-                self.client
-                    .send(ComputeCommand::Peek { peek, on_replica })
-                    .await
+                self.client.send(ComputeCommand::Peek(peek)).await
             }
             CancelPeeks { uuids } => {
                 for uuid in &uuids {

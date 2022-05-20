@@ -29,15 +29,16 @@ message ProtoPeek {
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
+    optional int64 target_replica = 7;
 }
 
 message ProtoComputeCommand {
-    message ProtoCreateInstanceKind {
+    message ProtoCreateInstance {
         int64 replica_id = 1;
         mz_dataflow_types.logging.ProtoLoggingConfig logging = 2;
     }
 
-    message ProtoCreateDataflowsKind {
+    message ProtoCreateDataflows {
         repeated mz_dataflow_types.types.ProtoDataflowDescription dataflows = 1;
     }
 
@@ -46,26 +47,21 @@ message ProtoComputeCommand {
         mz_persist.gen.persist.ProtoU64Antichain frontier = 2;
     }
 
-    message ProtoAllowCompactionKind {
+    message ProtoAllowCompaction {
         repeated ProtoCompaction collections = 1;
     }
 
-    message ProtoPeekKind {
-        ProtoPeek peek = 1;
-        optional int64 on_replica = 2;
-    }
-
-    message ProtoCancelPeeksKind {
+    message ProtoCancelPeeks {
         repeated mz_repr.proto.ProtoU128 uuids = 1;
     }
 
     oneof kind {
-        ProtoCreateInstanceKind create_instance = 1;
+        ProtoCreateInstance create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
-        ProtoCreateDataflowsKind create_dataflows = 3;
-        ProtoAllowCompactionKind allow_compaction = 4;
-        ProtoPeekKind peek = 5;
-        ProtoCancelPeeksKind cancel_peeks = 6;
+        ProtoCreateDataflows create_dataflows = 3;
+        ProtoAllowCompaction allow_compaction = 4;
+        ProtoPeek peek = 5;
+        ProtoCancelPeeks cancel_peeks = 6;
     }
 }
 

@@ -104,6 +104,11 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
+    /// Target replica of this peek.
+    ///
+    /// If `Some`, the peek is only handled by the given replica.
+    /// If `None`, the peek is handled by all replicas.
+    pub target_replica: Option<ReplicaId>,
 }
 
 impl From<&Peek> for ProtoPeek {
@@ -115,6 +120,7 @@ impl From<&Peek> for ProtoPeek {
             timestamp: x.timestamp,
             finishing: Some((&x.finishing).into()),
             map_filter_project: Some((&x.map_filter_project).into()),
+            target_replica: x.target_replica,
         }
     }
 }
@@ -135,6 +141,7 @@ impl TryFrom<ProtoPeek> for Peek {
             map_filter_project: x
                 .map_filter_project
                 .try_into_if_some("ProtoPeek::map_filter_project")?,
+            target_replica: x.target_replica,
         })
     }
 }
@@ -170,11 +177,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 
     /// Peek at an arrangement.
-    Peek {
-        peek: Peek<T>,
-        /// If `Some`, target the specified replica only.
-        on_replica: Option<ReplicaId>,
-    },
+    Peek(Peek<T>),
 
     /// Cancel the peeks associated with the given `uuids`.
     CancelPeeks {
@@ -192,18 +195,18 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
                 ComputeCommand::CreateInstance {
                     replica_id,
                     logging,
-                } => CreateInstance(ProtoCreateInstanceKind {
+                } => CreateInstance(ProtoCreateInstance {
                     replica_id: *replica_id,
                     logging: logging.as_ref().map(Into::into),
                 }),
                 ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
-                    CreateDataflows(ProtoCreateDataflowsKind {
+                    CreateDataflows(ProtoCreateDataflows {
                         dataflows: dataflows.iter().map(Into::into).collect(),
                     })
                 }
                 ComputeCommand::AllowCompaction(collections) => {
-                    AllowCompaction(ProtoAllowCompactionKind {
+                    AllowCompaction(ProtoAllowCompaction {
                         collections: collections
                             .iter()
                             .map(|(id, frontier)| ProtoCompaction {
@@ -213,11 +216,8 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
                             .collect(),
                     })
                 }
-                ComputeCommand::Peek { peek, on_replica } => Peek(ProtoPeekKind {
-                    peek: Some(peek.into()),
-                    on_replica: *on_replica,
-                }),
-                ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeksKind {
+                ComputeCommand::Peek(peek) => Peek(peek.into()),
+                ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
                     uuids: uuids.into_iter().map(|id| id.into_proto()).collect(),
                 }),
             }),
@@ -232,7 +232,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         match x.kind {
-            Some(CreateInstance(ProtoCreateInstanceKind {
+            Some(CreateInstance(ProtoCreateInstance {
                 replica_id,
                 logging,
             })) => Ok(ComputeCommand::CreateInstance {
@@ -240,7 +240,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                 logging: logging.map(TryInto::try_into).transpose()?,
             }),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
-            Some(CreateDataflows(ProtoCreateDataflowsKind { dataflows })) => {
+            Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(
                     dataflows
                         .into_iter()
@@ -248,7 +248,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                         .collect::<Result<Vec<_>, _>>()?,
                 ))
             }
-            Some(AllowCompaction(ProtoAllowCompactionKind { collections })) => {
+            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(ComputeCommand::AllowCompaction(
                     collections
                         .into_iter()
@@ -263,11 +263,8 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                         .collect::<Result<Vec<_>, TryFromProtoError>>()?,
                 ))
             }
-            Some(Peek(ProtoPeekKind { peek, on_replica })) => Ok(ComputeCommand::Peek {
-                peek: peek.try_into_if_some("ProtoPeekKind::peek")?,
-                on_replica,
-            }),
-            Some(CancelPeeks(ProtoCancelPeeksKind { uuids })) => Ok(ComputeCommand::CancelPeeks {
+            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.try_into()?)),
+            Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
                 uuids: uuids
                     .into_iter()
                     .map(Uuid::from_proto)
@@ -311,8 +308,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                     .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
                     .collect()
             )),
-            (any::<Peek>(), any::<Option<ReplicaId>>())
-                .prop_map(|(peek, on_replica)| ComputeCommand::Peek { peek, on_replica }),
+            any::<Peek>().prop_map(ComputeCommand::Peek),
             proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
                 ComputeCommand::CancelPeeks {
                     uuids: BTreeSet::from_iter(uuids.into_iter()),
@@ -456,10 +452,10 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                         final_frontiers.insert(id, frontier.clone());
                     }
                 }
-                ComputeCommand::Peek { peek, on_replica } => {
+                ComputeCommand::Peek(peek) => {
                     // We could pre-filter here, but seems hard to access `uuid`
                     // and take ownership of `peek` at the same time.
-                    live_peeks.push((peek, on_replica));
+                    live_peeks.push(peek);
                 }
                 ComputeCommand::CancelPeeks { mut uuids } => {
                     uuids.retain(|uuid| peeks.contains(uuid));
@@ -496,7 +492,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
 
         // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|(peek, _)| peeks.contains(&peek.uuid));
+        live_peeks.retain(|peek| peeks.contains(&peek.uuid));
 
         // Record the volume of post-compaction commands.
         let mut command_count = 1;
@@ -521,11 +517,8 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                 final_frontiers.into_iter().collect(),
             ));
         }
-        self.commands.extend(
-            live_peeks
-                .into_iter()
-                .map(|(peek, on_replica)| ComputeCommand::Peek { peek, on_replica }),
-        );
+        self.commands
+            .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
         if !live_cancels.is_empty() {
             self.commands.push(ComputeCommand::CancelPeeks {
                 uuids: live_cancels,

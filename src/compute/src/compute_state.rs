@@ -43,7 +43,7 @@ use crate::sink::SinkBaseMetrics;
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
-    /// The ID of the replica whis worker belongs to.
+    /// The ID of the replica this worker belongs to.
     pub replica_id: ReplicaId,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
@@ -169,9 +169,10 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 }
             }
 
-            ComputeCommand::Peek { peek, on_replica } => {
+            ComputeCommand::Peek(peek) => {
                 // Only handle peeks that are not targeted at a different replica.
-                if on_replica.is_none() || on_replica == Some(self.compute_state.replica_id) {
+                let target = peek.target_replica;
+                if target.is_none() || target == Some(self.compute_state.replica_id) {
                     // Acquire a copy of the trace suitable for fulfilling the peek.
                     let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
                     let timestamp_frontier = Antichain::from_elem(peek.timestamp);

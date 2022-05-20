@@ -401,7 +401,7 @@ where
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        on_replica: Option<ReplicaId>,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), ComputeError> {
         let since = self.as_ref().collection(id)?.read_capabilities.frontier();
 
@@ -415,20 +415,17 @@ where
         self.update_read_capabilities(&mut updates).await?;
         self.compute.peeks.insert(uuid, (id, timestamp.clone()));
 
-        let command = ComputeCommand::Peek {
-            peek: Peek {
+        self.compute
+            .client
+            .send(ComputeCommand::Peek(Peek {
                 id,
                 key,
                 uuid,
                 timestamp,
                 finishing,
                 map_filter_project,
-            },
-            on_replica,
-        };
-        self.compute
-            .client
-            .send(command)
+                target_replica,
+            }))
             .await
             .map_err(ComputeError::from)
     }
