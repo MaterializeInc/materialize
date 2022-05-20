@@ -177,7 +177,7 @@ mod tests {
     use crate::error::Error;
     use crate::mem::MemRegistry;
     use crate::operators::split_ok_err;
-    use crate::unreliable::UnreliableHandle;
+    use crate::unreliable::UnreliableHandleOld;
 
     use super::*;
 
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn initial_error_handling() -> Result<(), Error> {
-        let mut unreliable = UnreliableHandle::default();
+        let mut unreliable = UnreliableHandleOld::default();
         let p = MemRegistry::new().runtime_unreliable(unreliable.clone())?;
         unreliable.make_unavailable();
         let (_, read) = p.create_or_load::<(), ()>("test_name");
