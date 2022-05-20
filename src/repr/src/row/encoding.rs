@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::adt::array::ArrayDimension;
 use crate::adt::numeric::Numeric;
 use crate::chrono::{ProtoNaiveDate, ProtoNaiveTime};
-use crate::proto::newapi::{RustType, TryFromProtoError};
+use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
@@ -82,7 +82,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             }),
             Datum::Timestamp(x) => DatumType::Timestamp(x.into_proto()),
             Datum::TimestampTz(x) => DatumType::TimestampTz(x.into_proto()),
-            Datum::Interval(x) => DatumType::Interval((&x).into()),
+            Datum::Interval(x) => DatumType::Interval(x.into_proto()),
             Datum::Bytes(x) => DatumType::Bytes(x.to_vec()),
             Datum::String(x) => DatumType::String(x.to_owned()),
             Datum::Array(x) => DatumType::Array(ProtoArray {
@@ -199,7 +199,7 @@ impl RowPacker<'_> {
             )),
             Some(DatumType::Interval(x)) => self.push(Datum::Interval(
                 x.clone()
-                    .try_into()
+                    .into_rust()
                     .map_err(|e: TryFromProtoError| e.to_string())?,
             )),
             Some(DatumType::List(x)) => self.push_list_with(|row| -> Result<(), String> {
