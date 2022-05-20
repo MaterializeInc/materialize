@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="519" height="97">
+   <polygon points="9 61 1 57 1 65"/>
+   <polygon points="17 61 9 57 9 65"/>
+   <rect x="31" y="47" width="76" height="32" rx="10"/>
+   <rect x="29"
+         y="45"
+         width="76"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="39" y="65">CREATE</text>
+   <rect x="127" y="47" width="84" height="32" rx="10"/>
+   <rect x="125"
+         y="45"
+         width="84"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="135" y="65">CLUSTER</text>
+   <rect x="231" y="47" width="56" height="32"/>
+   <rect x="229" y="45" width="56" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="239" y="65">name</text>
+   <rect x="347" y="47" width="104" height="32"/>
+   <rect x="345" y="45" width="104" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="355" y="65">inline_replica</text>
+   <rect x="347" y="3" width="24" height="32" rx="10"/>
+   <rect x="345"
+         y="1"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="355" y="21">,</text>
+   <path class="line"
+         d="m17 61 h2 m0 0 h10 m76 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m56 0 h10 m40 0 h10 m104 0 h10 m-144 0 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m124 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-124 0 h10 m24 0 h10 m0 0 h80 m-164 44 h20 m164 0 h20 m-204 0 q10 0 10 10 m184 0 q0 -10 10 -10 m-194 10 v14 m184 0 v-14 m-184 14 q0 10 10 10 m164 0 q10 0 10 -10 m-174 10 h10 m0 0 h154 m23 -34 h-3"/>
+   <polygon points="509 61 517 57 517 65"/>
+   <polygon points="509 61 501 57 501 65"/>
+</svg>

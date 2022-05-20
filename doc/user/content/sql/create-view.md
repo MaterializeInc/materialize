@@ -18,7 +18,7 @@ VIEW`](../create-materialized-view).
 ## Conceptual framework
 
 `CREATE VIEW` simply stores the verbatim `SELECT` query, and provides a
-shorthand for performing the query. For more information, see [Key Concepts: Sources](/overview/key-concepts/#non-materialized-views).
+shorthand for performing the query. For more information, see [Key Concepts: Non-materialized views](/overview/key-concepts/#non-materialized-views).
 
 ## Syntax
 

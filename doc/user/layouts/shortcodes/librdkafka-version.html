@@ -1,9 +1,0 @@
-{{-
-  index
-    (split
-      (index
-        (where (index $.Site.Data "Cargo.lock" "package") "name" "rdkafka-sys")
-        0 "version")
-      "+")
-    1
--}}

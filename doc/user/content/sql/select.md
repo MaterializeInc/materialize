@@ -39,7 +39,17 @@ Scenario | `SELECT` behavior
 ---------|------------------
 **Creating view** | The query description is bound to the name given to it by `CREATE VIEW`.
 **Reading from a materialized source or view** | Reads directly from the maintained data.
-**Querying materialized sources and views** | Constructs a dataflow, which is torn down after returning results to the client.
+**Querying non-materialized sources and views** | Constructs a dataflow, which is torn down after returning results to the client.
+
+### `SELECT` + clusters
+
+As mentioned above, queries over non-materialized sources and views must create
+a dataflow to compute the results. Each dataflow must belong to a
+[cluster](/overview/key-concepts#clusters).
+
+Materialize only supports creating these ad hoc dataflows on the cluster named
+in the `cluster` session variable. You can change this cluster using `SET
+cluster = <cluster name>`.
 
 ## Syntax
 
