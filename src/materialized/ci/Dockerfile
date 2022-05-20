@@ -17,7 +17,8 @@ RUN apt-get update \
         postgresql-14 \
         sqlite3 \
         tini \
-    && useradd --system --create-home materialize \
+    && groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize \
     && pg_dropcluster 14 main \
     && pg_createcluster 14 materialize --user=materialize \
     && pg_ctlcluster 14 materialize start \

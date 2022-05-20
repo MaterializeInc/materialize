@@ -9,8 +9,13 @@
 
 MZFROM ubuntu-base
 
-RUN apt-get update && apt-get -qy install ca-certificates curl tini
+RUN apt-get update \
+    && apt-get -qy install ca-certificates curl tini \
+    && groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize
 
 COPY storaged /usr/local/bin/
+
+USER materialize
 
 ENTRYPOINT ["tini", "--", "storaged", "--listen-addr=0.0.0.0:2100"]
