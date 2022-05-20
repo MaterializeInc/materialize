@@ -19,6 +19,7 @@ statement ok
 CREATE CLUSTER test
   REPLICA replica_a (SIZE '1'),
   REPLICA replica_b (SIZE '2')
+  WITH INTROSPECTION GRANULARITY '50 milliseconds'
 
 statement ok
 SET cluster = test
@@ -38,6 +39,51 @@ a b
 query I
 SELECT * FROM mz_materializations
 ----
+
+# Verify that we are always hitting the same replica.
+# We check that the number of peeks in mz_peek_durations (which is a
+# replica-specific introspection source) increases by one with every query.
+# We sleep between checks to give dataflow logging time to catch up.
+
+query I
+SELECT mz_internal.mz_sleep(0.1)
+----
+NULL
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+2
+
+query I
+SELECT mz_internal.mz_sleep(0.1)
+----
+NULL
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+3
+
+query I
+SELECT mz_internal.mz_sleep(0.1)
+----
+NULL
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+4
+
+# Verify that we see no prior peeks when targeting another replica.
+
+statement ok
+SET cluster_replica = replica_b
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+NULL
 
 # Verify that targeting an unknown replica fails.
 
