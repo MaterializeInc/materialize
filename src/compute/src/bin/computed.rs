@@ -211,10 +211,15 @@ where
 
     loop {
         select! {
-            cmd = grpc_serve.recv() =>  { client.send(cmd?).await.unwrap() },
+            cmd = grpc_serve.recv() => {
+                client.send(cmd?).await.unwrap()
+            },
             res = client.recv() => {
-                let response = res.unwrap().expect("LocalClient::recv returned Ok(None)");
-                grpc_serve.send(response).await},
+                match res.unwrap() {
+                    None => { },
+                    Some(response) => grpc_serve.send(response).await
+                }
+            },
             _ = shutdown_rx.recv() => break
         }
     }

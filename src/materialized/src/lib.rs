@@ -33,8 +33,8 @@ use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
-use mz_dataflow_types::ConnectorContext;
 use mz_dataflow_types::client::StoragedRemoteClient;
+use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};

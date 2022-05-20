@@ -40,7 +40,7 @@ use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
     ConcreteComputeInstanceReplicaConfig, ControllerResponse, ReplicaId, StorageResponse,
 };
-use crate::client::{ComputedRemoteClient, GenericClient};
+use crate::client::{ComputedRemoteClient, GenericClient, ProtoSerializableTimestamp};
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
 
@@ -481,8 +481,6 @@ impl<T> Controller<T> {
 }
 
 use std::sync::Arc;
-
-use super::ProtoSerializableTimestamp;
 
 /// Compaction policies for collections maintained by `Controller`.
 #[derive(Clone, Derivative)]

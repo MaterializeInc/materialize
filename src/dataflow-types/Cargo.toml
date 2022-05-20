@@ -57,4 +57,3 @@ proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 
 [build-dependencies]
 tonic-build = "0.7"
-# prost-build = { version = "0.10.3", features = ["vendored"] }
