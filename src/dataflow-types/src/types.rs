@@ -274,7 +274,7 @@ pub struct BuildDesc<P> {
 impl From<&BuildDesc<crate::plan::Plan>> for ProtoBuildDesc {
     fn from(x: &BuildDesc<crate::plan::Plan>) -> Self {
         ProtoBuildDesc {
-            id: Some((&x.id).into()),
+            id: Some(x.id.into_proto()),
             plan: Some((&x.plan).into()),
         }
     }
@@ -285,7 +285,7 @@ impl TryFrom<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 
     fn try_from(x: ProtoBuildDesc) -> Result<Self, Self::Error> {
         Ok(BuildDesc {
-            id: x.id.try_into_if_some("ProtoBuildDesc::id")?,
+            id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
             plan: x.plan.try_into_if_some("ProtoBuildDesc::plan")?,
         })
     }
@@ -1031,7 +1031,7 @@ impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
                 .source_imports
                 .iter()
                 .map(|(id, source_instance_desc)| ProtoSourceImport {
-                    id: Some(id.into()),
+                    id: Some(id.into_proto()),
                     source_instance_desc: Some(source_instance_desc.into()),
                 })
                 .collect(),
@@ -1039,7 +1039,7 @@ impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
                 .index_imports
                 .iter()
                 .map(|(id, (index_desc, typ))| ProtoIndex {
-                    id: Some(id.into()),
+                    id: Some(id.into_proto()),
                     index_desc: Some(index_desc.into()),
                     typ: Some(typ.into()),
                 })
@@ -1049,7 +1049,7 @@ impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
                 .index_exports
                 .iter()
                 .map(|(id, (index_desc, typ))| ProtoIndex {
-                    id: Some(id.into()),
+                    id: Some(id.into_proto()),
                     index_desc: Some(index_desc.into()),
                     typ: Some(typ.into()),
                 })
@@ -1058,7 +1058,7 @@ impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
                 .sink_exports
                 .iter()
                 .map(|(id, sink_desc)| ProtoSinkExport {
-                    id: Some(id.into()),
+                    id: Some(id.into_proto()),
                     sink_desc: serde_json::to_string(sink_desc).unwrap(),
                 })
                 .collect(),
@@ -1081,7 +1081,7 @@ impl TryFrom<ProtoDataflowDescription>
                 .into_iter()
                 .map(|inner| {
                     Ok((
-                        inner.id.try_into_if_some("ProtoSourceImport::id")?,
+                        inner.id.into_rust_if_some("ProtoSourceImport::id")?,
                         inner
                             .source_instance_desc
                             .try_into_if_some("ProtoSourceImport::source_instance_desc")?,
@@ -1093,7 +1093,7 @@ impl TryFrom<ProtoDataflowDescription>
                 .into_iter()
                 .map(|inner| {
                     Ok((
-                        inner.id.try_into_if_some("ProtoIndex::id")?,
+                        inner.id.into_rust_if_some("ProtoIndex::id")?,
                         (
                             inner
                                 .index_desc
@@ -1113,7 +1113,7 @@ impl TryFrom<ProtoDataflowDescription>
                 .into_iter()
                 .map(|inner| {
                     Ok((
-                        inner.id.try_into_if_some("ProtoIndex::id")?,
+                        inner.id.into_rust_if_some("ProtoIndex::id")?,
                         (
                             inner
                                 .index_desc
@@ -1128,7 +1128,7 @@ impl TryFrom<ProtoDataflowDescription>
                 .into_iter()
                 .map(|inner| {
                     Ok((
-                        inner.id.try_into_if_some("ProtoSinkExport::id")?,
+                        inner.id.into_rust_if_some("ProtoSinkExport::id")?,
                         serde_json::from_str(&inner.sink_desc).map_err(TryFromProtoError::from)?,
                     ))
                 })
@@ -3001,7 +3001,7 @@ pub struct IndexDesc {
 impl From<&IndexDesc> for ProtoIndexDesc {
     fn from(x: &IndexDesc) -> Self {
         ProtoIndexDesc {
-            on_id: Some((&x.on_id).into()),
+            on_id: Some(x.on_id.into_proto()),
             key: x.key.iter().map(Into::into).collect(),
         }
     }
@@ -3012,7 +3012,7 @@ impl TryFrom<ProtoIndexDesc> for IndexDesc {
 
     fn try_from(x: ProtoIndexDesc) -> Result<Self, Self::Error> {
         Ok(IndexDesc {
-            on_id: x.on_id.try_into_if_some("ProtoIndexDesc::on_id")?,
+            on_id: x.on_id.into_rust_if_some("ProtoIndexDesc::on_id")?,
             key: x
                 .key
                 .into_iter()

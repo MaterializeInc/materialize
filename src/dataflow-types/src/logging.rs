@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -65,7 +66,7 @@ impl From<(&LogVariant, &GlobalId)> for ProtoActiveLog {
     fn from(x: (&LogVariant, &GlobalId)) -> Self {
         ProtoActiveLog {
             key: Some(x.0.into()),
-            value: Some(x.1.into()),
+            value: Some(x.1.into_proto()),
         }
     }
 }
@@ -76,7 +77,7 @@ impl TryFrom<ProtoActiveLog> for (LogVariant, GlobalId) {
     fn try_from(x: ProtoActiveLog) -> Result<Self, Self::Error> {
         Ok((
             x.key.try_into_if_some("ProtoActiveLog::key")?,
-            x.value.try_into_if_some("ProtoActiveLog::value")?,
+            x.value.into_rust_if_some("ProtoActiveLog::value")?,
         ))
     }
 }

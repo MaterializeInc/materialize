@@ -31,7 +31,8 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::proto::{TryFromProtoError, TryIntoIfSome};
+use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use crate::proto::TryIntoIfSome;
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -1054,10 +1055,10 @@ impl From<&ScalarType> for ProtoScalarType {
                     custom_id,
                 } => List(Box::new(ProtoList {
                     element_type: Some(element_type.as_ref().into()),
-                    custom_id: custom_id.map(|id| (&id).into()),
+                    custom_id: custom_id.map(|id| id.into_proto()),
                 })),
                 ScalarType::Record { custom_id, fields } => Record(ProtoRecord {
-                    custom_id: custom_id.map(|id| (&id).into()),
+                    custom_id: custom_id.map(|id| id.into_proto()),
                     fields: fields.into_iter().map(Into::into).collect(),
                 }),
                 ScalarType::Array(typ) => Array(typ.as_ref().into()),
@@ -1066,7 +1067,7 @@ impl From<&ScalarType> for ProtoScalarType {
                     custom_id,
                 } => Map(Box::new(ProtoMap {
                     value_type: Some(value_type.as_ref().into()),
-                    custom_id: custom_id.map(|id| (&id).into()),
+                    custom_id: custom_id.map(|id| id.into_proto()),
                 })),
             }),
         }
@@ -1126,10 +1127,10 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         .map(|x| *x)
                         .try_into_if_some("ProtoList::element_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
             Record(x) => Ok(ScalarType::Record {
-                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
                 fields: x
                     .fields
                     .into_iter()
@@ -1142,7 +1143,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                         .map(|x| *x)
                         .try_into_if_some("ProtoMap::value_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
         }
     }
