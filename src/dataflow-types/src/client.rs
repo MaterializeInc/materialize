@@ -75,6 +75,35 @@ pub enum ConcreteComputeInstanceReplicaConfig {
     },
 }
 
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Configuration sent to new compute instances.
+pub struct InstanceConfig {
+    /// The instance's replica ID.
+    pub replica_id: ReplicaId,
+    /// Optionally, request the installation of logging sources.
+    pub logging: Option<LoggingConfig>,
+}
+
+impl From<&InstanceConfig> for ProtoInstanceConfig {
+    fn from(x: &InstanceConfig) -> Self {
+        ProtoInstanceConfig {
+            replica_id: x.replica_id,
+            logging: x.logging.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<ProtoInstanceConfig> for InstanceConfig {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoInstanceConfig) -> Result<Self, Self::Error> {
+        Ok(Self {
+            replica_id: x.replica_id,
+            logging: x.logging.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
 /// Peek at an arrangement.
 ///
 /// This request elicits data from the worker, by naming an
@@ -150,12 +179,7 @@ impl TryFrom<ProtoPeek> for Peek {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
-    ///
-    /// Optionally, request that the logging sources in the contained configuration are installed.
-    CreateInstance {
-        replica_id: ReplicaId,
-        logging: Option<LoggingConfig>,
-    },
+    CreateInstance(InstanceConfig),
 
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
@@ -192,13 +216,7 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
         use proto_compute_command::*;
         ProtoComputeCommand {
             kind: Some(match x {
-                ComputeCommand::CreateInstance {
-                    replica_id,
-                    logging,
-                } => CreateInstance(ProtoCreateInstance {
-                    replica_id: *replica_id,
-                    logging: logging.as_ref().map(Into::into),
-                }),
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into()),
                 ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
@@ -232,13 +250,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         match x.kind {
-            Some(CreateInstance(ProtoCreateInstance {
-                replica_id,
-                logging,
-            })) => Ok(ComputeCommand::CreateInstance {
-                replica_id,
-                logging: logging.map(TryInto::try_into).transpose()?,
-            }),
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.try_into()?)),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(
@@ -283,12 +295,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            (any::<ReplicaId>(), any::<Option<LoggingConfig>>()).prop_map(
-                |(replica_id, logging)| ComputeCommand::CreateInstance {
-                    replica_id,
-                    logging
-                }
-            ),
+            any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
             Just(ComputeCommand::DropInstance),
             proptest::collection::vec(
                 any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>(),
@@ -389,8 +396,8 @@ impl<T> ComputeCommand<T> {
                     }
                 }
             }
-            ComputeCommand::CreateInstance { logging, .. } => {
-                if let Some(logging_config) = logging {
+            ComputeCommand::CreateInstance(config) => {
+                if let Some(logging_config) = &config.logging {
                     start.extend(logging_config.log_identifiers());
                 }
             }
@@ -435,7 +442,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
 
         for command in self.commands.drain(..) {
             match command {
-                create @ ComputeCommand::CreateInstance { .. } => {
+                create @ ComputeCommand::CreateInstance(_) => {
                     // We should be able to handle this, should this client need to be restartable.
                     assert!(create_command.is_none());
                     create_command = Some(create);

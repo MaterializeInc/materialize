@@ -396,8 +396,8 @@ where
 /// contain replica-specific fields that must be adjusted before sending.
 fn specialize_command<T>(command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
     // Tell new instances their replica ID.
-    if let ComputeCommand::CreateInstance { replica_id: id, .. } = command {
-        *id = replica_id;
+    if let ComputeCommand::CreateInstance(config) = command {
+        config.replica_id = replica_id;
     }
 
     // Replace dataflow identifiers with new unique ids.

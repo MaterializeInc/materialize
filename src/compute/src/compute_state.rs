@@ -87,11 +87,8 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
     /// Entrypoint for applying a compute command.
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
-            ComputeCommand::CreateInstance {
-                replica_id: _,
-                logging,
-            } => {
-                if let Some(logging) = logging {
+            ComputeCommand::CreateInstance(config) => {
+                if let Some(logging) = config.logging {
                     self.initialize_logging(&logging);
                 }
             }

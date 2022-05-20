@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, ReplicaId};
+use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, SourceInstanceDesc};
@@ -161,10 +161,10 @@ where
         }
         let mut client = crate::client::replicated::ActiveReplication::default();
         client
-            .send(ComputeCommand::CreateInstance {
+            .send(ComputeCommand::CreateInstance(InstanceConfig {
                 replica_id: Default::default(),
                 logging: logging.clone(),
-            })
+            }))
             .await?;
 
         Ok(Self {

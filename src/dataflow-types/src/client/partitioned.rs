@@ -389,7 +389,7 @@ where
     /// In particular, this method installs and removes upper frontier maintenance.
     pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateInstance { .. } | ComputeCommand::DropInstance => {
+            ComputeCommand::CreateInstance(_) | ComputeCommand::DropInstance => {
                 self.reset();
             }
             _ => (),
