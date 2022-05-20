@@ -6,7 +6,12 @@
 // As of the Change Date specified in that file, in accordance with
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
+
+use std::fs;
+use std::path::PathBuf;
+
 use async_trait::async_trait;
+
 use mz_repr::GlobalId;
 
 /// Securely stores secrets.
@@ -38,4 +43,36 @@ pub enum SecretOp {
         /// The id of the secret to delete.
         id: GlobalId,
     },
+}
+
+/// Configures a [`SecretsReader`].
+pub struct SecretsReaderConfig {
+    /// The directory at which secrets are mounted.
+    pub mount_path: PathBuf,
+}
+
+/// Securely reads secrets that are managed by a [`SecretsController`].
+///
+/// Does not provide access to create, update, or delete the secrets within.
+pub struct SecretsReader {
+    config: SecretsReaderConfig,
+}
+
+impl SecretsReader {
+    pub fn new(config: SecretsReaderConfig) -> Self {
+        Self { config }
+    }
+
+    /// Returns the contents of a secret identified by GlobalId
+    pub fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+        let file_path = self.config.mount_path.join(id.to_string());
+        Ok(fs::read(file_path)?)
+    }
+
+    /// Returns the path of the secret consisting of a configured base path
+    /// and the GlobalId
+    pub fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error> {
+        let path = self.config.mount_path.join(id.to_string());
+        Ok(path)
+    }
 }

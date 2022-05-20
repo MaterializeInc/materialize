@@ -46,7 +46,7 @@ use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_pid_file::PidFile;
-use mz_secrets::SecretsController;
+use mz_secrets::{SecretsController, SecretsReader, SecretsReaderConfig};
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
 
@@ -345,7 +345,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     };
 
     // Initialize secrets controller.
-    let secrets_controller: Box<dyn SecretsController> = match config.secrets_controller {
+    let (secrets_controller, secrets_reader) = match config.secrets_controller {
         None | Some(SecretsControllerConfig::LocalFileSystem) => {
             let secrets_storage = config.data_directory.join("secrets");
             fs::create_dir_all(&secrets_storage).with_context(|| {
@@ -353,25 +353,42 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             })?;
             let permissions = Permissions::from_mode(0o700);
             fs::set_permissions(secrets_storage.clone(), permissions)?;
-            Box::new(FilesystemSecretsController::new(secrets_storage))
+            let secrets_controller =
+                Box::new(FilesystemSecretsController::new(secrets_storage.clone()));
+            let secrets_reader = SecretsReader::new(SecretsReaderConfig {
+                mount_path: secrets_storage,
+            });
+            (
+                secrets_controller as Box<dyn SecretsController>,
+                secrets_reader,
+            )
         }
         Some(SecretsControllerConfig::Kubernetes {
             context,
             user_defined_secret,
             user_defined_secret_mount_path,
             refresh_pod_name,
-        }) => Box::new(
-            KubernetesSecretsController::new(
-                context,
-                KubernetesSecretsControllerConfig {
-                    user_defined_secret,
-                    user_defined_secret_mount_path,
-                    refresh_pod_name,
-                },
+        }) => {
+            let secrets_controller = Box::new(
+                KubernetesSecretsController::new(
+                    context.to_owned(),
+                    KubernetesSecretsControllerConfig {
+                        user_defined_secret,
+                        user_defined_secret_mount_path: user_defined_secret_mount_path.clone(),
+                        refresh_pod_name,
+                    },
+                )
+                .await
+                .context("connecting to kubernetes")?,
+            );
+            let secrets_reader = SecretsReader::new(SecretsReaderConfig {
+                mount_path: PathBuf::from(user_defined_secret_mount_path),
+            });
+            (
+                secrets_controller as Box<dyn SecretsController>,
+                secrets_reader,
             )
-            .await
-            .context("connecting to kubernetes")?,
-        ),
+        }
     };
 
     // Initialize dataflow controller.
@@ -400,6 +417,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller,
+        secrets_reader,
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
         connector_context: config.connector_context,
