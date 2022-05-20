@@ -1707,7 +1707,7 @@ impl From<&EvalError> for ProtoEvalError {
                 max_layer: max_layer.into_proto(),
                 val: *val,
             }),
-            EvalError::InvalidArray(error) => InvalidArray(error.into()),
+            EvalError::InvalidArray(error) => InvalidArray(error.into_proto()),
             EvalError::InvalidEncodingName(v) => InvalidEncodingName(v.clone()),
             EvalError::InvalidHashAlgorithm(v) => InvalidHashAlgorithm(v.clone()),
             EvalError::InvalidByteSequence {
@@ -1813,7 +1813,7 @@ impl TryFrom<ProtoEvalError> for EvalError {
                     max_layer: usize::from_proto(v.max_layer)?,
                     val: v.val,
                 }),
-                InvalidArray(error) => Ok(EvalError::InvalidArray(error.try_into()?)),
+                InvalidArray(error) => Ok(EvalError::InvalidArray(error.into_rust()?)),
                 InvalidEncodingName(v) => Ok(EvalError::InvalidEncodingName(v)),
                 InvalidHashAlgorithm(v) => Ok(EvalError::InvalidHashAlgorithm(v)),
                 InvalidByteSequence(v) => Ok(EvalError::InvalidByteSequence {
