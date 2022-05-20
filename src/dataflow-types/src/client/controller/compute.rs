@@ -145,10 +145,7 @@ impl<T> ComputeControllerState<T>
 where
     T: Timestamp + Lattice,
 {
-    pub(super) async fn new(
-        // client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
-        logging: &Option<LoggingConfig>,
-    ) -> Result<Self, anyhow::Error> {
+    pub(super) async fn new(logging: &Option<LoggingConfig>) -> Result<Self, anyhow::Error> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -164,7 +161,10 @@ where
         }
         let mut client = crate::client::replicated::ActiveReplication::default();
         client
-            .send(ComputeCommand::CreateInstance(logging.clone()))
+            .send(ComputeCommand::CreateInstance {
+                replica_id: Default::default(),
+                logging: logging.clone(),
+            })
             .await?;
 
         Ok(Self {

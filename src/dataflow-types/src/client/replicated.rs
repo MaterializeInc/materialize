@@ -179,17 +179,9 @@ where
         // Replay the commands at the client, creating new dataflow identifiers.
         let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.history.iter() {
-            if !command.targets_replica(replica_id) {
-                continue;
-            }
-
             let mut command = command.clone();
-            // Replace dataflow identifiers with new unique ids.
-            if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
-                for dataflow in dataflows.iter_mut() {
-                    dataflow.id = uuid::Uuid::new_v4();
-                }
-            }
+            specialize_command(&mut command, replica_id);
+
             cmd_tx
                 .send(command)
                 .expect("Channel to client has gone away!")
@@ -256,17 +248,8 @@ where
 
         // Clone the command for each target replica.
         for (id, (tx, _)) in self.replicas.iter_mut() {
-            if !cmd.targets_replica(*id) {
-                continue;
-            }
-
             let mut command = cmd.clone();
-            // Replace dataflow identifiers with new unique ids.
-            if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
-                for dataflow in dataflows.iter_mut() {
-                    dataflow.id = uuid::Uuid::new_v4();
-                }
-            }
+            specialize_command(&mut command, *id);
 
             // Errors are suppressed by this client, which awaits a reconnection in `recv` and
             // will rehydrate the client when that happens.
@@ -403,6 +386,24 @@ where
             }
             // Indicate completion of the communication.
             Ok(None)
+        }
+    }
+}
+
+/// Specialize a command for the given `ReplicaId`.
+///
+/// Most `ComputeCommand`s are independent of the target replica, but some
+/// contain replica-specific fields that must be adjusted before sending.
+fn specialize_command<T>(command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+    // Tell new instances their replica ID.
+    if let ComputeCommand::CreateInstance { replica_id: id, .. } = command {
+        *id = replica_id;
+    }
+
+    // Replace dataflow identifiers with new unique ids.
+    if let ComputeCommand::CreateDataflows(dataflows) = command {
+        for dataflow in dataflows.iter_mut() {
+            dataflow.id = uuid::Uuid::new_v4();
         }
     }
 }

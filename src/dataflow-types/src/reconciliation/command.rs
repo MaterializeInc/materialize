@@ -164,18 +164,26 @@ where
     async fn absorb_command(&mut self, command: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         use ComputeCommand::*;
         match command {
-            CreateInstance(config) => {
+            CreateInstance {
+                replica_id,
+                logging,
+            } => {
                 // TODO: Handle `logging` correctly when reconnecting. We currently assume that the
                 // logging config stays the same.
                 if !self.created {
-                    if let Some(logging) = &config {
+                    if let Some(logging) = &logging {
                         for id in logging.log_identifiers() {
                             if !self.uppers.contains_key(&id) {
                                 self.start_tracking(id);
                             }
                         }
                     }
-                    self.client.send(CreateInstance(config)).await?;
+                    self.client
+                        .send(CreateInstance {
+                            replica_id,
+                            logging,
+                        })
+                        .await?;
                     self.created = true;
                 }
                 Ok(())

@@ -24,7 +24,7 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
+use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, ReplicaId};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::ConnectorContext;
 use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
@@ -43,6 +43,8 @@ use crate::sink::SinkBaseMetrics;
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
+    /// The ID of the replica whis worker belongs to.
+    pub replica_id: ReplicaId,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
@@ -85,7 +87,10 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
     /// Entrypoint for applying a compute command.
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         match cmd {
-            ComputeCommand::CreateInstance(logging) => {
+            ComputeCommand::CreateInstance {
+                replica_id: _,
+                logging,
+            } => {
                 if let Some(logging) = logging {
                     self.initialize_logging(&logging);
                 }
@@ -164,37 +169,37 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
                 }
             }
 
-            ComputeCommand::Peek {
-                peek,
-                on_replica: _,
-            } => {
-                // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
-                let timestamp_frontier = Antichain::from_elem(peek.timestamp);
-                let empty_frontier = Antichain::new();
-                trace_bundle
-                    .oks_mut()
-                    .set_logical_compaction(timestamp_frontier.borrow());
-                trace_bundle
-                    .errs_mut()
-                    .set_logical_compaction(timestamp_frontier.borrow());
-                trace_bundle
-                    .oks_mut()
-                    .set_physical_compaction(empty_frontier.borrow());
-                trace_bundle
-                    .errs_mut()
-                    .set_physical_compaction(empty_frontier.borrow());
-                // Prepare a description of the peek work to do.
-                let mut peek = PendingPeek { peek, trace_bundle };
-                // Log the receipt of the peek.
-                if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                    logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
-                }
-                // Attempt to fulfill the peek.
-                if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
-                    self.send_peek_response(peek, response);
-                } else {
-                    self.compute_state.pending_peeks.push(peek);
+            ComputeCommand::Peek { peek, on_replica } => {
+                // Only handle peeks that are not targeted at a different replica.
+                if on_replica.is_none() || on_replica == Some(self.compute_state.replica_id) {
+                    // Acquire a copy of the trace suitable for fulfilling the peek.
+                    let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
+                    let timestamp_frontier = Antichain::from_elem(peek.timestamp);
+                    let empty_frontier = Antichain::new();
+                    trace_bundle
+                        .oks_mut()
+                        .set_logical_compaction(timestamp_frontier.borrow());
+                    trace_bundle
+                        .errs_mut()
+                        .set_logical_compaction(timestamp_frontier.borrow());
+                    trace_bundle
+                        .oks_mut()
+                        .set_physical_compaction(empty_frontier.borrow());
+                    trace_bundle
+                        .errs_mut()
+                        .set_physical_compaction(empty_frontier.borrow());
+                    // Prepare a description of the peek work to do.
+                    let mut peek = PendingPeek { peek, trace_bundle };
+                    // Log the receipt of the peek.
+                    if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+                        logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
+                    }
+                    // Attempt to fulfill the peek.
+                    if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
+                        self.send_peek_response(peek, response);
+                    } else {
+                        self.compute_state.pending_peeks.push(peek);
+                    }
                 }
             }
             ComputeCommand::CancelPeeks { uuids } => {
