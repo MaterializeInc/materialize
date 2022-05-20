@@ -53,6 +53,18 @@ pub fn bench_persist(c: &mut Criterion) {
         &data_small,
     )
     .expect("failed to bench write_to_listen");
+
+    consensus::bench_consensus_compare_and_set(
+        &small_data,
+        &mut c.benchmark_group("consensus/compare_and_set"),
+        1,
+    );
+    consensus::bench_consensus_compare_and_set(
+        &small_data,
+        &mut c.benchmark_group("consensus/concurrent_compare_and_set"),
+        8,
+    );
+    writer::bench_encode_batch(&data, &mut c.benchmark_group("writer/encode_batch"));
 }
 
 async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {

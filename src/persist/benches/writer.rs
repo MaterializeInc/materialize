@@ -362,39 +362,6 @@ pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, Wall
     bench_writes_indexed_inner(data, g, "file", file_indexed).expect("running benchmark failed");
 }
 
-pub fn bench_encode_batch(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
-    g.throughput(Throughput::Bytes(data.goodput_bytes()));
-    let unsealed = BlobUnsealedBatch {
-        desc: SeqNo(0)..SeqNo(1),
-        updates: data.batches().collect::<Vec<_>>(),
-    };
-    let trace = BlobTraceBatchPart {
-        desc: Description::new(
-            Antichain::from_elem(0),
-            Antichain::from_elem(1),
-            Antichain::from_elem(0),
-        ),
-        index: 0,
-        updates: data.batches().collect::<Vec<_>>(),
-    };
-
-    g.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
-        b.iter(|| {
-            // Intentionally alloc a new buf each iter.
-            let mut buf = Vec::new();
-            unsealed.encode(&mut buf);
-        })
-    });
-
-    g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
-        b.iter(|| {
-            // Intentionally alloc a new buf each iter.
-            let mut buf = Vec::new();
-            trace.encode(&mut buf);
-        })
-    });
-}
-
 pub fn bench_blob_cache_set_unsealed_batch(
     data: &DataGenerator,
     g: &mut BenchmarkGroup<'_, WallTime>,
