@@ -1,5 +1,3 @@
-// Copyright Materialize, Inc. and contributors. All rights reserved.
-//
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 //
@@ -1093,10 +1091,6 @@ pub mod tcp {
     impl<T> GrpcComputedClient<T>
     where
         T: ProtoSerializableTimestamp,
-        // super::ProtoComputeCommand: From<ComputeCommand<T>>,
-        // ComputeResponse<T>: TryFrom<super::ProtoComputeResponse>,
-        // <ComputeResponse<T> as TryFrom<super::ProtoComputeResponse>>::Error:
-        //     Send + Sync + std::error::Error,
     {
         // Cancellation safe
         pub async fn connect(&mut self) -> () {
@@ -1354,27 +1348,43 @@ pub mod tcp {
         )
     }
 
+    /// Shared data between the server task and the interface.
     pub struct GrpcComputedShared {
-        // Keep going after first client has terminated connection
-        //linger: bool,
-
-        // The echo server will input commands into this. Note, there should
-        // always be only one client
+        // The echo server will input commands into this. None if no client is connected, otherwise
+        // the endpoints are forwarded to the single client. If a client is already connected, this
+        // mutex is used to block further connections. If the consumer calls send or recv and queue
+        // is None, the consumer will wait on the queue_change notification to proceed only when a
+        // client has connected.
         queue: Mutex<
             Option<(
                 Receiver<super::ProtoComputeCommand>,
                 Sender<super::ProtoComputeResponse>,
             )>,
         >,
+
+        // If queue changes, a notification will be published here.
         queue_change: Notify,
     }
 
-    pub struct GrpcComputedServer {
+    /// Server side implementation.
+    struct GrpcComputedServer {
+        // Keep going after first client has terminated connection
+        linger: bool,
+
+        // Send a signal here to shutdown this computed.
+        shutdown_tx: Sender<()>,
+
         shared: Arc<GrpcComputedShared>,
     }
 
+    /// Consumer side functions such as send and recv. These will not directly interact with the
+    /// network, but put messages in a mpsc queue which will be read and sent to the network in a
+    /// separate server task.
     pub struct GrpcComputedServerInterface {
         shared: Arc<GrpcComputedShared>,
+        // Communicate to the outer loop that the whole process should shut down. This channel will
+        // receive an empty message if and only if linger is not set and a client has disconnected.
+        //pub shutdown_rx: Receiver<()>,
     }
 
     impl GrpcComputedServerInterface {
@@ -1404,7 +1414,7 @@ pub mod tcp {
 
                     // Other end absent, wait for connection
                     None => {
-                        info!("recv called while no coordinator connectedioo, waiting for coordinator connection.");
+                        info!("recv called while no coordinator connected, waiting for coordinator connection.");
                     }
                 }
 
@@ -1457,6 +1467,8 @@ pub mod tcp {
             // If we just map `in_stream` and write it back as `out_stream` the `out_stream`
             // will be drooped when connection error occurs and error will never be propagated
             // to mapped version of `in_stream`.
+            let linger = self.linger;
+            let shutdown_tx = self.shutdown_tx.clone();
             mz_ore::task::spawn(|| "ProtoComputeServer: ErrorChecker", async move {
                 while let Some(result) = in_stream.next().await {
                     match result {
@@ -1484,10 +1496,14 @@ pub mod tcp {
                         }
                     }
                 }
-                println!("\tstream ended");
+
+                if !linger {
+                    shutdown_tx.send(()).await.expect("working shutdown rx");
+                }
+                info!("Client disconnected");
             });
 
-            // Store channels in state state
+            // Store channels in state
             *self.shared.queue.lock().await = Some((cmd_rx, resp_tx));
             self.shared.queue_change.notify_waiters();
 
@@ -1499,14 +1515,19 @@ pub mod tcp {
         }
     }
 
-    pub fn grpc_computed_server(listen_addr: String, _linger: bool) -> GrpcComputedServerInterface {
+    pub fn grpc_computed_server(
+        listen_addr: String,
+        linger: bool,
+    ) -> (GrpcComputedServerInterface, Receiver<()>) {
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(4);
         let shared = Arc::new(GrpcComputedShared {
-            //linger,
             queue: Mutex::new(None),
             queue_change: Notify::new(),
         });
 
         let server = GrpcComputedServer {
+            linger,
+            shutdown_tx,
             shared: Arc::clone(&shared),
         };
 
@@ -1521,7 +1542,7 @@ pub mod tcp {
                 .unwrap();
         });
 
-        GrpcComputedServerInterface { shared }
+        (GrpcComputedServerInterface { shared }, shutdown_rx)
     }
 
     /// Constructs a framed connection for the client.

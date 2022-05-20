@@ -26,7 +26,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
 use mz_compute::server::Server;
-use mz_pid_file::PidFile;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -195,12 +194,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         client = Box::new(ComputeCommandReconcile::new(client))
     }
 
-    let mut _pid_file = None;
-    if let Some(pid_file_location) = &args.pid_file_location {
-        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
-    }
-
-    serve_proto(serve_config, server, client).await
+    serve(serve_config, server, client).await
 }
 
 struct ServeConfig {
@@ -208,36 +202,23 @@ struct ServeConfig {
     linger: bool,
 }
 
-async fn serve_proto<G>(
-    config: ServeConfig,
-    _server: Server,
-    mut client: G,
-) -> Result<(), anyhow::Error>
+async fn serve<G>(config: ServeConfig, _server: Server, mut client: G) -> Result<(), anyhow::Error>
 where
     G: GenericClient<ComputeCommand, ComputeResponse>,
 {
-    let mut grpc_serve =
+    let (mut grpc_serve, mut shutdown_rx) =
         mz_dataflow_types::client::tcp::grpc_computed_server(config.listen_addr, config.linger);
 
     loop {
-        loop {
-            select! {
-                cmd = grpc_serve.recv() =>  { client.send(cmd?).await.unwrap() },
-                res = client.recv() => {
-                    match res.unwrap() {
-                        None => break,
-                        Some(response) => { grpc_serve.send(response).await }
-                    }
-                }
-            }
-        }
-        if !config.linger {
-            info!("coordinator connection gone; exiting");
-            break;
-        } else {
-            info!("coordinator connection gone; lingering");
+        select! {
+            cmd = grpc_serve.recv() =>  { client.send(cmd?).await.unwrap() },
+            res = client.recv() => {
+                let response = res.unwrap().expect("LocalClient::recv returned Ok(None)");
+                grpc_serve.send(response).await},
+            _ = shutdown_rx.recv() => break
         }
     }
 
+    info!("coordinator connection gone; terminating");
     Ok(())
 }
