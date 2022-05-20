@@ -19,6 +19,11 @@ Sink source type | Description
 **Source** | Simply pass all data received from the source to the sink without modifying it.
 **Materialized view** | Stream all changes to the view to the sink. This lets you use Materialize to process a stream, and then stream the processed values. Note that this feature only works with [materialized views](../create-materialized-view), and _does not_ work with [non-materialized views](../create-view).
 
+### Sinks + clusters
+
+Materialize maintains sinks using dataflows. Each dataflow must belong to a
+[cluster](/overview/key-concepts#clusters).
+
 ## Syntax
 
 {{< diagram "create-sink.svg" >}}
@@ -39,6 +44,7 @@ Field | Use
 ------|-----
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
+_cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink. If not provided, uses the session's `cluster` variable.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
 **KAFKA BROKER** _host_ | The Kafka broker's host name without the security protocol, which is specified by the [`WITH` options](#with-options).) If you wish to specify multiple brokers (bootstrap servers) as an additional safeguard, use a comma-separated list. For example: `localhost:9092, localhost:9093`.
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.

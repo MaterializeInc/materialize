@@ -1,103 +1,122 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="589" height="379">
-   <polygon points="9 17 1 13 1 21"/>
-   <polygon points="17 17 9 13 9 21"/>
-   <rect x="31" y="3" width="114" height="32" rx="10"/>
-   <rect x="29"
+<svg xmlns="http://www.w3.org/2000/svg" width="571" height="477">
+   <polygon points="11 17 3 13 3 21"/>
+   <polygon points="19 17 11 13 11 21"/>
+   <rect x="33" y="3" width="114" height="32" rx="10"/>
+   <rect x="31"
          y="1"
          width="114"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="39" y="21">CREATE SINK</text>
-   <rect x="185" y="35" width="120" height="32" rx="10"/>
-   <rect x="183"
+   <text class="terminal" x="41" y="21">CREATE SINK</text>
+   <rect x="187" y="35" width="120" height="32" rx="10"/>
+   <rect x="185"
          y="33"
          width="120"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="193" y="53">IF NOT EXISTS</text>
-   <rect x="345" y="3" width="88" height="32"/>
-   <rect x="343" y="1" width="88" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="353" y="21">sink_name</text>
-   <rect x="453" y="3" width="60" height="32" rx="10"/>
-   <rect x="451"
-         y="1"
+   <text class="terminal" x="195" y="53">IF NOT EXISTS</text>
+   <rect x="347" y="3" width="88" height="32"/>
+   <rect x="345" y="1" width="88" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="355" y="21">sink_name</text>
+   <rect x="60" y="133" width="34" height="32" rx="10"/>
+   <rect x="58"
+         y="131"
+         width="34"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="68" y="151">IN</text>
+   <rect x="114" y="133" width="84" height="32" rx="10"/>
+   <rect x="112"
+         y="131"
+         width="84"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="122" y="151">CLUSTER</text>
+   <rect x="218" y="133" width="108" height="32"/>
+   <rect x="216" y="131" width="108" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="226" y="151">cluster_name</text>
+   <rect x="366" y="101" width="60" height="32" rx="10"/>
+   <rect x="364"
+         y="99"
          width="60"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="461" y="21">FROM</text>
-   <rect x="25" y="101" width="90" height="32"/>
-   <rect x="23" y="99" width="90" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="33" y="119">item_name</text>
-   <rect x="135" y="101" width="54" height="32" rx="10"/>
-   <rect x="133"
-         y="99"
+   <text class="terminal" x="374" y="119">FROM</text>
+   <rect x="446" y="101" width="90" height="32"/>
+   <rect x="444" y="99" width="90" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="454" y="119">item_name</text>
+   <rect x="72" y="199" width="54" height="32" rx="10"/>
+   <rect x="70"
+         y="197"
          width="54"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="143" y="119">INTO</text>
-   <rect x="209" y="101" width="162" height="32"/>
-   <rect x="207" y="99" width="162" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="217" y="119">sink_kafka_connector</text>
-   <rect x="411" y="133" width="136" height="32"/>
-   <rect x="409" y="131" width="136" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="419" y="151">sink_with_options</text>
-   <rect x="179" y="215" width="80" height="32" rx="10"/>
-   <rect x="177"
-         y="213"
+   <text class="terminal" x="80" y="217">INTO</text>
+   <rect x="146" y="199" width="162" height="32"/>
+   <rect x="144" y="197" width="162" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="154" y="217">sink_kafka_connector</text>
+   <rect x="348" y="231" width="136" height="32"/>
+   <rect x="346" y="229" width="136" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="356" y="249">sink_with_options</text>
+   <rect x="171" y="313" width="80" height="32" rx="10"/>
+   <rect x="169"
+         y="311"
          width="80"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="187" y="233">FORMAT</text>
-   <rect x="279" y="215" width="134" height="32"/>
-   <rect x="277" y="213" width="134" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="287" y="233">sink_format_spec</text>
-   <rect x="63" y="301" width="94" height="32" rx="10"/>
-   <rect x="61"
-         y="299"
+   <text class="terminal" x="179" y="331">FORMAT</text>
+   <rect x="271" y="313" width="134" height="32"/>
+   <rect x="269" y="311" width="134" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="279" y="331">sink_format_spec</text>
+   <rect x="45" y="399" width="94" height="32" rx="10"/>
+   <rect x="43"
+         y="397"
          width="94"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="71" y="319">ENVELOPE</text>
-   <rect x="197" y="301" width="92" height="32" rx="10"/>
-   <rect x="195"
-         y="299"
+   <text class="terminal" x="53" y="417">ENVELOPE</text>
+   <rect x="179" y="399" width="92" height="32" rx="10"/>
+   <rect x="177"
+         y="397"
          width="92"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="205" y="319">DEBEZIUM</text>
-   <rect x="197" y="345" width="76" height="32" rx="10"/>
-   <rect x="195"
-         y="343"
+   <text class="terminal" x="187" y="417">DEBEZIUM</text>
+   <rect x="179" y="443" width="76" height="32" rx="10"/>
+   <rect x="177"
+         y="441"
          width="76"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="205" y="363">UPSERT</text>
-   <rect x="369" y="301" width="142" height="32" rx="10"/>
-   <rect x="367"
-         y="299"
+   <text class="terminal" x="187" y="461">UPSERT</text>
+   <rect x="351" y="399" width="142" height="32" rx="10"/>
+   <rect x="349"
+         y="397"
          width="142"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="377" y="319">WITH SNAPSHOT</text>
-   <rect x="369" y="345" width="172" height="32" rx="10"/>
-   <rect x="367"
-         y="343"
+   <text class="terminal" x="359" y="417">WITH SNAPSHOT</text>
+   <rect x="351" y="443" width="172" height="32" rx="10"/>
+   <rect x="349"
+         y="441"
          width="172"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="377" y="363">WITHOUT SNAPSHOT</text>
+   <text class="terminal" x="359" y="461">WITHOUT SNAPSHOT</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m114 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m88 0 h10 m0 0 h10 m60 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-532 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m90 0 h10 m0 0 h10 m54 0 h10 m0 0 h10 m162 0 h10 m20 0 h10 m0 0 h146 m-176 0 h20 m156 0 h20 m-196 0 q10 0 10 10 m176 0 q0 -10 10 -10 m-186 10 v12 m176 0 v-12 m-176 12 q0 10 10 10 m156 0 q10 0 10 -10 m-166 10 h10 m136 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-452 82 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h244 m-274 0 h20 m254 0 h20 m-294 0 q10 0 10 10 m274 0 q0 -10 10 -10 m-284 10 v12 m274 0 v-12 m-274 12 q0 10 10 10 m254 0 q10 0 10 -10 m-264 10 h10 m80 0 h10 m0 0 h10 m134 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-434 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h256 m-286 0 h20 m266 0 h20 m-306 0 q10 0 10 10 m286 0 q0 -10 10 -10 m-296 10 v12 m286 0 v-12 m-286 12 q0 10 10 10 m266 0 q10 0 10 -10 m-276 10 h10 m94 0 h10 m20 0 h10 m92 0 h10 m-132 0 h20 m112 0 h20 m-152 0 q10 0 10 10 m132 0 q0 -10 10 -10 m-142 10 v24 m132 0 v-24 m-132 24 q0 10 10 10 m112 0 q10 0 10 -10 m-122 10 h10 m76 0 h10 m0 0 h16 m60 -76 h10 m0 0 h182 m-212 0 h20 m192 0 h20 m-232 0 q10 0 10 10 m212 0 q0 -10 10 -10 m-222 10 v12 m212 0 v-12 m-212 12 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m142 0 h10 m0 0 h30 m-202 -10 v20 m212 0 v-20 m-212 20 v24 m212 0 v-24 m-212 24 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m172 0 h10 m23 -76 h-3"/>
-   <polygon points="579 283 587 279 587 287"/>
-   <polygon points="579 283 571 279 571 287"/>
+         d="m19 17 h2 m0 0 h10 m114 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m88 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-439 98 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h276 m-306 0 h20 m286 0 h20 m-326 0 q10 0 10 10 m306 0 q0 -10 10 -10 m-316 10 v12 m306 0 v-12 m-306 12 q0 10 10 10 m286 0 q10 0 10 -10 m-296 10 h10 m34 0 h10 m0 0 h10 m84 0 h10 m0 0 h10 m108 0 h10 m20 -32 h10 m60 0 h10 m0 0 h10 m90 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-508 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m54 0 h10 m0 0 h10 m162 0 h10 m20 0 h10 m0 0 h146 m-176 0 h20 m156 0 h20 m-196 0 q10 0 10 10 m176 0 q0 -10 10 -10 m-186 10 v12 m176 0 v-12 m-176 12 q0 10 10 10 m156 0 q10 0 10 -10 m-166 10 h10 m136 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-397 82 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h244 m-274 0 h20 m254 0 h20 m-294 0 q10 0 10 10 m274 0 q0 -10 10 -10 m-284 10 v12 m274 0 v-12 m-274 12 q0 10 10 10 m254 0 q10 0 10 -10 m-264 10 h10 m80 0 h10 m0 0 h10 m134 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-444 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h256 m-286 0 h20 m266 0 h20 m-306 0 q10 0 10 10 m286 0 q0 -10 10 -10 m-296 10 v12 m286 0 v-12 m-286 12 q0 10 10 10 m266 0 q10 0 10 -10 m-276 10 h10 m94 0 h10 m20 0 h10 m92 0 h10 m-132 0 h20 m112 0 h20 m-152 0 q10 0 10 10 m132 0 q0 -10 10 -10 m-142 10 v24 m132 0 v-24 m-132 24 q0 10 10 10 m112 0 q10 0 10 -10 m-122 10 h10 m76 0 h10 m0 0 h16 m60 -76 h10 m0 0 h182 m-212 0 h20 m192 0 h20 m-232 0 q10 0 10 10 m212 0 q0 -10 10 -10 m-222 10 v12 m212 0 v-12 m-212 12 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m142 0 h10 m0 0 h30 m-202 -10 v20 m212 0 v-20 m-212 20 v24 m212 0 v-24 m-212 24 q0 10 10 10 m192 0 q10 0 10 -10 m-202 10 h10 m172 0 h10 m23 -76 h-3"/>
+   <polygon points="561 381 569 377 569 385"/>
+   <polygon points="561 381 553 377 553 385"/>
 </svg>
