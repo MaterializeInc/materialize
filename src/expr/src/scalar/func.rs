@@ -3849,7 +3849,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastStringToNumeric(func) => CastStringToNumeric(func.0.into_proto()),
             UnaryFunc::CastStringToUuid(_) => CastStringToUuid(()),
             UnaryFunc::CastStringToChar(func) => CastStringToChar(ProtoCastStringToChar {
-                length: func.length.as_ref().map(Into::into),
+                length: func.length.into_proto(),
                 fail_on_len: func.fail_on_len,
             }),
             UnaryFunc::PadChar(func) => PadChar(ProtoPadChar {
@@ -4133,12 +4133,12 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 }
                 CastStringToUuid(()) => Ok(impls::CastStringToUuid.into()),
                 CastStringToChar(func) => Ok(impls::CastStringToChar {
-                    length: func.length.map(TryInto::try_into).transpose()?,
+                    length: func.length.into_rust()?,
                     fail_on_len: func.fail_on_len,
                 }
                 .into()),
                 PadChar(func) => Ok(impls::PadChar {
-                    length: func.length.map(TryInto::try_into).transpose()?,
+                    length: func.length.into_rust()?,
                 }
                 .into()),
                 CastStringToVarChar(func) => Ok(impls::CastStringToVarChar {

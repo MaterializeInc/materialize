@@ -1044,7 +1044,7 @@ impl From<&ScalarType> for ProtoScalarType {
 
                 ScalarType::Numeric { max_scale } => Numeric(max_scale.into_proto()),
                 ScalarType::Char { length } => Char(ProtoChar {
-                    length: length.as_ref().map(Into::into),
+                    length: length.into_proto(),
                 }),
                 ScalarType::VarChar { max_length } => VarChar(ProtoVarChar {
                     max_length: max_length.into_proto(),
@@ -1111,7 +1111,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
                 max_scale: x.into_rust()?,
             }),
             Char(x) => Ok(ScalarType::Char {
-                length: x.length.map(TryInto::try_into).transpose()?,
+                length: x.length.into_rust()?,
             }),
 
             VarChar(x) => Ok(ScalarType::VarChar {
