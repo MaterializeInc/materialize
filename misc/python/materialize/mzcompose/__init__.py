@@ -926,6 +926,9 @@ class ServiceConfig(TypedDict, total=False):
     TODO(benesch): this should use a nested TypedDict.
     """
 
+    working_dir: str
+    """Overrides the container's working directory."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.

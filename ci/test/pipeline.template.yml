@@ -431,7 +431,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: java
-          run: java-smoketest
     agents:
       queue: linux-x86_64
 
