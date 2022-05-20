@@ -23,6 +23,7 @@ pub trait SecretsController: Send + Sync {
     /// they cannot apply atomically.
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), anyhow::Error>;
 
+    /// Returns true, if the controller supports multiple ops in a single atomic apply call
     fn supports_multi_statement_txn(&self) -> bool;
 }
 
