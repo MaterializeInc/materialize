@@ -15,8 +15,7 @@ use std::iter;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
-use mz_repr::proto::ProtoRepr;
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::proto::TryIntoIfSome;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
@@ -1884,7 +1883,7 @@ pub struct AnalyzedRegex(
 impl From<&AnalyzedRegex> for ProtoAnalyzedRegex {
     fn from(x: &AnalyzedRegex) -> Self {
         ProtoAnalyzedRegex {
-            regex: Some((&x.0).into()),
+            regex: Some(x.0.into_proto()),
             groups: x.1.iter().map(Into::into).collect(),
         }
     }
@@ -1895,7 +1894,7 @@ impl TryFrom<ProtoAnalyzedRegex> for AnalyzedRegex {
 
     fn try_from(x: ProtoAnalyzedRegex) -> Result<Self, Self::Error> {
         Ok(AnalyzedRegex(
-            x.regex.try_into_if_some("ProtoAnalyzedRegex::regex")?,
+            x.regex.into_rust_if_some("ProtoAnalyzedRegex::regex")?,
             x.groups
                 .into_iter()
                 .map(TryFrom::try_from)
@@ -2042,7 +2041,7 @@ impl TryFrom<ProtoTableFunc> for TableFunc {
             Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
             Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
             Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.try_into()?),
-            Kind::CsvExtract(x) => TableFunc::CsvExtract(usize::from_proto(x)?),
+            Kind::CsvExtract(x) => TableFunc::CsvExtract(x.into_rust()?),
             Kind::GenerateSeriesInt32(()) => TableFunc::GenerateSeriesInt32,
             Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
             Kind::GenerateSeriesTimestamp(()) => TableFunc::GenerateSeriesTimestamp,
@@ -2055,7 +2054,7 @@ impl TryFrom<ProtoTableFunc> for TableFunc {
                 el_typ: x.try_into()?,
             },
             Kind::Wrap(x) => TableFunc::Wrap {
-                width: usize::from_proto(x.width)?,
+                width: x.width.into_rust()?,
                 types: x
                     .types
                     .into_iter()

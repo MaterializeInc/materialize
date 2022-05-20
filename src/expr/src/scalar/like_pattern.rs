@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::EvalError;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
+use mz_repr::proto::newapi::{ProtoType, RustType};
 use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
@@ -180,7 +181,7 @@ impl TryFrom<ProtoMatcherImpl> for MatcherImpl {
                     .map(TryInto::try_into)
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            Some(Regex(regex)) => Ok(MatcherImpl::Regex(regex::Regex::from_proto(regex)?)),
+            Some(Regex(regex)) => Ok(MatcherImpl::Regex(regex.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoMatcherImpl::kind")),
         }
     }
@@ -310,7 +311,7 @@ impl TryFrom<ProtoSubpattern> for Subpattern {
 
     fn try_from(x: ProtoSubpattern) -> Result<Self, Self::Error> {
         Ok(Subpattern {
-            consume: usize::from_proto(x.consume)?,
+            consume: x.consume.into_rust()?,
             many: x.many,
             suffix: x.suffix,
         })
