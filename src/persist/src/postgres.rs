@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use tokio_postgres::{Client as PostgresClient, IsolationLevel, NoTls, Transaction};
+use tokio_postgres::{Client as PostgresClient, NoTls};
 
 use mz_ore::task;
 
@@ -25,6 +25,8 @@ use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const SCHEMA: &str = "
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
 -- Obtain an advisory lock before attempting to create the schema. This is
 -- necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
 -- in PostgreSQL.
@@ -152,35 +154,6 @@ impl PostgresConsensus {
             _handle: handle,
         })
     }
-
-    async fn tx<'a>(
-        &self,
-        client: &'a mut PostgresClient,
-    ) -> Result<Transaction<'a>, ExternalError> {
-        let tx = client
-            .build_transaction()
-            .isolation_level(IsolationLevel::Serializable)
-            .start()
-            .await?;
-        Ok(tx)
-    }
-
-    async fn head_tx(
-        &self,
-        tx: &Transaction<'_>,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
-        let q = "SELECT sequence_number, data FROM consensus WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-
-        let row = match tx.query_opt(q, &[&key]).await? {
-            Some(row) => row,
-            None => return Ok(None),
-        };
-
-        let seqno: SeqNo = row.try_get("sequence_number")?;
-        let data: Vec<u8> = row.try_get("data")?;
-        Ok(Some(VersionedData { seqno, data }))
-    }
 }
 
 #[async_trait]
@@ -191,17 +164,25 @@ impl Consensus for PostgresConsensus {
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
-        let ret = self.head_tx(&tx, key).await?;
-        tx.commit().await?;
 
-        Ok(ret)
+        let q = "SELECT sequence_number, data FROM consensus
+             WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
+        let client = self.client.lock().await;
+        let row = client.query_opt(&*q, &[&key]).await?;
+        let row = match row {
+            None => return Ok(None),
+            Some(row) => row,
+        };
+
+        let seqno: SeqNo = row.try_get("sequence_number")?;
+
+        let data: Vec<u8> = row.try_get("data")?;
+        Ok(Some(VersionedData { seqno, data }))
     }
 
     async fn compare_and_set(
         &self,
-        _deadline: Instant,
+        deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
@@ -216,8 +197,6 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
         let result = if let Some(expected) = expected {
             // Only insert the new row if:
             // - sequence number expected is already present
@@ -237,7 +216,10 @@ impl Consensus for PostgresConsensus {
                      )
                      ON CONFLICT DO NOTHING";
 
-            tx.execute(&*q, &[&key, &new.seqno, &new.data, &expected])
+            let client = self.client.lock().await;
+
+            client
+                .execute(&*q, &[&key, &new.seqno, &new.data, &expected])
                 .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
@@ -246,18 +228,22 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            tx.execute(&*q, &[&key, &new.seqno, &new.data]).await?
+            let client = self.client.lock().await;
+            client.execute(&*q, &[&key, &new.seqno, &new.data]).await?
         };
 
-        let ret = if result == 1 {
-            Ok(())
+        if result == 1 {
+            Ok(Ok(()))
         } else {
-            let current = self.head_tx(&tx, key).await?;
-            Err(current)
-        };
-
-        tx.commit().await?;
-        Ok(ret)
+            // It's safe to call head in a subsequent transaction rather than doing
+            // so directly in the same transaction because, once a given (seqno, data)
+            // pair exists for our shard, we enforce the invariants that
+            // 1. Our shard will always have _some_ data mapped to it.
+            // 2. All operations that modify the (seqno, data) can only increase
+            //    the sequence number.
+            let current = self.head(deadline, key).await?;
+            Ok(Err(current))
+        }
     }
 
     async fn scan(
@@ -271,15 +257,8 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
-        // Intentianally wait to actually use the data until after the transaction
-        // has successfully committed to ensure the reads were valid. See [1]
-        // for more details.
-        //
-        // [1]: https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE
-        let rows = tx.query(&*q, &[&key, &from]).await?;
-        tx.commit().await?;
+        let client = self.client.lock().await;
+        let rows = client.query(&*q, &[&key, &from]).await?;
         let mut results = vec![];
 
         for row in rows {
@@ -300,7 +279,7 @@ impl Consensus for PostgresConsensus {
 
     async fn truncate(
         &self,
-        _deadline: Instant,
+        deadline: Instant,
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
@@ -310,35 +289,32 @@ impl Consensus for PostgresConsensus {
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
-        let result = tx.execute(&*q, &[&key, &seqno]).await?;
-        let ret = if result == 0 {
+        let result = {
+            let client = self.client.lock().await;
+            client.execute(&*q, &[&key, &seqno]).await?
+        };
+        if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to
             // determine whether the request was valid and there were no records in
             // the provided range, or the request was invalid because it would have
             // also deleted head.
-            let current = self.head_tx(&tx, key).await?;
-            // Intentionally don't early exit here and instead wait until after
-            // we have committed the transaction to ensure that our reads were
-            // valid. See [1] for more details.
-            //
-            // [1]: https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE
+
+            // It's safe to call head in a subsequent transaction rather than doing
+            // so directly in the same transaction because, once a given (seqno, data)
+            // pair exists for our shard, we enforce the invariants that
+            // 1. Our shard will always have _some_ data mapped to it.
+            // 2. All operations that modify the (seqno, data) can only increase
+            //    the sequence number.
+            let current = self.head(deadline, key).await?;
             if current.map_or(true, |data| data.seqno < seqno) {
-                Err(ExternalError::from(anyhow!(
+                return Err(ExternalError::from(anyhow!(
                     "upper bound too high for truncate: {:?}",
                     seqno
-                )))
-            } else {
-                Ok(())
+                )));
             }
-        } else {
-            Ok(())
-        };
+        }
 
-        tx.commit().await?;
-
-        ret
+        Ok(())
     }
 }
 
