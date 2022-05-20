@@ -11,4 +11,4 @@
 #
 # sqllogictest — build and run sqllogictest and its constituent services.
 
-exec "$(dirname "$0")"/run sqllogictest
+exec "$(dirname "$0")"/run sqllogictest "$@"

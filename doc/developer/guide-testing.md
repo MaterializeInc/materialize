@@ -160,7 +160,7 @@ made up for by a much faster execution.
 To add logging for tests, append `-vv`, e.g.:
 
 ```shell
-$ bin/sqllogictest [--release] -vv -- test/sqllogictest/TESTFILE.slt
+$ bin/sqllogictest [--release] -- test/sqllogictest/TESTFILE.slt -vv
 ```
 
 There are currently three classes of sqllogictest files:

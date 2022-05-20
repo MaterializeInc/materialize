@@ -11,4 +11,4 @@
 #
 # materialized — build and run materialized and its constituent services.
 
-exec "$(dirname "$0")"/run materialized
+exec "$(dirname "$0")"/run materialized "$@"
