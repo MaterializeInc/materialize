@@ -13,6 +13,7 @@
 //! provides the protocol and semantics of the [MzReplay] operator.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -70,8 +71,9 @@ where
         let periodic_activator = scope.activator_for(&address[..]);
 
         let (targets, stream) = builder.new_output();
+        let error = Rc::new(RefCell::new(None));
 
-        let mut output = PushBuffer::new(PushCounter::new(targets));
+        let mut output = PushBuffer::new(PushCounter::new(targets), Rc::clone(&error));
         let mut event_streams = self.into_iter().collect::<Vec<_>>();
         let mut started = false;
 
@@ -89,6 +91,9 @@ where
         activator.register(scope, &address[..]);
 
         builder.build(move |progress| {
+            if let Some(error) = error.borrow_mut().take() {
+                return Err(error);
+            }
             activator.ack();
             if last_active
                 .checked_add(period)
@@ -141,7 +146,7 @@ where
                 .borrow_mut()
                 .drain_into(&mut progress.produceds[0]);
 
-            false
+            Ok(false)
         });
 
         (stream, token)

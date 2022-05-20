@@ -182,14 +182,16 @@ impl DirectCore {
                             );
                             data.probe_with(&mut probe).capture_into(output_tx);
                         });
-                        while worker.step_or_park(None) {
+                        while worker.step_or_park(None)? {
                             probe.with_frontier(|frontier| {
                                 progress_tx.maybe_progress(frontier);
                             })
                         }
                         progress_tx.close();
+                        Ok(())
                     },
-                )?;
+                )
+                .unwrap();
                 let input = Ingest {
                     write,
                     read,
@@ -547,7 +549,7 @@ impl fmt::Debug for StartFn {
     }
 }
 
-struct TimelyWorkers(WorkerGuards<()>);
+struct TimelyWorkers(WorkerGuards<timely::Result<()>>);
 
 impl fmt::Debug for TimelyWorkers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -556,7 +558,7 @@ impl fmt::Debug for TimelyWorkers {
 }
 
 impl TimelyWorkers {
-    fn join(self) -> Vec<Result<(), String>> {
+    fn join(self) -> Vec<anyhow::Result<anyhow::Result<()>>> {
         self.0.join()
     }
 }

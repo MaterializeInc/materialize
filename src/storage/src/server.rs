@@ -52,7 +52,7 @@ pub struct Config {
 ///
 /// Dropping this object will block until the dataflow computation ceases.
 pub struct Server {
-    _worker_guards: WorkerGuards<()>,
+    _worker_guards: WorkerGuards<timely::Result<()>>,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -143,7 +143,8 @@ pub fn serve_boundary<SC: StorageCapture, B: Fn(usize) -> SC + Send + Sync + 'st
             storage_boundary,
             storage_response_tx,
         }
-        .run()
+        .run()?;
+        Ok(())
     })
     .map_err(|e| anyhow!("{}", e))?;
     let worker_threads = worker_guards
@@ -185,14 +186,14 @@ where
     SC: StorageCapture,
 {
     /// Draws from `dataflow_command_receiver` until shutdown.
-    fn run(&mut self) {
+    fn run(&mut self) -> timely::Result<()> {
         let mut shutdown = false;
         while !shutdown {
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
             // unparking us when there's new work to be done, e.g., when sending
             // a command or when new Kafka messages have arrived.
-            self.timely_worker.step_or_park(None);
+            self.timely_worker.step_or_park(None)?;
 
             self.activate_storage().report_frontier_progress();
 
@@ -213,6 +214,7 @@ where
                 self.activate_storage().handle_storage_command(cmd);
             }
         }
+        Ok(())
     }
 
     fn activate_storage(&mut self) -> ActiveStorageState<A, SC> {

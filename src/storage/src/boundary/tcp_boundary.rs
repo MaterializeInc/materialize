@@ -343,13 +343,14 @@ pub mod server {
     }
 
     impl<T, D, R, F: Fn(EventCore<T, D>) -> R> EventPusherCore<T, D> for UnboundedEventPusher<R, F> {
-        fn push(&mut self, event: EventCore<T, D>) {
+        fn push(&mut self, event: EventCore<T, D>) -> timely::Result<()> {
             if self.client_token.upgrade().is_some() {
                 // Loss of the receiving end means we need to do nothing,
                 // so we ignore errors
                 // TODO(guswynn): can we handle failure better here?
                 let _ = self.sender.send((self.convert)(event));
             }
+            Ok(())
         }
     }
 }

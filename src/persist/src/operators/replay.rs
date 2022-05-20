@@ -200,7 +200,8 @@ mod tests {
             });
 
             (oks, errs)
-        });
+        })
+        .unwrap();
 
         assert_eq!(
             errs.extract()
@@ -252,7 +253,8 @@ mod tests {
             });
 
             (oks, errs)
-        });
+        })
+        .unwrap();
 
         assert!(errs
             .extract()
@@ -302,7 +304,8 @@ mod tests {
             });
 
             (oks, errs)
-        });
+        })
+        .unwrap();
 
         assert!(oks
             .extract()
@@ -364,7 +367,8 @@ mod tests {
             });
 
             (oks, errs)
-        });
+        })
+        .unwrap();
 
         assert_eq!(
             errs.extract()
