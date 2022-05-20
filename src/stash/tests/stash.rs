@@ -215,6 +215,22 @@ async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
         BTreeMap::from([("k2".to_string(), "v2".to_string())])
     );
 
+    // Verify the upper got bumped.
+    assert_eq!(
+        stash.since(orders).await?.into_option().unwrap(),
+        stash.upper(orders).await?.into_option().unwrap() - 1
+    );
+    // Multiple empty batches should bump the upper and the since because append
+    // must also compact and consolidate.
+    for _ in 0..5 {
+        let orders_batch = orders.make_batch(stash).await?;
+        stash.append(vec![orders_batch]).await?;
+        assert_eq!(
+            stash.since(orders).await?.into_option().unwrap(),
+            stash.upper(orders).await?.into_option().unwrap() - 1
+        );
+    }
+
     test_stash_table(stash).await?;
 
     Ok(())

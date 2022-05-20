@@ -523,10 +523,11 @@ impl From<&str> for StashError {
 /// Additional methods for Stash implementations that are able to provide atomic operations over multiple collections.
 #[async_trait]
 pub trait Append: Stash {
-    /// Atomically adds entries and seals multiple collections.
+    /// Atomically adds entries, seals, and compacts multiple collections.
     ///
     /// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
     /// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
+    /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
     ///
     /// If this method returns `Ok`, the entries have been made durable and uppers advanced, otherwise no changes were committed.
     async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
@@ -540,6 +541,7 @@ pub struct AppendBatch {
     pub collection_id: Id,
     pub lower: Antichain<Timestamp>,
     pub upper: Antichain<Timestamp>,
+    pub compact: Antichain<Timestamp>,
     pub timestamp: Timestamp,
     pub entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
 }
@@ -560,10 +562,12 @@ where
             Some(ts) => Antichain::from_elem(ts),
             None => return Err("cannot determine new upper".into()),
         };
+        let compact = Antichain::from_elem(timestamp);
         Ok(AppendBatch {
             collection_id: self.id,
             lower,
             upper,
+            compact,
             timestamp,
             entries: Vec::new(),
         })
