@@ -12,12 +12,13 @@
 //! See row.proto for details.
 
 use bytes::BufMut;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{Datelike, Timelike};
 use dec::Decimal;
-use mz_ore::cast::CastFrom;
-use mz_persist_types::Codec;
 use prost::Message;
 use uuid::Uuid;
+
+use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::numeric::Numeric;
@@ -185,18 +186,12 @@ impl RowPacker<'_> {
                 let u = Uuid::from_slice(&x).map_err(|err| err.to_string())?;
                 self.push(Datum::Uuid(u));
             }
-            Some(DatumType::Date(x)) => self.push(Datum::Date(
-                NaiveDate::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
-            Some(DatumType::Time(x)) => self.push(Datum::Time(
-                NaiveTime::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
-            Some(DatumType::Timestamp(x)) => self.push(Datum::Timestamp(
-                NaiveDateTime::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
-            Some(DatumType::TimestampTz(x)) => self.push(Datum::TimestampTz(
-                DateTime::<Utc>::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
+            Some(DatumType::Date(x)) => self.push(Datum::Date(x.clone().into_rust()?)),
+            Some(DatumType::Time(x)) => self.push(Datum::Time(x.clone().into_rust()?)),
+            Some(DatumType::Timestamp(x)) => self.push(Datum::Timestamp(x.clone().into_rust()?)),
+            Some(DatumType::TimestampTz(x)) => {
+                self.push(Datum::TimestampTz(x.clone().into_rust()?))
+            }
             Some(DatumType::Interval(x)) => self.push(Datum::Interval(
                 x.clone()
                     .into_rust()

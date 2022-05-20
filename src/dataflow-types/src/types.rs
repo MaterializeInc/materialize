@@ -324,8 +324,7 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
 
     fn from_proto(proto: ProtoSourceInstanceDesc) -> Result<Self, TryFromProtoError> {
         Ok(SourceInstanceDesc {
-            description: serde_json::from_str(&proto.description)
-                .map_err(TryFromProtoError::from)?,
+            description: serde_json::from_str(&proto.description)?,
             arguments: proto
                 .arguments
                 .into_rust_if_some("ProtoSourceInstanceDesc::arguments")?,
@@ -1083,7 +1082,7 @@ impl ProtoMapEntry<GlobalId, SinkDesc> for ProtoSinkExport {
     fn into_rust(self) -> Result<(GlobalId, SinkDesc), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSinkExport::id")?,
-            serde_json::from_str(&self.sink_desc).map_err(TryFromProtoError::from)?,
+            serde_json::from_str(&self.sink_desc)?,
         ))
     }
 }

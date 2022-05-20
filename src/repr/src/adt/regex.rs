@@ -93,7 +93,7 @@ impl RustType<String> for regex::Regex {
     }
 
     fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        Ok(regex::Regex::new(&proto).map_err(TryFromProtoError::from)?)
+        Ok(regex::Regex::new(&proto)?)
     }
 }
 

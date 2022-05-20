@@ -106,6 +106,14 @@ impl std::fmt::Display for TryFromProtoError {
     }
 }
 
+/// Allow `?` operator on `Result<_, TryFromProtoError>` in contexts
+/// where the error type is a `String`.
+impl From<TryFromProtoError> for String {
+    fn from(error: TryFromProtoError) -> Self {
+        error.to_string()
+    }
+}
+
 impl std::error::Error for TryFromProtoError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         use TryFromProtoError::*;
