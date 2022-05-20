@@ -1047,7 +1047,7 @@ impl From<&ScalarType> for ProtoScalarType {
                     length: length.as_ref().map(Into::into),
                 }),
                 ScalarType::VarChar { max_length } => VarChar(ProtoVarChar {
-                    max_length: max_length.as_ref().map(Into::into),
+                    max_length: max_length.into_proto(),
                 }),
 
                 ScalarType::List {
@@ -1115,7 +1115,7 @@ impl TryFrom<ProtoScalarType> for ScalarType {
             }),
 
             VarChar(x) => Ok(ScalarType::VarChar {
-                max_length: x.max_length.map(TryInto::try_into).transpose()?,
+                max_length: x.max_length.into_rust()?,
             }),
             Array(x) => Ok(ScalarType::Array({
                 let st: ScalarType = (*x).try_into()?;

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
-use crate::proto::TryFromProtoError;
+use crate::proto::newapi::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.varchar.rs"));
 
@@ -72,17 +72,13 @@ impl TryFrom<i64> for VarCharMaxLength {
     }
 }
 
-impl From<&VarCharMaxLength> for ProtoVarCharMaxLength {
-    fn from(value: &VarCharMaxLength) -> Self {
-        ProtoVarCharMaxLength { value: value.0 }
+impl RustType<ProtoVarCharMaxLength> for VarCharMaxLength {
+    fn into_proto(&self) -> ProtoVarCharMaxLength {
+        ProtoVarCharMaxLength { value: self.0 }
     }
-}
 
-impl TryFrom<ProtoVarCharMaxLength> for VarCharMaxLength {
-    type Error = TryFromProtoError;
-
-    fn try_from(repr: ProtoVarCharMaxLength) -> Result<Self, Self::Error> {
-        Ok(VarCharMaxLength(repr.value))
+    fn from_proto(proto: ProtoVarCharMaxLength) -> Result<Self, TryFromProtoError> {
+        Ok(VarCharMaxLength(proto.value))
     }
 }
 
@@ -132,7 +128,7 @@ pub fn format_str(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use crate::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {
