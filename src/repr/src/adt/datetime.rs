@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
 use crate::chrono::{any_fixed_offset, any_timezone};
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::newapi::{RustType, TryFromProtoError};
 
 use mz_lowertest::MzReflect;
 

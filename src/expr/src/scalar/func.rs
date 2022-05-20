@@ -41,7 +41,8 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::chrono::any_naive_datetime;
-use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::TryIntoIfSome;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -3100,7 +3101,7 @@ impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
                 TimezoneTimestamp(()) => Ok(BinaryFunc::TimezoneTimestamp),
                 TimezoneTimestampTz(()) => Ok(BinaryFunc::TimezoneTimestampTz),
                 TimezoneTime(wall_time) => Ok(BinaryFunc::TimezoneTime {
-                    wall_time: ProtoRepr::from_proto(wall_time)?,
+                    wall_time: wall_time.into_rust()?,
                 }),
                 TimezoneIntervalTimestamp(()) => Ok(BinaryFunc::TimezoneIntervalTimestamp),
                 TimezoneIntervalTimestampTz(()) => Ok(BinaryFunc::TimezoneIntervalTimestampTz),
@@ -4247,7 +4248,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                     tz: func.tz.try_into_if_some("ProtoTimezoneTime::tz")?,
                     wall_time: func
                         .wall_time
-                        .from_proto_if_some("ProtoTimezoneTime::wall_time")?,
+                        .into_rust_if_some("ProtoTimezoneTime::wall_time")?,
                 }
                 .into()),
                 ToTimestamp(()) => Ok(impls::ToTimestamp.into()),
