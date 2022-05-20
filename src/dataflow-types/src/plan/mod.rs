@@ -18,6 +18,9 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use mz_ore::soft_panic_or_log;
+use mz_repr::proto::newapi::IntoRustIfSome;
+use mz_repr::proto::newapi::ProtoType;
+use mz_repr::proto::newapi::RustType;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
 use proptest::arbitrary::Arbitrary;
@@ -480,7 +483,7 @@ impl Arbitrary for Plan {
 impl From<&(Row, u64, i64)> for proto_plan::ProtoRowDiff {
     fn from(x: &(Row, u64, i64)) -> Self {
         proto_plan::ProtoRowDiff {
-            row: Some((&x.0).into()),
+            row: Some(x.0.into_proto()),
             timestamp: x.1,
             diff: x.2,
         }
@@ -524,7 +527,7 @@ impl From<&Plan> for ProtoPlan {
         ) -> Option<ProtoPlanInputKeyVal> {
             x.as_ref().map(|(key, val)| ProtoPlanInputKeyVal {
                 key: key.iter().map(Into::into).collect(),
-                val: val.as_ref().map(Into::into),
+                val: val.into_proto(),
             })
         }
 
@@ -640,7 +643,7 @@ impl TryFrom<proto_plan::ProtoRowDiff> for (Row, u64, i64) {
 
     fn try_from(x: proto_plan::ProtoRowDiff) -> Result<Self, Self::Error> {
         Ok((
-            x.row.try_into_if_some("ProtoRowDiff::row")?,
+            x.row.into_rust_if_some("ProtoRowDiff::row")?,
             x.timestamp,
             x.diff,
         ))
@@ -696,7 +699,7 @@ impl TryFrom<ProtoPlan> for Plan {
                         .into_iter()
                         .map(TryInto::try_into)
                         .collect::<Result<_, _>>()?,
-                    inner.val.map(TryInto::try_into).transpose()?,
+                    inner.val.into_rust()?,
                 )),
                 None => None,
             })
@@ -818,7 +821,7 @@ impl From<&GetPlan> for ProtoGetPlan {
                 GetPlan::Arrangement(k, s, m) => {
                     Arrangement(proto_get_plan::ProtoGetPlanArrangement {
                         key: k.iter().map(Into::into).collect(),
-                        seek: s.as_ref().map(Into::into),
+                        seek: s.into_proto(),
                         mfp: Some(m.into()),
                     })
                 }
@@ -845,7 +848,7 @@ impl TryFrom<ProtoGetPlan> for GetPlan {
                     key.into_iter()
                         .map(TryFrom::try_from)
                         .collect::<Result<_, _>>()?,
-                    seek.map(TryFrom::try_from).transpose()?,
+                    seek.into_rust()?,
                     mfp.try_into_if_some("ProtoGetPlanArrangement::mfp")?,
                 )
             }

@@ -19,7 +19,6 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
-use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::de::DeserializeOwned;
@@ -30,7 +29,8 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::proto::any_uuid;
+use mz_repr::proto::newapi::{ProtoType, RustType};
+use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -110,7 +110,7 @@ impl From<&Peek> for ProtoPeek {
     fn from(x: &Peek) -> Self {
         ProtoPeek {
             id: Some((&x.id).into()),
-            key: x.key.as_ref().map(Into::into),
+            key: x.key.into_proto(),
             uuid: Some(x.uuid.into_proto()),
             timestamp: x.timestamp,
             finishing: Some((&x.finishing).into()),
@@ -125,7 +125,7 @@ impl TryFrom<ProtoPeek> for Peek {
     fn try_from(x: ProtoPeek) -> Result<Self, Self::Error> {
         Ok(Self {
             id: x.id.try_into_if_some("ProtoPeek::id")?,
-            key: x.key.map(|x| x.try_into()).transpose()?,
+            key: x.key.into_rust()?,
             uuid: Uuid::from_proto(
                 x.uuid
                     .ok_or_else(|| TryFromProtoError::missing_field("ProtoPeek::uuid"))?,

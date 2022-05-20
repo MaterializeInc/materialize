@@ -242,7 +242,7 @@ impl From<&Result<Row, EvalError>> for proto_literal::ProtoLiteralData {
         use proto_literal::proto_literal_data::Result::*;
         proto_literal::ProtoLiteralData {
             result: Some(match x {
-                Result::Ok(row) => Ok(row.into()),
+                Result::Ok(row) => Ok(row.into_proto()),
                 Result::Err(err) => Err(err.into()),
             }),
         }

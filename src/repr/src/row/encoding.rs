@@ -44,7 +44,7 @@ impl Codec for Row {
     where
         B: BufMut,
     {
-        ProtoRow::from(self)
+        self.into_proto()
             .encode(buf)
             .expect("no required fields means no initialization errors");
     }
@@ -140,13 +140,6 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
         ProtoDatum {
             datum_type: Some(datum_type),
         }
-    }
-}
-
-impl From<&Row> for ProtoRow {
-    fn from(x: &Row) -> Self {
-        let datums = x.iter().map(|x| x.into()).collect();
-        ProtoRow { datums }
     }
 }
 
@@ -258,11 +251,13 @@ impl RowPacker<'_> {
     }
 }
 
+/// TODO: remove this in favor of [`RustType::from_proto`].
 impl TryFrom<&ProtoRow> for Row {
     type Error = String;
 
     fn try_from(x: &ProtoRow) -> Result<Self, Self::Error> {
         // TODO: Try to pre-size this.
+        // see https://github.com/MaterializeInc/materialize/issues/12631
         let mut row = Row::default();
         let mut packer = row.packer();
         for d in x.datums.iter() {
@@ -272,13 +267,23 @@ impl TryFrom<&ProtoRow> for Row {
     }
 }
 
-impl TryFrom<ProtoRow> for Row {
-    type Error = TryFromProtoError;
+impl RustType<ProtoRow> for Row {
+    fn into_proto(self: &Self) -> ProtoRow {
+        let datums = self.iter().map(|x| x.into()).collect();
+        ProtoRow { datums }
+    }
 
-    fn try_from(x: ProtoRow) -> Result<Self, Self::Error> {
-        //TODO(lluki): Revisit this when we fix #12125
-        (&x).try_into()
-            .map_err(TryFromProtoError::RowConversionError)
+    fn from_proto(proto: ProtoRow) -> Result<Self, TryFromProtoError> {
+        // TODO: Try to pre-size this.
+        // see https://github.com/MaterializeInc/materialize/issues/12631
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        for d in proto.datums.iter() {
+            packer
+                .try_push_proto(d)
+                .map_err(TryFromProtoError::RowConversionError)?;
+        }
+        Ok(row)
     }
 }
 

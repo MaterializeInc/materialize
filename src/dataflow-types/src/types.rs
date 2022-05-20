@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::proto::{any_uuid, FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
+use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
@@ -67,7 +68,7 @@ impl From<&PeekResponse> for ProtoPeekResponse {
                     rows: rows
                         .iter()
                         .map(|(r, d)| ProtoRow {
-                            row: Some(r.into()),
+                            row: Some(r.into_proto()),
                             diff: d.into_proto(),
                         })
                         .collect(),
@@ -90,7 +91,7 @@ impl TryFrom<ProtoPeekResponse> for PeekResponse {
                     .into_iter()
                     .map(|row| {
                         Ok((
-                            row.row.try_into_if_some("ProtoRow::row")?,
+                            row.row.into_rust_if_some("ProtoRow::row")?,
                             NonZeroUsize::from_proto(row.diff)?,
                         ))
                     })
@@ -194,7 +195,7 @@ impl From<&TailBatch<mz_repr::Timestamp>> for ProtoTailBatch {
                 .iter()
                 .map(|(t, r, d)| ProtoUpdate {
                     timestamp: *t,
-                    row: Some(r.into()),
+                    row: Some(r.into_proto()),
                     diff: *d,
                 })
                 .collect(),
@@ -221,7 +222,7 @@ impl TryFrom<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
                 .map(|update| {
                     Ok((
                         update.timestamp,
-                        update.row.try_into_if_some("ProtoUpdate::row")?,
+                        update.row.into_rust_if_some("ProtoUpdate::row")?,
                         update.diff,
                     ))
                 })
@@ -1154,6 +1155,7 @@ pub mod sources {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
+    use mz_repr::proto::newapi::{ProtoType, RustType};
     use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
     use proptest_derive::Arbitrary;
     use prost::Message;
@@ -1163,7 +1165,7 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::{any_uuid, ProtoRepr, TryFromProtoError, TryIntoIfSome};
+    use mz_repr::proto::{any_uuid, TryFromProtoError, TryIntoIfSome};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -2723,7 +2725,7 @@ pub mod sources {
             use proto_source_data::Kind;
             ProtoSourceData {
                 kind: Some(match &**x {
-                    Ok(row) => Kind::Ok(row.into()),
+                    Ok(row) => Kind::Ok(row.into_proto()),
                     Err(err) => Kind::Err(err.into()),
                 }),
             }
@@ -2737,7 +2739,7 @@ pub mod sources {
             use proto_source_data::Kind;
             match data.kind {
                 Some(kind) => match kind {
-                    Kind::Ok(row) => Ok(SourceData(Ok(row.try_into()?))),
+                    Kind::Ok(row) => Ok(SourceData(Ok(row.into_rust()?))),
                     Kind::Err(err) => Ok(SourceData(Err(err.try_into()?))),
                 },
                 None => Result::Err(TryFromProtoError::missing_field("ProtoSourceData::kind")),
