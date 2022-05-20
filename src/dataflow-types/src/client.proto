@@ -23,8 +23,8 @@ import "google/protobuf/empty.proto";
 package mz_dataflow_types.client;
 
 message ProtoInstanceConfig {
-    int64 replica_id = 1;
-    mz_dataflow_types.logging.ProtoLoggingConfig logging = 2;
+    mz_dataflow_types.logging.ProtoLoggingConfig logging = 1;
+    int64 replica_id = 2;
 }
 
 message ProtoPeek {
