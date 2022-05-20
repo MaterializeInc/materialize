@@ -45,10 +45,15 @@ pub enum SecretOp {
     },
 }
 
+/// Configures a [`SecretsReader`].
 pub struct SecretsReaderConfig {
+    /// The directory at which secrets are mounted.
     pub mount_path: PathBuf,
 }
 
+/// Securely reads secrets that are managed by a [`SecretsController`].
+///
+/// Does not provide access to create, update, or delete the secrets within.
 pub struct SecretsReader {
     config: SecretsReaderConfig,
 }
@@ -58,14 +63,15 @@ impl SecretsReader {
         Self { config }
     }
 
-    #[allow(dead_code)]
-    fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+    /// Returns the contents of a secret identified by GlobalId
+    pub fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
         let file_path = self.config.mount_path.join(id.to_string());
         Ok(fs::read(file_path)?)
     }
 
-    #[allow(dead_code)]
-    fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error> {
+    /// Returns the path of the secret consisting of a configured base path
+    /// and the GlobalId
+    pub fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error> {
         let path = self.config.mount_path.join(id.to_string());
         Ok(path)
     }
