@@ -3037,8 +3037,8 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(session.vars().cluster())?;
 
-        let replica_name = session.vars().cluster_replica();
-        let replica_id = replica_name
+        let compute_replica_name = session.vars().cluster_replica();
+        let compute_replica = compute_replica_name
             .map(|name| {
                 compute_instance
                     .replica_id_by_name
@@ -3245,7 +3245,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 conn_id,
                 source.arity(),
                 compute_instance,
-                replica_id,
+                compute_replica,
             )
             .await?;
 
@@ -5073,7 +5073,7 @@ pub mod fast_path_peek {
             conn_id: u32,
             source_arity: usize,
             compute_instance: ComputeInstanceId,
-            replica_id: Option<ReplicaId>,
+            compute_replica: Option<ReplicaId>,
         ) -> Result<crate::ExecuteResponse, CoordError> {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             if let Plan::Constant(rows) = fast_path {
@@ -5211,7 +5211,7 @@ pub mod fast_path_peek {
                     timestamp,
                     finishing.clone(),
                     map_filter_project,
-                    replica_id,
+                    compute_replica,
                 )
                 .await
                 .unwrap();

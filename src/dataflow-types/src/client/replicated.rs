@@ -246,7 +246,7 @@ where
             self.last_command_count = self.history.reduce(&self.peeks);
         }
 
-        // Clone the command for each target replica.
+        // Clone the command for each active replica.
         for (id, (tx, _)) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
             specialize_command(&mut command, *id);

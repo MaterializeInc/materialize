@@ -180,7 +180,6 @@ impl TryFrom<ProtoPeek> for Peek {
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
     CreateInstance(InstanceConfig),
-
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
@@ -202,7 +201,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
 
     /// Peek at an arrangement.
     Peek(Peek<T>),
-
     /// Cancel the peeks associated with the given `uuids`.
     CancelPeeks {
         /// The identifiers of the peek requests to cancel.
