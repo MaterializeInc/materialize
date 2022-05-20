@@ -11,7 +11,7 @@
 # tests, because we need to know what IDs various schemas were given in CSR,
 # in order to refer to them in later `CREATE SOURCE` statements. But testdrive
 # does not support passing state from one action to another at runtime.
-# 
+#
 # Running in a separate composition allows us to assume we started from a clean slate,
 # i.e. that the first schema in the file will be given "1", and sequentially from there.
 
