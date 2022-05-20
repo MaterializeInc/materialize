@@ -1441,6 +1441,35 @@ pub mod plan {
         }
     }
 
+    impl std::fmt::Display for SafeMfpPlan {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            use mz_ore::str::*;
+            if self.mfp.is_identity() {
+                writeln!(f, "| Identity")?;
+            }
+            if !self.mfp.expressions.is_empty() {
+                writeln!(f, "| Map {}", separated(", ", &self.mfp.expressions))?;
+            }
+            if !self.mfp.predicates.is_empty() {
+                writeln!(
+                    f,
+                    "| Filter {}",
+                    separated(", ", self.mfp.predicates.iter().map(|(_, pred)| pred))
+                )?;
+            }
+            if self.mfp.projection.len() != self.mfp.input_arity + self.mfp.expressions.len()
+                || self.mfp.projection.iter().enumerate().any(|(i, p)| i != *p)
+            {
+                writeln!(
+                    f,
+                    "| Project {}",
+                    bracketed("(", ")", Indices(&self.mfp.projection))
+                )?;
+            }
+            Ok(())
+        }
+    }
+
     /// Predicates partitioned into temporal and non-temporal.
     ///
     /// Temporal predicates require some recognition to determine their

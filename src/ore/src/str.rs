@@ -145,3 +145,33 @@ where
         iter: iter.into_iter(),
     }
 }
+
+/// Pretty-prints a list of indices.
+#[derive(Debug)]
+pub struct Indices<'a>(pub &'a [usize]);
+
+impl<'a> fmt::Display for Indices<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut is_first = true;
+        let mut slice = self.0;
+        while !slice.is_empty() {
+            if !is_first {
+                write!(f, ", ")?;
+            }
+            is_first = false;
+            let lead = &slice[0];
+            if slice.len() > 2 && slice[1] == lead + 1 && slice[2] == lead + 2 {
+                let mut last = 3;
+                while slice.get(last) == Some(&(lead + last)) {
+                    last += 1;
+                }
+                write!(f, "#{}..=#{}", lead, lead + last - 1)?;
+                slice = &slice[last..];
+            } else {
+                write!(f, "#{}", slice[0])?;
+                slice = &slice[1..];
+            }
+        }
+        Ok(())
+    }
+}

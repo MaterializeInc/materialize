@@ -22,6 +22,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
+use mz_ore::str::{bracketed, separated, Indices};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
@@ -2093,6 +2094,22 @@ impl RowSetFinishing {
         }
 
         ret
+    }
+}
+
+impl std::fmt::Display for RowSetFinishing {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(writeln!(
+            f,
+            "\nFinish order_by={} limit={} offset={} project={}",
+            bracketed("(", ")", separated(", ", &self.order_by)),
+            match self.limit {
+                Some(limit) => limit.to_string(),
+                None => "none".to_owned(),
+            },
+            self.offset,
+            bracketed("(", ")", Indices(&self.project))
+        )?)
     }
 }
 

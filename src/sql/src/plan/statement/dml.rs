@@ -205,7 +205,7 @@ pub fn plan_explain(
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let is_view = matches!(explainee, Explainee::View(_));
-    let query = match explainee {
+    let (view_id, query) = match explainee {
         Explainee::View(name) => {
             let view = scx.get_item_by_resolved_name(&name)?;
             if view.item_type() != CatalogItemType::View {
@@ -221,9 +221,9 @@ pub fn plan_explain(
                 _ => panic!("Sql for existing view should parse as a view"),
             };
             let mut qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-            resolve_names(&mut qcx, query)?
+            (view.id(), resolve_names(&mut qcx, query)?)
         }
-        Explainee::Query(query) => query,
+        Explainee::Query(query) => (GlobalId::Explain, query),
     };
     // Previously we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
@@ -247,6 +247,7 @@ pub fn plan_explain(
         row_set_finishing: finishing,
         stage,
         options,
+        view_id,
     }))
 }
 

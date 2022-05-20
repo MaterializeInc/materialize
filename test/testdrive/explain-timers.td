@@ -16,25 +16,25 @@ $ set-regex match=(\s\(u\d+\)|materialize\.public\.|\s\d\d:\d\d:\d\d\.\d\d\d\d\d
 
 ? EXPLAIN (TIMING true) SELECT * FROM t1;
 %0 =
-| Get t1
+| ReadExistingIndex t1_primary_idx
 
 Decorrelation time:
 Optimization time:
 
 ? EXPLAIN (TIMING false, TIMING true) SELECT * FROM t1;
 %0 =
-| Get t1
+| ReadExistingIndex t1_primary_idx
 
 Decorrelation time:
 Optimization time:
 
 ? EXPLAIN (TIMING false) SELECT * FROM t1;
 %0 =
-| Get t1
+| ReadExistingIndex t1_primary_idx
 
 ? EXPLAIN (TIMING true, TIMING false) SELECT * FROM t1;
 %0 =
-| Get t1
+| ReadExistingIndex t1_primary_idx
 
 ? EXPLAIN (TIMING true) RAW PLAN FOR SELECT * FROM t1;
 %0 =

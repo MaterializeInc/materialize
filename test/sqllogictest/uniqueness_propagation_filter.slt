@@ -26,7 +26,7 @@ query T multiline
 EXPLAIN SELECT DISTINCT f1, f2 FROM v1 WHERE f1 = f3;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #2)
 | Project (#0, #1)
 
@@ -36,7 +36,7 @@ query T multiline
 EXPLAIN SELECT f1, f2 FROM v1 WHERE f1 = f3 GROUP BY f1, f2;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #2)
 | Project (#0, #1)
 
@@ -46,7 +46,7 @@ query T multiline
 EXPLAIN SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #1)
 | Project (#0, #2)
 
@@ -56,7 +56,7 @@ query T multiline
 EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #1)
 | Project (#1, #2)
 
@@ -66,7 +66,7 @@ query T multiline
 EXPLAIN SELECT DISTINCT f1 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #1), (#0 = #2)
 | Project (#0)
 
@@ -76,7 +76,7 @@ query T multiline
 EXPLAIN SELECT DISTINCT f1, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #1), (#0 = #2)
 | Project (#0, #2)
 
@@ -86,7 +86,7 @@ query T multiline
 EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f1 = f3;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #1), (#0 = #2)
 | Project (#1, #2)
 
@@ -96,7 +96,7 @@ query T multiline
 EXPLAIN SELECT DISTINCT f2, f3 FROM v1 WHERE f1 = f2 AND f2 = f3;
 ----
 %0 =
-| Get materialize.public.v1 (u2)
+| ReadExistingIndex materialize.public.v1_primary_idx
 | Filter (#0 = #1), (#1 = #2)
 | Project (#1, #2)
 

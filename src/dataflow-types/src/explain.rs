@@ -32,10 +32,10 @@ use std::fmt;
 
 use crate::{DataflowDescription, LinearOperator};
 
-use mz_expr::explain::{Indices, ViewExplanation};
-use mz_expr::{ExprHumanizer, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::explain::ViewExplanation;
+use mz_expr::{ExprHumanizer, OptimizedMirRelationExpr};
 use mz_ore::result::ResultExt;
-use mz_ore::str::{bracketed, separated};
+use mz_ore::str::{bracketed, separated, Indices};
 use mz_repr::GlobalId;
 
 pub trait ViewFormatter<ViewExpr> {
@@ -61,8 +61,6 @@ where
     sources: Vec<(GlobalId, &'a LinearOperator)>,
     /// One `ViewExplanation` per view in the dataflow.
     views: Vec<(GlobalId, &'a ViewExpr)>,
-    /// An optional `RowSetFinishing` to mention at the end.
-    finishing: Option<RowSetFinishing>,
 }
 
 impl<'a, Formatter, ViewExpr> Explanation<'a, Formatter, ViewExpr>
@@ -79,7 +77,6 @@ where
             expr_humanizer,
             sources: vec![],
             views: vec![(GlobalId::Explain, expr)],
-            finishing: None,
         }
     }
 
@@ -109,13 +106,7 @@ where
             expr_humanizer,
             sources,
             views,
-            finishing: None,
         }
-    }
-
-    /// Attach a `RowSetFinishing` to the explanation.
-    pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
-        self.finishing = Some(finishing);
     }
 }
 
@@ -154,20 +145,6 @@ where
                 }
             }
             self.formatter.fmt_view(f, view)?;
-        }
-
-        if let Some(finishing) = &self.finishing {
-            writeln!(
-                f,
-                "\nFinish order_by={} limit={} offset={} project={}",
-                bracketed("(", ")", separated(", ", &finishing.order_by)),
-                match finishing.limit {
-                    Some(limit) => limit.to_string(),
-                    None => "none".to_owned(),
-                },
-                finishing.offset,
-                bracketed("(", ")", Indices(&finishing.project))
-            )?;
         }
 
         Ok(())

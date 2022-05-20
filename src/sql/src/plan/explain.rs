@@ -21,11 +21,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use mz_expr::explain::Indices;
-use mz_expr::{ExprHumanizer, Id, LocalId, RowSetFinishing};
+use mz_expr::{ExprHumanizer, Id, LocalId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
-use mz_ore::str::{bracketed, separated};
+use mz_ore::str::{bracketed, separated, Indices};
 use mz_repr::{RelationType, ScalarType};
 
 use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr, WindowExprType};
@@ -41,8 +40,6 @@ pub struct Explanation<'a> {
     /// One `ExplanationNode` for each `HirRelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
-    /// An optional `RowSetFinishing` to mention at the end.
-    finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
     expr_chains: HashMap<*const HirRelationExpr, u64>,
     /// Records the chain ID that was assigned to each let.
@@ -83,20 +80,6 @@ impl<'a> fmt::Display for Explanation<'a> {
             prev_chain = node.chain;
 
             self.fmt_node(f, node)?;
-        }
-
-        if let Some(finishing) = &self.finishing {
-            writeln!(
-                f,
-                "\nFinish order_by={} limit={} offset={} project={}",
-                bracketed("(", ")", separated(", ", &finishing.order_by)),
-                match finishing.limit {
-                    Some(limit) => limit.to_string(),
-                    None => "none".to_owned(),
-                },
-                finishing.offset,
-                bracketed("(", ")", Indices(&finishing.project))
-            )?;
         }
 
         Ok(())
@@ -255,7 +238,6 @@ impl<'a> Explanation<'a> {
         let mut explanation = Explanation {
             expr_humanizer,
             nodes: vec![],
-            finishing: None,
             expr_chains: HashMap::new(),
             local_id_chains,
             chain_local_ids: HashMap::new(),
@@ -285,11 +267,6 @@ impl<'a> Explanation<'a> {
             }
             node.typ = Some(outers.into_first());
         }
-    }
-
-    /// Attach a `RowSetFinishing` to the explanation.
-    pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
-        self.finishing = Some(finishing);
     }
 
     fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {

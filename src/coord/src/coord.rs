@@ -3559,6 +3559,7 @@ impl<S: Append + 'static> Coordinator<S> {
             row_set_finishing,
             stage,
             options,
+            view_id,
         } = plan;
 
         struct Timings {
@@ -3592,12 +3593,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
                 coord
                     .dataflow_builder(compute_instance)
-                    .import_view_into_dataflow(
-                        // TODO: If explaining a view, pipe the actual id of the view.
-                        &GlobalId::Explain,
-                        &optimized_plan,
-                        &mut dataflow,
-                    )?;
+                    .import_view_into_dataflow(&view_id, &optimized_plan, &mut dataflow)?;
                 mz_transform::optimize_dataflow(
                     &mut dataflow,
                     &coord.index_oracle(compute_instance),
@@ -3610,9 +3606,6 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStage::RawPlan => {
                 let catalog = self.catalog.for_session(session);
                 let mut explanation = mz_sql::plan::Explanation::new(&raw_plan, &catalog);
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
                 if options.typed {
                     explanation.explain_types(&BTreeMap::new());
                 }
@@ -3637,11 +3630,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 let catalog = self.catalog.for_session(session);
                 let formatter =
                     mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
-                let mut explanation =
+                let explanation =
                     mz_dataflow_types::Explanation::new(&decorrelated_plan, &catalog, &formatter);
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
@@ -3653,11 +3643,20 @@ impl<S: Append + 'static> Coordinator<S> {
                     mz_dataflow_types::DataflowGraphFormatter::new(&catalog, options.typed);
                 let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
                     &dataflow, &catalog, &formatter,
-                );
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
+                )
+                .to_string();
+                if view_id == GlobalId::Explain {
+                    let dataflow_plan =
+                        mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
+                            .expect("Dataflow planning failed; unrecoverable error");
+                    if let Some(peek_existing_explanation) =
+                        fast_path_peek::explain_peek_existing(dataflow_plan, view_id, catalog)
+                            .expect("Dataflow planning failed; unrecoverable error")
+                    {
+                        explanation = peek_existing_explanation;
+                    }
                 }
-                explanation.to_string()
+                explanation
             }
             ExplainStage::PhysicalPlan => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
@@ -3667,14 +3666,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     mz_dataflow_types::Plan::<mz_repr::Timestamp>::finalize_dataflow(dataflow)
                         .expect("Dataflow planning failed; unrecoverable error");
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = mz_dataflow_types::Explanation::new_from_dataflow(
+                let explanation = mz_dataflow_types::Explanation::new_from_dataflow(
                     &dataflow_plan,
                     &catalog,
                     &mz_dataflow_types::JsonViewFormatter {},
                 );
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
                 explanation.to_string()
             }
             ExplainStage::Timestamp => {
@@ -3772,6 +3768,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 explanation.to_string()
             }
         };
+        if let Some(row_set_finishing) = row_set_finishing {
+            explanation_string.push_str(&row_set_finishing.to_string());
+        }
         if options.timing {
             if let Some(decorrelation) = &timings.decorrelation {
                 explanation_string.push_str(&format!(
@@ -4927,7 +4926,7 @@ pub mod fast_path_peek {
 
     use crate::coord::{PeekResponseUnary, PendingPeek};
     use crate::CoordError;
-    use mz_expr::{EvalError, Id, MirScalarExpr};
+    use mz_expr::{EvalError, ExprHumanizer, Id, MirScalarExpr};
     use mz_repr::{Diff, GlobalId, Row};
 
     #[derive(Debug)]
@@ -4950,6 +4949,70 @@ pub mod fast_path_peek {
         PeekDataflow(PeekDataflowPlan<T>),
     }
 
+    fn create_peek_existing(
+        dataflow_plan: &mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
+        view_id: GlobalId,
+    ) -> Result<Option<(GlobalId, Option<Row>, mz_expr::SafeMfpPlan)>, CoordError> {
+        if dataflow_plan.objects_to_build.len() >= 1
+            && dataflow_plan.objects_to_build[0].id == view_id
+        {
+            // In the case of a bare `Get`, we may be able to directly index an arrangement.
+            if let mz_dataflow_types::Plan::Get { id, keys, plan } =
+                &dataflow_plan.objects_to_build[0].plan
+            {
+                match plan {
+                    mz_dataflow_types::plan::GetPlan::PassArrangements => {
+                        // An arrangement may or may not exist. If not, nothing to be done.
+                        if let Some((key, permute, thinning)) = keys.arbitrary_arrangement() {
+                            // Just grab any arrangement, but be sure to de-permute the results.
+                            for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                                if Id::Global(desc.on_id) == *id && &desc.key == key {
+                                    let mut map_filter_project =
+                                        mz_expr::MapFilterProject::new(_typ.arity())
+                                            .into_plan()
+                                            .unwrap()
+                                            .into_nontemporal()
+                                            .unwrap();
+                                    map_filter_project
+                                        .permute(permute.clone(), key.len() + thinning.len());
+                                    return Ok(Some((*index_id, None, map_filter_project)));
+                                }
+                            }
+                        }
+                    }
+                    mz_dataflow_types::plan::GetPlan::Arrangement(key, val, mfp) => {
+                        // Convert `mfp` to an executable, non-temporal plan.
+                        // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
+                        let map_filter_project = mfp
+                            .clone()
+                            .into_plan()
+                            .map_err(|e| {
+                                crate::error::CoordError::Unstructured(::anyhow::anyhow!(e))
+                            })?
+                            .into_nontemporal()
+                            .map_err(|_e| {
+                                crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                                    "OneShot plan has temporal constraints"
+                                ))
+                            })?;
+                        // We should only get excited if we can track down an index for `id`.
+                        // If `keys` is non-empty, that means we think one exists.
+                        for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
+                            if Id::Global(desc.on_id) == *id && &desc.key == key {
+                                // Indicate an early exit with a specific index and key_val.
+                                return Ok(Some((*index_id, val.clone(), map_filter_project)));
+                            }
+                        }
+                    }
+                    mz_dataflow_types::plan::GetPlan::Collection(_) => {
+                        // No arrangement, so nothing to be done here.
+                    }
+                }
+            }
+        }
+        return Ok(None);
+    }
+
     /// Determine if the dataflow plan can be implemented without an actual dataflow.
     ///
     /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
@@ -4963,6 +5026,9 @@ pub mod fast_path_peek {
         index_permutation: HashMap<usize, usize>,
         index_thinned_arity: usize,
     ) -> Result<Plan, CoordError> {
+        if let Some((id, value, mfp)) = create_peek_existing(&dataflow_plan, view_id)? {
+            return Ok(Plan::PeekExisting(id, value, mfp));
+        }
         // At this point, `dataflow_plan` contains our best optimized dataflow.
         // We will check the plan to see if there is a fast path to escape full dataflow construction.
 
@@ -4976,65 +5042,7 @@ pub mod fast_path_peek {
                 mz_dataflow_types::Plan::Constant { rows } => {
                     return Ok(Plan::Constant(rows.clone()));
                 }
-                // In the case of a bare `Get`, we may be able to directly index an arrangement.
-                mz_dataflow_types::Plan::Get { id, keys, plan } => {
-                    match plan {
-                        mz_dataflow_types::plan::GetPlan::PassArrangements => {
-                            // An arrangement may or may not exist. If not, nothing to be done.
-                            if let Some((key, permute, thinning)) = keys.arbitrary_arrangement() {
-                                // Just grab any arrangement, but be sure to de-permute the results.
-                                for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
-                                    if Id::Global(desc.on_id) == *id && &desc.key == key {
-                                        let mut map_filter_project =
-                                            mz_expr::MapFilterProject::new(_typ.arity())
-                                                .into_plan()
-                                                .unwrap()
-                                                .into_nontemporal()
-                                                .unwrap();
-                                        map_filter_project
-                                            .permute(permute.clone(), key.len() + thinning.len());
-                                        return Ok(Plan::PeekExisting(
-                                            *index_id,
-                                            None,
-                                            map_filter_project,
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        mz_dataflow_types::plan::GetPlan::Arrangement(key, val, mfp) => {
-                            // Convert `mfp` to an executable, non-temporal plan.
-                            // It should be non-temporal, as OneShot preparation populates `mz_logical_timestamp`.
-                            let map_filter_project = mfp
-                                .clone()
-                                .into_plan()
-                                .map_err(|e| {
-                                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(e))
-                                })?
-                                .into_nontemporal()
-                                .map_err(|_e| {
-                                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(
-                                        "OneShot plan has temporal constraints"
-                                    ))
-                                })?;
-                            // We should only get excited if we can track down an index for `id`.
-                            // If `keys` is non-empty, that means we think one exists.
-                            for (index_id, (desc, _typ)) in dataflow_plan.index_imports.iter() {
-                                if Id::Global(desc.on_id) == *id && &desc.key == key {
-                                    // Indicate an early exit with a specific index and key_val.
-                                    return Ok(Plan::PeekExisting(
-                                        *index_id,
-                                        val.clone(),
-                                        map_filter_project,
-                                    ));
-                                }
-                            }
-                        }
-                        mz_dataflow_types::plan::GetPlan::Collection(_) => {
-                            // No arrangement, so nothing to be done here.
-                        }
-                    }
-                }
+
                 // nothing can be done for non-trivial expressions.
                 _ => {}
             }
@@ -5046,6 +5054,33 @@ pub mod fast_path_peek {
             permutation: index_permutation,
             thinned_arity: index_thinned_arity,
         }));
+    }
+
+    pub fn explain_peek_existing<E: ExprHumanizer>(
+        dataflow_plan: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan>,
+        view_id: GlobalId,
+        humanizer: E,
+    ) -> Result<Option<String>, CoordError> {
+        use std::fmt::Write;
+        if let Some((index, value, mfp)) = create_peek_existing(&dataflow_plan, view_id)? {
+            let mut explanation = String::new();
+            writeln!(
+                &mut explanation,
+                "%0 =\n| ReadExistingIndex {}",
+                humanizer
+                    .humanize_id(index)
+                    .unwrap_or_else(|| index.to_string())
+            )
+            .unwrap();
+            if let Some(value) = value {
+                writeln!(&mut explanation, "| | Lookup value {}", value).unwrap();
+            }
+            if !mfp.is_identity() {
+                write!(&mut explanation, "{}", mfp).unwrap();
+            }
+            return Ok(Some(explanation));
+        }
+        Ok(None)
     }
 
     impl<S: Append + 'static> crate::coord::Coordinator<S> {
