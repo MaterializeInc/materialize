@@ -26,10 +26,10 @@ use tokio::time::{self, Duration, Instant};
 use tracing::{debug, warn};
 
 use mz_coord::session::{
-    row_future_to_stream, EndTransactionAction, InProgressRows, Portal, PortalState,
-    RowBatchStream, Session, TransactionStatus,
+    EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
+    TransactionStatus,
 };
-use mz_coord::{ExecuteResponse, PeekResponseUnary};
+use mz_coord::{ExecuteResponse, PeekResponseUnary, RowsFuture};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -1005,6 +1005,40 @@ where
         self.flush().await
     }
 
+    // Converts a RowsFuture to a stream while also checking for connection close.
+    async fn row_future_to_stream(&self, rows: RowsFuture) -> Result<RowBatchStream, io::Error> {
+        let closed = async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+
+                // We've been waiting for rows for a bit, and the client may have
+                // disconnected. Check whether the socket is no longer readable and error
+                // if so.
+                match self.conn.ready(Interest::READABLE).await {
+                    Ok(ready) => {
+                        if ready.is_read_closed() {
+                            return io::Error::new(io::ErrorKind::Other, "connection closed");
+                        }
+                    }
+                    Err(err) => return err,
+                }
+            }
+        };
+        // Do not include self.coord_client.canceled() here because cancel messages
+        // will propagate through the PeekResponse. select is safe to use because if
+        // close finishes, rows is canceled, which is the intended behavior.
+        tokio::select! {
+            err = closed => {
+                Err(err)
+            },
+            rows = rows => {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                tx.send(rows).expect("send must succeed");
+                Ok(rx)
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn send_execute_response(
         &mut self,
@@ -1146,7 +1180,7 @@ where
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    InProgressRows::new(row_future_to_stream(rx).await),
+                    InProgressRows::new(self.row_future_to_stream(rx).await?),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -1228,7 +1262,9 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
                     ExecuteResponse::Tailing { rx } => rx,
-                    ExecuteResponse::SendingRows(rows_rx) => row_future_to_stream(rows_rx).await,
+                    ExecuteResponse::SendingRows(rows_rx) => {
+                        self.row_future_to_stream(rows_rx).await?
+                    }
                     _ => {
                         return self
                             .error(ErrorResponse::error(

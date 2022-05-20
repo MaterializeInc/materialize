@@ -943,3 +943,54 @@ write frontier:[            0]\n",
 
     Ok(())
 }
+
+// Test that a query that causes a compute instance to panic will resolve
+// the panic and allow the compute instance to restart (instead of crash loop
+// forever) when a client is terminated (disconnects from the server) instead
+// of cancelled (sends a pgwire cancel request on a new connection).
+#[test]
+fn test_github_12546() -> Result<(), Box<dyn Error>> {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config)?;
+
+    server.runtime.block_on(async {
+        let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
+
+        client.batch_execute("CREATE TABLE test(a text);").await?;
+        client
+            .batch_execute("INSERT INTO test VALUES ('a');")
+            .await?;
+
+        let query = client.query("SELECT mz_internal.mz_panic(a) FROM test", &[]);
+        let timeout = tokio::time::timeout(Duration::from_secs(2), query);
+        // We expect the timeout to trigger because the query should be crashing the
+        // compute instance.
+        assert_eq!(
+            timeout.await.unwrap_err().to_string(),
+            "deadline has elapsed"
+        );
+
+        // Aborting the connection should cause its pending queries to be cancelled,
+        // allowing the compute instances to stop crashing while trying to execute
+        // them.
+        conn_task.abort();
+
+        // Need to await `conn_task` to actually deliver the `abort`.
+        let _ = conn_task.await;
+
+        // Make a new connection to verify the compute instance can now start.
+        let (client, _conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
+        assert_eq!(
+            client
+                .query_one("SELECT 1::int4", &[])
+                .await?
+                .get::<_, i32>(0),
+            1,
+        );
+
+        Ok::<_, Box<dyn Error>>(())
+    })?;
+
+    Ok(())
+}
