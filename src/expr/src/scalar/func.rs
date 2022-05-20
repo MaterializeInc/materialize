@@ -3924,21 +3924,21 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::IsLikeMatch(pattern) => IsLikeMatch((&pattern.0).into()),
             UnaryFunc::IsRegexpMatch(regex) => IsRegexpMatch(regex.0.into_proto()),
             UnaryFunc::RegexpMatch(regex) => RegexpMatch(regex.0.into_proto()),
-            UnaryFunc::ExtractInterval(func) => ExtractInterval((&func.0).into()),
-            UnaryFunc::ExtractTime(func) => ExtractTime((&func.0).into()),
-            UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp((&func.0).into()),
-            UnaryFunc::ExtractTimestampTz(func) => ExtractTimestampTz((&func.0).into()),
-            UnaryFunc::ExtractDate(func) => ExtractDate((&func.0).into()),
-            UnaryFunc::DatePartInterval(func) => DatePartInterval((&func.0).into()),
-            UnaryFunc::DatePartTime(func) => DatePartTime((&func.0).into()),
-            UnaryFunc::DatePartTimestamp(func) => DatePartTimestamp((&func.0).into()),
-            UnaryFunc::DatePartTimestampTz(func) => DatePartTimestampTz((&func.0).into()),
-            UnaryFunc::DateTruncTimestamp(func) => DateTruncTimestamp((&func.0).into()),
-            UnaryFunc::DateTruncTimestampTz(func) => DateTruncTimestampTz((&func.0).into()),
-            UnaryFunc::TimezoneTimestamp(func) => TimezoneTimestamp((&func.0).into()),
-            UnaryFunc::TimezoneTimestampTz(func) => TimezoneTimestampTz((&func.0).into()),
+            UnaryFunc::ExtractInterval(func) => ExtractInterval(func.0.into_proto()),
+            UnaryFunc::ExtractTime(func) => ExtractTime(func.0.into_proto()),
+            UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp(func.0.into_proto()),
+            UnaryFunc::ExtractTimestampTz(func) => ExtractTimestampTz(func.0.into_proto()),
+            UnaryFunc::ExtractDate(func) => ExtractDate(func.0.into_proto()),
+            UnaryFunc::DatePartInterval(func) => DatePartInterval(func.0.into_proto()),
+            UnaryFunc::DatePartTime(func) => DatePartTime(func.0.into_proto()),
+            UnaryFunc::DatePartTimestamp(func) => DatePartTimestamp(func.0.into_proto()),
+            UnaryFunc::DatePartTimestampTz(func) => DatePartTimestampTz(func.0.into_proto()),
+            UnaryFunc::DateTruncTimestamp(func) => DateTruncTimestamp(func.0.into_proto()),
+            UnaryFunc::DateTruncTimestampTz(func) => DateTruncTimestampTz(func.0.into_proto()),
+            UnaryFunc::TimezoneTimestamp(func) => TimezoneTimestamp(func.0.into_proto()),
+            UnaryFunc::TimezoneTimestampTz(func) => TimezoneTimestampTz(func.0.into_proto()),
             UnaryFunc::TimezoneTime(func) => TimezoneTime(ProtoTimezoneTime {
-                tz: Some((&func.tz).into()),
+                tz: Some(func.tz.into_proto()),
                 wall_time: Some(func.wall_time.into_proto()),
             }),
             UnaryFunc::ToTimestamp(_) => ToTimestamp(()),
@@ -4223,29 +4223,29 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 IsLikeMatch(pattern) => Ok(impls::IsLikeMatch(pattern.try_into()?).into()),
                 IsRegexpMatch(regex) => Ok(impls::IsRegexpMatch(regex.into_rust()?).into()),
                 RegexpMatch(regex) => Ok(impls::RegexpMatch(regex.into_rust()?).into()),
-                ExtractInterval(units) => Ok(impls::ExtractInterval(units.try_into()?).into()),
-                ExtractTime(units) => Ok(impls::ExtractTime(units.try_into()?).into()),
-                ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.try_into()?).into()),
+                ExtractInterval(units) => Ok(impls::ExtractInterval(units.into_rust()?).into()),
+                ExtractTime(units) => Ok(impls::ExtractTime(units.into_rust()?).into()),
+                ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.into_rust()?).into()),
                 ExtractTimestampTz(units) => {
-                    Ok(impls::ExtractTimestampTz(units.try_into()?).into())
+                    Ok(impls::ExtractTimestampTz(units.into_rust()?).into())
                 }
-                ExtractDate(units) => Ok(impls::ExtractDate(units.try_into()?).into()),
-                DatePartInterval(units) => Ok(impls::DatePartInterval(units.try_into()?).into()),
-                DatePartTime(units) => Ok(impls::DatePartTime(units.try_into()?).into()),
-                DatePartTimestamp(units) => Ok(impls::DatePartTimestamp(units.try_into()?).into()),
+                ExtractDate(units) => Ok(impls::ExtractDate(units.into_rust()?).into()),
+                DatePartInterval(units) => Ok(impls::DatePartInterval(units.into_rust()?).into()),
+                DatePartTime(units) => Ok(impls::DatePartTime(units.into_rust()?).into()),
+                DatePartTimestamp(units) => Ok(impls::DatePartTimestamp(units.into_rust()?).into()),
                 DatePartTimestampTz(units) => {
-                    Ok(impls::DatePartTimestampTz(units.try_into()?).into())
+                    Ok(impls::DatePartTimestampTz(units.into_rust()?).into())
                 }
                 DateTruncTimestamp(units) => {
-                    Ok(impls::DateTruncTimestamp(units.try_into()?).into())
+                    Ok(impls::DateTruncTimestamp(units.into_rust()?).into())
                 }
                 DateTruncTimestampTz(units) => {
-                    Ok(impls::DateTruncTimestampTz(units.try_into()?).into())
+                    Ok(impls::DateTruncTimestampTz(units.into_rust()?).into())
                 }
-                TimezoneTimestamp(tz) => Ok(impls::TimezoneTimestamp(tz.try_into()?).into()),
-                TimezoneTimestampTz(tz) => Ok(impls::TimezoneTimestampTz(tz.try_into()?).into()),
+                TimezoneTimestamp(tz) => Ok(impls::TimezoneTimestamp(tz.into_rust()?).into()),
+                TimezoneTimestampTz(tz) => Ok(impls::TimezoneTimestampTz(tz.into_rust()?).into()),
                 TimezoneTime(func) => Ok(impls::TimezoneTime {
-                    tz: func.tz.try_into_if_some("ProtoTimezoneTime::tz")?,
+                    tz: func.tz.into_rust_if_some("ProtoTimezoneTime::tz")?,
                     wall_time: func
                         .wall_time
                         .into_rust_if_some("ProtoTimezoneTime::wall_time")?,

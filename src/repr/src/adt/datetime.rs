@@ -135,11 +135,11 @@ impl FromStr for DateTimeUnits {
     }
 }
 
-impl From<&DateTimeUnits> for ProtoDateTimeUnits {
-    fn from(value: &DateTimeUnits) -> Self {
+impl RustType<ProtoDateTimeUnits> for DateTimeUnits {
+    fn into_proto(&self) -> ProtoDateTimeUnits {
         use proto_date_time_units::Kind;
         ProtoDateTimeUnits {
-            kind: Some(match value {
+            kind: Some(match self {
                 DateTimeUnits::Epoch => Kind::Epoch(()),
                 DateTimeUnits::Millennium => Kind::Millennium(()),
                 DateTimeUnits::Century => Kind::Century(()),
@@ -164,14 +164,10 @@ impl From<&DateTimeUnits> for ProtoDateTimeUnits {
             }),
         }
     }
-}
 
-impl TryFrom<ProtoDateTimeUnits> for DateTimeUnits {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: ProtoDateTimeUnits) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoDateTimeUnits) -> Result<Self, TryFromProtoError> {
         use proto_date_time_units::Kind;
-        let kind = value
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoDateTimeUnits.kind"))?;
         Ok(match kind {
@@ -414,24 +410,20 @@ pub enum Timezone {
     Tz(#[proptest(strategy = "any_timezone()")] Tz),
 }
 
-impl From<&Timezone> for ProtoTimezone {
-    fn from(value: &Timezone) -> Self {
+impl RustType<ProtoTimezone> for Timezone {
+    fn into_proto(&self) -> ProtoTimezone {
         use proto_timezone::Kind;
         ProtoTimezone {
-            kind: Some(match value {
+            kind: Some(match self {
                 Timezone::FixedOffset(fo) => Kind::FixedOffset(fo.into_proto()),
                 Timezone::Tz(tz) => Kind::Tz(tz.into_proto()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoTimezone> for Timezone {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: ProtoTimezone) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoTimezone) -> Result<Self, TryFromProtoError> {
         use proto_timezone::Kind;
-        let kind = value
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimezone::kind"))?;
         Ok(match kind {
@@ -2195,7 +2187,7 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use crate::proto::newapi::protobuf_roundtrip;
 
     #[test]
     fn iterate_datetimefield() {
