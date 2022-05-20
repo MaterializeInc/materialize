@@ -7,12 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! An S3 implementation of [Blob] storage.
+//! An S3 implementation of [BlobMulti] storage.
 
 use std::cmp;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use aws_config::default_provider::{credentials, region};
 use aws_config::meta::region::ProvideRegion;
@@ -33,7 +34,7 @@ use mz_ore::cast::CastFrom;
 use crate::error::Error;
 use crate::location::{Atomicity, BlobMulti, ExternalError};
 
-/// Configuration for opening an [S3Blob] or [S3BlobRead].
+/// Configuration for opening an [S3BlobMulti].
 #[derive(Clone, Debug)]
 pub struct S3BlobConfig {
     client: S3Client,
@@ -136,9 +137,10 @@ impl S3BlobConfig {
     }
 }
 
+/// Implementation of [BlobMulti] backed by S3.
 #[derive(Debug)]
-struct S3BlobCore {
-    client: Option<S3Client>,
+pub struct S3BlobMulti {
+    client: S3Client,
     bucket: String,
     prefix: String,
     // Maximum number of keys we get information about per list-objects request.
@@ -148,20 +150,33 @@ struct S3BlobCore {
     multipart_config: MultipartConfig,
 }
 
-impl S3BlobCore {
+impl S3BlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub async fn open(config: S3BlobConfig) -> Result<Self, ExternalError> {
+        let ret = S3BlobMulti {
+            client: config.client,
+            bucket: config.bucket,
+            prefix: config.prefix,
+            max_keys: 1_000,
+            multipart_config: MultipartConfig::default(),
+        };
+        // Connect before returning success. We don't particularly care about
+        // what's stored in this blob (nothing writes to it, so presumably it's
+        // empty) just that we were able and allowed to fetch it.
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        let _ = ret.get(deadline, "HEALTH_CHECK").await?;
+        Ok(ret)
+    }
+
     fn get_path(&self, key: &str) -> String {
         format!("{}/{}", self.prefix, key)
     }
+}
 
-    fn ensure_open(&self) -> Result<&S3Client, Error> {
-        self.client
-            .as_ref()
-            .ok_or_else(|| Error::from("S3Blob unexpectedly closed"))
-    }
-
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
+#[async_trait]
+impl BlobMulti for S3BlobMulti {
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let start_overall = Instant::now();
-        let client = self.ensure_open()?;
         let path = self.get_path(key);
 
         // S3 advises that it's fastest to download large objects along the part
@@ -195,7 +210,8 @@ impl S3BlobCore {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
-        let object = client
+        let object = self
+            .client
             .get_object()
             .bucket(&self.bucket)
             .key(&path)
@@ -205,7 +221,7 @@ impl S3BlobCore {
         let first_part = match object {
             Ok(object) => object,
             Err(SdkError::ServiceError { err, .. }) if err.is_no_such_key() => return Ok(None),
-            Err(err) => return Err(Error::from(format!("s3 get meta err: {}", err))),
+            Err(err) => return Err(ExternalError::from(anyhow!("s3 get meta err: {}", err))),
         };
         let num_parts = if first_part.parts_count() == 0 {
             // For a non-multipart upload, parts_count will be 0. The rest of
@@ -221,7 +237,7 @@ impl S3BlobCore {
             num_parts
         );
         if num_parts < 1 {
-            return Err(format!("unexpected number of s3 object parts: {}", num_parts).into());
+            return Err(anyhow!("unexpected number of s3 object parts: {}", num_parts).into());
         }
 
         // TODO: Plumb an Arc<AsyncRuntime> on S3BlobCore instead. I tried but
@@ -229,14 +245,14 @@ impl S3BlobCore {
         // not allowed" error that I didn't want to get distracted with. All the
         // calls into the s3 library require that this context is set anyway, so
         // I suppose this is no worse than where we started.
-        let async_runtime = AsyncHandle::try_current().map_err(|err| err.to_string())?;
+        let async_runtime = AsyncHandle::try_current().map_err(anyhow::Error::msg)?;
 
         // Continue to fetch the first part's body while we fetch the other
         // parts.
         let start_part_body = Instant::now();
         let mut part_bodies = Vec::new();
         let first_body_len = usize::try_from(first_part.content_length)
-            .map_err(|err| format!("unexpected s3 content_length: {}", err))?;
+            .map_err(|err| anyhow!("unexpected s3 content_length: {}", err))?;
         let mut total_body_len = first_body_len;
         part_bodies.push(
             // TODO: Add the key and part number once this can be annotated with
@@ -260,7 +276,7 @@ impl S3BlobCore {
                 // with metadata.
                 let part_fut = async_runtime.spawn_named(
                     || "persist_s3blob_get_header",
-                    client
+                    self.client
                         .get_object()
                         .bucket(&self.bucket)
                         .key(&path)
@@ -283,11 +299,11 @@ impl S3BlobCore {
             for part_fut in part_futs {
                 let (this_header_elapsed, part_res) = part_fut
                     .await
-                    .map_err(|err| Error::from(format!("s3 spawn err: {}", err)))?;
-                let part_res =
-                    part_res.map_err(|err| Error::from(format!("s3 get meta err: {}", err)))?;
+                    .map_err(|err| ExternalError::from(anyhow!("s3 spawn err: {}", err)))?;
+                let part_res = part_res
+                    .map_err(|err| ExternalError::from(anyhow!("s3 get meta err: {}", err)))?;
                 let this_body_len = usize::try_from(part_res.content_length)
-                    .map_err(|err| format!("unexpected s3 content_length: {}", err))?;
+                    .map_err(|err| anyhow!("unexpected s3 content_length: {}", err))?;
                 total_body_len += this_body_len;
 
                 let min_header_elapsed = min_header_elapsed.observe(this_header_elapsed);
@@ -351,7 +367,7 @@ impl S3BlobCore {
             // into this single Vec.
             let start_body_copy = Instant::now();
             if part_body_res.remaining() != this_body_len {
-                return Err(format!(
+                return Err(anyhow!(
                     "s3 expected body length {} got: {}",
                     this_body_len,
                     part_body_res.remaining()
@@ -382,14 +398,14 @@ impl S3BlobCore {
         Ok(Some(val))
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, Error> {
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
         let mut ret = vec![];
-        let client = self.ensure_open()?;
         let mut continuation_token = None;
         let prefix = self.get_path("");
 
         loop {
-            let resp = client
+            let resp = self
+                .client
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .prefix(&self.prefix)
@@ -404,7 +420,7 @@ impl S3BlobCore {
                         if let Some(key) = key.strip_prefix(&prefix) {
                             ret.push(key.to_string());
                         } else {
-                            return Err(Error::from(format!(
+                            return Err(ExternalError::from(anyhow!(
                                 "found key with invalid prefix: {}",
                                 key
                             )));
@@ -422,27 +438,48 @@ impl S3BlobCore {
 
         Ok(ret)
     }
+
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        _atomic: Atomicity,
+    ) -> Result<(), ExternalError> {
+        // NB: S3 is always atomic, so we're free to ignore the atomic param.
+        if self
+            .multipart_config
+            .should_multipart(value.len())
+            .map_err(anyhow::Error::msg)?
+        {
+            self.set_multi_part(key, value).await
+        } else {
+            self.set_single_part(key, value).await
+        }
+    }
+
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        let path = self.get_path(key);
+        self.client
+            .delete_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .send()
+            .await
+            .map_err(|err| Error::from(err.to_string()))?;
+        Ok(())
+    }
 }
 
-/// Implementation of [Blob] backed by S3.
-//
-// TODO: Productionize this:
-// - Resolve what to do with LOCK, this impl is race-y.
-#[derive(Debug)]
-pub struct S3Blob {
-    core: S3BlobCore,
-}
-
-impl S3Blob {
-    async fn set_single_part(&self, key: &str, value: Vec<u8>) -> Result<(), Error> {
+impl S3BlobMulti {
+    async fn set_single_part(&self, key: &str, value: Vec<u8>) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
-        let client = self.core.ensure_open()?;
-        let path = self.core.get_path(key);
+        let path = self.get_path(key);
 
         let value_len = value.len();
-        client
+        self.client
             .put_object()
-            .bucket(&self.core.bucket)
+            .bucket(&self.bucket)
             .key(path)
             .body(ByteStream::from(value))
             .send()
@@ -456,16 +493,16 @@ impl S3Blob {
         Ok(())
     }
 
-    async fn set_multi_part(&self, key: &str, value: Vec<u8>) -> Result<(), Error> {
+    async fn set_multi_part(&self, key: &str, value: Vec<u8>) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
-        let client = self.core.ensure_open()?;
-        let path = self.core.get_path(key);
+        let path = self.get_path(key);
 
         // Start the multi part request and get an upload id.
         trace!("s3 PutObject multi start {}b", value.len());
-        let upload_res = client
+        let upload_res = self
+            .client
             .create_multipart_upload()
-            .bucket(&self.core.bucket)
+            .bucket(&self.bucket)
             .key(&path)
             .send()
             .await
@@ -485,7 +522,7 @@ impl S3Blob {
         // not allowed" error that I didn't want to get distracted with. All the
         // calls into the s3 library require that this context is set anyway, so
         // I suppose this is no worse than where we started.
-        let async_runtime = AsyncHandle::try_current().map_err(|err| err.to_string())?;
+        let async_runtime = AsyncHandle::try_current().map_err(anyhow::Error::new)?;
 
         // Fire off all the individual parts.
         //
@@ -494,7 +531,7 @@ impl S3Blob {
         let start_parts = Instant::now();
         let value = Bytes::from(value);
         let mut part_futs = Vec::new();
-        for (part_num, part_range) in self.core.multipart_config.part_iter(value.len()) {
+        for (part_num, part_range) in self.multipart_config.part_iter(value.len()) {
             // NB: Without this spawn, these will execute serially. This is rust
             // async 101 stuff, but there isn't much async in the persist
             // codebase (yet?) so I thought it worth calling out.
@@ -502,9 +539,9 @@ impl S3Blob {
                 // TODO: Add the key and part number once this can be annotated
                 // with metadata.
                 || "persist_s3blob_put_part",
-                client
+                self.client
                     .upload_part()
-                    .bucket(&self.core.bucket)
+                    .bucket(&self.bucket)
                     .key(&path)
                     .upload_id(upload_id)
                     .part_number(part_num as i32)
@@ -569,9 +606,9 @@ impl S3Blob {
         // abort_multipart_upload work, but it would be complex and affect perf.
         // Let's see how far we can get without it.
         let start_complete = Instant::now();
-        client
+        self.client
             .complete_multipart_upload()
-            .bucket(&self.core.bucket)
+            .bucket(&self.bucket)
             .key(&path)
             .upload_id(upload_id)
             .multipart_upload(
@@ -593,103 +630,6 @@ impl S3Blob {
             start_overall.elapsed(),
             parts_len
         );
-        Ok(())
-    }
-}
-
-impl S3Blob {
-    async fn set(&mut self, key: &str, value: Vec<u8>, _atomic: Atomicity) -> Result<(), Error> {
-        // NB: S3 is always atomic, so we're free to ignore the atomic param.
-        if self.core.multipart_config.should_multipart(value.len())? {
-            self.set_multi_part(key, value).await
-        } else {
-            self.set_single_part(key, value).await
-        }
-    }
-
-    async fn delete(&mut self, key: &str) -> Result<(), Error> {
-        let client = self.core.ensure_open()?;
-        let path = self.core.get_path(key);
-        client
-            .delete_object()
-            .bucket(&self.core.bucket)
-            .key(path)
-            .send()
-            .await
-            .map_err(|err| Error::from(err.to_string()))?;
-        Ok(())
-    }
-}
-
-/// Implementation of [BlobMulti] backed by S3.
-#[derive(Debug)]
-pub struct S3BlobMulti {
-    core: S3BlobCore,
-}
-
-impl S3BlobMulti {
-    /// Opens the given location for non-exclusive read-write access.
-    pub async fn open(config: S3BlobConfig) -> Result<Self, ExternalError> {
-        let core = S3BlobCore {
-            client: Some(config.client),
-            bucket: config.bucket,
-            prefix: config.prefix,
-            max_keys: 1_000,
-            multipart_config: MultipartConfig::default(),
-        };
-        // Connect before returning success. We don't particularly care about
-        // what's stored in this blob (nothing writes to it, so presumably it's
-        // empty) just that we were able and allowed to fetch it.
-        let _ = core.get("HEALTH_CHECK").await?;
-        Ok(S3BlobMulti { core })
-    }
-}
-
-#[async_trait]
-impl BlobMulti for S3BlobMulti {
-    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        let value = self.core.get(key).await?;
-        Ok(value)
-    }
-
-    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
-        let keys = self.core.list_keys().await?;
-        Ok(keys)
-    }
-
-    async fn set(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        value: Vec<u8>,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
-        // TODO: Move this impl here once we delete S3Blob.
-        let mut hack = S3Blob {
-            core: S3BlobCore {
-                client: self.core.client.clone(),
-                bucket: self.core.bucket.clone(),
-                prefix: self.core.prefix.clone(),
-                max_keys: self.core.max_keys,
-                multipart_config: self.core.multipart_config.clone(),
-            },
-        };
-        hack.set(key, value, atomic).await?;
-        Ok(())
-    }
-
-    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
-        // TODO: Move this impl here once we delete S3Blob.
-        let mut hack = S3Blob {
-            core: S3BlobCore {
-                client: self.core.client.clone(),
-                bucket: self.core.bucket.clone(),
-                prefix: self.core.prefix.clone(),
-                max_keys: self.core.max_keys,
-                multipart_config: self.core.multipart_config.clone(),
-            },
-        };
-        hack.delete(key).await?;
         Ok(())
     }
 }
@@ -852,7 +792,7 @@ mod tests {
                 return Ok(());
             }
         };
-        let _config_multipart = config.clone_with_new_uuid_prefix();
+        let config_multipart = config.clone_with_new_uuid_prefix();
 
         blob_multi_impl_test(move |path| {
             let path = path.to_owned();
@@ -864,7 +804,7 @@ mod tests {
                     prefix: format!("{}/s3_blob_multi_impl_test/{}", config.prefix, path),
                 };
                 let mut blob = S3BlobMulti::open(config).await?;
-                blob.core.max_keys = 2;
+                blob.max_keys = 2;
                 Ok(blob)
             }
         })
@@ -873,14 +813,14 @@ mod tests {
         // Also specifically test multipart. S3 requires all parts but the last
         // to be at least 5MB, which we don't want to do from a test, so this
         // uses the multipart code path but only writes a single part.
-        #[cfg(WIP)]
         {
-            let blob = S3Blob::open_exclusive(
-                config_multipart,
-                LockInfo::new_no_reentrance("multipart".into()),
-            )?;
+            let blob = S3BlobMulti::open(config_multipart).await?;
             blob.set_multi_part("multipart", "foobar".into()).await?;
-            assert_eq!(blob.get("multipart").await?, Some("foobar".into()));
+            let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+            assert_eq!(
+                blob.get(deadline, "multipart").await?,
+                Some("foobar".into())
+            );
         }
 
         Ok(())

@@ -11,9 +11,7 @@
 //! i64)` updates.
 
 // NB: These really don't need to be public, but the public doc lint is nice.
-#[cfg(WIP)]
 pub mod background;
-#[cfg(WIP)]
 pub mod cache;
 pub mod columnar;
 pub mod encoding;

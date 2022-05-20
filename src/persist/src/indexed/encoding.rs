@@ -18,6 +18,7 @@ use std::io::Cursor;
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec;
 use prost::Message;
 use timely::progress::{Antichain, Timestamp};
@@ -28,8 +29,10 @@ use crate::gen::persist::{
     proto_batch_inline, ProtoBatchFormat, ProtoBatchInline, ProtoTraceBatchMeta,
     ProtoTraceBatchPartInline, ProtoU64Antichain, ProtoU64Description,
 };
+use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use crate::indexed::columnar::ColumnarRecords;
+use crate::location::BlobMulti;
 
 /// The metadata necessary to reconstruct a list of [BlobTraceBatchPart]s.
 ///
@@ -56,30 +59,31 @@ pub struct TraceBatchMeta {
     pub size_bytes: u64,
 }
 
-/// The structure serialized and stored as a value in [crate::location::Blob]
-/// storage for data keys corresponding to trace data.
+/// The structure serialized and stored as a value in
+/// [crate::location::BlobMulti] storage for data keys corresponding to trace
+/// data.
 ///
 /// This batch represents the data that was originally written at some time in
 /// [lower, upper) (more precisely !< lower and < upper). The individual record
-/// times may have later been advanced by compaction to something <= since.
-/// This means the ability to reconstruct the state of the collection at times < since
-/// has been lost. However, there may still be records present in the batch whose
-/// times are < since. Users iterating through updates must take care to advance
-/// records with times < since to since in order to correctly answer queries at
-/// times >= since.
+/// times may have later been advanced by compaction to something <= since. This
+/// means the ability to reconstruct the state of the collection at times <
+/// since has been lost. However, there may still be records present in the
+/// batch whose times are < since. Users iterating through updates must take
+/// care to advance records with times < since to since in order to correctly
+/// answer queries at times >= since.
 ///
 /// Invariants:
 /// - The [lower, upper) interval of times in desc is non-empty.
 /// - The timestamp of each update is >= to desc.lower().
-/// - The timestamp of each update is < desc.upper() iff desc.upper() > desc.since().
-///   Otherwise the timestamp of each update is <= desc.since().
+/// - The timestamp of each update is < desc.upper() iff desc.upper() >
+///   desc.since(). Otherwise the timestamp of each update is <= desc.since().
 /// - The values in updates are sorted by (key, value, time).
 /// - The values in updates are "consolidated", i.e. (key, value, time) is
 ///   unique.
 /// - All entries have a non-zero diff.
 ///
-/// TODO: disallow empty trace batch parts in the future so there is one unique way
-/// to represent an empty trace batch.
+/// TODO: disallow empty trace batch parts in the future so there is one unique
+/// way to represent an empty trace batch.
 #[derive(Clone, Debug)]
 pub struct BlobTraceBatchPart {
     /// Which updates are included in this batch.
@@ -108,13 +112,15 @@ impl TraceBatchMeta {
     }
 
     /// Assert that all of the [BlobTraceBatchPart]'s obey the required invariants.
-    #[cfg(WIP)]
-    pub fn validate_data<B: BlobRead>(&self, cache: &BlobCache<B>) -> Result<(), Error> {
+    pub async fn validate_data<B: BlobMulti + Send + Sync + 'static>(
+        &self,
+        cache: &BlobCache<B>,
+    ) -> Result<(), Error> {
         let mut batches = vec![];
         for (idx, key) in self.keys.iter().enumerate() {
             let batch = cache
                 .get_trace_batch_async(key, CacheHint::NeverAdd)
-                .recv()?;
+                .await?;
             if batch.desc != self.desc {
                 return Err(format!(
                     "invalid trace batch part desc expected {:?} got {:?}",
@@ -343,8 +349,12 @@ pub fn decode_trace_inline_meta(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::error::Error;
     use crate::indexed::columnar::ColumnarRecordsVec;
+    use crate::indexed::metrics::Metrics;
+    use crate::mem::{MemBlobMulti, MemBlobMultiConfig};
     use crate::workload::DataGenerator;
 
     use super::*;
@@ -502,15 +512,11 @@ mod tests {
         );
     }
 
-    #[test]
-    #[cfg(WIP)]
-    fn trace_batch_meta_validate_data() -> Result<(), Error> {
-        let async_runtime = Arc::new(AsyncRuntime::new()?);
+    #[tokio::test]
+    async fn trace_batch_meta_validate_data() -> Result<(), Error> {
         let blob = BlobCache::new(
-            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
-            async_runtime,
-            MemRegistry::new().blob_no_reentrance()?,
+            MemBlobMulti::open(MemBlobMultiConfig::default()),
             None,
         );
         let format = ProtoBatchFormat::ParquetKvtd;
@@ -539,8 +545,8 @@ mod tests {
             .into_inner(),
         };
 
-        let batch0_size_bytes = blob.set_trace_batch("b0".into(), batch0, format)?;
-        let batch1_size_bytes = blob.set_trace_batch("b1".into(), batch1, format)?;
+        let batch0_size_bytes = blob.set_trace_batch("b0".into(), batch0, format).await?;
+        let batch1_size_bytes = blob.set_trace_batch("b1".into(), batch1, format).await?;
         let size_bytes = batch0_size_bytes + batch1_size_bytes;
         let batch_meta = TraceBatchMeta {
             keys: vec!["b0".into(), "b1".into()],
@@ -551,7 +557,7 @@ mod tests {
         };
 
         // Normal case:
-        assert_eq!(batch_meta.validate_data(&blob), Ok(()));
+        assert_eq!(batch_meta.validate_data(&blob).await, Ok(()));
 
         // Incorrect desc
         let batch_meta = TraceBatchMeta {
@@ -561,7 +567,7 @@ mod tests {
             level: 0,
             size_bytes,
         };
-        assert_eq!(batch_meta.validate_data(&blob), Err(Error::from("invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
+        assert_eq!(batch_meta.validate_data(&blob).await, Err(Error::from("invalid trace batch part desc expected Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } } got Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [3] }, since: Antichain { elements: [0] } }")));
         // Key with no corresponding batch part
         let batch_meta = TraceBatchMeta {
             keys: vec!["b0".into(), "b1".into(), "b2".into()],
@@ -571,7 +577,7 @@ mod tests {
             size_bytes,
         };
         assert_eq!(
-            batch_meta.validate_data(&blob),
+            batch_meta.validate_data(&blob).await,
             Err(Error::from("no blob for trace batch at key: b2"))
         );
         // Batch parts not in index order
@@ -583,7 +589,7 @@ mod tests {
             size_bytes,
         };
         assert_eq!(
-            batch_meta.validate_data(&blob),
+            batch_meta.validate_data(&blob).await,
             Err(Error::from(
                 "invalid index for blob trace batch part at key b1 expected 0 got 1"
             ))
@@ -620,7 +626,7 @@ mod tests {
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
             ),
-            "1/1=(1016, 1036) 25/1=(2767, 2787) 1000/1=(73011, 73031) 1000/100=(113056, 113076)"
+            "1/1=1036 25/1=2787 1000/1=73031 1000/100=113076"
         );
     }
 }

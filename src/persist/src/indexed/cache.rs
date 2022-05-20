@@ -11,22 +11,16 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use futures_executor::block_on;
-use mz_build_info::BuildInfo;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec;
-use semver::Version;
-use tokio::runtime::Runtime as AsyncRuntime;
 
 use crate::error::Error;
-use crate::gen::persist::{ProtoBatchFormat, ProtoMeta};
+use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta};
 use crate::indexed::metrics::Metrics;
-use crate::location::Atomicity;
-use crate::pfuture::PFuture;
+use crate::location::{Atomicity, BlobMulti};
 
 /// User hints for [BlobCache] operations.
 #[derive(Debug)]
@@ -37,7 +31,7 @@ pub enum CacheHint {
     NeverAdd,
 }
 
-/// A disk-backed cache for objects in [Blob] storage.
+/// A disk-backed cache for objects in [BlobMulti] storage.
 ///
 /// The data for the objects in the cache is stored on disk, mmap'd, and a
 /// validated handle is stored in-memory to avoid repeatedly decoding it.
@@ -52,23 +46,17 @@ pub enum CacheHint {
 /// erroring) until disk space frees up.
 #[derive(Debug)]
 pub struct BlobCache<B> {
-    build_version: Version,
     metrics: Arc<Metrics>,
-    blob: Arc<Mutex<B>>,
-    async_runtime: Arc<AsyncRuntime>,
+    blob: Arc<B>,
     cache: BlobCacheInner,
-    prev_meta_len: u64,
 }
 
 impl<B> Clone for BlobCache<B> {
     fn clone(&self) -> Self {
         BlobCache {
-            build_version: self.build_version.clone(),
             metrics: Arc::clone(&self.metrics),
             blob: Arc::clone(&self.blob),
-            async_runtime: Arc::clone(&self.async_runtime),
             cache: self.cache.clone(),
-            prev_meta_len: self.prev_meta_len,
         }
     }
 }
@@ -76,49 +64,29 @@ impl<B> Clone for BlobCache<B> {
 const MB: usize = 1024 * 1024;
 const GB: usize = 1024 * MB;
 
-impl<B: BlobRead> BlobCache<B> {
-    const META_KEY: &'static str = "META";
+impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
     const DEFAULT_CACHE_SIZE_LIMIT: usize = 2 * GB;
 
-    /// Returns a new, empty cache for the given [Blob] storage.
-    pub fn new(
-        build: BuildInfo,
-        metrics: Arc<Metrics>,
-        async_runtime: Arc<AsyncRuntime>,
-        blob: B,
-        cache_size_limit: Option<usize>,
-    ) -> Self {
+    /// Returns a new, empty cache for the given [BlobMulti] storage.
+    pub fn new(metrics: Arc<Metrics>, blob: B, cache_size_limit: Option<usize>) -> Self {
         BlobCache {
-            build_version: build.semver_version(),
             metrics,
-            blob: Arc::new(Mutex::new(blob)),
-            async_runtime,
+            blob: Arc::new(blob),
             cache: BlobCacheInner::new(cache_size_limit.unwrap_or(Self::DEFAULT_CACHE_SIZE_LIMIT)),
-            prev_meta_len: 0,
         }
     }
 
-    /// Synchronously closes the cache, releasing exclusive-writer locks and
-    /// causing all future commands to error.
-    ///
-    /// This method is idempotent. Returns true if the blob had not
-    /// previously been closed.
-    pub fn close(&mut self) -> Result<bool, Error> {
-        let async_guard = self.async_runtime.enter();
-        let ret = block_on(self.blob.lock()?.close());
-        drop(async_guard);
-        ret
-    }
-
     /// Synchronously fetches the batch for the given key.
-    fn fetch_trace_batch_sync(
+    async fn fetch_trace_batch(
         &self,
         key: &str,
         hint: CacheHint,
     ) -> Result<Arc<BlobTraceBatchPart>, Error> {
-        let async_guard = self.async_runtime.enter();
-
-        let bytes = block_on(self.blob.lock()?.get(key))?
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        let bytes = self
+            .blob
+            .get(deadline, key)
+            .await?
             .ok_or_else(|| Error::from(format!("no blob for trace batch at key: {}", key)))?;
         let bytes_len = bytes.len();
         self.metrics
@@ -135,30 +103,25 @@ impl<B: BlobRead> BlobCache<B> {
             self.cache
                 .maybe_add_trace(key.to_owned(), bytes_len, Arc::clone(&ret))?;
         }
-
-        drop(async_guard);
         Ok(ret)
     }
 
     /// Asynchronously returns the batch for the given key, fetching in another
     /// thread if it's not already in the cache.
-    pub fn get_trace_batch_async(
+    pub async fn get_trace_batch_async(
         &self,
         key: &str,
         hint: CacheHint,
-    ) -> PFuture<Arc<BlobTraceBatchPart>> {
-        let (tx, rx) = PFuture::new();
+    ) -> Result<Arc<BlobTraceBatchPart>, Error> {
         match self.cache.get_trace(key) {
             Err(err) => {
                 // TODO: if there's an error reading from cache we could just
                 // fetch the batch directly from blob storage.
-                tx.fill(Err(err));
-                return rx;
+                return Err(err);
             }
             Ok(Some(entry)) => {
                 self.metrics.blob_read_cache_hit_count.inc();
-                tx.fill(Ok(entry));
-                return rx;
+                return Ok(entry);
             }
             Ok(None) => {
                 // If the batch doesn't exist in the cache, fallback to fetching
@@ -169,42 +132,20 @@ impl<B: BlobRead> BlobCache<B> {
 
         // TODO: If a fetch for this key is already in progress join that one
         // instead of starting another.
-        let cache = self.clone();
-        let key = key.to_owned();
-        // TODO: IO thread pool for persist instead of spawning one here.
-        let _ = thread::spawn(move || {
-            let async_guard = cache.async_runtime.enter();
-            let res = cache.fetch_trace_batch_sync(&key, hint);
-            tx.fill(res);
-            drop(async_guard);
-        });
-        rx
-    }
-
-    /// Returns the list of keys known to the underlying [Blob].
-    pub fn list_keys(&self) -> Result<Vec<String>, Error> {
-        let async_guard = self.async_runtime.enter();
-        let ret = block_on(self.blob.lock()?.list_keys());
-        drop(async_guard);
-        ret
+        self.fetch_trace_batch(&key, hint).await
     }
 }
 
-impl<B: Blob> BlobCache<B> {
-    /// Writes a batch to backing [Blob] storage.
+impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
+    /// Writes a batch to backing [BlobMulti] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.
-    pub fn set_trace_batch(
+    pub async fn set_trace_batch(
         &self,
         key: String,
         batch: BlobTraceBatchPart,
         format: ProtoBatchFormat,
     ) -> Result<u64, Error> {
-        let async_guard = self.async_runtime.enter();
-
-        if key == Self::META_KEY {
-            return Err(format!("cannot write trace batch to meta key: {}", Self::META_KEY).into());
-        }
         if format != ProtoBatchFormat::ParquetKvtd {
             return Err(format!(
                 "cannot write trace batch with unsupported format {:?}",
@@ -219,8 +160,11 @@ impl<B: Blob> BlobCache<B> {
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
-        block_on(self.blob.lock()?.set(&key, val, Atomicity::AllowNonAtomic))
-            .map_err(|err| self.metric_set_error(err))?;
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        self.blob
+            .set(deadline, &key, val, Atomicity::AllowNonAtomic)
+            .await
+            .map_err(|err| self.metric_set_error(err.into()))?;
         self.metrics
             .trace
             .blob_write_seconds
@@ -230,19 +174,16 @@ impl<B: Blob> BlobCache<B> {
 
         self.cache
             .maybe_add_trace(key, usize::cast_from(val_len), Arc::new(batch))?;
-
-        drop(async_guard);
         Ok(val_len)
     }
 
-    /// Removes a batch from both [Blob] storage and the local cache.
-    pub fn delete_trace_batch(&mut self, batch: &TraceBatchMeta) -> Result<(), Error> {
-        let async_guard = self.async_runtime.enter();
-
+    /// Removes a batch from both [BlobMulti] storage and the local cache.
+    pub async fn delete_trace_batch(&mut self, batch: &TraceBatchMeta) -> Result<(), Error> {
         let delete_start = Instant::now();
         for key in batch.keys.iter() {
             self.cache.remove_trace(&key)?;
-            block_on(self.blob.lock()?.delete(key))?;
+            let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+            self.blob.delete(deadline, key).await?;
         }
         self.metrics
             .trace
@@ -253,8 +194,6 @@ impl<B: Blob> BlobCache<B> {
             .trace
             .blob_delete_bytes
             .inc_by(batch.size_bytes);
-
-        drop(async_guard);
         Ok(())
     }
 
@@ -267,7 +206,7 @@ impl<B: Blob> BlobCache<B> {
     }
 }
 
-/// Internal, in-memory cache for objects in [Blob] storage that back an
+/// Internal, in-memory cache for objects in [BlobMulti] storage that back an
 /// arrangement.
 #[derive(Clone, Debug)]
 struct BlobCacheInner {

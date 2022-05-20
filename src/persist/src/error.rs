@@ -14,7 +14,7 @@ use std::{error, fmt, io, sync};
 
 use arrow2::error::ArrowError;
 
-use crate::location::SeqNo;
+use crate::location::{ExternalError, SeqNo};
 
 /// A persistence related error.
 #[derive(Debug, Clone)]
@@ -63,6 +63,12 @@ impl PartialEq for Error {
             (Error::RuntimeShutdown, Error::RuntimeShutdown) => true,
             _ => false,
         }
+    }
+}
+
+impl From<ExternalError> for Error {
+    fn from(e: ExternalError) -> Self {
+        Error::String(e.to_string())
     }
 }
 

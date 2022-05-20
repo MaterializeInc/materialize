@@ -230,7 +230,7 @@ impl From<tokio::task::JoinError> for ExternalError {
     }
 }
 
-/// Configuration of whether a [Blob::set] must occur atomically.
+/// Configuration of whether a [BlobMulti::set] must occur atomically.
 #[derive(Debug)]
 pub enum Atomicity {
     /// Require the write be atomic and either succeed or leave the previous

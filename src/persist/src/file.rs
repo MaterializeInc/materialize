@@ -13,6 +13,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use fail::fail_point;
 
@@ -22,7 +23,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::error::Error;
 use crate::location::{Atomicity, BlobMulti, ExternalError};
 
-/// Configuration for opening a [FileBlob] or [FileBlobRead].
+/// Configuration for opening a [FileBlobMulti].
 #[derive(Debug)]
 pub struct FileBlobConfig {
     base_dir: PathBuf,
@@ -36,21 +37,29 @@ impl<P: AsRef<Path>> From<P> for FileBlobConfig {
     }
 }
 
+/// Implementation of [BlobMulti] backed by files.
 #[derive(Debug)]
-struct FileBlobCore {
-    base_dir: Option<PathBuf>,
+pub struct FileBlobMulti {
+    base_dir: PathBuf,
 }
 
-impl FileBlobCore {
-    fn blob_path(&self, key: &str) -> Result<PathBuf, Error> {
-        self.base_dir
-            .as_ref()
-            .map(|base_dir| base_dir.join(key))
-            .ok_or_else(|| return Error::from("FileBlob unexpectedly closed"))
+impl FileBlobMulti {
+    /// Opens the given location for non-exclusive read-write access.
+    pub async fn open(config: FileBlobConfig) -> Result<Self, ExternalError> {
+        let base_dir = config.base_dir;
+        fs::create_dir_all(&base_dir).await.map_err(Error::from)?;
+        Ok(FileBlobMulti { base_dir })
     }
 
-    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        let file_path = self.blob_path(key)?;
+    fn blob_path(&self, key: &str) -> PathBuf {
+        self.base_dir.join(key)
+    }
+}
+
+#[async_trait]
+impl BlobMulti for FileBlobMulti {
+    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
+        let file_path = self.blob_path(key);
         let mut file = match File::open(file_path).await {
             Ok(file) => file,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
@@ -61,11 +70,8 @@ impl FileBlobCore {
         Ok(Some(buf))
     }
 
-    async fn list_keys(&self) -> Result<Vec<String>, Error> {
-        let base_dir = match &self.base_dir {
-            Some(base_dir) => base_dir.canonicalize()?,
-            None => return Err(Error::from("FileBlob unexpectedly closed")),
-        };
+    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
+        let base_dir = self.base_dir.canonicalize()?;
         let mut ret = vec![];
 
         let mut entries = fs::read_dir(&base_dir).await?;
@@ -81,7 +87,7 @@ impl FileBlobCore {
                         continue;
                     }
                 } else {
-                    return Err(Error::from(format!(
+                    return Err(ExternalError::from(anyhow!(
                         "unexpectedly found directory while iterating through FileBlob: {}",
                         path.display()
                     )));
@@ -100,17 +106,15 @@ impl FileBlobCore {
         }
         Ok(ret)
     }
-}
 
-/// Implementation of [Blob] backed by files.
-#[derive(Debug)]
-pub struct FileBlob {
-    core: FileBlobCore,
-}
-
-impl FileBlob {
-    async fn set(&mut self, key: &str, value: Vec<u8>, atomic: Atomicity) -> Result<(), Error> {
-        let file_path = self.core.blob_path(key)?;
+    async fn set(
+        &self,
+        _deadline: Instant,
+        key: &str,
+        value: Vec<u8>,
+        atomic: Atomicity,
+    ) -> Result<(), ExternalError> {
+        let file_path = self.blob_path(key);
         match atomic {
             Atomicity::RequireAtomic => {
                 // To implement require_atomic, write to a temp file and rename
@@ -125,7 +129,7 @@ impl FileBlob {
                 file.write_all(&value[..]).await?;
 
                 fail_point!("fileblob_set_sync", |_| {
-                    Err(Error::from(format!(
+                    Err(ExternalError::from(anyhow!(
                         "FileBlob::set_sync fail point reached for file {:?}",
                         file_path
                     )))
@@ -146,7 +150,7 @@ impl FileBlob {
                 file.write_all(&value[..]).await?;
 
                 fail_point!("fileblob_set_sync", |_| {
-                    Err(Error::from(format!(
+                    Err(ExternalError::from(anyhow!(
                         "FileBlob::set_sync fail point reached for file {:?}",
                         file_path
                     )))
@@ -158,13 +162,13 @@ impl FileBlob {
         Ok(())
     }
 
-    async fn delete(&mut self, key: &str) -> Result<(), Error> {
-        let file_path = self.core.blob_path(key)?;
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        let file_path = self.blob_path(key);
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
 
         fail_point!("fileblob_delete_before", |_| {
-            Err(Error::from(format!(
+            Err(ExternalError::from(anyhow!(
                 "FileBlob::delete_before fail point reached for file {:?}",
                 file_path
             )))
@@ -178,71 +182,12 @@ impl FileBlob {
         };
 
         fail_point!("fileblob_delete_after", |_| {
-            Err(Error::from(format!(
+            Err(ExternalError::from(anyhow!(
                 "FileBlob::delete_after fail point reached for file {:?}",
                 file_path
             )))
         });
 
-        Ok(())
-    }
-}
-
-/// Implementation of [BlobMulti] backed by files.
-#[derive(Debug)]
-pub struct FileBlobMulti {
-    core: FileBlobCore,
-}
-
-impl FileBlobMulti {
-    /// Opens the given location for non-exclusive read-write access.
-    pub async fn open(config: FileBlobConfig) -> Result<Self, ExternalError> {
-        let base_dir = config.base_dir;
-        fs::create_dir_all(&base_dir).await.map_err(Error::from)?;
-        let core = FileBlobCore {
-            base_dir: Some(base_dir),
-        };
-        Ok(FileBlobMulti { core })
-    }
-}
-
-#[async_trait]
-impl BlobMulti for FileBlobMulti {
-    async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        let value = self.core.get(key).await?;
-        Ok(value)
-    }
-
-    async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
-        let keys = self.core.list_keys().await?;
-        Ok(keys)
-    }
-
-    async fn set(
-        &self,
-        _deadline: Instant,
-        key: &str,
-        value: Vec<u8>,
-        atomic: Atomicity,
-    ) -> Result<(), ExternalError> {
-        // TODO: Move this impl here once we delete FileBlob.
-        let mut hack = FileBlob {
-            core: FileBlobCore {
-                base_dir: self.core.base_dir.clone(),
-            },
-        };
-        hack.set(key, value, atomic).await?;
-        Ok(())
-    }
-
-    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
-        // TODO: Move this impl here once we delete FileBlob.
-        let mut hack = FileBlob {
-            core: FileBlobCore {
-                base_dir: self.core.base_dir.clone(),
-            },
-        };
-        hack.delete(key).await?;
         Ok(())
     }
 }
