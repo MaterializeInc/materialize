@@ -47,7 +47,7 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
-use mz_dataflow_types::aws::{AwsConfig, AwsExternalId};
+use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{Compression, ExternalSourceConnector, MzOffset, S3KeySource};
 use mz_dataflow_types::ConnectorContext;
@@ -126,12 +126,14 @@ async fn download_objects_task(
     tx: Sender<S3Result<InternalMessage>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_config: AwsConfig,
-    aws_external_id: Option<AwsExternalId>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     activator: SyncActivator,
     compression: Compression,
     metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id.as_ref()).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), &source_id)
+        .await;
     let client = aws_sdk_s3::Client::new(&config);
 
     struct BucketInfo {
@@ -239,11 +241,13 @@ async fn scan_bucket_task(
     source_id: String,
     glob: Option<GlobMatcher>,
     aws_config: AwsConfig,
-    aws_external_id: Option<AwsExternalId>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id.as_ref()).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), &source_id)
+        .await;
     let client = aws_sdk_s3::Client::new(&config);
 
     let glob = glob.as_ref();
@@ -352,7 +356,7 @@ async fn read_sqs_task(
     glob: Option<GlobMatcher>,
     queue: String,
     aws_config: AwsConfig,
-    aws_external_id: Option<AwsExternalId>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     tx: Sender<S3Result<KeyInfo>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
@@ -362,7 +366,9 @@ async fn read_sqs_task(
         source_id, queue,
     );
 
-    let config = aws_config.load(aws_external_id.as_ref()).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), &source_id)
+        .await;
     let client = aws_sdk_sqs::Client::new(&config);
 
     let glob = glob.as_ref();
@@ -805,7 +811,7 @@ impl SourceReader for S3SourceReader {
                     dataflow_tx,
                     shutdown_rx.clone(),
                     s3_conn.aws.clone(),
-                    connector_context.aws_external_id.clone(),
+                    connector_context.aws_external_id_prefix.clone(),
                     consumer_activator,
                     s3_conn.compression,
                     metrics.clone(),
@@ -827,7 +833,7 @@ impl SourceReader for S3SourceReader {
                                 source_id.to_string(),
                                 glob.clone(),
                                 s3_conn.aws.clone(),
-                                connector_context.aws_external_id.clone(),
+                                connector_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
                             ),
@@ -845,7 +851,7 @@ impl SourceReader for S3SourceReader {
                                 glob.clone(),
                                 queue,
                                 s3_conn.aws.clone(),
-                                connector_context.aws_external_id.clone(),
+                                connector_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
                                 metrics.clone(),

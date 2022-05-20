@@ -21,7 +21,7 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use mz_dataflow_types::aws::AwsExternalId;
+use mz_dataflow_types::aws::AwsExternalIdPrefix;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{ExternalSourceConnector, KinesisSourceConnector, MzOffset};
 use mz_dataflow_types::{ConnectorContext, SourceErrorDetails};
@@ -122,7 +122,7 @@ impl SourceReader for KinesisSourceReader {
 
     fn new(
         _source_name: String,
-        _source_id: GlobalId,
+        source_id: GlobalId,
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,
@@ -140,7 +140,8 @@ impl SourceReader for KinesisSourceReader {
         let state = block_on(create_state(
             &metrics.kinesis,
             kc,
-            connector_context.aws_external_id.as_ref(),
+            connector_context.aws_external_id_prefix.as_ref(),
+            source_id,
         ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
@@ -266,7 +267,8 @@ impl SourceReader for KinesisSourceReader {
 async fn create_state(
     base_metrics: &KinesisMetrics,
     c: KinesisSourceConnector,
-    aws_external_id: Option<&AwsExternalId>,
+    aws_external_id_prefix: Option<&AwsExternalIdPrefix>,
+    source_id: GlobalId,
 ) -> Result<
     (
         KinesisClient,
@@ -276,7 +278,11 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let config = c.aws.load(aws_external_id).await;
+    // TODO what to use for the source ID?
+    let config = c
+        .aws
+        .load(aws_external_id_prefix, &format!("{}", source_id))
+        .await;
     let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;

@@ -374,11 +374,11 @@ pub struct Args {
     catalog_postgres_stash: String,
 
     // === AWS options. ===
-    /// An external ID to be supplied to all AWS AssumeRole operations.
+    /// Prefix for an external ID to be supplied to all AWS AssumeRole operations.
     ///
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, value_name = "ID")]
-    aws_external_id: Option<String>,
+    aws_external_id_prefix: Option<String>,
 
     /// The endpoint to send opentelemetry traces to.
     /// If not provided, tracing is not sent.
@@ -738,7 +738,10 @@ max log level: {max_log_level}",
         now: SYSTEM_TIME.clone(),
         replica_sizes,
         availability_zones: args.availability_zone,
-        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
+        connector_context: ConnectorContext::from_cli_args(
+            &args.log_filter,
+            args.aws_external_id_prefix,
+        ),
     }))?;
 
     eprintln!(

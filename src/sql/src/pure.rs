@@ -27,7 +27,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
-use mz_dataflow_types::aws::{AwsConfig, AwsExternalId};
+use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::ConnectorContext;
 
@@ -143,8 +143,11 @@ pub async fn purify_create_source(
         }
         CreateSourceConnector::S3 { .. } => {
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
-            validate_aws_credentials(&aws_config, connector_context.aws_external_id.as_ref())
-                .await?;
+            validate_aws_credentials(
+                &aws_config,
+                connector_context.aws_external_id_prefix.as_ref(),
+            )
+            .await?;
         }
         CreateSourceConnector::Kinesis { arn } => {
             let region = arn
@@ -154,8 +157,11 @@ pub async fn purify_create_source(
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
             let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
-            validate_aws_credentials(&aws_config, connector_context.aws_external_id.as_ref())
-                .await?;
+            validate_aws_credentials(
+                &aws_config,
+                connector_context.aws_external_id_prefix.as_ref(),
+            )
+            .await?;
         }
         CreateSourceConnector::Postgres {
             conn,
@@ -512,9 +518,9 @@ async fn compile_proto(
 /// whether the specified AWS configuration is valid.
 async fn validate_aws_credentials(
     config: &AwsConfig,
-    external_id: Option<&AwsExternalId>,
+    external_id_prefix: Option<&AwsExternalIdPrefix>,
 ) -> Result<(), anyhow::Error> {
-    let config = config.load(external_id).await;
+    let config = config.load(external_id_prefix, "").await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client
         .get_caller_identity()
