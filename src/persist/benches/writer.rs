@@ -21,7 +21,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::s3::{S3Blob, S3BlobConfig};
-use mz_persist_types::Codec;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
 use timely::progress::Antichain;

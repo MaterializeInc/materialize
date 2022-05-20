@@ -14,6 +14,10 @@ use std::time::{Duration, Instant};
 
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Throughput};
+use differential_dataflow::trace::Description;
+use mz_persist::indexed::encoding::BlobTraceBatchPart;
+use mz_persist_types::Codec;
+use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -158,10 +162,6 @@ pub fn bench_consensus_compare_and_set(
 
 pub fn bench_encode_batch(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
     g.throughput(Throughput::Bytes(data.goodput_bytes()));
-    let unsealed = BlobUnsealedBatch {
-        desc: SeqNo(0)..SeqNo(1),
-        updates: data.batches().collect::<Vec<_>>(),
-    };
     let trace = BlobTraceBatchPart {
         desc: Description::new(
             Antichain::from_elem(0),
@@ -171,14 +171,6 @@ pub fn bench_encode_batch(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallT
         index: 0,
         updates: data.batches().collect::<Vec<_>>(),
     };
-
-    g.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
-        b.iter(|| {
-            // Intentionally alloc a new buf each iter.
-            let mut buf = Vec::new();
-            unsealed.encode(&mut buf);
-        })
-    });
 
     g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
         b.iter(|| {

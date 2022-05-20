@@ -10,7 +10,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use mz_persist::workload::DataGenerator;
 
-mod consensus;
 mod end_to_end;
 mod snapshot;
 mod writer;
@@ -21,7 +20,6 @@ pub fn bench_persist(c: &mut Criterion) {
     // being as spammy in these benchmarks.
     mz_ore::test::init_logging_default("warn");
     let data = DataGenerator::default();
-    let small_data = DataGenerator::small();
 
     end_to_end::bench_load(&data, &mut c.benchmark_group("end_to_end/load"));
     end_to_end::bench_replay(&data, &mut c.benchmark_group("end_to_end/replay"));

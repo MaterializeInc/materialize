@@ -20,6 +20,7 @@ use mz_persist_client::PersistClient;
 use tempfile::TempDir;
 
 mod min_latency;
+mod speed_of_light;
 
 pub fn bench_persist(c: &mut Criterion) {
     // Override the default of "info" here because the s3 library is chatty on
@@ -54,17 +55,23 @@ pub fn bench_persist(c: &mut Criterion) {
     )
     .expect("failed to bench write_to_listen");
 
-    consensus::bench_consensus_compare_and_set(
-        &small_data,
-        &mut c.benchmark_group("consensus/compare_and_set"),
+    speed_of_light::bench_consensus_compare_and_set(
+        &data_small,
+        &mut c.benchmark_group("speed_of_light/concurrency=1/consensus_compare_and_set"),
         1,
     );
-    consensus::bench_consensus_compare_and_set(
-        &small_data,
-        &mut c.benchmark_group("consensus/concurrent_compare_and_set"),
-        8,
+    speed_of_light::bench_consensus_compare_and_set(
+        &data_small,
+        &mut c.benchmark_group(format!(
+            "speed_of_light/concurrency={}/consensus_compare_and_set",
+            ncpus_useful
+        )),
+        ncpus_useful,
     );
-    writer::bench_encode_batch(&data, &mut c.benchmark_group("writer/encode_batch"));
+    speed_of_light::bench_encode_batch(
+        &data_small,
+        &mut c.benchmark_group("speed_of_light/encode_batch"),
+    );
 }
 
 async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
