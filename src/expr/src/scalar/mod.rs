@@ -23,7 +23,8 @@ use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
 use mz_repr::arb_datum;
-use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::TryIntoIfSome;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
@@ -1731,8 +1732,8 @@ impl From<&EvalError> for ProtoEvalError {
                 typ: typ.clone(),
             }),
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
-            EvalError::Parse(error) => Parse(error.into()),
-            EvalError::ParseHex(error) => ParseHex(error.into()),
+            EvalError::Parse(error) => Parse(error.into_proto()),
+            EvalError::ParseHex(error) => ParseHex(error.into_proto()),
             EvalError::Internal(v) => Internal(v.clone()),
             EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.clone()),
             EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.clone()),
@@ -1831,8 +1832,8 @@ impl TryFrom<ProtoEvalError> for EvalError {
                 UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
                 UnsupportedUnits(v) => Ok(EvalError::UnsupportedUnits(v.units, v.typ)),
                 UnterminatedLikeEscapeSequence(()) => Ok(EvalError::UnterminatedLikeEscapeSequence),
-                Parse(error) => Ok(EvalError::Parse(error.try_into()?)),
-                ParseHex(error) => Ok(EvalError::ParseHex(error.try_into()?)),
+                Parse(error) => Ok(EvalError::Parse(error.into_rust()?)),
+                ParseHex(error) => Ok(EvalError::ParseHex(error.into_rust()?)),
                 Internal(v) => Ok(EvalError::Internal(v)),
                 InfinityOutOfDomain(v) => Ok(EvalError::InfinityOutOfDomain(v)),
                 NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v)),
