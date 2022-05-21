@@ -65,19 +65,12 @@ contains:INCLUDE TOPIC not yet supported
   INCLUDE TIMESTAMP as myts, TOPIC
 contains:INCLUDE TOPIC not yet supported
 
-> CREATE MATERIALIZED SOURCE avro_data_conflict
+! CREATE MATERIALIZED SOURCE avro_data_conflict
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
-
-! SELECT id, b FROM avro_data_conflict
-contains:column reference "id" is ambiguous
-
-> SELECT * FROM avro_data_conflict
-id id b
--------
-1 2 3
+contains: column "id" specified more than once
 
 > CREATE MATERIALIZED SOURCE avro_data_explicit (key_id, id, b)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-${testdrive.seed}'

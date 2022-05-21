@@ -131,33 +131,14 @@ $ set schemaheaders={
 
 $ kafka-create-topic topic=headers_conflict
 
-> CREATE MATERIALIZED SOURCE headers_conflict
+! CREATE MATERIALIZED SOURCE headers_conflict
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-headers_conflict-${testdrive.seed}'
   KEY FORMAT AVRO USING SCHEMA '${keyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schemaheaders}'
   INCLUDE HEADERS
   ENVELOPE UPSERT
-
-# conflict!!
-! SELECT headers from headers_conflict
-contains:column reference "headers" is ambiguous
-
-# both columns exist
-> SHOW COLUMNS from headers_conflict
-name       nullable  type
--------------------------
-headers    false     list
-headers    false     text
-key        false     text
-
-$ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${keyschema} schema=${schemaheaders} headers={"gus": "hmm"}
-{"key": "fish"} {"headers": "value"}
-
-> SELECT count(*) from headers_conflict
-count
------
-1
+contains: column "headers" specified more than once
 
 # No meaningful way to get data out in td because of the ambiguous name
 # + weird type

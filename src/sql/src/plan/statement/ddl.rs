@@ -916,6 +916,11 @@ pub fn plan_create_source(
 
     desc = plan_utils::maybe_rename_columns(format!("source {}", name), desc, &col_names)?;
 
+    let names: Vec<_> = desc.iter_names().cloned().collect();
+    if let Some(dup) = names.iter().duplicates().next() {
+        bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
     // Apply user-specified key constraint
     if let Some(KeyConstraint::PrimaryKeyNotEnforced { columns }) = key_constraint.clone() {
         let key_columns = columns
