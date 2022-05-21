@@ -496,10 +496,10 @@ impl Action for FailSqlAction {
 impl FailSqlAction {
     async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         match state.pgclient.query(query, &[]).await {
-            Ok(_) => bail!("query succeeded, but expected {}", self.expected_error,),
+            Ok(_) => bail!("query succeeded, but expected {}", self.expected_error),
             Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
                 Some(err) => {
-                    let mut err_string = err.to_string();
+                    let mut err_string = err.message().to_string();
                     if let Some(regex) = &state.regex {
                         err_string = regex
                             .replace_all(&err_string, state.regex_replacement.as_str())
