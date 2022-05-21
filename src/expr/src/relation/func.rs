@@ -16,7 +16,6 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
 use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::proto::TryIntoIfSome;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -1124,16 +1123,12 @@ impl Arbitrary for AggregateFunc {
 impl RustType<ProtoColumnOrders> for Vec<ColumnOrder> {
     fn into_proto(&self) -> ProtoColumnOrders {
         ProtoColumnOrders {
-            orders: self.iter().map(Into::into).collect(),
+            orders: self.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoColumnOrders) -> Result<Self, TryFromProtoError> {
-        proto
-            .orders
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<_, _>>()
+        proto.orders.into_rust()
     }
 }
 
@@ -1200,14 +1195,14 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     window_frame,
                 } => Kind::FirstValue(proto_aggregate_func::ProtoWindowFrame {
                     order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into()),
+                    window_frame: Some(window_frame.into_proto()),
                 }),
                 AggregateFunc::LastValue {
                     order_by,
                     window_frame,
                 } => Kind::LastValue(proto_aggregate_func::ProtoWindowFrame {
                     order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into()),
+                    window_frame: Some(window_frame.into_proto()),
                 }),
                 AggregateFunc::Dummy => Kind::Dummy(()),
             }),
@@ -1294,7 +1289,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     .into_rust_if_some("ProtoWindowFrame::order_by")?,
                 window_frame: pfv
                     .window_frame
-                    .try_into_if_some("ProtoWindowFrame::window_frame")?,
+                    .into_rust_if_some("ProtoWindowFrame::window_frame")?,
             },
             Kind::LastValue(pfv) => AggregateFunc::LastValue {
                 order_by: pfv
@@ -1302,7 +1297,7 @@ impl RustType<ProtoAggregateFunc> for AggregateFunc {
                     .into_rust_if_some("ProtoWindowFrame::order_by")?,
                 window_frame: pfv
                     .window_frame
-                    .try_into_if_some("ProtoWindowFrame::window_frame")?,
+                    .into_rust_if_some("ProtoWindowFrame::window_frame")?,
             },
             Kind::Dummy(()) => AggregateFunc::Dummy,
         })

@@ -73,7 +73,6 @@ use mz_repr::proto::newapi::ProtoType;
 use mz_repr::proto::newapi::RustType;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
-use mz_repr::proto::TryIntoIfSome;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
@@ -275,7 +274,7 @@ impl From<&(usize, usize, AggregateExpr)> for proto_accumulable_plan::ProtoAggr 
         Self {
             index_agg: x.0.into_proto(),
             index_inp: x.1.into_proto(),
-            expr: Some((&x.2).into()),
+            expr: Some(x.2.into_proto()),
         }
     }
 }
@@ -287,7 +286,7 @@ impl TryFrom<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr
         Ok((
             x.index_agg.into_rust()?,
             x.index_inp.into_rust()?,
-            x.expr.try_into_if_some("ProtoAggr::expr")?,
+            x.expr.into_rust_if_some("ProtoAggr::expr")?,
         ))
     }
 }
@@ -295,7 +294,7 @@ impl TryFrom<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr
 impl From<&AccumulablePlan> for ProtoAccumulablePlan {
     fn from(x: &AccumulablePlan) -> Self {
         Self {
-            full_aggrs: x.full_aggrs.iter().map(Into::into).collect(),
+            full_aggrs: x.full_aggrs.into_proto(),
             simple_aggrs: x.simple_aggrs.iter().map(Into::into).collect(),
             distinct_aggrs: x.distinct_aggrs.iter().map(Into::into).collect(),
         }
@@ -307,11 +306,7 @@ impl TryFrom<ProtoAccumulablePlan> for AccumulablePlan {
 
     fn try_from(x: ProtoAccumulablePlan) -> Result<Self, Self::Error> {
         Ok(Self {
-            full_aggrs: x
-                .full_aggrs
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            full_aggrs: x.full_aggrs.into_rust()?,
             simple_aggrs: x
                 .simple_aggrs
                 .into_iter()
@@ -481,7 +476,7 @@ impl From<&(usize, AggregateExpr)> for proto_basic_plan::ProtoSingleBasicPlan {
     fn from(x: &(usize, AggregateExpr)) -> proto_basic_plan::ProtoSingleBasicPlan {
         Self {
             index: x.0.into_proto(),
-            expr: Some((&x.1).into()),
+            expr: Some(x.1.into_proto()),
         }
     }
 }
@@ -492,7 +487,7 @@ impl TryFrom<proto_basic_plan::ProtoSingleBasicPlan> for (usize, AggregateExpr) 
     fn try_from(x: proto_basic_plan::ProtoSingleBasicPlan) -> Result<Self, Self::Error> {
         Ok((
             x.index.into_rust()?,
-            x.expr.try_into_if_some("ProtoSingleBasicPlan::expr")?,
+            x.expr.into_rust_if_some("ProtoSingleBasicPlan::expr")?,
         ))
     }
 }
@@ -506,7 +501,7 @@ impl From<&BasicPlan> for ProtoBasicPlan {
                 BasicPlan::Single(index, expr) => Kind::Single({
                     ProtoSingleBasicPlan {
                         index: index.into_proto(),
-                        expr: Some(expr.into()),
+                        expr: Some(expr.into_proto()),
                     }
                 }),
                 BasicPlan::Multiple(aggrs) => Kind::Multiple(ProtoMultipleBasicPlan {
@@ -538,9 +533,10 @@ impl TryFrom<ProtoBasicPlan> for BasicPlan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoBasicPlan::kind"))?;
 
         Ok(match kind {
-            Kind::Single(x) => {
-                BasicPlan::Single(x.index.into_rust()?, x.expr.try_into_if_some("")?)
-            }
+            Kind::Single(x) => BasicPlan::Single(
+                x.index.into_rust()?,
+                x.expr.into_rust_if_some("ProtoSingleBasicPlan.expr")?,
+            ),
             Kind::Multiple(x) => BasicPlan::Multiple(x.try_into()?),
         })
     }

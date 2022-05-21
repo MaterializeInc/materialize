@@ -147,7 +147,7 @@ impl RustType<ProtoPeek> for Peek {
             key: self.key.into_proto(),
             uuid: Some(self.uuid.into_proto()),
             timestamp: self.timestamp,
-            finishing: Some((&self.finishing).into()),
+            finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             target_replica: self.target_replica,
         }
@@ -157,12 +157,9 @@ impl RustType<ProtoPeek> for Peek {
         Ok(Self {
             id: x.id.into_rust_if_some("ProtoPeek::id")?,
             key: x.key.into_rust()?,
-            uuid: Uuid::from_proto(
-                x.uuid
-                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoPeek::uuid"))?,
-            )?,
+            uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
             timestamp: x.timestamp,
-            finishing: x.finishing.try_into_if_some("ProtoPeek::finishing")?,
+            finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
             map_filter_project: x
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,

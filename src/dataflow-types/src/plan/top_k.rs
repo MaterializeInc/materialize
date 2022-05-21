@@ -23,7 +23,10 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::ColumnOrder;
-use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+use mz_repr::proto::{
+    newapi::{ProtoType, RustType},
+    ProtoRepr, TryFromProtoError,
+};
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.top_k.rs"));
 
@@ -144,8 +147,8 @@ pub struct MonotonicTop1Plan {
 impl From<&MonotonicTop1Plan> for ProtoMonotonicTop1Plan {
     fn from(x: &MonotonicTop1Plan) -> Self {
         ProtoMonotonicTop1Plan {
-            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
-            order_key: x.order_key.iter().map(Into::into).collect(),
+            group_key: x.group_key.into_proto(),
+            order_key: x.order_key.into_proto(),
         }
     }
 }
@@ -155,16 +158,8 @@ impl TryFrom<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
 
     fn try_from(x: ProtoMonotonicTop1Plan) -> Result<Self, Self::Error> {
         Ok(MonotonicTop1Plan {
-            group_key: x
-                .group_key
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            order_key: x
-                .order_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
+            group_key: x.group_key.into_rust()?,
+            order_key: x.order_key.into_rust()?,
         })
     }
 }
@@ -186,8 +181,8 @@ pub struct MonotonicTopKPlan {
 impl From<&MonotonicTopKPlan> for ProtoMonotonicTopKPlan {
     fn from(x: &MonotonicTopKPlan) -> Self {
         ProtoMonotonicTopKPlan {
-            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
-            order_key: x.order_key.iter().map(Into::into).collect(),
+            group_key: x.group_key.into_proto(),
+            order_key: x.order_key.into_proto(),
             limit: x.limit.into_proto(),
             arity: x.arity.into_proto(),
         }
@@ -199,18 +194,10 @@ impl TryFrom<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
 
     fn try_from(x: ProtoMonotonicTopKPlan) -> Result<Self, Self::Error> {
         Ok(MonotonicTopKPlan {
-            group_key: x
-                .group_key
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            order_key: x
-                .order_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            limit: Option::<usize>::from_proto(x.limit)?,
-            arity: usize::from_proto(x.arity)?,
+            group_key: x.group_key.into_rust()?,
+            order_key: x.order_key.into_rust()?,
+            limit: x.limit.into_rust()?,
+            arity: x.arity.into_rust()?,
         })
     }
 }
@@ -237,8 +224,8 @@ pub struct BasicTopKPlan {
 impl From<&BasicTopKPlan> for ProtoBasicTopKPlan {
     fn from(x: &BasicTopKPlan) -> Self {
         ProtoBasicTopKPlan {
-            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
-            order_key: x.order_key.iter().map(Into::into).collect(),
+            group_key: x.group_key.into_proto(),
+            order_key: x.order_key.into_proto(),
             limit: x.limit.into_proto(),
             offset: x.offset.into_proto(),
             arity: x.arity.into_proto(),
@@ -251,19 +238,11 @@ impl TryFrom<ProtoBasicTopKPlan> for BasicTopKPlan {
 
     fn try_from(x: ProtoBasicTopKPlan) -> Result<Self, Self::Error> {
         Ok(BasicTopKPlan {
-            group_key: x
-                .group_key
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            order_key: x
-                .order_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            limit: Option::<usize>::from_proto(x.limit)?,
-            offset: usize::from_proto(x.offset)?,
-            arity: usize::from_proto(x.arity)?,
+            group_key: x.group_key.into_rust()?,
+            order_key: x.order_key.into_rust()?,
+            limit: x.limit.into_rust()?,
+            offset: x.offset.into_rust()?,
+            arity: x.arity.into_rust()?,
         })
     }
 }
