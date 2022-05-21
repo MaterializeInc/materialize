@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::EvalError;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
-use mz_repr::proto::newapi::{ProtoType, RustType};
-use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use proto_matcher_impl::ProtoSubpatternVec;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));
 
@@ -124,26 +124,22 @@ impl Matcher {
     }
 }
 
-impl From<&Matcher> for ProtoMatcher {
-    fn from(x: &Matcher) -> Self {
+impl RustType<ProtoMatcher> for Matcher {
+    fn into_proto(&self) -> ProtoMatcher {
         ProtoMatcher {
-            pattern: x.pattern.clone(),
-            case_insensitive: x.case_insensitive,
-            matcher_impl: Some((&x.matcher_impl).into()),
+            pattern: self.pattern.clone(),
+            case_insensitive: self.case_insensitive,
+            matcher_impl: Some(self.matcher_impl.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoMatcher> for Matcher {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMatcher) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoMatcher) -> Result<Self, TryFromProtoError> {
         Ok(Matcher {
-            pattern: x.pattern,
-            case_insensitive: x.case_insensitive,
-            matcher_impl: x
+            pattern: proto.pattern,
+            case_insensitive: proto.case_insensitive,
+            matcher_impl: proto
                 .matcher_impl
-                .try_into_if_some("ProtoMatcher::matcher_impl")?,
+                .into_rust_if_some("ProtoMatcher::matcher_impl")?,
         })
     }
 }
@@ -154,36 +150,36 @@ enum MatcherImpl {
     Regex(#[serde(with = "serde_regex")] Regex),
 }
 
-impl From<&MatcherImpl> for ProtoMatcherImpl {
-    fn from(x: &MatcherImpl) -> Self {
+impl RustType<ProtoMatcherImpl> for MatcherImpl {
+    fn into_proto(&self) -> ProtoMatcherImpl {
         use proto_matcher_impl::Kind::*;
-        use proto_matcher_impl::ProtoSubpatternVec;
         ProtoMatcherImpl {
-            kind: Some(match x {
-                MatcherImpl::String(subpatterns) => String(ProtoSubpatternVec {
-                    vec: subpatterns.iter().map(Into::into).collect(),
-                }),
-                MatcherImpl::Regex(regex) => Regex(regex.clone().into_proto()),
+            kind: Some(match self {
+                MatcherImpl::String(subpatterns) => String(subpatterns.into_proto()),
+                MatcherImpl::Regex(regex) => Regex(regex.into_proto()),
             }),
+        }
+    }
+
+    fn from_proto(proto: ProtoMatcherImpl) -> Result<Self, TryFromProtoError> {
+        use proto_matcher_impl::Kind::*;
+        match proto.kind {
+            Some(String(subpatterns)) => Ok(MatcherImpl::String(subpatterns.into_rust()?)),
+            Some(Regex(regex)) => Ok(MatcherImpl::Regex(regex.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field("ProtoMatcherImpl::kind")),
         }
     }
 }
 
-impl TryFrom<ProtoMatcherImpl> for MatcherImpl {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMatcherImpl) -> Result<Self, Self::Error> {
-        use proto_matcher_impl::Kind::*;
-        use proto_matcher_impl::ProtoSubpatternVec;
-        match x.kind {
-            Some(String(ProtoSubpatternVec { vec })) => Ok(MatcherImpl::String(
-                vec.into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            Some(Regex(regex)) => Ok(MatcherImpl::Regex(regex.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field("ProtoMatcherImpl::kind")),
+impl RustType<ProtoSubpatternVec> for Vec<Subpattern> {
+    fn into_proto(self: &Self) -> ProtoSubpatternVec {
+        ProtoSubpatternVec {
+            vec: self.into_proto(),
         }
+    }
+
+    fn from_proto(proto: ProtoSubpatternVec) -> Result<Self, TryFromProtoError> {
+        proto.vec.into_rust()
     }
 }
 
@@ -296,24 +292,20 @@ impl Subpattern {
     }
 }
 
-impl From<&Subpattern> for ProtoSubpattern {
-    fn from(x: &Subpattern) -> Self {
+impl RustType<ProtoSubpattern> for Subpattern {
+    fn into_proto(&self) -> ProtoSubpattern {
         ProtoSubpattern {
-            consume: x.consume.into_proto(),
-            many: x.many,
-            suffix: x.suffix.clone(),
+            consume: self.consume.into_proto(),
+            many: self.many,
+            suffix: self.suffix.clone(),
         }
     }
-}
 
-impl TryFrom<ProtoSubpattern> for Subpattern {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoSubpattern) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoSubpattern) -> Result<Self, TryFromProtoError> {
         Ok(Subpattern {
-            consume: x.consume.into_rust()?,
-            many: x.many,
-            suffix: x.suffix,
+            consume: proto.consume.into_rust()?,
+            many: proto.many,
+            suffix: proto.suffix,
         })
     }
 }
