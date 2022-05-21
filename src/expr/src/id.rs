@@ -56,24 +56,20 @@ impl fmt::Display for Id {
     }
 }
 
-impl From<&Id> for ProtoId {
-    fn from(x: &Id) -> Self {
+impl RustType<ProtoId> for Id {
+    fn into_proto(&self) -> ProtoId {
         ProtoId {
-            kind: Some(match x {
+            kind: Some(match self {
                 Id::Global(g) => proto_id::Kind::Global(g.into_proto()),
-                Id::Local(l) => proto_id::Kind::Local(l.into()),
+                Id::Local(l) => proto_id::Kind::Local(l.into_proto()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoId> for Id {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoId) -> Result<Self, Self::Error> {
-        match x.kind {
+    fn from_proto(proto: ProtoId) -> Result<Self, TryFromProtoError> {
+        match proto.kind {
             Some(proto_id::Kind::Global(x)) => Ok(Id::Global(x.into_rust()?)),
-            Some(proto_id::Kind::Local(x)) => Ok(Id::Local(x.try_into()?)),
+            Some(proto_id::Kind::Local(x)) => Ok(Id::Local(x.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoId::kind")),
         }
     }
@@ -110,17 +106,13 @@ impl fmt::Display for LocalId {
     }
 }
 
-impl From<&LocalId> for ProtoLocalId {
-    fn from(x: &LocalId) -> Self {
-        ProtoLocalId { value: x.0 }
+impl RustType<ProtoLocalId> for LocalId {
+    fn into_proto(&self) -> ProtoLocalId {
+        ProtoLocalId { value: self.0 }
     }
-}
 
-impl TryFrom<ProtoLocalId> for LocalId {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoLocalId) -> Result<Self, Self::Error> {
-        Ok(LocalId::new(x.value))
+    fn from_proto(proto: ProtoLocalId) -> Result<Self, TryFromProtoError> {
+        Ok(LocalId::new(proto.value))
     }
 }
 
@@ -181,25 +173,23 @@ impl FromStr for PartitionId {
     }
 }
 
-impl From<&PartitionId> for ProtoPartitionId {
-    fn from(x: &PartitionId) -> Self {
+impl RustType<ProtoPartitionId> for PartitionId {
+    fn into_proto(&self) -> ProtoPartitionId {
+        use proto_partition_id::Kind::*;
         ProtoPartitionId {
-            kind: Some(match x {
-                PartitionId::Kafka(x) => proto_partition_id::Kind::Kafka(*x),
-                PartitionId::None => proto_partition_id::Kind::None(()),
+            kind: Some(match self {
+                PartitionId::Kafka(x) => Kafka(*x),
+                PartitionId::None => None(()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoPartitionId> for PartitionId {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoPartitionId) -> Result<Self, Self::Error> {
-        match x.kind {
-            Some(proto_partition_id::Kind::Kafka(x)) => Ok(PartitionId::Kafka(x)),
-            Some(proto_partition_id::Kind::None(_)) => Ok(PartitionId::None),
-            None => Err(TryFromProtoError::missing_field("ProtoPartitionId::kind")),
+    fn from_proto(proto: ProtoPartitionId) -> Result<Self, TryFromProtoError> {
+        use proto_partition_id::Kind::*;
+        match proto.kind {
+            Option::Some(Kafka(x)) => Ok(PartitionId::Kafka(x)),
+            Option::Some(None(_)) => Ok(PartitionId::None),
+            Option::None => Err(TryFromProtoError::missing_field("ProtoPartitionId::kind")),
         }
     }
 }
@@ -210,7 +200,7 @@ impl mz_persist_types::Codec for PartitionId {
     }
 
     fn encode<B: BufMut>(&self, buf: &mut B) {
-        ProtoPartitionId::from(self)
+        self.into_proto()
             .encode(buf)
             .expect("provided buffer had sufficient capacity")
     }
@@ -218,7 +208,7 @@ impl mz_persist_types::Codec for PartitionId {
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
         ProtoPartitionId::decode(buf)
             .map_err(|err| err.to_string())?
-            .try_into()
+            .into_rust()
             .map_err(|err: TryFromProtoError| err.to_string())
     }
 }
@@ -226,7 +216,7 @@ impl mz_persist_types::Codec for PartitionId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

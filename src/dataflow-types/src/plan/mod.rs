@@ -544,12 +544,12 @@ impl From<&Plan> for ProtoPlan {
             kind: Some(match x {
                 Plan::Constant { rows } => Constant(rows.into()),
                 Plan::Get { id, keys, plan } => Get(ProtoPlanGet {
-                    id: Some(id.into()),
+                    id: Some(id.into_proto()),
                     keys: Some(keys.into()),
                     plan: Some(plan.into()),
                 }),
                 Plan::Let { id, value, body } => Let(ProtoPlanLet {
-                    id: Some(id.into()),
+                    id: Some(id.into_proto()),
                     value: value.into(),
                     body: body.into(),
                 }
@@ -722,12 +722,12 @@ impl TryFrom<ProtoPlan> for Plan {
                 }
             }
             Get(proto) => Plan::Get {
-                id: proto.id.try_into_if_some("ProtoPlanGet::id")?,
+                id: proto.id.into_rust_if_some("ProtoPlanGet::id")?,
                 keys: proto.keys.try_into_if_some("ProtoPlanGet::keys")?,
                 plan: proto.plan.try_into_if_some("ProtoPlanGet::plan")?,
             },
             Let(proto) => Plan::Let {
-                id: proto.id.try_into_if_some("ProtoPlanLet::id")?,
+                id: proto.id.into_rust_if_some("ProtoPlanLet::id")?,
                 value: proto.value.try_into_if_some("ProtoPlanLet::value")?,
                 body: proto.body.try_into_if_some("ProtoPlanLet::body")?,
             },
