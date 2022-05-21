@@ -236,5 +236,8 @@ ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
+# Ensure any Rust binaries that crash print a backtrace.
+ENV RUST_BACKTRACE=1
+
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +

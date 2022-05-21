@@ -13,8 +13,6 @@
 
 set -euo pipefail
 
-export RUST_BACKTRACE=full
-
 tests=(
     test/sqllogictest/*.slt
     test/sqllogictest/qgm/*.slt
