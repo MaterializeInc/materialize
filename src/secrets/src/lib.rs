@@ -27,9 +27,13 @@ pub trait SecretsController: Send + Sync {
     /// Implementations are permitted to reject combinations of operations which
     /// they cannot apply atomically.
     async fn apply(&mut self, ops: Vec<SecretOp>) -> Result<(), anyhow::Error>;
+
+    /// Returns true, if the controller supports multiple ops in a single atomic apply call
+    fn supports_multi_statement_txn(&self) -> bool;
 }
 
 /// An operation on a [`SecretsController`].
+#[derive(Debug, Clone, PartialEq)]
 pub enum SecretOp {
     /// Create or update the contents of a secret.
     Ensure {
