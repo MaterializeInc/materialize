@@ -98,10 +98,6 @@ try_finish() {
     exit 0
 }
 
-ci_init() {
-    export RUST_BACKTRACE=full
-}
-
 ci_collapsed_heading() {
     echo "---" "$@" >&2
 }

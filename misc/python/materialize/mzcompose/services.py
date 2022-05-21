@@ -46,7 +46,6 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -135,7 +134,6 @@ class Computed(Service):
             environment = [
                 "COMPUTED_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
             ]
 
         if volumes is None:
@@ -521,7 +519,6 @@ class Testdrive(Service):
             environment = [
                 "TMPDIR=/share/tmp",
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -623,12 +620,10 @@ class SqlLogicTest(Service):
         name: str = "sqllogictest-svc",
         mzbuild: str = "sqllogictest",
         environment: List[str] = [
-            "RUST_BACKTRACE=full",
             "PGUSER=postgres",
             "PGHOST=postgres",
             "PGPASSWORD=postgres",
             "MZ_SOFT_ASSERTIONS=1",
-            "RUST_BACKTRACE=1",
         ],
         volumes: List[str] = ["../..:/workdir"],
         depends_on: List[str] = ["postgres"],

@@ -11,8 +11,6 @@
 
 set -euo pipefail
 
-export RUST_BACKTRACE=full
-
 passed=0
 total=0
 
