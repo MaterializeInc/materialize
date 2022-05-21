@@ -24,7 +24,6 @@ use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::proto::TryIntoIfSome;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
@@ -1498,7 +1497,7 @@ impl RustType<ProtoAggregateExpr> for AggregateExpr {
     fn into_proto(&self) -> ProtoAggregateExpr {
         ProtoAggregateExpr {
             func: Some(self.func.into_proto()),
-            expr: Some((&self.expr).into()),
+            expr: Some(self.expr.into_proto()),
             distinct: self.distinct,
         }
     }
@@ -1506,7 +1505,7 @@ impl RustType<ProtoAggregateExpr> for AggregateExpr {
     fn from_proto(proto: ProtoAggregateExpr) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             func: proto.func.into_rust_if_some("ProtoAggregateExpr::func")?,
-            expr: proto.expr.try_into_if_some("ProtoAggregateExpr::expr")?,
+            expr: proto.expr.into_rust_if_some("ProtoAggregateExpr::expr")?,
             distinct: proto.distinct,
         })
     }

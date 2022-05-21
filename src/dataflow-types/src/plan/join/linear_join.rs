@@ -19,6 +19,8 @@ use mz_expr::MapFilterProject;
 use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::MirScalarExpr;
+use mz_repr::proto::newapi::ProtoType;
+use mz_repr::proto::newapi::RustType;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
@@ -101,7 +103,7 @@ impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
 impl From<&Vec<MirScalarExpr>> for ProtoMirScalarVec {
     fn from(x: &Vec<MirScalarExpr>) -> Self {
         Self {
-            values: x.iter().map(Into::into).collect(),
+            values: x.into_proto(),
         }
     }
 }
@@ -110,7 +112,7 @@ impl TryFrom<ProtoMirScalarVec> for Vec<MirScalarExpr> {
     type Error = TryFromProtoError;
 
     fn try_from(x: ProtoMirScalarVec) -> Result<Self, Self::Error> {
-        x.values.into_iter().map(TryInto::try_into).collect()
+        x.values.into_rust()
     }
 }
 
@@ -156,9 +158,9 @@ impl From<&LinearStagePlan> for ProtoLinearStagePlan {
     fn from(x: &LinearStagePlan) -> Self {
         Self {
             lookup_relation: x.lookup_relation.into_proto(),
-            stream_key: x.stream_key.iter().map(Into::into).collect(),
-            stream_thinning: x.stream_thinning.iter().map(|x| x.into_proto()).collect(),
-            lookup_key: x.lookup_key.iter().map(Into::into).collect(),
+            stream_key: x.stream_key.into_proto(),
+            stream_thinning: x.stream_thinning.into_proto(),
+            lookup_key: x.lookup_key.into_proto(),
             closure: Some(Into::into(&x.closure)),
         }
     }
@@ -170,23 +172,9 @@ impl TryFrom<ProtoLinearStagePlan> for LinearStagePlan {
     fn try_from(x: ProtoLinearStagePlan) -> Result<Self, Self::Error> {
         Ok(Self {
             lookup_relation: ProtoRepr::from_proto(x.lookup_relation)?,
-            stream_key: x
-                .stream_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            stream_thinning: x
-                .stream_thinning
-                .into_iter()
-                .map(ProtoRepr::from_proto)
-                .collect::<Result<_, _>>()?,
-
-            lookup_key: x
-                .lookup_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-
+            stream_key: x.stream_key.into_rust()?,
+            stream_thinning: x.stream_thinning.into_rust()?,
+            lookup_key: x.lookup_key.into_rust()?,
             closure: x
                 .closure
                 .try_into_if_some("ProtoLinearStagePlan::closure")?,

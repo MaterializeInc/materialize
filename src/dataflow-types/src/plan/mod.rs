@@ -505,7 +505,7 @@ impl From<&Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>>
         proto_plan::ProtoPlanConstant {
             result: Some(match x {
                 Ok(rows) => proto_plan::proto_plan_constant::Result::Rows(rows.into()),
-                Err(err) => proto_plan::proto_plan_constant::Result::Err(err.into()),
+                Err(err) => proto_plan::proto_plan_constant::Result::Err(err.into_proto()),
             }),
         }
     }
@@ -526,7 +526,7 @@ impl From<&Plan> for ProtoPlan {
             x: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
         ) -> Option<ProtoPlanInputKeyVal> {
             x.as_ref().map(|(key, val)| ProtoPlanInputKeyVal {
-                key: key.iter().map(Into::into).collect(),
+                key: key.into_proto(),
                 val: val.into_proto(),
             })
         }
@@ -535,9 +535,8 @@ impl From<&Plan> for ProtoPlan {
             input_key: Option<&Vec<MirScalarExpr>>,
         ) -> Option<proto_plan::ProtoPlanInputKey> {
             input_key.map(|vec| ProtoPlanInputKey {
-                key: vec.iter().map(Into::into).collect(),
+                key: vec.into_proto(),
             })
-            // input_key.map(|x| x.iter().map(Into::into).collect())
         }
 
         Self {
@@ -574,7 +573,7 @@ impl From<&Plan> for ProtoPlan {
                     ProtoPlanFlatMap {
                         input: input.into(),
                         func: Some(func.into_proto()),
-                        exprs: exprs.iter().map(Into::into).collect(),
+                        exprs: exprs.into_proto(),
                         mfp: Some(mfp.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
                     }
@@ -680,11 +679,7 @@ impl TryFrom<ProtoPlan> for Plan {
             input_key: Option<ProtoPlanInputKey>,
         ) -> Result<Option<Vec<MirScalarExpr>>, TryFromProtoError> {
             Ok(match input_key {
-                Some(proto_plan::ProtoPlanInputKey { key }) => Some(
-                    key.into_iter()
-                        .map(TryFrom::try_from)
-                        .collect::<Result<_, _>>()?,
-                ),
+                Some(proto_plan::ProtoPlanInputKey { key }) => Some(key.into_rust()?),
                 None => None,
             })
         }
@@ -693,14 +688,7 @@ impl TryFrom<ProtoPlan> for Plan {
             input_key_val: Option<ProtoPlanInputKeyVal>,
         ) -> Result<Option<(Vec<MirScalarExpr>, Option<Row>)>, TryFromProtoError> {
             Ok(match input_key_val {
-                Some(inner) => Some((
-                    inner
-                        .key
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<_, _>>()?,
-                    inner.val.into_rust()?,
-                )),
+                Some(inner) => Some((inner.key.into_rust()?, inner.val.into_rust()?)),
                 None => None,
             })
         }
@@ -717,7 +705,7 @@ impl TryFrom<ProtoPlan> for Plan {
                 Plan::Constant {
                     rows: match result {
                         proto_plan_constant::Result::Rows(rows) => Ok(rows.try_into()?),
-                        proto_plan_constant::Result::Err(eval_err) => Err(eval_err.try_into()?),
+                        proto_plan_constant::Result::Err(eval_err) => Err(eval_err.into_rust()?),
                     },
                 }
             }
@@ -739,11 +727,7 @@ impl TryFrom<ProtoPlan> for Plan {
             FlatMap(proto) => Plan::FlatMap {
                 input: proto.input.try_into_if_some("")?,
                 func: proto.func.into_rust_if_some("")?,
-                exprs: proto
-                    .exprs
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
+                exprs: proto.exprs.into_rust()?,
                 mfp: proto.mfp.into_rust_if_some("")?,
                 input_key: input_k_try_into(proto.input_key)?,
             },
@@ -820,7 +804,7 @@ impl From<&GetPlan> for ProtoGetPlan {
                 GetPlan::PassArrangements => PassArrangements(()),
                 GetPlan::Arrangement(k, s, m) => {
                     Arrangement(proto_get_plan::ProtoGetPlanArrangement {
-                        key: k.iter().map(Into::into).collect(),
+                        key: k.into_proto(),
                         seek: s.into_proto(),
                         mfp: Some(m.into_proto()),
                     })
@@ -841,9 +825,7 @@ impl TryFrom<ProtoGetPlan> for GetPlan {
             Some(PassArrangements(())) => Ok(GetPlan::PassArrangements),
             Some(Arrangement(ProtoGetPlanArrangement { key, seek, mfp })) => {
                 Ok(GetPlan::Arrangement(
-                    key.into_iter()
-                        .map(TryFrom::try_from)
-                        .collect::<Result<_, _>>()?,
+                    key.into_rust()?,
                     seek.into_rust()?,
                     mfp.into_rust_if_some("ProtoGetPlanArrangement::mfp")?,
                 ))

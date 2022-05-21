@@ -11,10 +11,10 @@ use std::collections::{HashMap, HashSet};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::newapi::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::proto::TryIntoIfSome;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row};
 
+use self::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -89,44 +89,38 @@ impl Arbitrary for MapFilterProject {
 impl RustType<ProtoMapFilterProject> for MapFilterProject {
     fn into_proto(&self) -> ProtoMapFilterProject {
         ProtoMapFilterProject {
-            expressions: self.expressions.iter().map(Into::into).collect(),
-            predicates: self
-                .predicates
-                .iter()
-                .map(|(col, pred)| proto_map_filter_project::ProtoPredicate {
-                    column_to_apply: col.into_proto(),
-                    predicate: Some(pred.into()),
-                })
-                .collect(),
-            projection: self.projection.iter().map(|i| i.into_proto()).collect(),
+            expressions: self.expressions.into_proto(),
+            predicates: self.predicates.into_proto(),
+            projection: self.projection.into_proto(),
             input_arity: self.input_arity.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoMapFilterProject) -> Result<Self, TryFromProtoError> {
         Ok(MapFilterProject {
-            expressions: proto
-                .expressions
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
-            predicates: proto
-                .predicates
-                .into_iter()
-                .map::<Result<(usize, MirScalarExpr), TryFromProtoError>, _>(|x| {
-                    Ok((
-                        x.column_to_apply.into_rust()?,
-                        x.predicate.try_into_if_some("ProtoPredicate::predicate")?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            projection: proto
-                .projection
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
+            expressions: proto.expressions.into_rust()?,
+            predicates: proto.predicates.into_rust()?,
+            projection: proto.projection.into_rust()?,
             input_arity: proto.input_arity.into_rust()?,
         })
+    }
+}
+
+impl RustType<ProtoPredicate> for (usize, MirScalarExpr) {
+    fn into_proto(&self) -> ProtoPredicate {
+        ProtoPredicate {
+            column_to_apply: self.0.into_proto(),
+            predicate: Some(self.1.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoPredicate) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.column_to_apply.into_rust()?,
+            proto
+                .predicate
+                .into_rust_if_some("ProtoPredicate::predicate")?,
+        ))
     }
 }
 
@@ -1313,7 +1307,7 @@ pub mod plan {
 
     use std::collections::HashMap;
 
-    use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
+    use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
@@ -1460,24 +1454,16 @@ pub mod plan {
         fn into_proto(&self) -> ProtoMfpPlan {
             ProtoMfpPlan {
                 mfp: Some(self.mfp.into_proto()),
-                lower_bounds: self.lower_bounds.iter().map(Into::into).collect(),
-                upper_bounds: self.upper_bounds.iter().map(Into::into).collect(),
+                lower_bounds: self.lower_bounds.into_proto(),
+                upper_bounds: self.upper_bounds.into_proto(),
             }
         }
 
         fn from_proto(proto: ProtoMfpPlan) -> Result<Self, TryFromProtoError> {
             Ok(MfpPlan {
                 mfp: proto.mfp.into_rust_if_some("ProtoMfpPlan::mfp")?,
-                lower_bounds: proto
-                    .lower_bounds
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-                upper_bounds: proto
-                    .upper_bounds
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
+                lower_bounds: proto.lower_bounds.into_rust()?,
+                upper_bounds: proto.upper_bounds.into_rust()?,
             })
         }
     }

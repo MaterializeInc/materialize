@@ -30,7 +30,10 @@ use std::collections::HashMap;
 
 use crate::plan::any_arranged_thin;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+use mz_repr::proto::{
+    newapi::{ProtoType, RustType},
+    TryFromProtoError,
+};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -85,7 +88,7 @@ impl From<&(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)> for ProtoArr
     fn from(x: &(Vec<MirScalarExpr>, HashMap<usize, usize>, Vec<usize>)) -> Self {
         use proto_arrangement::ProtoArrangementPermutation;
         Self {
-            all_columns: x.0.iter().map(Into::into).collect(),
+            all_columns: x.0.into_proto(),
             permutation: x
                 .1
                 .iter()
@@ -112,17 +115,7 @@ impl TryFrom<ProtoArrangement> for (Vec<MirScalarExpr>, HashMap<usize, usize>, V
                 Ok((key?, val?))
             })
             .collect();
-        Ok((
-            x.all_columns
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
-            perm?,
-            x.thinning
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<_, _>>()?,
-        ))
+        Ok((x.all_columns.into_rust()?, perm?, x.thinning.into_rust()?))
     }
 }
 

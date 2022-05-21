@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
 use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
@@ -3020,7 +3020,7 @@ impl From<&IndexDesc> for ProtoIndexDesc {
     fn from(x: &IndexDesc) -> Self {
         ProtoIndexDesc {
             on_id: Some(x.on_id.into_proto()),
-            key: x.key.iter().map(Into::into).collect(),
+            key: x.key.into_proto(),
         }
     }
 }
@@ -3031,11 +3031,7 @@ impl TryFrom<ProtoIndexDesc> for IndexDesc {
     fn try_from(x: ProtoIndexDesc) -> Result<Self, Self::Error> {
         Ok(IndexDesc {
             on_id: x.on_id.into_rust_if_some("ProtoIndexDesc::on_id")?,
-            key: x
-                .key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
+            key: x.key.into_rust()?,
         })
     }
 }
@@ -3066,7 +3062,7 @@ pub struct LinearOperator {
 impl From<&LinearOperator> for ProtoLinearOperator {
     fn from(x: &LinearOperator) -> Self {
         ProtoLinearOperator {
-            predicates: x.predicates.iter().map(Into::into).collect(),
+            predicates: x.predicates.into_proto(),
             projection: x.projection.iter().map(|x| x.into_proto()).collect(),
         }
     }
@@ -3077,11 +3073,7 @@ impl TryFrom<ProtoLinearOperator> for LinearOperator {
 
     fn try_from(x: ProtoLinearOperator) -> Result<Self, Self::Error> {
         Ok(LinearOperator {
-            predicates: x
-                .predicates
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
+            predicates: x.predicates.into_rust()?,
             projection: x
                 .projection
                 .into_iter()

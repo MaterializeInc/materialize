@@ -42,7 +42,6 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::chrono::any_naive_datetime;
 use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::proto::TryIntoIfSome;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -3827,19 +3826,19 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastStringToArray(inner) => {
                 CastStringToArray(Box::new(ProtoCastToVariableType {
                     return_ty: Some(inner.return_ty.into_proto()),
-                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                    cast_expr: Some(inner.cast_expr.into_proto()),
                 }))
             }
             UnaryFunc::CastStringToList(inner) => {
                 CastStringToList(Box::new(ProtoCastToVariableType {
                     return_ty: Some(inner.return_ty.into_proto()),
-                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                    cast_expr: Some(inner.cast_expr.into_proto()),
                 }))
             }
             UnaryFunc::CastStringToMap(inner) => {
                 CastStringToMap(Box::new(ProtoCastToVariableType {
                     return_ty: Some(inner.return_ty.into_proto()),
-                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                    cast_expr: Some(inner.cast_expr.into_proto()),
                 }))
             }
             UnaryFunc::CastStringToTime(_) => CastStringToTime(()),
@@ -3894,7 +3893,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastRecord1ToRecord2(inner) => {
                 CastRecord1ToRecord2(ProtoCastRecord1ToRecord2 {
                     return_ty: Some(inner.return_ty.into_proto()),
-                    cast_exprs: inner.cast_exprs.iter().map(Into::into).collect(),
+                    cast_exprs: inner.cast_exprs.into_proto(),
                 })
             }
             UnaryFunc::CastArrayToString(func) => CastArrayToString(func.ty.into_proto()),
@@ -3902,7 +3901,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastList1ToList2(inner) => {
                 CastList1ToList2(Box::new(ProtoCastToVariableType {
                     return_ty: Some(inner.return_ty.into_proto()),
-                    cast_expr: Some(Box::new((&*inner.cast_expr).into())),
+                    cast_expr: Some(inner.cast_expr.into_proto()),
                 }))
             }
             UnaryFunc::CastArrayToListOneDim(_) => CastArrayToListOneDim(()),
@@ -4103,7 +4102,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                         .into_rust_if_some("ProtoCastStringToArray::return_ty")?,
                     cast_expr: inner
                         .cast_expr
-                        .try_into_if_some("ProtoCastStringToArray::cast_expr")?,
+                        .into_rust_if_some("ProtoCastStringToArray::cast_expr")?,
                 }
                 .into()),
                 CastStringToList(inner) => Ok(impls::CastStringToList {
@@ -4112,7 +4111,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                         .into_rust_if_some("ProtoCastStringToList::return_ty")?,
                     cast_expr: inner
                         .cast_expr
-                        .try_into_if_some("ProtoCastStringToList::cast_expr")?,
+                        .into_rust_if_some("ProtoCastStringToList::cast_expr")?,
                 }
                 .into()),
                 CastStringToMap(inner) => Ok(impls::CastStringToMap {
@@ -4121,7 +4120,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                         .into_rust_if_some("ProtoCastStringToMap::return_ty")?,
                     cast_expr: inner
                         .cast_expr
-                        .try_into_if_some("ProtoCastStringToMap::cast_expr")?,
+                        .into_rust_if_some("ProtoCastStringToMap::cast_expr")?,
                 }
                 .into()),
                 CastStringToTime(()) => Ok(impls::CastStringToTime.into()),
@@ -4187,11 +4186,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                     return_ty: inner
                         .return_ty
                         .into_rust_if_some("ProtoCastRecord1ToRecord2::return_ty")?,
-                    cast_exprs: inner
-                        .cast_exprs
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<_>, _>>()?,
+                    cast_exprs: inner.cast_exprs.into_rust()?,
                 }
                 .into()),
                 CastArrayToString(ty) => Ok(impls::CastArrayToString {
@@ -4208,7 +4203,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                         .into_rust_if_some("ProtoCastList1ToList2::return_ty")?,
                     cast_expr: inner
                         .cast_expr
-                        .try_into_if_some("ProtoCastList1ToList2::cast_expr")?,
+                        .into_rust_if_some("ProtoCastList1ToList2::cast_expr")?,
                 }
                 .into()),
                 CastArrayToListOneDim(()) => Ok(impls::CastArrayToListOneDim.into()),

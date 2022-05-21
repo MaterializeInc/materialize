@@ -27,6 +27,8 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
+use mz_repr::proto::newapi::ProtoType;
+use mz_repr::proto::newapi::RustType;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
@@ -133,7 +135,7 @@ impl From<&DeltaPathPlan> for ProtoDeltaPathPlan {
     fn from(x: &DeltaPathPlan) -> Self {
         Self {
             source_relation: x.source_relation.into_proto(),
-            source_key: x.source_key.iter().map(Into::into).collect(),
+            source_key: x.source_key.into_proto(),
             initial_closure: Some((&x.initial_closure).into()),
             stage_plans: x.stage_plans.iter().map(Into::into).collect(),
             final_closure: x.final_closure.as_ref().map(Into::into),
@@ -147,11 +149,7 @@ impl TryFrom<ProtoDeltaPathPlan> for DeltaPathPlan {
     fn try_from(x: ProtoDeltaPathPlan) -> Result<Self, Self::Error> {
         Ok(DeltaPathPlan {
             source_relation: x.source_relation.try_into()?,
-            source_key: x
-                .source_key
-                .into_iter()
-                .map(|x| x.try_into())
-                .collect::<Result<_, _>>()?,
+            source_key: x.source_key.into_rust()?,
             initial_closure: x
                 .initial_closure
                 .try_into_if_some("ProtoDeltaPathPlan::initial_closure")?,
@@ -216,9 +214,9 @@ impl From<&DeltaStagePlan> for ProtoDeltaStagePlan {
     fn from(x: &DeltaStagePlan) -> Self {
         Self {
             lookup_relation: x.lookup_relation.into_proto(),
-            stream_key: x.stream_key.iter().map(Into::into).collect(),
-            stream_thinning: x.stream_thinning.iter().map(|x| x.into_proto()).collect(),
-            lookup_key: x.lookup_key.iter().map(Into::into).collect(),
+            stream_key: x.stream_key.into_proto(),
+            stream_thinning: x.stream_thinning.into_proto(),
+            lookup_key: x.lookup_key.into_proto(),
             closure: Some((&x.closure).into()),
         }
     }
@@ -229,22 +227,10 @@ impl TryFrom<ProtoDeltaStagePlan> for DeltaStagePlan {
 
     fn try_from(x: ProtoDeltaStagePlan) -> Result<Self, Self::Error> {
         Ok(Self {
-            lookup_relation: usize::from_proto(x.lookup_relation)?,
-            stream_key: x
-                .stream_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            stream_thinning: x
-                .stream_thinning
-                .into_iter()
-                .map(ProtoRepr::from_proto)
-                .collect::<Result<_, _>>()?,
-            lookup_key: x
-                .lookup_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            lookup_relation: x.lookup_relation.into_rust()?,
+            stream_key: x.stream_key.into_rust()?,
+            stream_thinning: x.stream_thinning.into_rust()?,
+            lookup_key: x.lookup_key.into_rust()?,
             closure: x.closure.try_into_if_some("ProtoDeltaStagePlan::closure")?,
         })
     }

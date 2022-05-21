@@ -10,7 +10,7 @@
 use std::fmt::Display;
 
 use bytes::BufMut;
-use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -186,7 +186,7 @@ impl From<&DataflowError> for ProtoDataflowError {
         ProtoDataflowError {
             kind: Some(match error {
                 DataflowError::DecodeError(err) => Kind::DecodeError(err.into()),
-                DataflowError::EvalError(err) => Kind::EvalError(err.into()),
+                DataflowError::EvalError(err) => Kind::EvalError(err.into_proto()),
                 DataflowError::SourceError(err) => Kind::SourceError(err.into()),
             }),
         }
@@ -201,7 +201,7 @@ impl TryFrom<ProtoDataflowError> for DataflowError {
         match error.kind {
             Some(kind) => match kind {
                 Kind::DecodeError(err) => Ok(DataflowError::DecodeError(err.try_into()?)),
-                Kind::EvalError(err) => Ok(DataflowError::EvalError(err.try_into()?)),
+                Kind::EvalError(err) => Ok(DataflowError::EvalError(err.into_rust()?)),
                 Kind::SourceError(err) => Ok(DataflowError::SourceError(err.try_into()?)),
             },
             None => Err(TryFromProtoError::missing_field("ProtoDataflowError::kind")),

@@ -30,6 +30,7 @@ use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+use self::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
 use crate::scalar::func::parse_timezone;
 use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
@@ -133,119 +134,107 @@ impl Arbitrary for MirScalarExpr {
     }
 }
 
-impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: ProtoMirScalarExpr) -> Result<Self, Self::Error> {
-        use proto_mir_scalar_expr::Kind::*;
-        let kind = value
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
-        Ok(match kind {
-            Column(i) => MirScalarExpr::Column(usize::from_proto(i)?),
-            Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
-                lit.try_into_if_some("ProtoLiteral::lit")?,
-                typ.into_rust_if_some("ProtoLiteral::typ")?,
-            ),
-            CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.try_into()?),
-            CallUnary(call_unary) => MirScalarExpr::CallUnary {
-                func: call_unary.func.try_into_if_some("ProtoCallUnary::func")?,
-                expr: call_unary.expr.try_into_if_some("ProtoCallUnary::expr")?,
-            },
-            CallBinary(call_binary) => MirScalarExpr::CallBinary {
-                func: call_binary.func.try_into_if_some("ProtoCallBinary::func")?,
-                expr1: call_binary
-                    .expr1
-                    .try_into_if_some("ProtoCallBinary::expr1")?,
-                expr2: call_binary
-                    .expr2
-                    .try_into_if_some("ProtoCallBinary::expr2")?,
-            },
-            CallVariadic(ProtoCallVariadic { func, exprs }) => MirScalarExpr::CallVariadic {
-                func: func.try_into_if_some("ProtoCallVariadic::func")?,
-                exprs: exprs
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
-            If(if_struct) => MirScalarExpr::If {
-                cond: if_struct.cond.try_into_if_some("ProtoIf::cond")?,
-                then: if_struct.then.try_into_if_some("ProtoIf::then")?,
-                els: if_struct.els.try_into_if_some("ProtoIf::els")?,
-            },
-        })
-    }
-}
-
-impl TryFrom<Box<ProtoMirScalarExpr>> for Box<MirScalarExpr> {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: Box<ProtoMirScalarExpr>) -> Result<Self, Self::Error> {
-        Ok(Box::new((*value).try_into()?))
-    }
-}
-
-impl From<&MirScalarExpr> for ProtoMirScalarExpr {
-    fn from(value: &MirScalarExpr) -> Self {
+impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
+    fn into_proto(&self) -> ProtoMirScalarExpr {
         use proto_mir_scalar_expr::Kind::*;
         ProtoMirScalarExpr {
-            kind: Some(match value {
+            kind: Some(match self {
                 MirScalarExpr::Column(i) => Column(i.into_proto()),
                 MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
-                    lit: Some(lit.into()),
+                    lit: Some(lit.into_proto()),
                     typ: Some(typ.into_proto()),
                 }),
                 MirScalarExpr::CallUnmaterializable(func) => CallUnmaterializable(func.into()),
                 MirScalarExpr::CallUnary { func, expr } => CallUnary(Box::new(ProtoCallUnary {
                     func: Some(Box::new(func.into())),
-                    expr: Some(Box::new((&**expr).into())),
+                    expr: Some(expr.into_proto()),
                 })),
                 MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                     CallBinary(Box::new(ProtoCallBinary {
                         func: Some(func.into()),
-                        expr1: Some(Box::new((&**expr1).into())),
-                        expr2: Some(Box::new((&**expr2).into())),
+                        expr1: Some(expr1.into_proto()),
+                        expr2: Some(expr2.into_proto()),
                     }))
                 }
                 MirScalarExpr::CallVariadic { func, exprs } => CallVariadic(ProtoCallVariadic {
                     func: Some(func.into()),
-                    exprs: exprs.iter().map(Into::into).collect(),
+                    exprs: exprs.into_proto(),
                 }),
                 MirScalarExpr::If { cond, then, els } => If(Box::new(ProtoIf {
-                    cond: Some(Box::new((&**cond).into())),
-                    then: Some(Box::new((&**then).into())),
-                    els: Some(Box::new((&**els).into())),
+                    cond: Some(cond.into_proto()),
+                    then: Some(then.into_proto()),
+                    els: Some(els.into_proto()),
                 })),
             }),
         }
     }
+
+    fn from_proto(proto: ProtoMirScalarExpr) -> Result<Self, TryFromProtoError> {
+        use proto_mir_scalar_expr::Kind::*;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
+        Ok(match kind {
+            Column(i) => MirScalarExpr::Column(usize::from_proto(i)?),
+            Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
+                lit.into_rust_if_some("ProtoLiteral::lit")?,
+                typ.into_rust_if_some("ProtoLiteral::typ")?,
+            ),
+            CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.try_into()?),
+            CallUnary(call_unary) => MirScalarExpr::CallUnary {
+                func: call_unary.func.into_rust_if_some("ProtoCallUnary::func")?,
+                expr: call_unary.expr.into_rust_if_some("ProtoCallUnary::expr")?,
+            },
+            CallBinary(call_binary) => MirScalarExpr::CallBinary {
+                func: call_binary.func.try_into_if_some("ProtoCallBinary::func")?,
+                expr1: call_binary
+                    .expr1
+                    .into_rust_if_some("ProtoCallBinary::expr1")?,
+                expr2: call_binary
+                    .expr2
+                    .into_rust_if_some("ProtoCallBinary::expr2")?,
+            },
+            CallVariadic(ProtoCallVariadic { func, exprs }) => MirScalarExpr::CallVariadic {
+                func: func.try_into_if_some("ProtoCallVariadic::func")?,
+                exprs: exprs.into_rust()?,
+            },
+            If(if_struct) => MirScalarExpr::If {
+                cond: if_struct.cond.into_rust_if_some("ProtoIf::cond")?,
+                then: if_struct.then.into_rust_if_some("ProtoIf::then")?,
+                els: if_struct.els.into_rust_if_some("ProtoIf::els")?,
+            },
+        })
+    }
 }
 
-impl TryFrom<proto_literal::ProtoLiteralData> for Result<Row, EvalError> {
-    type Error = TryFromProtoError;
+impl IntoRustIfSome<UnaryFunc> for Option<Box<ProtoUnaryFunc>> {
+    fn into_rust_if_some<S: ToString>(self, field: S) -> Result<UnaryFunc, TryFromProtoError> {
+        let value = self.ok_or_else(|| TryFromProtoError::missing_field(field))?;
+        (*value).try_into()
+    }
+}
 
-    fn try_from(value: proto_literal::ProtoLiteralData) -> Result<Self, Self::Error> {
+impl RustType<proto_literal::ProtoLiteralData> for Result<Row, EvalError> {
+    fn into_proto(&self) -> proto_literal::ProtoLiteralData {
         use proto_literal::proto_literal_data::Result::*;
-        match value.result {
+        proto_literal::ProtoLiteralData {
+            result: Some(match self {
+                Result::Ok(row) => Ok(row.into_proto()),
+                Result::Err(err) => Err(err.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: proto_literal::ProtoLiteralData) -> Result<Self, TryFromProtoError> {
+        use proto_literal::proto_literal_data::Result::*;
+        match proto.result {
             Some(Ok(row)) => Result::Ok(Result::Ok(
                 (&row)
                     .try_into()
                     .map_err(TryFromProtoError::RowConversionError)?,
             )),
-            Some(Err(err)) => Result::Ok(Result::Err(err.try_into()?)),
+            Some(Err(err)) => Result::Ok(Result::Err(err.into_rust()?)),
             None => Result::Err(TryFromProtoError::missing_field("ProtoLiteralData::result")),
-        }
-    }
-}
-
-impl From<&Result<Row, EvalError>> for proto_literal::ProtoLiteralData {
-    fn from(x: &Result<Row, EvalError>) -> Self {
-        use proto_literal::proto_literal_data::Result::*;
-        proto_literal::ProtoLiteralData {
-            result: Some(match x {
-                Result::Ok(row) => Ok(row.into_proto()),
-                Result::Err(err) => Err(err.into()),
-            }),
         }
     }
 }
@@ -1348,24 +1337,20 @@ pub enum DomainLimit {
     Exclusive(i64),
 }
 
-impl From<&DomainLimit> for ProtoDomainLimit {
-    fn from(limit: &DomainLimit) -> Self {
+impl RustType<ProtoDomainLimit> for DomainLimit {
+    fn into_proto(&self) -> ProtoDomainLimit {
         use proto_domain_limit::Kind::*;
-        let kind = match limit {
+        let kind = match self {
             DomainLimit::None => None(()),
             DomainLimit::Inclusive(v) => Inclusive(*v),
             DomainLimit::Exclusive(v) => Exclusive(*v),
         };
         ProtoDomainLimit { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoDomainLimit> for DomainLimit {
-    type Error = TryFromProtoError;
-
-    fn try_from(limit: ProtoDomainLimit) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoDomainLimit) -> Result<Self, TryFromProtoError> {
         use proto_domain_limit::Kind::*;
-        if let Some(kind) = limit.kind {
+        if let Some(kind) = proto.kind {
             match kind {
                 None(()) => Ok(DomainLimit::None),
                 Inclusive(v) => Ok(DomainLimit::Inclusive(v)),
@@ -1665,12 +1650,11 @@ impl From<TypeFromOidError> for EvalError {
     }
 }
 
-impl From<&EvalError> for ProtoEvalError {
-    fn from(error: &EvalError) -> Self {
+impl RustType<ProtoEvalError> for EvalError {
+    fn into_proto(&self) -> ProtoEvalError {
         use proto_eval_error::Kind::*;
         use proto_eval_error::*;
-        use proto_incompatible_array_dimensions::*;
-        let kind = match error {
+        let kind = match self {
             EvalError::CharacterNotValidForEncoding(v) => CharacterNotValidForEncoding(*v),
             EvalError::CharacterTooLargeForEncoding(v) => CharacterTooLargeForEncoding(*v),
             EvalError::DateBinOutOfRange(v) => DateBinOutOfRange(v.clone()),
@@ -1740,8 +1724,8 @@ impl From<&EvalError> for ProtoEvalError {
             EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.clone()),
             EvalError::ZeroOutOfDomain(v) => ZeroOutOfDomain(v.clone()),
             EvalError::OutOfDomain(lower, upper, id) => OutOfDomain(ProtoOutOfDomain {
-                lower: Some(lower.into()),
-                upper: Some(upper.into()),
+                lower: Some(lower.into_proto()),
+                upper: Some(upper.into_proto()),
                 id: id.clone(),
             }),
             EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.clone()),
@@ -1761,24 +1745,17 @@ impl From<&EvalError> for ProtoEvalError {
             }
             EvalError::IncompatibleArrayDimensions { dims } => {
                 IncompatibleArrayDimensions(ProtoIncompatibleArrayDimensions {
-                    dims: dims.map(|dims| ProtoDims {
-                        f0: dims.0.into_proto(),
-                        f1: dims.1.into_proto(),
-                    }),
+                    dims: dims.into_proto(),
                 })
             }
             EvalError::TypeFromOid(v) => TypeFromOid(v.clone()),
         };
         ProtoEvalError { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoEvalError> for EvalError {
-    type Error = TryFromProtoError;
-
-    fn try_from(error: ProtoEvalError) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoEvalError) -> Result<Self, TryFromProtoError> {
         use proto_eval_error::Kind::*;
-        match error.kind {
+        match proto.kind {
             Some(kind) => match kind {
                 CharacterNotValidForEncoding(v) => Ok(EvalError::CharacterNotValidForEncoding(v)),
                 CharacterTooLargeForEncoding(v) => Ok(EvalError::CharacterTooLargeForEncoding(v)),
@@ -1786,7 +1763,7 @@ impl TryFrom<ProtoEvalError> for EvalError {
                 DivisionByZero(()) => Ok(EvalError::DivisionByZero),
                 Unsupported(v) => Ok(EvalError::Unsupported {
                     feature: v.feature,
-                    issue_no: Option::<usize>::from_proto(v.issue_no)?,
+                    issue_no: v.issue_no.into_rust()?,
                 }),
                 FloatOverflow(()) => Ok(EvalError::FloatOverflow),
                 FloatUnderflow(()) => Ok(EvalError::FloatUnderflow),
@@ -1840,8 +1817,8 @@ impl TryFrom<ProtoEvalError> for EvalError {
                 NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v)),
                 ZeroOutOfDomain(v) => Ok(EvalError::ZeroOutOfDomain(v)),
                 OutOfDomain(v) => Ok(EvalError::OutOfDomain(
-                    v.lower.try_into_if_some("ProtoDomainLimit::lower")?,
-                    v.upper.try_into_if_some("ProtoDomainLimit::upper")?,
+                    v.lower.into_rust_if_some("ProtoDomainLimit::lower")?,
+                    v.upper.into_rust_if_some("ProtoDomainLimit::upper")?,
                     v.id,
                 )),
                 ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v)),
@@ -1857,14 +1834,7 @@ impl TryFrom<ProtoEvalError> for EvalError {
                     Ok(EvalError::MultidimensionalArrayRemovalNotSupported)
                 }
                 IncompatibleArrayDimensions(v) => Ok(EvalError::IncompatibleArrayDimensions {
-                    dims: v
-                        .dims
-                        .map::<Result<_, TryFromProtoError>, _>(|dims| {
-                            let f0 = usize::from_proto(dims.f0)?;
-                            let f1 = usize::from_proto(dims.f1)?;
-                            Ok((f0, f1))
-                        })
-                        .transpose()?,
+                    dims: v.dims.into_rust()?,
                 }),
                 TypeFromOid(v) => Ok(EvalError::TypeFromOid(v)),
             },
@@ -1873,10 +1843,23 @@ impl TryFrom<ProtoEvalError> for EvalError {
     }
 }
 
+impl RustType<ProtoDims> for (usize, usize) {
+    fn into_proto(self: &Self) -> ProtoDims {
+        ProtoDims {
+            f0: self.0.into_proto(),
+            f1: self.1.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoDims) -> Result<Self, TryFromProtoError> {
+        Ok((proto.f0.into_rust()?, proto.f1.into_rust()?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
 
     #[test]
     fn test_reduce() {
