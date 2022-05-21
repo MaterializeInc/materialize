@@ -35,8 +35,9 @@ use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::relation::{
-    compare_columns, proto_aggregate_func, proto_table_func, ColumnOrder, ProtoAggregateFunc,
-    ProtoTableFunc, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    compare_columns, proto_aggregate_func, proto_aggregate_func::ProtoColumnOrders,
+    proto_table_func, ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, WindowFrame,
+    WindowFrameBound, WindowFrameUnits,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
 use crate::EvalError;
@@ -1120,30 +1121,27 @@ impl Arbitrary for AggregateFunc {
     }
 }
 
-impl From<&Vec<ColumnOrder>> for proto_aggregate_func::ProtoColumnOrders {
-    fn from(x: &Vec<ColumnOrder>) -> Self {
-        proto_aggregate_func::ProtoColumnOrders {
-            orders: x.iter().map(Into::into).collect(),
+impl RustType<ProtoColumnOrders> for Vec<ColumnOrder> {
+    fn into_proto(&self) -> ProtoColumnOrders {
+        ProtoColumnOrders {
+            orders: self.iter().map(Into::into).collect(),
         }
     }
-}
 
-impl TryFrom<proto_aggregate_func::ProtoColumnOrders> for Vec<ColumnOrder> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_aggregate_func::ProtoColumnOrders) -> Result<Self, Self::Error> {
-        x.orders
+    fn from_proto(proto: ProtoColumnOrders) -> Result<Self, TryFromProtoError> {
+        proto
+            .orders
             .into_iter()
             .map(TryInto::try_into)
             .collect::<Result<_, _>>()
     }
 }
 
-impl From<&AggregateFunc> for ProtoAggregateFunc {
-    fn from(x: &AggregateFunc) -> Self {
+impl RustType<ProtoAggregateFunc> for AggregateFunc {
+    fn into_proto(&self) -> ProtoAggregateFunc {
         use proto_aggregate_func::Kind;
         ProtoAggregateFunc {
-            kind: Some(match x {
+            kind: Some(match self {
                 AggregateFunc::MaxNumeric => Kind::MaxNumeric(()),
                 AggregateFunc::MaxInt16 => Kind::MaxInt16(()),
                 AggregateFunc::MaxInt32 => Kind::MaxInt32(()),
@@ -1175,16 +1173,18 @@ impl From<&AggregateFunc> for ProtoAggregateFunc {
                 AggregateFunc::Count => Kind::Count(()),
                 AggregateFunc::Any => Kind::Any(()),
                 AggregateFunc::All => Kind::All(()),
-                AggregateFunc::JsonbAgg { order_by } => Kind::JsonbAgg(order_by.into()),
-                AggregateFunc::JsonbObjectAgg { order_by } => Kind::JsonbObjectAgg(order_by.into()),
-                AggregateFunc::ArrayConcat { order_by } => Kind::ArrayConcat(order_by.into()),
-                AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into()),
-                AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into()),
-                AggregateFunc::RowNumber { order_by } => Kind::RowNumber(order_by.into()),
-                AggregateFunc::DenseRank { order_by } => Kind::DenseRank(order_by.into()),
+                AggregateFunc::JsonbAgg { order_by } => Kind::JsonbAgg(order_by.into_proto()),
+                AggregateFunc::JsonbObjectAgg { order_by } => {
+                    Kind::JsonbObjectAgg(order_by.into_proto())
+                }
+                AggregateFunc::ArrayConcat { order_by } => Kind::ArrayConcat(order_by.into_proto()),
+                AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into_proto()),
+                AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into_proto()),
+                AggregateFunc::RowNumber { order_by } => Kind::RowNumber(order_by.into_proto()),
+                AggregateFunc::DenseRank { order_by } => Kind::DenseRank(order_by.into_proto()),
                 AggregateFunc::LagLead { order_by, lag_lead } => {
                     Kind::LagLead(proto_aggregate_func::ProtoLagLead {
-                        order_by: Some(order_by.into()),
+                        order_by: Some(order_by.into_proto()),
                         lag_lead: Some(match lag_lead {
                             LagLeadType::Lag => {
                                 proto_aggregate_func::proto_lag_lead::LagLead::Lag(())
@@ -1199,28 +1199,24 @@ impl From<&AggregateFunc> for ProtoAggregateFunc {
                     order_by,
                     window_frame,
                 } => Kind::FirstValue(proto_aggregate_func::ProtoWindowFrame {
-                    order_by: Some(order_by.into()),
+                    order_by: Some(order_by.into_proto()),
                     window_frame: Some(window_frame.into()),
                 }),
                 AggregateFunc::LastValue {
                     order_by,
                     window_frame,
                 } => Kind::LastValue(proto_aggregate_func::ProtoWindowFrame {
-                    order_by: Some(order_by.into()),
+                    order_by: Some(order_by.into_proto()),
                     window_frame: Some(window_frame.into()),
                 }),
                 AggregateFunc::Dummy => Kind::Dummy(()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoAggregateFunc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoAggregateFunc) -> Result<Self, TryFromProtoError> {
         use proto_aggregate_func::Kind;
-        let kind = x
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoAggregateFunc::kind"))?;
         Ok(match kind {
@@ -1256,28 +1252,28 @@ impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
             Kind::Any(()) => AggregateFunc::Any,
             Kind::All(()) => AggregateFunc::All,
             Kind::JsonbAgg(order_by) => AggregateFunc::JsonbAgg {
-                order_by: order_by.try_into()?,
+                order_by: order_by.into_rust()?,
             },
             Kind::JsonbObjectAgg(order_by) => AggregateFunc::JsonbObjectAgg {
-                order_by: order_by.try_into()?,
+                order_by: order_by.into_rust()?,
             },
             Kind::ArrayConcat(order_by) => AggregateFunc::ArrayConcat {
-                order_by: order_by.try_into()?,
+                order_by: order_by.into_rust()?,
             },
             Kind::ListConcat(order_by) => AggregateFunc::ListConcat {
-                order_by: order_by.try_into()?,
+                order_by: order_by.into_rust()?,
             },
             Kind::StringAgg(order_by) => AggregateFunc::StringAgg {
-                order_by: order_by.try_into()?,
+                order_by: order_by.into_rust()?,
             },
             Kind::RowNumber(order_by) => AggregateFunc::RowNumber {
-                order_by: order_by.try_into()?,
+                order_by: order_by.into_rust()?,
             },
             Kind::DenseRank(order_by) => AggregateFunc::DenseRank {
-                order_by: order_by.try_into()?,
+                order_by: order_by.into_rust()?,
             },
             Kind::LagLead(pll) => AggregateFunc::LagLead {
-                order_by: pll.order_by.try_into_if_some("ProtoLagLead::order_by")?,
+                order_by: pll.order_by.into_rust_if_some("ProtoLagLead::order_by")?,
                 lag_lead: match pll.lag_lead {
                     Some(proto_aggregate_func::proto_lag_lead::LagLead::Lag(())) => {
                         LagLeadType::Lag
@@ -1295,7 +1291,7 @@ impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
             Kind::FirstValue(pfv) => AggregateFunc::FirstValue {
                 order_by: pfv
                     .order_by
-                    .try_into_if_some("ProtoWindowFrame::order_by")?,
+                    .into_rust_if_some("ProtoWindowFrame::order_by")?,
                 window_frame: pfv
                     .window_frame
                     .try_into_if_some("ProtoWindowFrame::window_frame")?,
@@ -1303,7 +1299,7 @@ impl TryFrom<ProtoAggregateFunc> for AggregateFunc {
             Kind::LastValue(pfv) => AggregateFunc::LastValue {
                 order_by: pfv
                     .order_by
-                    .try_into_if_some("ProtoWindowFrame::order_by")?,
+                    .into_rust_if_some("ProtoWindowFrame::order_by")?,
                 window_frame: pfv
                     .window_frame
                     .try_into_if_some("ProtoWindowFrame::window_frame")?,
@@ -1852,24 +1848,20 @@ pub struct CaptureGroupDesc {
     pub nullable: bool,
 }
 
-impl From<&CaptureGroupDesc> for ProtoCaptureGroupDesc {
-    fn from(x: &CaptureGroupDesc) -> Self {
-        Self {
-            index: x.index,
-            name: x.name.clone(),
-            nullable: x.nullable,
+impl RustType<ProtoCaptureGroupDesc> for CaptureGroupDesc {
+    fn into_proto(&self) -> ProtoCaptureGroupDesc {
+        ProtoCaptureGroupDesc {
+            index: self.index,
+            name: self.name.clone(),
+            nullable: self.nullable,
         }
     }
-}
 
-impl TryFrom<ProtoCaptureGroupDesc> for CaptureGroupDesc {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoCaptureGroupDesc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoCaptureGroupDesc) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            index: x.index,
-            name: x.name,
-            nullable: x.nullable,
+            index: proto.index,
+            name: proto.name,
+            nullable: proto.nullable,
         })
     }
 }
@@ -1880,25 +1872,18 @@ pub struct AnalyzedRegex(
     Vec<CaptureGroupDesc>,
 );
 
-impl From<&AnalyzedRegex> for ProtoAnalyzedRegex {
-    fn from(x: &AnalyzedRegex) -> Self {
+impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
+    fn into_proto(&self) -> ProtoAnalyzedRegex {
         ProtoAnalyzedRegex {
-            regex: Some(x.0.into_proto()),
-            groups: x.1.iter().map(Into::into).collect(),
+            regex: Some(self.0.into_proto()),
+            groups: self.1.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoAnalyzedRegex> for AnalyzedRegex {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoAnalyzedRegex) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoAnalyzedRegex) -> Result<Self, TryFromProtoError> {
         Ok(AnalyzedRegex(
-            x.regex.into_rust_if_some("ProtoAnalyzedRegex::regex")?,
-            x.groups
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
+            proto.regex.into_rust_if_some("ProtoAnalyzedRegex::regex")?,
+            proto.groups.into_rust()?,
         ))
     }
 }
@@ -1997,17 +1982,17 @@ pub enum TableFunc {
     GenerateSubscriptsArray,
 }
 
-impl From<&TableFunc> for ProtoTableFunc {
-    fn from(x: &TableFunc) -> Self {
+impl RustType<ProtoTableFunc> for TableFunc {
+    fn into_proto(&self) -> ProtoTableFunc {
         use proto_table_func::Kind;
         use proto_table_func::ProtoWrap;
 
         ProtoTableFunc {
-            kind: Some(match x {
+            kind: Some(match self {
                 TableFunc::JsonbEach { stringify } => Kind::JsonbEach(*stringify),
                 TableFunc::JsonbObjectKeys => Kind::JsonbObjectKeys(()),
                 TableFunc::JsonbArrayElements { stringify } => Kind::JsonbArrayElements(*stringify),
-                TableFunc::RegexpExtract(x) => Kind::RegexpExtract(x.into()),
+                TableFunc::RegexpExtract(x) => Kind::RegexpExtract(x.into_proto()),
                 TableFunc::CsvExtract(x) => Kind::CsvExtract(x.into_proto()),
                 TableFunc::GenerateSeriesInt32 => Kind::GenerateSeriesInt32(()),
                 TableFunc::GenerateSeriesInt64 => Kind::GenerateSeriesInt64(()),
@@ -2024,15 +2009,11 @@ impl From<&TableFunc> for ProtoTableFunc {
             }),
         }
     }
-}
 
-impl TryFrom<ProtoTableFunc> for TableFunc {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoTableFunc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoTableFunc) -> Result<Self, TryFromProtoError> {
         use proto_table_func::Kind;
 
-        let kind = x
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoTableFunc::Kind"))?;
 
@@ -2040,7 +2021,7 @@ impl TryFrom<ProtoTableFunc> for TableFunc {
             Kind::JsonbEach(stringify) => TableFunc::JsonbEach { stringify },
             Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
             Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
-            Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.try_into()?),
+            Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.into_rust()?),
             Kind::CsvExtract(x) => TableFunc::CsvExtract(x.into_rust()?),
             Kind::GenerateSeriesInt32(()) => TableFunc::GenerateSeriesInt32,
             Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
@@ -2320,7 +2301,7 @@ impl fmt::Display for TableFunc {
 #[cfg(test)]
 mod tests {
     use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

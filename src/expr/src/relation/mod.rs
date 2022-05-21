@@ -15,6 +15,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -1468,7 +1469,7 @@ impl TryFrom<ProtoColumnOrder> for ColumnOrder {
 
     fn try_from(x: ProtoColumnOrder) -> Result<Self, Self::Error> {
         Ok(ColumnOrder {
-            column: usize::from_proto(x.column)?,
+            column: x.column.into_rust()?,
             desc: x.desc,
         })
     }
@@ -1500,7 +1501,7 @@ pub struct AggregateExpr {
 impl From<&AggregateExpr> for ProtoAggregateExpr {
     fn from(x: &AggregateExpr) -> Self {
         ProtoAggregateExpr {
-            func: Some((&x.func).into()),
+            func: Some((&x.func).into_proto()),
             expr: Some((&x.expr).into()),
             distinct: x.distinct,
         }
@@ -1512,7 +1513,7 @@ impl TryFrom<ProtoAggregateExpr> for AggregateExpr {
 
     fn try_from(x: ProtoAggregateExpr) -> Result<Self, Self::Error> {
         Ok(Self {
-            func: x.func.try_into_if_some("ProtoAggregateExpr::func")?,
+            func: x.func.into_rust_if_some("ProtoAggregateExpr::func")?,
             expr: x.expr.try_into_if_some("ProtoAggregateExpr::expr")?,
             distinct: x.distinct,
         })
@@ -1964,9 +1965,9 @@ impl From<&RowSetFinishing> for ProtoRowSetFinishing {
     fn from(x: &RowSetFinishing) -> Self {
         ProtoRowSetFinishing {
             order_by: x.order_by.iter().map(Into::into).collect(),
-            limit: x.limit.as_ref().map(|x| usize::into_proto(*x)),
+            limit: x.limit.into_proto(),
             offset: x.offset.into_proto(),
-            project: x.project.iter().map(|x| usize::into_proto(*x)).collect(),
+            project: x.project.into_proto(),
         }
     }
 }
@@ -1981,13 +1982,9 @@ impl TryFrom<ProtoRowSetFinishing> for RowSetFinishing {
                 .into_iter()
                 .map(TryFrom::try_from)
                 .collect::<Result<_, _>>()?,
-            limit: x.limit.map(usize::from_proto).transpose()?,
-            offset: usize::from_proto(x.offset)?,
-            project: x
-                .project
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
+            limit: x.limit.into_rust()?,
+            offset: x.offset.into_rust()?,
+            project: x.project.into_rust()?,
         })
     }
 }

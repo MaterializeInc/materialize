@@ -388,8 +388,8 @@ pub struct MonotonicPlan {
 impl From<&MonotonicPlan> for ProtoMonotonicPlan {
     fn from(x: &MonotonicPlan) -> Self {
         Self {
-            aggr_funcs: x.aggr_funcs.iter().map(Into::into).collect(),
-            skips: x.skips.iter().map(|x| x.into_proto()).collect(),
+            aggr_funcs: x.aggr_funcs.into_proto(),
+            skips: x.skips.into_proto(),
         }
     }
 }
@@ -399,16 +399,8 @@ impl TryFrom<ProtoMonotonicPlan> for MonotonicPlan {
 
     fn try_from(x: ProtoMonotonicPlan) -> Result<Self, Self::Error> {
         Ok(Self {
-            aggr_funcs: x
-                .aggr_funcs
-                .into_iter()
-                .map(|x| x.try_into())
-                .collect::<Result<_, _>>()?,
-            skips: x
-                .skips
-                .into_iter()
-                .map(RustType::from_proto)
-                .collect::<Result<_, _>>()?,
+            aggr_funcs: x.aggr_funcs.into_rust()?,
+            skips: x.skips.into_rust()?,
         })
     }
 }
@@ -439,8 +431,8 @@ pub struct BucketedPlan {
 impl From<&BucketedPlan> for ProtoBucketedPlan {
     fn from(x: &BucketedPlan) -> Self {
         ProtoBucketedPlan {
-            aggr_funcs: x.aggr_funcs.iter().map(Into::into).collect(),
-            skips: x.skips.iter().map(|&x| x.into_proto()).collect(),
+            aggr_funcs: x.aggr_funcs.into_proto(),
+            skips: x.skips.into_proto(),
             buckets: x.buckets.clone(),
         }
     }
@@ -451,16 +443,8 @@ impl TryFrom<ProtoBucketedPlan> for BucketedPlan {
 
     fn try_from(x: ProtoBucketedPlan) -> Result<Self, Self::Error> {
         Ok(Self {
-            aggr_funcs: x
-                .aggr_funcs
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            skips: x
-                .skips
-                .into_iter()
-                .map(RustType::from_proto)
-                .collect::<Result<_, _>>()?,
+            aggr_funcs: x.aggr_funcs.into_rust()?,
+            skips: x.skips.into_rust()?,
             buckets: x.buckets,
         })
     }

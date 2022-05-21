@@ -573,7 +573,7 @@ impl From<&Plan> for ProtoPlan {
                 } => FlatMap(
                     ProtoPlanFlatMap {
                         input: input.into(),
-                        func: Some(func.into()),
+                        func: Some(func.into_proto()),
                         exprs: exprs.iter().map(Into::into).collect(),
                         mfp: Some(mfp.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
@@ -738,7 +738,7 @@ impl TryFrom<ProtoPlan> for Plan {
             },
             FlatMap(proto) => Plan::FlatMap {
                 input: proto.input.try_into_if_some("")?,
-                func: proto.func.try_into_if_some("")?,
+                func: proto.func.into_rust_if_some("")?,
                 exprs: proto
                     .exprs
                     .into_iter()
