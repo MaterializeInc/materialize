@@ -51,7 +51,7 @@ pub struct Config {
 ///
 /// Dropping this object will block until the dataflow computation ceases.
 pub struct Server {
-    _worker_guards: WorkerGuards<()>,
+    _worker_guards: WorkerGuards<timely::Result<()>>,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -109,7 +109,8 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
             metrics_bundle: metrics_bundle.clone(),
             connector_context: config.connector_context.clone(),
         }
-        .run()
+        .run()?;
+        Ok(())
     })
     .map_err(|e| anyhow!("{}", e))?;
     let worker_threads = worker_guards
@@ -156,7 +157,7 @@ where
     CR: ComputeReplay,
 {
     /// Draws from `dataflow_command_receiver` until shutdown.
-    fn run(&mut self) {
+    fn run(&mut self) -> timely::Result<()> {
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -168,7 +169,7 @@ where
             // nothing to do, it will park the thread. We rely on another thread
             // unparking us when there's new work to be done, e.g., when sending
             // a command or when new Kafka messages have arrived.
-            self.timely_worker.step_or_park(None);
+            self.timely_worker.step_or_park(None)?;
 
             // Report frontier information back the coordinator.
             if let Some(mut compute_state) = self.activate_compute() {
@@ -231,6 +232,7 @@ where
             compute_state.compute_state.traces.del_all_traces();
             compute_state.shutdown_logging();
         }
+        Ok(())
     }
 
     fn activate_compute(&mut self) -> Option<ActiveComputeState<A, CR>> {

@@ -136,10 +136,11 @@ fn bench_read_persisted_source<M: Measurement>(
             });
 
             while probe.less_than(&expected_input_frontier) {
-                worker.step();
+                worker.step()?;
             }
 
-            runtime.stop().expect("runtime shut down cleanly")
+            runtime.stop().expect("runtime shut down cleanly");
+            Ok(())
         })
         .unwrap();
 

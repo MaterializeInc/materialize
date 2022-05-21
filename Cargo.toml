@@ -90,3 +90,6 @@ debug = 1
 [patch.crates-io]
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
+
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+timely = { git = "https://github.com/antiguru/timely-dataflow", branch = "error_handling" }

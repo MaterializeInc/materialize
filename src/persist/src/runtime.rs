@@ -879,12 +879,14 @@ mod tests {
             writes.join().expect("write thread succeeds");
 
             while probe.less_than(&2) {
-                worker.step();
+                worker.step()?;
             }
             p.stop().expect("stop was successful");
 
-            ok_stream
-        });
+            timely::Result::Ok(ok_stream)
+        })
+        .unwrap()
+        .unwrap();
 
         let diff_sum: i64 = ok
             .extract()

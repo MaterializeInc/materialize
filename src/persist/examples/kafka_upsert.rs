@@ -83,8 +83,10 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn Error>> {
             });
             ok_stream.inspect(|d| info!("ok: {:?}", d));
             err_stream.inspect(|d| info!("err: {:?}", d));
-        })
-    })?;
+        });
+        Ok(())
+    })
+    .unwrap();
 
     let _result = worker_guards
         .join()

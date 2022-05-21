@@ -33,8 +33,9 @@ impl<E> ActivatedEventPusher<E> {
 }
 
 impl<T, D, E: EventPusherCore<T, D>> EventPusherCore<T, D> for ActivatedEventPusher<E> {
-    fn push(&mut self, event: EventCore<T, D>) {
-        self.inner.push(event);
+    fn push(&mut self, event: EventCore<T, D>) -> timely::Result<()> {
+        self.inner.push(event)?;
         self.activator.activate();
+        Ok(())
     }
 }

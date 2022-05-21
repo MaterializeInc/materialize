@@ -204,7 +204,8 @@ mod tests {
             }
             write.seal(6).recv().expect("seal was successful");
             (oks, errs)
-        });
+        })
+        .unwrap();
 
         assert_eq!(
             errs.extract()
@@ -268,11 +269,13 @@ mod tests {
             });
 
             while probe.less_than(&seal_ts) {
-                worker.step();
+                worker.step()?;
             }
 
-            true
-        });
+            timely::Result::Ok(true)
+        })
+        .unwrap()
+        .unwrap();
 
         assert!(result);
 
@@ -295,7 +298,9 @@ mod tests {
                     .recv()
                     .expect("write was successful")
             });
-        })?;
+            Ok(())
+        })
+        .unwrap();
 
         // Execute a second dataflow with a different number of workers (2).
         // This is mainly testing that we only get one copy of the original
@@ -330,7 +335,9 @@ mod tests {
             // hanging on to its capability. We need to wait until we've
             // captured through ts=3 and then unregister the listener/close the
             // persister to unblock things.
-        })?;
+            Ok(())
+        })
+        .unwrap();
 
         let mut actual = rx
             .extract()
@@ -365,7 +372,8 @@ mod tests {
                 err_stream.capture()
             });
             recv
-        });
+        })
+        .unwrap();
 
         let actual = recv
             .extract()
@@ -397,7 +405,8 @@ mod tests {
             });
 
             recv
-        });
+        })
+        .unwrap();
 
         let actual = recv
             .extract()
@@ -455,9 +464,11 @@ mod tests {
                 });
 
                 while probe.less_than(&1) {
-                    worker.step();
+                    worker.step()?;
                 }
-            })?;
+                Ok(())
+            })
+            .unwrap();
 
             let result: Result<Vec<_>, _> = guards.join().into_iter().collect();
 

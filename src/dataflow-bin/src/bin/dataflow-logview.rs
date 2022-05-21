@@ -79,6 +79,7 @@ fn main() {
                 .replay_into(scope)
                 .inspect(|x| println!("{:?}", x));
         });
+        Ok(())
     })
     .expect("timely computation failed");
 }

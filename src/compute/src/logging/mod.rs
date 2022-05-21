@@ -85,20 +85,24 @@ where
         if !data.is_empty() {
             // If we don't need to grow our buffer, move
             if data.len() > self.buffer.capacity() - self.buffer.len() {
-                self.event_pusher.push(Event::Messages(
-                    self.time_ms as Timestamp,
-                    self.buffer.drain(..).collect(),
-                ));
+                self.event_pusher
+                    .push(Event::Messages(
+                        self.time_ms as Timestamp,
+                        self.buffer.drain(..).collect(),
+                    ))
+                    .unwrap();
             }
 
             self.buffer.append(data);
         }
         if self.time_ms < new_time_ms {
             // Flush buffered events that may need to advance.
-            self.event_pusher.push(Event::Messages(
-                self.time_ms as Timestamp,
-                self.buffer.drain(..).collect(),
-            ));
+            self.event_pusher
+                .push(Event::Messages(
+                    self.time_ms as Timestamp,
+                    self.buffer.drain(..).collect(),
+                ))
+                .unwrap();
             if self.buffer.capacity() > Self::buffer_capacity() {
                 self.buffer = Vec::with_capacity(Self::buffer_capacity())
             }
@@ -107,7 +111,8 @@ where
             // We could buffer more aggressively if the logging granularity were exposed
             // here, as the forward ticks would be that much less frequent.
             self.event_pusher
-                .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
+                .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]))
+                .unwrap();
         }
         self.time_ms = new_time_ms;
     }
@@ -118,7 +123,8 @@ where
 {
     fn drop(&mut self) {
         self.event_pusher
-            .push(Event::Progress(vec![(self.time_ms as Timestamp, -1)]));
+            .push(Event::Progress(vec![(self.time_ms as Timestamp, -1)]))
+            .unwrap();
     }
 }
 

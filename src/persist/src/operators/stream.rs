@@ -534,9 +534,12 @@ mod tests {
             }
             input.advance_to(6);
             while probe.less_than(&6) {
-                worker.step();
+                worker.step()?;
             }
-        });
+            timely::Result::Ok(())
+        })
+        .unwrap()
+        .unwrap();
 
         let expected = vec![
             (("1".to_string(), ()), 1, 1),
@@ -571,11 +574,13 @@ mod tests {
             input.advance_to(1);
 
             while probe.less_than(&1) {
-                worker.step();
+                worker.step()?;
             }
 
-            err_stream
-        });
+            timely::Result::<_>::Ok(err_stream)
+        })
+        .unwrap()
+        .unwrap();
 
         let actual = recv
             .extract()
@@ -611,9 +616,12 @@ mod tests {
             input.send((((), ()), 1, 1));
             input.advance_to(42);
             while probe.less_than(&42) {
-                worker.step();
+                worker.step()?;
             }
-        });
+            timely::Result::Ok(())
+        })
+        .unwrap()
+        .unwrap();
 
         let p = registry.runtime_no_reentrance()?;
         let (_write, read) = p.create_or_load::<(), ()>("1");
@@ -647,7 +655,7 @@ mod tests {
 
             input.advance_to(1);
             while seal_probe.less_than(&1) {
-                worker.step();
+                worker.step()?;
             }
 
             unreliable.make_unavailable();
@@ -658,7 +666,7 @@ mod tests {
             // advance. Of course, we cannot rule out that the frontier might advance on the 11th
             // step, but tests without the fix showed the test to be very unstable on this
             for _i in 0..10 {
-                worker.step();
+                worker.step()?;
             }
             assert!(seal_probe.less_than(&2));
 
@@ -666,9 +674,12 @@ mod tests {
             // advance.
             unreliable.make_available();
             while seal_probe.less_than(&2) {
-                worker.step();
+                worker.step()?;
             }
-        });
+            timely::Result::Ok(())
+        })
+        .unwrap()
+        .unwrap();
 
         Ok(())
     }
@@ -714,7 +725,7 @@ mod tests {
             input.advance_to(1);
 
             // Allow the operator to submit the seal request.
-            worker.step();
+            worker.step()?;
 
             // We close the input, which will make the operator drop all its capabilities. The
             // operator still has a pending seal request, so it will not be shut down.
@@ -727,9 +738,12 @@ mod tests {
             // it.
             placeholder.advance_to(2);
             while probe.less_than(&2) {
-                worker.step();
+                worker.step()?;
             }
-        });
+            timely::Result::Ok(())
+        })
+        .unwrap()
+        .unwrap();
 
         Ok(())
     }
@@ -834,7 +848,7 @@ mod tests {
 
             condition_input.advance_to(1);
             while seal_probe.less_than(&1) {
-                worker.step();
+                worker.step()?;
             }
 
             // Pull primary input to 3 already. We're still expecting a seal at 2 for primary,
@@ -843,12 +857,12 @@ mod tests {
 
             condition_input.advance_to(2);
             while seal_probe.less_than(&2) {
-                worker.step();
+                worker.step()?;
             }
 
             condition_input.advance_to(3);
             while seal_probe.less_than(&3) {
-                worker.step();
+                worker.step()?;
             }
 
             // Advance conditional input ahead of the primary.
@@ -859,7 +873,7 @@ mod tests {
             // would be able to insert a probe within the conditional_seal operator
             // itself but that's not possible at the moment.
             for _ in 0..10 {
-                worker.step();
+                worker.step()?;
             }
 
             // Hard shut down the dataflows. We have to do this because execute_directly
@@ -879,7 +893,10 @@ mod tests {
             for dataflow in dataflows {
                 worker.drop_dataflow(dataflow);
             }
-        });
+            timely::Result::Ok(())
+        })
+        .unwrap()
+        .unwrap();
 
         // Stop the runtime so the listener task can exit.
         p_clone.stop()?;
@@ -953,9 +970,11 @@ mod tests {
 
             input.advance_to(42);
             while seal_probe.less_than(&42) {
-                worker.step();
+                worker.step()?;
             }
-        })?;
+            Ok(())
+        })
+        .unwrap();
 
         let timely_result: Result<Vec<_>, _> = guards.join().into_iter().collect();
         timely_result.expect("timely workers failed");
@@ -989,9 +1008,12 @@ mod tests {
             // Note that these were all sent at the timely time of 0.
             input.advance_to(1);
             while probe.less_than(&1) {
-                worker.step();
+                worker.step()?;
             }
-        });
+            timely::Result::Ok(())
+        })
+        .unwrap()
+        .unwrap();
 
         let expected = vec![(((), ()), 5, -1), (((), ()), 6, -1)];
 
