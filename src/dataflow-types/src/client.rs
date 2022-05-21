@@ -140,24 +140,20 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub target_replica: Option<ReplicaId>,
 }
 
-impl From<&Peek> for ProtoPeek {
-    fn from(x: &Peek) -> Self {
+impl RustType<ProtoPeek> for Peek {
+    fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
-            id: Some(x.id.into_proto()),
-            key: x.key.into_proto(),
-            uuid: Some(x.uuid.into_proto()),
-            timestamp: x.timestamp,
-            finishing: Some((&x.finishing).into()),
-            map_filter_project: Some((&x.map_filter_project).into()),
-            target_replica: x.target_replica,
+            id: Some(self.id.into_proto()),
+            key: self.key.into_proto(),
+            uuid: Some(self.uuid.into_proto()),
+            timestamp: self.timestamp,
+            finishing: Some((&self.finishing).into()),
+            map_filter_project: Some(self.map_filter_project.into_proto()),
+            target_replica: self.target_replica,
         }
     }
-}
 
-impl TryFrom<ProtoPeek> for Peek {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoPeek) -> Result<Self, Self::Error> {
+    fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             id: x.id.into_rust_if_some("ProtoPeek::id")?,
             key: x.key.into_rust()?,
@@ -169,7 +165,7 @@ impl TryFrom<ProtoPeek> for Peek {
             finishing: x.finishing.try_into_if_some("ProtoPeek::finishing")?,
             map_filter_project: x
                 .map_filter_project
-                .try_into_if_some("ProtoPeek::map_filter_project")?,
+                .into_rust_if_some("ProtoPeek::map_filter_project")?,
             target_replica: x.target_replica,
         })
     }
@@ -232,7 +228,7 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
                             .collect(),
                     })
                 }
-                ComputeCommand::Peek(peek) => Peek(peek.into()),
+                ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
                     uuids: uuids.into_iter().map(|id| id.into_proto()).collect(),
                 }),
@@ -273,7 +269,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                         .collect::<Result<Vec<_>, TryFromProtoError>>()?,
                 ))
             }
-            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.try_into()?)),
+            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
                 uuids: uuids
                     .into_iter()
@@ -1182,7 +1178,7 @@ pub mod tcp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
@@ -1196,6 +1192,7 @@ mod tests {
 
         #[test]
         fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
+            use mz_repr::proto::protobuf_roundtrip;
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
@@ -1203,6 +1200,7 @@ mod tests {
 
         #[test]
         fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
+            use mz_repr::proto::protobuf_roundtrip;
             let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
             assert!(actual.is_ok());
             let actual = actual.unwrap();

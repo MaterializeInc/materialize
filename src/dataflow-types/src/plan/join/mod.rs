@@ -35,7 +35,8 @@ pub mod linear_join;
 
 use std::collections::HashMap;
 
-use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
+use mz_repr::proto::TryFromProtoError;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -117,7 +118,7 @@ impl From<&JoinClosure> for ProtoJoinClosure {
     fn from(x: &JoinClosure) -> Self {
         Self {
             ready_equivalences: x.ready_equivalences.iter().map(Into::into).collect(),
-            before: Some((&x.before).into()),
+            before: Some(x.before.into_proto()),
         }
     }
 }
@@ -133,7 +134,7 @@ impl TryFrom<ProtoJoinClosure> for JoinClosure {
                 .map(TryFrom::try_from)
                 .collect::<Result<_, TryFromProtoError>>()?,
 
-            before: x.before.try_into_if_some("ProtoJoinClosure::before")?,
+            before: x.before.into_rust_if_some("ProtoJoinClosure::before")?,
         })
     }
 }

@@ -560,7 +560,7 @@ impl From<&Plan> for ProtoPlan {
                     input_key_val,
                 } => Mfp(ProtoPlanMfp {
                     input: input.into(),
-                    mfp: Some(mfp.into()),
+                    mfp: Some(mfp.into_proto()),
                     input_key_val: input_kv_into(input_key_val),
                 }
                 .into()),
@@ -575,7 +575,7 @@ impl From<&Plan> for ProtoPlan {
                         input: input.into(),
                         func: Some(func.into()),
                         exprs: exprs.iter().map(Into::into).collect(),
-                        mfp: Some(mfp.into()),
+                        mfp: Some(mfp.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
                     }
                     .into(),
@@ -629,7 +629,7 @@ impl From<&Plan> for ProtoPlan {
                         input: input.into(),
                         forms: Some(forms.into()),
                         input_key: input_k_into(input_key.as_ref()),
-                        input_mfp: Some(input_mfp.into()),
+                        input_mfp: Some(input_mfp.into_proto()),
                     }
                     .into(),
                 ),
@@ -734,7 +734,7 @@ impl TryFrom<ProtoPlan> for Plan {
             Mfp(proto) => Plan::Mfp {
                 input: proto.input.try_into_if_some("ProtoPlanMfp::input")?,
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
-                mfp: proto.mfp.try_into_if_some("ProtoPlanMfp::mfp")?,
+                mfp: proto.mfp.into_rust_if_some("ProtoPlanMfp::mfp")?,
             },
             FlatMap(proto) => Plan::FlatMap {
                 input: proto.input.try_into_if_some("")?,
@@ -744,7 +744,7 @@ impl TryFrom<ProtoPlan> for Plan {
                     .into_iter()
                     .map(TryFrom::try_from)
                     .collect::<Result<_, _>>()?,
-                mfp: proto.mfp.try_into_if_some("")?,
+                mfp: proto.mfp.into_rust_if_some("")?,
                 input_key: input_k_try_into(proto.input_key)?,
             },
             Join(proto) => Plan::Join {
@@ -789,7 +789,7 @@ impl TryFrom<ProtoPlan> for Plan {
                 input_key: input_k_try_into(proto.input_key)?,
                 input_mfp: proto
                     .input_mfp
-                    .try_into_if_some("ProtoPlanArrangeBy::input_mfp")?,
+                    .into_rust_if_some("ProtoPlanArrangeBy::input_mfp")?,
             },
         })
     }
@@ -822,10 +822,10 @@ impl From<&GetPlan> for ProtoGetPlan {
                     Arrangement(proto_get_plan::ProtoGetPlanArrangement {
                         key: k.iter().map(Into::into).collect(),
                         seek: s.into_proto(),
-                        mfp: Some(m.into()),
+                        mfp: Some(m.into_proto()),
                     })
                 }
-                GetPlan::Collection(mfp) => Collection(mfp.into()),
+                GetPlan::Collection(mfp) => Collection(mfp.into_proto()),
             }),
         }
     }
@@ -836,24 +836,21 @@ impl TryFrom<ProtoGetPlan> for GetPlan {
 
     fn try_from(x: ProtoGetPlan) -> Result<Self, Self::Error> {
         use proto_get_plan::Kind::*;
-
-        let kind = x
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoGetPlan::kind"))?;
-
-        Ok(match kind {
-            PassArrangements(()) => GetPlan::PassArrangements,
-            Arrangement(proto_get_plan::ProtoGetPlanArrangement { key, seek, mfp }) => {
-                GetPlan::Arrangement(
+        use proto_get_plan::ProtoGetPlanArrangement;
+        match x.kind {
+            Some(PassArrangements(())) => Ok(GetPlan::PassArrangements),
+            Some(Arrangement(ProtoGetPlanArrangement { key, seek, mfp })) => {
+                Ok(GetPlan::Arrangement(
                     key.into_iter()
                         .map(TryFrom::try_from)
                         .collect::<Result<_, _>>()?,
                     seek.into_rust()?,
-                    mfp.try_into_if_some("ProtoGetPlanArrangement::mfp")?,
-                )
+                    mfp.into_rust_if_some("ProtoGetPlanArrangement::mfp")?,
+                ))
             }
-            Collection(mfp) => GetPlan::Collection(mfp.try_into()?),
-        })
+            Some(Collection(mfp)) => Ok(GetPlan::Collection(mfp.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field("ProtoGetPlan::kind")),
+        }
     }
 }
 

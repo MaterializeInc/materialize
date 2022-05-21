@@ -68,6 +68,9 @@ use mz_expr::AggregateExpr;
 use mz_expr::AggregateFunc;
 use mz_expr::MirScalarExpr;
 use mz_ore::soft_assert_or_log;
+use mz_repr::proto::newapi::IntoRustIfSome;
+use mz_repr::proto::newapi::ProtoType;
+use mz_repr::proto::newapi::RustType;
 use mz_repr::proto::ProtoRepr;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::proto::TryIntoIfSome;
@@ -282,8 +285,8 @@ impl TryFrom<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr
 
     fn try_from(x: proto_accumulable_plan::ProtoAggr) -> Result<Self, Self::Error> {
         Ok((
-            usize::from_proto(x.index_agg)?,
-            usize::from_proto(x.index_inp)?,
+            x.index_agg.into_rust()?,
+            x.index_inp.into_rust()?,
             x.expr.try_into_if_some("ProtoAggr::expr")?,
         ))
     }
@@ -404,7 +407,7 @@ impl TryFrom<ProtoMonotonicPlan> for MonotonicPlan {
             skips: x
                 .skips
                 .into_iter()
-                .map(usize::from_proto)
+                .map(RustType::from_proto)
                 .collect::<Result<_, _>>()?,
         })
     }
@@ -456,7 +459,7 @@ impl TryFrom<ProtoBucketedPlan> for BucketedPlan {
             skips: x
                 .skips
                 .into_iter()
-                .map(usize::from_proto)
+                .map(RustType::from_proto)
                 .collect::<Result<_, _>>()?,
             buckets: x.buckets,
         })
@@ -504,7 +507,7 @@ impl TryFrom<proto_basic_plan::ProtoSingleBasicPlan> for (usize, AggregateExpr) 
 
     fn try_from(x: proto_basic_plan::ProtoSingleBasicPlan) -> Result<Self, Self::Error> {
         Ok((
-            usize::from_proto(x.index)?,
+            x.index.into_rust()?,
             x.expr.try_into_if_some("ProtoSingleBasicPlan::expr")?,
         ))
     }
@@ -552,7 +555,7 @@ impl TryFrom<ProtoBasicPlan> for BasicPlan {
 
         Ok(match kind {
             Kind::Single(x) => {
-                BasicPlan::Single(usize::from_proto(x.index)?, x.expr.try_into_if_some("")?)
+                BasicPlan::Single(x.index.into_rust()?, x.expr.try_into_if_some("")?)
             }
             Kind::Multiple(x) => BasicPlan::Multiple(x.try_into()?),
         })
@@ -820,8 +823,8 @@ pub struct KeyValPlan {
 impl From<&KeyValPlan> for ProtoKeyValPlan {
     fn from(x: &KeyValPlan) -> Self {
         Self {
-            key_plan: Some((&x.key_plan).into()),
-            val_plan: Some((&x.val_plan).into()),
+            key_plan: Some(x.key_plan.into_proto()),
+            val_plan: Some(x.val_plan.into_proto()),
         }
     }
 }
@@ -831,8 +834,8 @@ impl TryFrom<ProtoKeyValPlan> for KeyValPlan {
 
     fn try_from(x: ProtoKeyValPlan) -> Result<Self, Self::Error> {
         Ok(Self {
-            key_plan: x.key_plan.try_into_if_some("ProtoKeyValPlan::key_plan")?,
-            val_plan: x.val_plan.try_into_if_some("ProtoKeyValPlan::val_plan")?,
+            key_plan: x.key_plan.into_rust_if_some("ProtoKeyValPlan::key_plan")?,
+            val_plan: x.val_plan.into_rust_if_some("ProtoKeyValPlan::val_plan")?,
         })
     }
 }
