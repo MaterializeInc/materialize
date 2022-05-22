@@ -1167,7 +1167,7 @@ pub mod sources {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
-    use mz_repr::proto::newapi::{ProtoType, RustType};
+    use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
     use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
     use proptest_derive::Arbitrary;
     use prost::Message;
@@ -2001,7 +2001,7 @@ pub mod sources {
     impl From<&KafkaSourceConnector> for ProtoKafkaSourceConnector {
         fn from(x: &KafkaSourceConnector) -> Self {
             ProtoKafkaSourceConnector {
-                addrs: Some((&x.addrs).into()),
+                addrs: Some((&x.addrs).into_proto()),
                 topic: x.topic.clone(),
                 config_options: x.config_options.clone().into_iter().collect(),
                 start_offsets: x.start_offsets.clone(),
@@ -2023,7 +2023,7 @@ pub mod sources {
             Ok(KafkaSourceConnector {
                 addrs: x
                     .addrs
-                    .try_into_if_some("ProtoKafkaSourceConnector::addrs")?,
+                    .into_rust_if_some("ProtoKafkaSourceConnector::addrs")?,
                 topic: x.topic,
                 config_options: x.config_options.into_iter().collect(),
                 start_offsets: x.start_offsets,

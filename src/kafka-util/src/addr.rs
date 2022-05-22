@@ -15,7 +15,8 @@ use std::str::FromStr;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+use mz_repr::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::ProtoRepr;
 
 include!(concat!(env!("OUT_DIR"), "/mz_kafka_util.addr.rs"));
 
@@ -53,41 +54,28 @@ impl fmt::Display for KafkaAddrs {
     }
 }
 
-impl From<&(String, u16)> for proto_kafka_addrs::ProtoKafkaAddr {
-    fn from((host, port): &(String, u16)) -> Self {
+impl RustType<proto_kafka_addrs::ProtoKafkaAddr> for (String, u16) {
+    fn into_proto(&self) -> proto_kafka_addrs::ProtoKafkaAddr {
         proto_kafka_addrs::ProtoKafkaAddr {
-            host: host.clone(),
-            port: port.into_proto(),
+            host: self.0.clone(),
+            port: self.1.into_proto(),
         }
     }
-}
 
-impl TryFrom<proto_kafka_addrs::ProtoKafkaAddr> for (String, u16) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_kafka_addrs::ProtoKafkaAddr) -> Result<Self, Self::Error> {
-        Ok((x.host, u16::from_proto(x.port)?))
+    fn from_proto(proto: proto_kafka_addrs::ProtoKafkaAddr) -> Result<Self, TryFromProtoError> {
+        Ok((proto.host, u16::from_proto(proto.port)?))
     }
 }
 
-impl From<&KafkaAddrs> for ProtoKafkaAddrs {
-    fn from(x: &KafkaAddrs) -> Self {
+impl RustType<ProtoKafkaAddrs> for KafkaAddrs {
+    fn into_proto(&self) -> ProtoKafkaAddrs {
         ProtoKafkaAddrs {
-            addrs: x.0.iter().map(Into::into).collect(),
+            addrs: self.0.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoKafkaAddrs> for KafkaAddrs {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoKafkaAddrs) -> Result<Self, Self::Error> {
-        Ok(KafkaAddrs(
-            x.addrs
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
-        ))
+    fn from_proto(proto: ProtoKafkaAddrs) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaAddrs(proto.addrs.into_rust()?))
     }
 }
 
