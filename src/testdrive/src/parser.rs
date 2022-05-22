@@ -30,8 +30,9 @@ pub enum Command {
     Builtin(BuiltinCommand),
     Sql(SqlCommand),
     FailSql(FailSqlCommand),
-    SendSql(SqlCommand),
+    SendSql(SendSqlCommand),
     ReapSql(ReapSqlCommand),
+    ReapFailSql(ReapFailSqlCommand),
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +67,20 @@ pub struct FailSqlCommand {
 }
 
 #[derive(Debug, Clone)]
-pub struct ReapSqlCommand {}
+pub struct SendSqlCommand {
+    pub query: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReapSqlCommand {
+    pub expected_output: SqlOutput,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReapFailSqlCommand {
+    pub error_match_type: SqlErrorMatchType,
+    pub expected_error: String,
+}
 
 #[derive(Debug, Clone)]
 pub enum SqlErrorMatchType {
@@ -79,13 +93,23 @@ pub(crate) fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, Pos
     let mut out = Vec::new();
     while let Some((pos, line)) = line_reader.peek() {
         let pos = *pos;
-        let command = match line.chars().next() {
+        let mut chars = line.chars();
+        let command = match chars.next() {
             Some('$') => Command::Builtin(parse_builtin(line_reader)?),
             Some('>') => Command::Sql(parse_sql(line_reader)?),
             Some('?') => Command::Sql(parse_explain_sql(line_reader)?),
             Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
-            Some('S') => Command::SendSql(parse_sql(line_reader)?),
-            Some('R') => Command::ReapSql(parse_reap_sql(line_reader)?),
+            Some('~') => match chars.next() {
+                Some('>') => Command::SendSql(parse_send_sql(line_reader)?),
+                Some('<') => Command::ReapSql(parse_reap_sql(line_reader)?),
+                Some('!') => Command::ReapFailSql(parse_reap_fail_sql(line_reader)?),
+                _ => {
+                    return Err(PosError {
+                        source: anyhow!("parse error in the ~ operator"),
+                        pos: Some(pos),
+                    });
+                }
+            },
             Some('#') => {
                 // Comment line.
                 line_reader.next();
@@ -164,6 +188,23 @@ pub fn validate_ident(name: &str) -> Result<(), anyhow::Error> {
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     let (_, line1) = line_reader.next().unwrap();
     let query = line1[1..].trim().to_owned();
+
+    let expected_output = parse_expected_output(line_reader)?;
+
+    Ok(SqlCommand {
+        query,
+        expected_output,
+    })
+}
+
+fn parse_send_sql(line_reader: &mut LineReader) -> Result<SendSqlCommand, PosError> {
+    let (_, line1) = line_reader.next().unwrap();
+    let query = line1[2..].trim().to_owned();
+
+    Ok(SendSqlCommand { query })
+}
+
+fn parse_expected_output(line_reader: &mut LineReader) -> Result<SqlOutput, PosError> {
     let line2 = slurp_one(line_reader);
     let line3 = slurp_one(line_reader);
     let mut column_names = None;
@@ -183,12 +224,9 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
         (Some((pos2, line2)), None) => match HASH_REGEX.captures(&line2) {
             Some(captures) => match captures[1].parse::<usize>() {
                 Ok(num_values) => {
-                    return Ok(SqlCommand {
-                        query,
-                        expected_output: SqlOutput::Hashed {
-                            num_values,
-                            md5: captures[2].to_owned(),
-                        },
+                    return Ok(SqlOutput::Hashed {
+                        num_values,
+                        md5: captures[2].to_owned(),
                     })
                 }
                 Err(err) => {
@@ -205,12 +243,10 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     while let Some((pos, line)) = slurp_one(line_reader) {
         expected_rows.push(split_line(pos, &line)?)
     }
-    Ok(SqlCommand {
-        query,
-        expected_output: SqlOutput::Full {
-            column_names,
-            expected_rows,
-        },
+
+    Ok(SqlOutput::Full {
+        column_names,
+        expected_rows,
     })
 }
 
@@ -250,6 +286,7 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
             });
         }
     };
+
     let query = line1[1..].trim().to_string();
 
     let (expected_error, error_match_type) =
@@ -267,6 +304,7 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
                 ),
             });
         };
+
     Ok(FailSqlCommand {
         query: query.trim().to_string(),
         expected_error: expected_error.trim().to_string(),
@@ -275,7 +313,47 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
 }
 
 fn parse_reap_sql(line_reader: &mut LineReader) -> Result<ReapSqlCommand, PosError> {
-    Ok(ReapSqlCommand {})
+    line_reader.next().unwrap();
+
+    let expected_output = parse_expected_output(line_reader)?;
+
+    Ok(ReapSqlCommand { expected_output })
+}
+
+fn parse_reap_fail_sql(line_reader: &mut LineReader) -> Result<ReapFailSqlCommand, PosError> {
+    let (pos, _) = line_reader.next().unwrap();
+
+    let line2 = slurp_one(line_reader);
+    let (err_pos, expected_error) = match line2 {
+        Some((err_pos, line2)) => (err_pos, line2),
+        None => {
+            return Err(PosError {
+                pos: Some(pos),
+                source: anyhow!("failing SQL command is missing expected error message"),
+            });
+        }
+    };
+
+    let (expected_error, error_match_type) =
+        if let Some(exp_err) = expected_error.strip_prefix("regex:") {
+            (exp_err, SqlErrorMatchType::Regex)
+        } else if let Some(exp_err) = expected_error.strip_prefix("contains:") {
+            (exp_err, SqlErrorMatchType::Contains)
+        } else if let Some(exp_err) = expected_error.strip_prefix("exact:") {
+            (exp_err, SqlErrorMatchType::Exact)
+        } else {
+            return Err(PosError {
+                pos: Some(err_pos),
+                source: anyhow!(
+                    "Query error must start with match specifier (`regex:`|`contains:`|`exact:`)"
+                ),
+            });
+        };
+
+    Ok(ReapFailSqlCommand {
+        expected_error: expected_error.trim().to_string(),
+        error_match_type,
+    })
 }
 
 fn split_line(pos: usize, line: &str) -> Result<Vec<String>, PosError> {
@@ -339,7 +417,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') | Some('?') | Some('S') | Some('R') => return None,
+            Some('$') | Some('>') | Some('!') | Some('?') | Some('~') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -439,10 +517,7 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn is_sigil(c: Option<char>) -> bool {
-    matches!(
-        c,
-        Some('$') | Some('>') | Some('!') | Some('?') | Some('R') | Some('S')
-    )
+    matches!(c, Some('$') | Some('>') | Some('!') | Some('?') | Some('~'))
 }
 
 struct BuiltinReader<'a> {

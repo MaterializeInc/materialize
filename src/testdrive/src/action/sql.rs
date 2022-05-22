@@ -34,22 +34,21 @@ use mz_sql_parser::ast::{
 };
 
 use crate::action::{Action, ControlFlow, State};
-use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
+use crate::parser::{
+    FailSqlCommand, ReapFailSqlCommand, ReapSqlCommand, SendSqlCommand, SqlCommand,
+    SqlErrorMatchType, SqlOutput,
+};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
 }
 
-pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
+pub fn build_sql(cmd: SqlCommand) -> Result<SqlAction, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
-    }
-    if let SqlOutput::Full { expected_rows, .. } = &mut cmd.expected_output {
-        // TODO(benesch): one day we'll support SQL queries where order matters.
-        expected_rows.sort();
     }
     Ok(SqlAction {
         cmd,
@@ -265,92 +264,121 @@ impl SqlAction {
             .prepare(query)
             .await
             .context("preparing query failed")?;
-        let mut actual: Vec<_> = state
+        let mut actual_rows: Vec<_> = state
             .pgclient
             .query(&stmt, &[])
             .await
             .context("executing query failed")?
             .into_iter()
-            .map(|row| decode_row(state, row))
+            .map(|row| decode_row(row, &state.regex, state.regex_replacement.clone()))
             .collect::<Result<_, _>>()?;
-        actual.sort();
 
-        match &self.cmd.expected_output {
-            SqlOutput::Full {
-                expected_rows,
-                column_names,
-            } => {
-                if let Some(column_names) = column_names {
-                    let actual_columns: Vec<_> = stmt.columns().iter().map(|c| c.name()).collect();
-                    if actual_columns.iter().ne(column_names) {
-                        bail!(
-                            "column name mismatch\nexpected: {:?}\nactual:   {:?}",
-                            column_names,
-                            actual_columns
-                        );
-                    }
-                }
-                if &actual == expected_rows {
-                    Ok(())
-                } else {
-                    let (mut left, mut right) = (0, 0);
-                    let mut buf = String::new();
-                    while let (Some(e), Some(a)) = (expected_rows.get(left), actual.get(right)) {
-                        match e.cmp(a) {
-                            std::cmp::Ordering::Less => {
-                                writeln!(buf, "row missing: {:?}", e).unwrap();
-                                left += 1;
-                            }
-                            std::cmp::Ordering::Equal => {
-                                left += 1;
-                                right += 1;
-                            }
-                            std::cmp::Ordering::Greater => {
-                                writeln!(buf, "extra row: {:?}", a).unwrap();
-                                right += 1;
-                            }
-                        }
-                    }
-                    while let Some(e) = expected_rows.get(left) {
-                        writeln!(buf, "row missing: {:?}", e).unwrap();
-                        left += 1;
-                    }
-                    while let Some(a) = actual.get(right) {
-                        writeln!(buf, "extra row: {:?}", a).unwrap();
-                        right += 1;
-                    }
+        actual_rows.sort();
+        let actual_columns = stmt
+            .columns()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
+
+        check_expected(&actual_rows, &actual_columns, &self.cmd.expected_output)
+    }
+}
+
+fn check_expected(
+    actual_rows: &Vec<Vec<String>>,
+    actual_columns: &Vec<String>,
+    expected: &SqlOutput,
+) -> Result<(), anyhow::Error> {
+    match &expected {
+        SqlOutput::Full {
+            expected_rows,
+            column_names,
+        } => {
+            if let Some(column_names) = column_names {
+                if actual_columns.iter().ne(column_names) {
                     bail!(
-                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
-                        expected_rows,
-                        actual,
-                        buf
-                    )
+                        "column name mismatch\nexpected: {:?}\nactual:   {:?}",
+                        column_names,
+                        actual_columns
+                    );
                 }
             }
-            SqlOutput::Hashed { num_values, md5 } => {
-                if &actual.len() != num_values {
-                    bail!(
-                        "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
-                        actual.len(),
-                        num_values,
-                    )
-                } else {
-                    let mut hasher = Md5::new();
-                    for row in &actual {
-                        for entry in row {
-                            hasher.update(entry);
+            if actual_rows == expected_rows {
+                Ok(())
+            } else {
+                let (mut left, mut right) = (0, 0);
+                let mut buf = String::new();
+                while let (Some(e), Some(a)) = (expected_rows.get(left), actual_rows.get(right)) {
+                    match e.cmp(a) {
+                        std::cmp::Ordering::Less => {
+                            writeln!(buf, "row missing: {:?}", e).unwrap();
+                            left += 1;
+                        }
+                        std::cmp::Ordering::Equal => {
+                            left += 1;
+                            right += 1;
+                        }
+                        std::cmp::Ordering::Greater => {
+                            writeln!(buf, "extra row: {:?}", a).unwrap();
+                            right += 1;
                         }
                     }
-                    let actual = format!("{:x}", hasher.finalize());
-                    if &actual != md5 {
-                        bail!("wrong hash value: expected:{:?} got:{:?}", md5, actual)
-                    } else {
-                        Ok(())
+                }
+                while let Some(e) = expected_rows.get(left) {
+                    writeln!(buf, "row missing: {:?}", e).unwrap();
+                    left += 1;
+                }
+                while let Some(a) = actual_rows.get(right) {
+                    writeln!(buf, "extra row: {:?}", a).unwrap();
+                    right += 1;
+                }
+                bail!(
+                    "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
+                    expected_rows,
+                    actual_rows,
+                    buf
+                )
+            }
+        }
+        SqlOutput::Hashed { num_values, md5 } => {
+            if &actual_rows.len() != num_values {
+                bail!(
+                    "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
+                    actual_rows.len(),
+                    num_values,
+                )
+            } else {
+                let mut hasher = Md5::new();
+                for row in actual_rows {
+                    for entry in row {
+                        hasher.update(entry);
                     }
+                }
+                let actual = format!("{:x}", hasher.finalize());
+                if &actual != md5 {
+                    bail!("wrong hash value: expected:{:?} got:{:?}", md5, actual)
+                } else {
+                    Ok(())
                 }
             }
         }
     }
+}
+
+fn check_error(
+    err_string: &String,
+    expected_error: &ErrorMatcher,
+    regex: &Option<Regex>,
+    regex_replacement: String,
+) -> Result<(), anyhow::Error> {
+    let mut err_string = err_string.clone();
+
+    if let Some(regex) = regex {
+        err_string = regex
+            .replace_all(&err_string, regex_replacement.as_str())
+            .to_string();
+    }
+    expected_error.match_string(&err_string)
 }
 
 pub struct FailSqlAction {
@@ -488,7 +516,12 @@ impl Action for FailSqlAction {
 
         // Check the error again in order to detech 'deadline has elapsed' timeout errors
         if let Err(err) = res {
-            self.check_error(state, &err.to_string())?;
+            check_error(
+                &err.to_string(),
+                &self.expected_error,
+                &state.regex,
+                state.regex_replacement.clone(),
+            )?;
         }
 
         Ok(ControlFlow::Continue)
@@ -503,35 +536,33 @@ impl FailSqlAction {
                 self.expected_error.as_str()
             ),
             Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
-                Some(err) => self.check_error(state, &err.message().to_string()),
+                Some(err) => check_error(
+                    &err.to_string(),
+                    &self.expected_error,
+                    &state.regex,
+                    state.regex_replacement.clone(),
+                ),
                 None => Err(err.into()),
             },
         }
     }
-
-    fn check_error(&self, state: &State, err_string: &String) -> Result<(), anyhow::Error> {
-        let mut err_string = err_string.clone();
-
-        if let Some(regex) = &state.regex {
-            err_string = regex
-                .replace_all(&err_string, state.regex_replacement.as_str())
-                .to_string();
-        }
-        self.expected_error.match_string(&err_string)
-    }
 }
 
 pub struct SendSqlAction {
-    query: String,
+    cmd: SendSqlCommand,
+    stmt: Statement<Raw>,
 }
 
-pub fn build_send_sql(mut cmd: SqlCommand) -> Result<SendSqlAction, anyhow::Error> {
+pub fn build_send_sql(cmd: SendSqlCommand) -> Result<SendSqlAction, anyhow::Error> {
     let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
         .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
     }
-    Ok(SendSqlAction { query: cmd.query })
+    Ok(SendSqlAction {
+        cmd,
+        stmt: stmts.into_element(),
+    })
 }
 
 #[async_trait]
@@ -542,22 +573,31 @@ impl Action for SendSqlAction {
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let pgclient = Arc::clone(&state.pgclient);
-        let query = self.query.clone();
+        let query = self.cmd.query.clone();
+        let stmt = pgclient.prepare(query.as_str()).await?;
+        let cols = stmt
+            .columns()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
+
         state.pgclient_futures.insert(
             "foo".to_string(),
-            Mutex::new(Box::pin(async move {
-                pgclient.execute(query.as_str(), &[]).await
-            })),
+            Mutex::new(Box::pin(
+                async move { (cols, pgclient.query(&stmt, &[]).await) },
+            )),
         );
 
         Ok(ControlFlow::Continue)
     }
 }
 
-pub struct ReapSqlAction {}
+pub struct ReapSqlAction {
+    cmd: ReapSqlCommand,
+}
 
-pub fn build_reap_sql() -> Result<ReapSqlAction, anyhow::Error> {
-    Ok(ReapSqlAction {})
+pub fn build_reap_sql(cmd: ReapSqlCommand) -> Result<ReapSqlAction, anyhow::Error> {
+    Ok(ReapSqlAction { cmd })
 }
 
 #[async_trait]
@@ -568,7 +608,64 @@ impl Action for ReapSqlAction {
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let mut pgclient_future = state.pgclient_futures.get_mut("foo").unwrap().lock().await;
-        (&mut *pgclient_future).await?;
+
+        let fut = (&mut *pgclient_future).await;
+
+        let actual_columns = fut.0;
+
+        let mut actual_rows: Vec<_> = fut
+            .1
+            .context("executing query failed")?
+            .into_iter()
+            .map(|row| decode_row(row, &state.regex, state.regex_replacement.clone()))
+            .collect::<Result<_, _>>()?;
+
+        actual_rows.sort();
+        check_expected(&actual_rows, &actual_columns, &self.cmd.expected_output)?;
+        Ok(ControlFlow::Continue)
+    }
+}
+
+pub struct ReapFailSqlAction {
+    expected_error: ErrorMatcher,
+}
+
+pub fn build_reap_fail_sql(cmd: ReapFailSqlCommand) -> Result<ReapFailSqlAction, anyhow::Error> {
+    let expected_error = match cmd.error_match_type {
+        SqlErrorMatchType::Contains => ErrorMatcher::Contains(cmd.expected_error),
+        SqlErrorMatchType::Exact => ErrorMatcher::Exact(cmd.expected_error),
+        SqlErrorMatchType::Regex => ErrorMatcher::Regex(Regex::new(&cmd.expected_error)?),
+    };
+
+    Ok(ReapFailSqlAction { expected_error })
+}
+
+#[async_trait]
+impl Action for ReapFailSqlAction {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+        let mut pgclient_future = state.pgclient_futures.get_mut("foo").unwrap().lock().await;
+
+        let result = (&mut *pgclient_future).await;
+
+        match result.1 {
+            Ok(_) => bail!(
+                "query succeeded, but expected error '{}'",
+                self.expected_error.as_str()
+            ),
+            Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
+                Some(err) => check_error(
+                    &err.to_string(),
+                    &self.expected_error,
+                    &state.regex,
+                    state.regex_replacement.clone(),
+                ),
+                None => Err(err.into()),
+            },
+        }?;
 
         Ok(ControlFlow::Continue)
     }
@@ -578,7 +675,11 @@ pub fn print_query(query: &str) {
     println!("> {}", query);
 }
 
-pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error> {
+pub fn decode_row(
+    row: Row,
+    regex: &Option<Regex>,
+    regex_replacement: String,
+) -> Result<Vec<String>, anyhow::Error> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -658,9 +759,9 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
         }
         .unwrap_or_else(|| "<null>".into());
 
-        if let Some(regex) = &state.regex {
+        if let Some(regex) = &regex {
             value = regex
-                .replace_all(&value, state.regex_replacement.as_str())
+                .replace_all(&value, regex_replacement.as_str())
                 .to_string();
         }
 

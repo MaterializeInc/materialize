@@ -159,8 +159,18 @@ pub struct State {
     materialized_addr: String,
     materialized_user: String,
     pgclient: Arc<tokio_postgres::Client>,
-    pgclient_futures:
-        HashMap<String, Mutex<BoxFuture<'static, Result<u64, tokio_postgres::Error>>>>,
+    pgclient_futures: HashMap<
+        String,
+        Mutex<
+            BoxFuture<
+                'static,
+                (
+                    Vec<String>,
+                    std::result::Result<Vec<tokio_postgres::Row>, tokio_postgres::Error>,
+                ),
+            >,
+        >,
+    >,
 
     // === Confluent state. ===
     schema_registry_url: Url,
@@ -658,7 +668,8 @@ pub(crate) async fn build(
                 Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?)
             }
             Command::SendSql(sql) => Box::new(sql::build_send_sql(sql).map_err(wrap_err)?),
-            Command::ReapSql(sql) => Box::new(sql::build_reap_sql().map_err(wrap_err)?),
+            Command::ReapSql(sql) => Box::new(sql::build_reap_sql(sql).map_err(wrap_err)?),
+            Command::ReapFailSql(sql) => Box::new(sql::build_reap_fail_sql(sql).map_err(wrap_err)?),
         };
         out.push(PosAction {
             pos: cmd.pos,
