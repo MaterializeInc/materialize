@@ -550,7 +550,6 @@ impl FailSqlAction {
 
 pub struct SendSqlAction {
     cmd: SendSqlCommand,
-    stmt: Statement<Raw>,
 }
 
 pub fn build_send_sql(cmd: SendSqlCommand) -> Result<SendSqlAction, anyhow::Error> {
@@ -559,10 +558,7 @@ pub fn build_send_sql(cmd: SendSqlCommand) -> Result<SendSqlAction, anyhow::Erro
     if stmts.len() != 1 {
         bail!("expected one statement, but got {}", stmts.len());
     }
-    Ok(SendSqlAction {
-        cmd,
-        stmt: stmts.into_element(),
-    })
+    Ok(SendSqlAction { cmd })
 }
 
 #[async_trait]

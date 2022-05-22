@@ -244,6 +244,8 @@ fn parse_expected_output(line_reader: &mut LineReader) -> Result<SqlOutput, PosE
         expected_rows.push(split_line(pos, &line)?)
     }
 
+    expected_rows.sort();
+
     Ok(SqlOutput::Full {
         column_names,
         expected_rows,
