@@ -17,7 +17,7 @@ humanize==4.1.0
 isort==5.10.1
 junit-xml==1.9
 mypy==0.950
-numpy==1.22.3
+numpy==1.22.4
 pandas==1.4.2
 parameterized==0.8.1
 paramiko==2.11.0
