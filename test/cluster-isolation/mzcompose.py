@@ -75,7 +75,7 @@ disruptions_disabled = [
 > INSERT INTO panic_table VALUES ('panic!');
 
 ! INSERT INTO panic_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
-contains: deadline has elapsed
+timeout
 """,
         ),
     ),
