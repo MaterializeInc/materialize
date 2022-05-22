@@ -25,7 +25,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-regex = "1.5.4"
+regex = "1.5.6"
 serde_json = "1.0.81"
 tempfile = "3.2.0"
 time = "0.3.9"
