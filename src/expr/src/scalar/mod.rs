@@ -25,7 +25,6 @@ use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
 use mz_repr::arb_datum;
 use mz_repr::proto::newapi::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::proto::TryIntoIfSome;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
@@ -144,20 +143,22 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
                     lit: Some(lit.into_proto()),
                     typ: Some(typ.into_proto()),
                 }),
-                MirScalarExpr::CallUnmaterializable(func) => CallUnmaterializable(func.into()),
+                MirScalarExpr::CallUnmaterializable(func) => {
+                    CallUnmaterializable(func.into_proto())
+                }
                 MirScalarExpr::CallUnary { func, expr } => CallUnary(Box::new(ProtoCallUnary {
-                    func: Some(Box::new(func.into())),
+                    func: Some(Box::new(func.into_proto())),
                     expr: Some(expr.into_proto()),
                 })),
                 MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                     CallBinary(Box::new(ProtoCallBinary {
-                        func: Some(func.into()),
+                        func: Some(func.into_proto()),
                         expr1: Some(expr1.into_proto()),
                         expr2: Some(expr2.into_proto()),
                     }))
                 }
                 MirScalarExpr::CallVariadic { func, exprs } => CallVariadic(ProtoCallVariadic {
-                    func: Some(func.into()),
+                    func: Some(func.into_proto()),
                     exprs: exprs.into_proto(),
                 }),
                 MirScalarExpr::If { cond, then, els } => If(Box::new(ProtoIf {
@@ -180,13 +181,15 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
                 lit.into_rust_if_some("ProtoLiteral::lit")?,
                 typ.into_rust_if_some("ProtoLiteral::typ")?,
             ),
-            CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.try_into()?),
+            CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.into_rust()?),
             CallUnary(call_unary) => MirScalarExpr::CallUnary {
                 func: call_unary.func.into_rust_if_some("ProtoCallUnary::func")?,
                 expr: call_unary.expr.into_rust_if_some("ProtoCallUnary::expr")?,
             },
             CallBinary(call_binary) => MirScalarExpr::CallBinary {
-                func: call_binary.func.try_into_if_some("ProtoCallBinary::func")?,
+                func: call_binary
+                    .func
+                    .into_rust_if_some("ProtoCallBinary::func")?,
                 expr1: call_binary
                     .expr1
                     .into_rust_if_some("ProtoCallBinary::expr1")?,
@@ -195,7 +198,7 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
                     .into_rust_if_some("ProtoCallBinary::expr2")?,
             },
             CallVariadic(ProtoCallVariadic { func, exprs }) => MirScalarExpr::CallVariadic {
-                func: func.try_into_if_some("ProtoCallVariadic::func")?,
+                func: func.into_rust_if_some("ProtoCallVariadic::func")?,
                 exprs: exprs.into_rust()?,
             },
             If(if_struct) => MirScalarExpr::If {
@@ -204,13 +207,6 @@ impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
                 els: if_struct.els.into_rust_if_some("ProtoIf::els")?,
             },
         })
-    }
-}
-
-impl IntoRustIfSome<UnaryFunc> for Option<Box<ProtoUnaryFunc>> {
-    fn into_rust_if_some<S: ToString>(self, field: S) -> Result<UnaryFunc, TryFromProtoError> {
-        let value = self.ok_or_else(|| TryFromProtoError::missing_field(field))?;
-        (*value).try_into()
     }
 }
 

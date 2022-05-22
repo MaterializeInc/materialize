@@ -127,10 +127,10 @@ impl fmt::Display for UnmaterializableFunc {
     }
 }
 
-impl From<&UnmaterializableFunc> for ProtoUnmaterializableFunc {
-    fn from(func: &UnmaterializableFunc) -> Self {
+impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
+    fn into_proto(&self) -> ProtoUnmaterializableFunc {
         use crate::scalar::proto_unmaterializable_func::Kind::*;
-        let kind = match func {
+        let kind = match self {
             UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
             UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
             UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
@@ -147,14 +147,10 @@ impl From<&UnmaterializableFunc> for ProtoUnmaterializableFunc {
         };
         ProtoUnmaterializableFunc { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoUnmaterializableFunc> for UnmaterializableFunc {
-    type Error = TryFromProtoError;
-
-    fn try_from(func: ProtoUnmaterializableFunc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoUnmaterializableFunc) -> Result<Self, TryFromProtoError> {
         use crate::scalar::proto_unmaterializable_func::Kind::*;
-        if let Some(kind) = func.kind {
+        if let Some(kind) = proto.kind {
             match kind {
                 CurrentDatabase(()) => Ok(UnmaterializableFunc::CurrentDatabase),
                 CurrentSchemasWithSystem(()) => Ok(UnmaterializableFunc::CurrentSchemasWithSystem),
@@ -2849,10 +2845,10 @@ impl Arbitrary for BinaryFunc {
     }
 }
 
-impl From<&BinaryFunc> for ProtoBinaryFunc {
-    fn from(func: &BinaryFunc) -> Self {
+impl RustType<ProtoBinaryFunc> for BinaryFunc {
+    fn into_proto(&self) -> ProtoBinaryFunc {
         use crate::scalar::proto_binary_func::Kind::*;
-        let kind = match func {
+        let kind = match self {
             BinaryFunc::And => And(()),
             BinaryFunc::Or => Or(()),
             BinaryFunc::AddInt16 => AddInt16(()),
@@ -2996,14 +2992,10 @@ impl From<&BinaryFunc> for ProtoBinaryFunc {
         };
         ProtoBinaryFunc { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
-    type Error = TryFromProtoError;
-
-    fn try_from(func: ProtoBinaryFunc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoBinaryFunc) -> Result<Self, TryFromProtoError> {
         use crate::scalar::proto_binary_func::Kind::*;
-        if let Some(kind) = func.kind {
+        if let Some(kind) = proto.kind {
             match kind {
                 And(()) => Ok(BinaryFunc::And),
                 Or(()) => Ok(BinaryFunc::Or),
@@ -3130,7 +3122,7 @@ impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
                 TrimTrailing(()) => Ok(BinaryFunc::TrimTrailing),
                 EncodedBytesCharLength(()) => Ok(BinaryFunc::EncodedBytesCharLength),
                 ListLengthMax(max_layer) => Ok(BinaryFunc::ListLengthMax {
-                    max_layer: usize::from_proto(max_layer)?,
+                    max_layer: max_layer.into_rust()?,
                 }),
                 ArrayContains(()) => Ok(BinaryFunc::ArrayContains),
                 ArrayLength(()) => Ok(BinaryFunc::ArrayLength),
@@ -3730,11 +3722,11 @@ impl Arbitrary for UnaryFunc {
     }
 }
 
-impl From<&UnaryFunc> for ProtoUnaryFunc {
-    fn from(func: &UnaryFunc) -> Self {
+impl RustType<ProtoUnaryFunc> for UnaryFunc {
+    fn into_proto(&self) -> ProtoUnaryFunc {
         use crate::scalar::proto_unary_func::Kind::*;
         use crate::scalar::proto_unary_func::*;
-        let kind = match func {
+        let kind = match self {
             UnaryFunc::Not(_) => Not(()),
             UnaryFunc::IsNull(_) => IsNull(()),
             UnaryFunc::IsTrue(_) => IsTrue(()),
@@ -3989,14 +3981,10 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
         };
         ProtoUnaryFunc { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
-    type Error = TryFromProtoError;
-
-    fn try_from(func: ProtoUnaryFunc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoUnaryFunc) -> Result<Self, TryFromProtoError> {
         use crate::scalar::proto_unary_func::Kind::*;
-        if let Some(kind) = func.kind {
+        if let Some(kind) = proto.kind {
             match kind {
                 Not(()) => Ok(impls::Not.into()),
                 IsNull(()) => Ok(impls::IsNull.into()),
@@ -4270,7 +4258,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 TrimWhitespace(()) => Ok(impls::TrimWhitespace.into()),
                 TrimLeadingWhitespace(()) => Ok(impls::TrimLeadingWhitespace.into()),
                 TrimTrailingWhitespace(()) => Ok(impls::TrimTrailingWhitespace.into()),
-                RecordGet(field) => Ok(impls::RecordGet(usize::from_proto(field)?).into()),
+                RecordGet(field) => Ok(impls::RecordGet(field.into_rust()?).into()),
                 ListLength(()) => Ok(impls::ListLength.into()),
                 MapLength(()) => Ok(impls::MapLength.into()),
                 Upper(()) => Ok(impls::Upper.into()),
@@ -4311,11 +4299,10 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
     }
 }
 
-impl TryFrom<Box<ProtoUnaryFunc>> for UnaryFunc {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: Box<ProtoUnaryFunc>) -> Result<Self, Self::Error> {
-        Ok((*value).try_into()?)
+impl IntoRustIfSome<UnaryFunc> for Option<Box<ProtoUnaryFunc>> {
+    fn into_rust_if_some<S: ToString>(self, field: S) -> Result<UnaryFunc, TryFromProtoError> {
+        let value = self.ok_or_else(|| TryFromProtoError::missing_field(field))?;
+        (*value).into_rust()
     }
 }
 
@@ -5742,11 +5729,11 @@ impl Arbitrary for VariadicFunc {
     }
 }
 
-impl From<&VariadicFunc> for ProtoVariadicFunc {
-    fn from(func: &VariadicFunc) -> Self {
+impl RustType<ProtoVariadicFunc> for VariadicFunc {
+    fn into_proto(&self) -> ProtoVariadicFunc {
         use crate::scalar::proto_variadic_func::Kind::*;
         use crate::scalar::proto_variadic_func::ProtoRecordCreate;
-        let kind = match func {
+        let kind = match self {
             VariadicFunc::Coalesce => Coalesce(()),
             VariadicFunc::Greatest => Greatest(()),
             VariadicFunc::Least => Least(()),
@@ -5776,15 +5763,11 @@ impl From<&VariadicFunc> for ProtoVariadicFunc {
         };
         ProtoVariadicFunc { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
-    type Error = TryFromProtoError;
-
-    fn try_from(func: ProtoVariadicFunc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoVariadicFunc) -> Result<Self, TryFromProtoError> {
         use crate::scalar::proto_variadic_func::Kind::*;
         use crate::scalar::proto_variadic_func::ProtoRecordCreate;
-        if let Some(kind) = func.kind {
+        if let Some(kind) = proto.kind {
             match kind {
                 Coalesce(()) => Ok(VariadicFunc::Coalesce),
                 Greatest(()) => Ok(VariadicFunc::Greatest),
@@ -5803,7 +5786,7 @@ impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
                     elem_type: elem_type.into_rust()?,
                 }),
                 ArrayIndex(offset) => Ok(VariadicFunc::ArrayIndex {
-                    offset: usize::from_proto(offset)?,
+                    offset: offset.into_rust()?,
                 }),
                 ListCreate(elem_type) => Ok(VariadicFunc::ListCreate {
                     elem_type: elem_type.into_rust()?,
@@ -5834,7 +5817,7 @@ mod test {
     use chrono::prelude::*;
     use proptest::prelude::*;
 
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
 
     use super::*;
 
