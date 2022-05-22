@@ -38,7 +38,7 @@ mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-stash = { path = "../stash" }
 prost = "0.10.3"
-regex = "1.5.4"
+regex = "1.5.6"
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

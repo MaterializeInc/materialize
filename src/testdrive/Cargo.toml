@@ -52,7 +52,7 @@ prost-reflect = { version = "0.8.0", features = ["serde"] }
 protobuf-src = "1.0.4"
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-regex = "1.5.4"
+regex = "1.5.6"
 reqwest = { version = "0.11.10", features = ["native-tls-vendored"] }
 serde = "1.0.137"
 serde_json = { version = "1.0.81", features = ["raw_value"] }

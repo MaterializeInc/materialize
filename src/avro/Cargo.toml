@@ -22,7 +22,7 @@ enum-kinds = "0.5.1"
 flate2 = "1.0.23"
 itertools = "0.10.3"
 rand = "0.8.5"
-regex = "1.5.4"
+regex = "1.5.6"
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 sha2 = "0.10.2"
