@@ -24,7 +24,7 @@ paramiko==2.11.0
 pdoc3==0.10.0
 pg8000==1.27.1
 prettytable==3.3.0
-psutil==5.9.0
+psutil==5.9.1
 # psycopg2 intentionally omitted. Use pg8000 instead.
 pydantic==1.9.0
 PyMySQL==1.0.2
