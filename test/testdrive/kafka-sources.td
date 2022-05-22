@@ -11,4 +11,4 @@
 
 ! CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-exact:Source format must be specified
+contains:Source format must be specified
