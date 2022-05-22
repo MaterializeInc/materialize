@@ -15,7 +15,7 @@ mz-ore = { path = "../ore" }
 mz-pid-file = { path = "../pid-file" }
 serde_json = "1.0.81"
 scopeguard = "1.1.0"
-sysinfo = "0.23.12"
+sysinfo = "0.23.13"
 tokio = "1.18.2"
 tracing = "0.1.34"
 
