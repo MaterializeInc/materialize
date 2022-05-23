@@ -198,6 +198,38 @@ impl CatalogState {
         }
     }
 
+    /// Computes the IDs of any log sources this catalog entry transitively
+    /// depends on.
+    pub fn log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+        let mut out = Vec::new();
+        self.log_dependencies_inner(id, &mut out);
+        out
+    }
+
+    fn log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
+        match self.get_entry(&id).item() {
+            CatalogItem::Source(Source {
+                connector: SourceConnector::Log,
+                ..
+            }) => {
+                out.push(id);
+            }
+            CatalogItem::View(view) => {
+                for id in view.depends_on.iter() {
+                    self.log_dependencies_inner(*id, out);
+                }
+            }
+            CatalogItem::Sink(sink) => self.log_dependencies_inner(sink.from, out),
+            CatalogItem::Index(idx) => self.log_dependencies_inner(idx.on, out),
+            CatalogItem::Table(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connector(_) => (),
+        }
+    }
+
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         match self.get_entry(&id).item() {
             CatalogItem::Table(_) => true,
@@ -3067,6 +3099,11 @@ impl<S: Append> Catalog<S> {
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         self.state.uses_tables(id)
+    }
+
+    /// Return the names of all log sources the given object depends on.
+    pub fn log_dependencies(&self, id: GlobalId) -> Vec<GlobalId> {
+        self.state.log_dependencies(id)
     }
 
     /// Serializes the catalog's in-memory state.
