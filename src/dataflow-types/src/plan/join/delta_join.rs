@@ -27,11 +27,7 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
-use mz_repr::proto::newapi::ProtoType;
-use mz_repr::proto::newapi::RustType;
-use mz_repr::proto::ProtoRepr;
-use mz_repr::proto::TryFromProtoError;
-use mz_repr::proto::TryIntoIfSome;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -128,9 +124,9 @@ impl RustType<ProtoDeltaPathPlan> for DeltaPathPlan {
         ProtoDeltaPathPlan {
             source_relation: self.source_relation.into_proto(),
             source_key: self.source_key.into_proto(),
-            initial_closure: Some((&self.initial_closure).into()),
+            initial_closure: Some(self.initial_closure.into_proto()),
             stage_plans: self.stage_plans.into_proto(),
-            final_closure: self.final_closure.as_ref().map(Into::into),
+            final_closure: self.final_closure.into_proto(),
         }
     }
     fn from_proto(proto: ProtoDeltaPathPlan) -> Result<Self, TryFromProtoError> {
@@ -139,9 +135,9 @@ impl RustType<ProtoDeltaPathPlan> for DeltaPathPlan {
             source_key: proto.source_key.into_rust()?,
             initial_closure: proto
                 .initial_closure
-                .try_into_if_some("ProtoDeltaPathPlan::initial_closure")?,
+                .into_rust_if_some("ProtoDeltaPathPlan::initial_closure")?,
             stage_plans: proto.stage_plans.into_rust()?,
-            final_closure: proto.final_closure.map(|x| x.try_into()).transpose()?,
+            final_closure: proto.final_closure.into_rust()?,
         })
     }
 }
@@ -200,7 +196,7 @@ impl RustType<ProtoDeltaStagePlan> for DeltaStagePlan {
             stream_key: self.stream_key.into_proto(),
             stream_thinning: self.stream_thinning.into_proto(),
             lookup_key: self.lookup_key.into_proto(),
-            closure: Some((&self.closure).into()),
+            closure: Some(self.closure.into_proto()),
         }
     }
 
@@ -212,7 +208,7 @@ impl RustType<ProtoDeltaStagePlan> for DeltaStagePlan {
             lookup_key: proto.lookup_key.into_rust()?,
             closure: proto
                 .closure
-                .try_into_if_some("ProtoDeltaStagePlan::closure")?,
+                .into_rust_if_some("ProtoDeltaStagePlan::closure")?,
         })
     }
 }

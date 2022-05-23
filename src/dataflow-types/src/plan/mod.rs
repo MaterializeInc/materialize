@@ -577,7 +577,7 @@ impl From<&Plan> for ProtoPlan {
                 ),
                 Plan::Join { inputs, plan } => Join(ProtoPlanJoin {
                     inputs: inputs.iter().map(Into::into).collect(),
-                    plan: Some(plan.into()),
+                    plan: Some(plan.into_proto()),
                 }),
                 Plan::Reduce {
                     input,
@@ -733,7 +733,7 @@ impl TryFrom<ProtoPlan> for Plan {
                     .into_iter()
                     .map(TryFrom::try_from)
                     .collect::<Result<_, _>>()?,
-                plan: proto.plan.try_into_if_some("")?,
+                plan: proto.plan.into_rust_if_some("")?,
             },
             Reduce(proto) => Plan::Reduce {
                 input: proto.input.try_into_if_some("ProtoPlanReduce::input")?,
