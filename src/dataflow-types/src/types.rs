@@ -1154,7 +1154,7 @@ pub mod sources {
 
         /// A description of how each row should be decoded, from a string of bytes to a sequence of
         /// Differential updates.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum DataEncoding {
             Avro(AvroEncoding),
             Protobuf(ProtobufEncoding),
@@ -1164,6 +1164,41 @@ pub mod sources {
             Bytes,
             Text,
             RowCodec(RelationDesc),
+        }
+
+        impl RustType<ProtoDataEncoding> for DataEncoding {
+            fn into_proto(self: &Self) -> ProtoDataEncoding {
+                use proto_data_encoding::Kind;
+                ProtoDataEncoding {
+                    kind: Some(match self {
+                        DataEncoding::Avro(e) => Kind::Avro(e.into_proto()),
+                        DataEncoding::Protobuf(e) => Kind::Protobuf(e.into_proto()),
+                        DataEncoding::Csv(e) => Kind::Csv(e.into_proto()),
+                        DataEncoding::Regex(e) => Kind::Regex(e.into_proto()),
+                        DataEncoding::Postgres => Kind::Postgres(()),
+                        DataEncoding::Bytes => Kind::Bytes(()),
+                        DataEncoding::Text => Kind::Text(()),
+                        DataEncoding::RowCodec(e) => Kind::RowCodec(e.into_proto()),
+                    }),
+                }
+            }
+
+            fn from_proto(proto: ProtoDataEncoding) -> Result<Self, TryFromProtoError> {
+                use proto_data_encoding::Kind;
+                let kind = proto
+                    .kind
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoDataEncoding::kind"))?;
+                Ok(match kind {
+                    Kind::Avro(e) => DataEncoding::Avro(e.into_rust()?),
+                    Kind::Protobuf(e) => DataEncoding::Protobuf(e.into_rust()?),
+                    Kind::Csv(e) => DataEncoding::Csv(e.into_rust()?),
+                    Kind::Regex(e) => DataEncoding::Regex(e.into_rust()?),
+                    Kind::Postgres(()) => DataEncoding::Postgres,
+                    Kind::Bytes(()) => DataEncoding::Bytes,
+                    Kind::Text(()) => DataEncoding::Text,
+                    Kind::RowCodec(e) => DataEncoding::RowCodec(e.into_rust()?),
+                })
+            }
         }
 
         impl SourceDataEncoding {

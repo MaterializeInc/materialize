@@ -9,10 +9,26 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
 import "ccsr/src/config.proto";
 import "repr/src/adt/regex.proto";
+import "repr/src/relation_and_scalar.proto";
 
 package mz_dataflow_types.types.sources.encoding;
+
+message ProtoDataEncoding {
+    oneof kind {
+        ProtoAvroEncoding avro = 1;
+        ProtoProtobufEncoding protobuf = 2;
+        ProtoCsvEncoding csv = 3;
+        ProtoRegexEncoding regex = 4;
+        google.protobuf.Empty postgres = 5;
+        google.protobuf.Empty bytes = 6;
+        google.protobuf.Empty text = 7;
+        mz_repr.relation_and_scalar.ProtoRelationDesc row_codec = 8;
+    }
+}
 
 message ProtoAvroEncoding {
     string schema = 1;
