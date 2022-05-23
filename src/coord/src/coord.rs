@@ -361,6 +361,8 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
+    // TODO(jkosh44)
+    pending_writes: Vec<(ClientTransmitter<ExecuteResponse>, Session)>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -634,7 +636,8 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        if self.strict_serializability {
+        // if self.strict_serializability {
+        if true {
             let global_timeline_hold = ReadHolds {
                 time: self.get_local_read_ts(),
                 id_bundle: CollectionIdBundle {
@@ -814,7 +817,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
                 Message::AdvanceLocalInputs => {
                     let now = self.now();
-                    if self.strict_serializability {
+                    // if self.strict_serializability {
+                    if true {
                         let source_ids = self
                             .catalog
                             .entries()
@@ -832,6 +836,58 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.acquire_read_holds(&read_holds.as_ref().unwrap()).await;
                         std::mem::swap(&mut read_holds, &mut self.global_timeline_hold);
                         self.release_read_hold(read_holds.unwrap()).await;
+
+                        if !self.pending_writes.is_empty() {
+                            for (tx, mut session) in self
+                                .pending_writes
+                                .drain(..)
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                            {
+                                let mut action = EndTransactionAction::Commit;
+                                // If the transaction has failed, we can only rollback.
+                                if let (
+                                    EndTransactionAction::Commit,
+                                    TransactionStatus::Failed(_),
+                                ) = (&action, session.transaction())
+                                {
+                                    action = EndTransactionAction::Rollback;
+                                }
+                                let response = ExecuteResponse::TransactionExited {
+                                    tag: action.tag(),
+                                    was_implicit: session.transaction().is_implicit(),
+                                };
+
+                                // Immediately do tasks that must be serialized in the coordinator.
+                                let rx = self
+                                    .sequence_end_transaction_inner(&mut session, action)
+                                    .await;
+
+                                // We can now wait for responses or errors and do any session/transaction
+                                // finalization in a separate task.
+                                let conn_id = session.conn_id();
+                                task::spawn(
+                                    || format!("sequence_end_transaction:{conn_id}"),
+                                    async move {
+                                        let result = match rx {
+                                            // If we have more work to do, do it
+                                            Ok(fut) => fut.await,
+                                            Err(e) => Err(e),
+                                        };
+
+                                        if result.is_err() {
+                                            action = EndTransactionAction::Rollback;
+                                        }
+                                        session.vars_mut().end_transaction(action);
+
+                                        match result {
+                                            Ok(()) => tx.send(Ok(response), session),
+                                            Err(err) => tx.send(Err(err), session),
+                                        }
+                                    },
+                                );
+                            }
+                        }
                     }
 
                     // Convince the coordinator it needs to open a new timestamp
@@ -1533,6 +1589,16 @@ impl<S: Append + 'static> Coordinator<S> {
             // rogue cancellation request and ignore it.
             if conn_meta.secret_key != secret_key {
                 return;
+            }
+
+            // Cancel pending writes. There is at most one pending write per session.
+            if let Some(idx) = self
+                .pending_writes
+                .iter()
+                .position(|(_tx, session)| session.conn_id() == conn_id)
+            {
+                let (tx, session) = self.pending_writes.remove(idx);
+                tx.send(Ok(ExecuteResponse::Canceled), session);
             }
 
             // Cancel deferred writes. There is at most one pending write per session.
@@ -2885,6 +2951,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 ..
             } = txn
             {
+                if self.strict_serializability {
+                    self.pending_writes.push((tx, session));
+                    return;
+                }
                 guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
             }
         }
@@ -4953,6 +5023,7 @@ pub async fn serve<S: Append + 'static>(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
+                pending_writes: Vec::new(),
                 secrets_controller,
                 secrets_reader,
                 replica_sizes,

@@ -590,6 +590,8 @@ impl Runner {
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
             connector_context: Default::default(),
+            // TODO(jkosh44)
+            strict_serializability: true,
         };
         let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;
