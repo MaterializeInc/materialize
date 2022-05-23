@@ -1758,13 +1758,31 @@ pub mod sources {
         DifferentialRow,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct UpsertEnvelope {
         /// What style of Upsert we are using
         pub style: UpsertStyle,
         /// The indices of the keys in the full value row, used
         /// to deduplicate data in `upsert_core`
         pub key_indices: Vec<usize>,
+    }
+
+    impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
+        fn into_proto(self: &Self) -> ProtoUpsertEnvelope {
+            ProtoUpsertEnvelope {
+                style: Some(self.style.into_proto()),
+                key_indices: self.key_indices.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoUpsertEnvelope) -> Result<Self, TryFromProtoError> {
+            Ok(UpsertEnvelope {
+                style: proto
+                    .style
+                    .into_rust_if_some("ProtoUpsertEnvelope::style")?,
+                key_indices: proto.key_indices.into_rust()?,
+            })
+        }
     }
 
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

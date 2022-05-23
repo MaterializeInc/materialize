@@ -29,6 +29,11 @@ message ProtoKeyEnvelope {
     }
 }
 
+message ProtoUpsertEnvelope {
+    ProtoUpsertStyle style = 1;
+    repeated uint64 key_indices = 2;
+}
+
 message ProtoUpsertStyle {
     message ProtoDebezium {
         uint64 after_idx = 1;
