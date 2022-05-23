@@ -3442,10 +3442,28 @@ pub mod sinks {
         Persist(PersistSinkConnector),
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct KafkaSinkConsistencyConnector {
         pub topic: String,
         pub schema_id: i32,
+    }
+
+    impl RustType<ProtoKafkaSinkConsistencyConnector> for KafkaSinkConsistencyConnector {
+        fn into_proto(self: &Self) -> ProtoKafkaSinkConsistencyConnector {
+            ProtoKafkaSinkConsistencyConnector {
+                topic: self.topic.clone(),
+                schema_id: self.schema_id,
+            }
+        }
+
+        fn from_proto(
+            proto: ProtoKafkaSinkConsistencyConnector,
+        ) -> Result<Self, TryFromProtoError> {
+            Ok(KafkaSinkConsistencyConnector {
+                topic: proto.topic,
+                schema_id: proto.schema_id,
+            })
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -13,6 +13,11 @@ import "repr/src/relation_and_scalar.proto";
 
 package mz_dataflow_types.types.sinks;
 
+message ProtoKafkaSinkConsistencyConnector {
+    string topic = 1;
+    int32 schema_id = 2;
+}
+
 message ProtoPublishedSchemaInfo {
     optional int32 key_schema_id = 1;
     int32 value_schema_id = 2;
