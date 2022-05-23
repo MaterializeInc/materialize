@@ -1126,6 +1126,7 @@ pub mod sources {
     pub mod encoding {
         use anyhow::Context;
         use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
+        use proptest_derive::Arbitrary;
         use serde::{Deserialize, Serialize};
 
         use mz_interchange::{avro, protobuf};
@@ -1322,7 +1323,7 @@ pub mod sources {
         }
 
         /// Determines the RelationDesc and decoding of CSV objects
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum ColumnSpec {
             /// The first row is not a header row, and all columns get default names like `columnN`.
             Count(usize),
@@ -1330,6 +1331,31 @@ pub mod sources {
             ///
             /// Each of the values in `names` becomes the default name of a column in the dataflow.
             Header { names: Vec<String> },
+        }
+
+        impl RustType<ProtoColumnSpec> for ColumnSpec {
+            fn into_proto(self: &Self) -> ProtoColumnSpec {
+                use proto_column_spec::{Kind, ProtoHeader};
+                ProtoColumnSpec {
+                    kind: Some(match self {
+                        ColumnSpec::Count(c) => Kind::Count(c.into_proto()),
+                        ColumnSpec::Header { names } => Kind::Header(ProtoHeader {
+                            names: names.clone(),
+                        }),
+                    }),
+                }
+            }
+
+            fn from_proto(proto: ProtoColumnSpec) -> Result<Self, TryFromProtoError> {
+                use proto_column_spec::{Kind, ProtoHeader};
+                let kind = proto
+                    .kind
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoColumnSpec::kind"))?;
+                Ok(match kind {
+                    Kind::Count(c) => ColumnSpec::Count(c.into_rust()?),
+                    Kind::Header(ProtoHeader { names }) => ColumnSpec::Header { names },
+                })
+            }
         }
 
         impl ColumnSpec {

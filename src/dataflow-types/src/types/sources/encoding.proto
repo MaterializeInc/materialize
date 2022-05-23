@@ -13,6 +13,16 @@ import "repr/src/adt/regex.proto";
 
 package mz_dataflow_types.types.sources.encoding;
 
+message ProtoColumnSpec {
+    message ProtoHeader {
+        repeated string names = 1;
+    }
+    oneof kind {
+        uint64 count = 1;
+        ProtoHeader header = 2;
+    }
+}
+
 message ProtoRegexEncoding {
     mz_repr.adt.regex.ProtoRegex regex = 1;
 }
