@@ -226,32 +226,52 @@ where
         }
     }
 
+    // NB: Unlike the other methods here, this one is read-only.
+    pub async fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Self, Since<T>> {
+        match self.state.verify_listen(as_of) {
+            Ok(Ok(())) => Ok(self.clone()),
+            Ok(Err(Upper(_))) => {
+                // The upper may not be ready yet (maybe it would be ready if we
+                // re-fetched state), but that's okay! One way to think of
+                // Listen is as an async stream where creating the stream at any
+                // legal as_of does not block but then updates trickle in once
+                // they are available.
+                Ok(self.clone())
+            }
+            Err(Since(since)) => return Err(Since(since)),
+        }
+    }
+
     pub async fn next_listen_batch(
         &mut self,
         frontier: &Antichain<T>,
     ) -> (Vec<String>, Description<T>) {
-        // This unconditionally fetches the latest state and uses that to
-        // determine if we can serve `as_of`. TODO: We could instead check first
-        // and only fetch if necessary.
-        let mut retry = self
-            .retry_metrics
-            .next_listen_batch
-            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        let mut retry: Option<MetricsRetryStream> = None;
         loop {
-            self.fetch_and_update_state().await;
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
                 return (keys.to_owned(), desc.clone());
             }
-            // Wait a bit and try again. Intentionally don't ever log this at
-            // info level.
-            //
-            // TODO: See if we can watch for changes in Consensus to be more
-            // reactive here.
-            debug!(
-                "next_listen_batch didn't find new data, retrying in {:?}",
-                retry.next_sleep()
-            );
-            retry = retry.sleep().instrument(trace_span!("listen::sleep")).await;
+            // Only sleep after the first fetch, because the first time through
+            // maybe our state was just out of date.
+            retry = Some(match retry.take() {
+                None => self
+                    .retry_metrics
+                    .next_listen_batch
+                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
+                Some(retry) => {
+                    // Wait a bit and try again. Intentionally don't ever log
+                    // this at info level.
+                    //
+                    // TODO: See if we can watch for changes in Consensus to be
+                    // more reactive here.
+                    debug!(
+                        "next_listen_batch didn't find new data, retrying in {:?}",
+                        retry.next_sleep()
+                    );
+                    retry.sleep().instrument(trace_span!("listen::sleep")).await
+                }
+            });
+            self.fetch_and_update_state().await;
         }
     }
 
