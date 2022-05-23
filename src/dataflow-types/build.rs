@@ -17,6 +17,7 @@ fn main() {
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_persist.gen.persist", "::mz_persist::gen::persist")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
+        .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.proto", "::mz_repr::proto")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")

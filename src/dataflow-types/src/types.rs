@@ -1101,7 +1101,8 @@ pub mod sources {
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
     use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
-    use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+    use proptest::prelude::{any, Arbitrary, BoxedStrategy, Just, Strategy};
+    use proptest::prop_oneof;
     use proptest_derive::Arbitrary;
     use prost::Message;
     use serde::{Deserialize, Serialize};
@@ -1110,7 +1111,8 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::{any_uuid, TryFromProtoError};
+    use mz_repr::chrono::any_naive_datetime;
+    use mz_repr::proto::{any_uuid, TryFromProtoError, TryIntoIfSome};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -1922,6 +1924,88 @@ pub mod sources {
             start: NaiveDateTime,
             end: NaiveDateTime,
         },
+    }
+
+    impl Arbitrary for DebeziumMode {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                Just(DebeziumMode::None),
+                any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Ordered),
+                any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Full),
+                (
+                    any::<DebeziumDedupProjection>(),
+                    any::<bool>(),
+                    any_naive_datetime(),
+                    any_naive_datetime(),
+                    any_naive_datetime(),
+                )
+                    .prop_map(
+                        |(projection, pad_start_option, pad_start, start, end)| {
+                            DebeziumMode::FullInRange {
+                                projection,
+                                pad_start: if pad_start_option {
+                                    Some(pad_start)
+                                } else {
+                                    None
+                                },
+                                start,
+                                end,
+                            }
+                        }
+                    ),
+            ]
+            .boxed()
+        }
+    }
+
+    impl RustType<ProtoDebeziumMode> for DebeziumMode {
+        fn into_proto(self: &Self) -> ProtoDebeziumMode {
+            use proto_debezium_mode::{Kind, ProtoFullInRange};
+            ProtoDebeziumMode {
+                kind: Some(match self {
+                    DebeziumMode::None => Kind::None(()),
+                    DebeziumMode::Ordered(o) => Kind::Ordered(o.into_proto()),
+                    DebeziumMode::Full(f) => Kind::Full(f.into_proto()),
+                    DebeziumMode::FullInRange {
+                        projection,
+                        pad_start,
+                        start,
+                        end,
+                    } => Kind::FullInRange(ProtoFullInRange {
+                        projection: Some(projection.into_proto()),
+                        pad_start: pad_start.into_proto(),
+                        start: Some(start.into_proto()),
+                        end: Some(end.into_proto()),
+                    }),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumMode) -> Result<Self, TryFromProtoError> {
+            use proto_debezium_mode::{Kind, ProtoFullInRange};
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoDebeziumMode::kind"))?;
+            Ok(match kind {
+                Kind::None(()) => DebeziumMode::None,
+                Kind::Ordered(o) => DebeziumMode::Ordered(o.into_rust()?),
+                Kind::Full(o) => DebeziumMode::Full(o.into_rust()?),
+                Kind::FullInRange(ProtoFullInRange {
+                    projection,
+                    pad_start,
+                    start,
+                    end,
+                }) => DebeziumMode::FullInRange {
+                    projection: projection.into_rust_if_some("ProtoFullInRange::projection")?,
+                    pad_start: pad_start.into_rust()?,
+                    start: start.into_rust_if_some("ProtoFullInRange::start")?,
+                    end: end.into_rust_if_some("ProtoFullInRange::end")?,
+                },
+            })
+        }
     }
 
     impl DebeziumMode {
