@@ -798,12 +798,11 @@ impl Consensus for MemConsensus {
 
 #[cfg(test)]
 mod tests {
-    // TODO(#12633): Remove override.
-    #![allow(clippy::await_holding_lock)]
     use crate::location::tests::{
         blob_impl_test, blob_multi_impl_test, consensus_impl_test, log_impl_test,
     };
     use crate::location::Atomicity::RequireAtomic;
+    use tokio::sync::Mutex as AsyncMutex;
 
     use super::*;
 
@@ -857,41 +856,43 @@ mod tests {
 
         // Put a blob in an Arc<Mutex<..>> and copy it (like we do to in
         // BlobCache to share it between the main persist loop and maintenance).
-        let blob_gen1_1 = Arc::new(Mutex::new(registry.blob_no_reentrance()?));
+        let blob_gen1_1 = Arc::new(AsyncMutex::new(registry.blob_no_reentrance()?));
         let blob_gen1_2 = Arc::clone(&blob_gen1_1);
 
         // Close one of them because the runtime is shutting down, but keep the
         // other around (to simulate an async fetch in maintenance).
-        assert_eq!(blob_gen1_1.lock()?.close().await?, true);
+        assert_eq!(blob_gen1_1.lock().await.close().await?, true);
         drop(blob_gen1_1);
 
         // Now "restart" everything and reuse this blob like nemesis does.
-        let blob_gen2 = Arc::new(Mutex::new(registry.blob_no_reentrance()?));
+        let blob_gen2 = Arc::new(AsyncMutex::new(registry.blob_no_reentrance()?));
 
         // Write some data with the new handle.
         blob_gen2
-            .lock()?
+            .lock()
+            .await
             .set("a", "1".into(), RequireAtomic)
             .await?;
 
         // The old handle should not be usable anymore. Writes and reads using
         // it should fail and the value set by blob_gen2 should not be affected.
         assert_eq!(
-            blob_gen1_2.lock()?.get("a").await,
+            blob_gen1_2.lock().await.get("a").await,
             Err(Error::from("MemBlob has been closed"))
         );
         assert_eq!(
             blob_gen1_2
-                .lock()?
+                .lock()
+                .await
                 .set("a", "2".as_bytes().to_vec(), RequireAtomic)
                 .await,
             Err(Error::from("MemBlob has been closed"))
         );
         assert_eq!(
-            blob_gen1_2.lock()?.delete("a").await,
+            blob_gen1_2.lock().await.delete("a").await,
             Err(Error::from("MemBlob has been closed"))
         );
-        assert_eq!(blob_gen2.lock()?.get("a").await?, Some("1".into()));
+        assert_eq!(blob_gen2.lock().await.get("a").await?, Some("1".into()));
 
         // The async fetch finishes. This causes the Arc to run the MemBlob Drop
         // impl because it's the last copy of the original Arc.
@@ -900,7 +901,8 @@ mod tests {
         // There was a regression where the previous drop closed the current
         // MemBlob, make sure it's still usable.
         blob_gen2
-            .lock()?
+            .lock()
+            .await
             .set("b", "3".into(), RequireAtomic)
             .await
             .expect("blob_take2 should still be open");

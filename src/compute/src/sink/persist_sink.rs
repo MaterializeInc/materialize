@@ -7,13 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// TODO(#12635): Remove override.
-#![allow(clippy::await_holding_refcell_ref)]
-
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ops::DerefMut;
 use std::rc::Rc;
 
 use differential_dataflow::{Collection, Hashable};
@@ -78,23 +74,10 @@ where
             consensus_uri: self.consensus_uri.clone(),
             blob_uri: self.blob_uri.clone(),
         };
+        let shard_id = self.shard_id.clone();
 
-        // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-
-        // NOTE(aljoscha): We are using futures_executor here, instead of doing these calls in a
-        // "real" async context (such as our nice operator implementation below) because we need to
-        // create the write handle before creating the operator because we want to share the handle
-        // between the drop guard (which acts as the sink token) and the operator implementation.
-        let persist_client = futures_executor::block_on(persist_location.open())
-            .expect("cannot open persist client");
-
-        let write = futures_executor::block_on(
-            persist_client.open_writer::<Row, Row, Timestamp, Diff>(self.shard_id),
-        )
-        .expect("could not open persist shard");
-
-        let write = Rc::new(RefCell::new(Some(write)));
-        let write_weak = Rc::downgrade(&write);
+        let token = Rc::new(());
+        let token_weak = Rc::downgrade(&token);
 
         // Only the active_write_worker will ever produce data so all other workers have
         // an empty frontier.  It's necessary to insert all of these into `storage_state.
@@ -125,22 +108,23 @@ where
                 // Row. Our output type is `(Row, Row)` instead of `(Option<Row>, Option<Row>)`.
                 let empty_row = Row::default();
 
+                // TODO(aljoscha): We need to figure out what to do with error results from these calls.
+                let persist_client = persist_location
+                    .open()
+                    .await
+                    .expect("cannot open persist client");
+
+                let mut write = persist_client
+                    .open_writer::<Row, Row, Timestamp, Diff>(shard_id)
+                    .await
+                    .expect("could not open persist shard");
+
                 while scheduler.notified().await {
                     let frontier = frontiers.borrow()[0].clone();
 
-                    if !active_write_worker {
+                    if !active_write_worker || token_weak.upgrade().is_none() {
                         return;
                     }
-
-                    let mut write = write.borrow_mut();
-                    let write = write.deref_mut();
-                    let write = match write {
-                        Some(write) => write,
-                        None => {
-                            // We have been cancelled!
-                            return;
-                        }
-                    };
 
                     input.for_each(|_cap, data| {
                         data.swap(&mut buffer);
@@ -181,12 +165,6 @@ where
             },
         );
 
-        // Destroy the write handle so the sink operator can't send spurious updates while shutting
-        // down.
-        Some(Rc::new(scopeguard::guard((), move |_| {
-            if let Some(write) = write_weak.upgrade() {
-                std::mem::drop(write.borrow_mut().take())
-            }
-        })))
+        Some(token)
     }
 }
