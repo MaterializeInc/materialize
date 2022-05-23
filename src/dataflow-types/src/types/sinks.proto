@@ -1,0 +1,21 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "repr/src/relation_and_scalar.proto";
+
+package mz_dataflow_types.types.sinks;
+
+message ProtoPersistSinkConnector {
+    mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
+    string shard_id = 2;
+    string consensus_uri = 3;
+    string blob_uri = 4;
+}

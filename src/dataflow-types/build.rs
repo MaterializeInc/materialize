@@ -34,6 +34,7 @@ fn main() {
                 "dataflow-types/src/logging.proto",
                 "dataflow-types/src/postgres_source.proto",
                 "dataflow-types/src/types/aws.proto",
+                "dataflow-types/src/types/sinks.proto",
                 "dataflow-types/src/types/sources.proto",
                 "dataflow-types/src/types/sources/encoding.proto",
                 "dataflow-types/src/plan.proto",

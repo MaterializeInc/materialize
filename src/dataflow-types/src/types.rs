@@ -3380,13 +3380,20 @@ pub mod sinks {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
+    use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
     use timely::progress::frontier::Antichain;
     use url::Url;
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_client::ShardId;
+    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::{GlobalId, RelationDesc};
+
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/mz_dataflow_types.types.sinks.rs"
+    ));
 
     /// A sink for updates to a relational collection.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -3467,12 +3474,34 @@ pub mod sinks {
         pub value_schema_id: i32,
     }
 
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PersistSinkConnector {
         pub value_desc: RelationDesc,
         pub shard_id: ShardId,
         pub consensus_uri: String,
         pub blob_uri: String,
+    }
+
+    impl RustType<ProtoPersistSinkConnector> for PersistSinkConnector {
+        fn into_proto(self: &Self) -> ProtoPersistSinkConnector {
+            ProtoPersistSinkConnector {
+                value_desc: Some(self.value_desc.into_proto()),
+                shard_id: self.shard_id.into_proto(),
+                consensus_uri: self.consensus_uri.clone(),
+                blob_uri: self.blob_uri.clone(),
+            }
+        }
+
+        fn from_proto(proto: ProtoPersistSinkConnector) -> Result<Self, TryFromProtoError> {
+            Ok(PersistSinkConnector {
+                value_desc: proto
+                    .value_desc
+                    .into_rust_if_some("ProtoPersistSinkConnector::value_desc")?,
+                shard_id: proto.shard_id.into_rust()?,
+                consensus_uri: proto.consensus_uri,
+                blob_uri: proto.blob_uri,
+            })
+        }
     }
 
     impl SinkConnector {
