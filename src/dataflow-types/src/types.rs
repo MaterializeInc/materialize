@@ -25,9 +25,7 @@ use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_repr::proto::any_uuid;
-use mz_repr::proto::newapi::{
-    IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError,
-};
+use mz_repr::proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
@@ -475,8 +473,8 @@ pub mod aws {
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
+    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::GlobalId;
-    use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
@@ -1102,7 +1100,7 @@ pub mod sources {
     use mz_persist_client::read::ReadHandle;
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
-    use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
+    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
     use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
     use proptest_derive::Arbitrary;
     use prost::Message;
@@ -2682,7 +2680,7 @@ pub mod sources {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use mz_repr::proto::newapi::protobuf_roundtrip;
+        use mz_repr::proto::protobuf_roundtrip;
         use proptest::prelude::*;
 
         proptest! {
@@ -2979,7 +2977,7 @@ impl LinearOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

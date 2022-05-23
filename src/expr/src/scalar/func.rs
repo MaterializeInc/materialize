@@ -41,7 +41,7 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::chrono::any_naive_datetime;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -5817,7 +5817,7 @@ mod test {
     use chrono::prelude::*;
     use proptest::prelude::*;
 
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
 
     use super::*;
 

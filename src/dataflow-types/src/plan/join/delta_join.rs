@@ -27,7 +27,7 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 

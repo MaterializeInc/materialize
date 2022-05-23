@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_expr::EvalError;
 use mz_persist_types::Codec;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.errors.rs"));

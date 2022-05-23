@@ -29,13 +29,11 @@
 use std::collections::HashMap;
 
 use crate::plan::any_arranged_thin;
-use mz_expr::{permutation_for_arrangement, MirScalarExpr};
-use mz_repr::proto::{
-    newapi::{ProtoType, RustType},
-    TryFromProtoError,
-};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+
+use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
 
 use super::AvailableCollections;
 
@@ -184,7 +182,7 @@ impl ThresholdPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

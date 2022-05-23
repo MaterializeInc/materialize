@@ -28,7 +28,6 @@ use std::str::FromStr;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
-use mz_repr::proto::newapi::RustType;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
@@ -39,7 +38,7 @@ use uuid::Uuid;
 
 use mz_persist_client::{read::ReadHandle, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_stash::{self, StashError, TypedCollection};
 

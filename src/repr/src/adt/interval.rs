@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
 use crate::adt::numeric::{DecimalLike, Numeric};
-use crate::proto::newapi::{RustType, TryFromProtoError};
+use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 

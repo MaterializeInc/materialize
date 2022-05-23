@@ -28,7 +28,7 @@ use mz_expr::{
     MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
 use mz_ore::soft_panic_or_log;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -1744,7 +1744,7 @@ pub fn linear_to_mfp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(10))]

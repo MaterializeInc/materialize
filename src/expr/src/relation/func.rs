@@ -15,7 +15,7 @@ use std::iter;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
 use proptest::prelude::{Arbitrary, Just};
@@ -2296,7 +2296,7 @@ impl fmt::Display for TableFunc {
 #[cfg(test)]
 mod tests {
     use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

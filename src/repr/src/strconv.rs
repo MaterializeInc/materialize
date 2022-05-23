@@ -53,7 +53,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
-use crate::proto::newapi::{RustType, TryFromProtoError};
+use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
@@ -1588,7 +1588,7 @@ impl RustType<ProtoParseHexError> for ParseHexError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

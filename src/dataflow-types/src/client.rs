@@ -29,8 +29,8 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::proto::{any_uuid, FromProtoIfSome};
+use mz_repr::proto::any_uuid;
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -629,7 +629,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
-                resp.id.from_proto_if_some("ProtoPeekResponseKind::id")?,
+                resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
             )),
             Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
@@ -1158,7 +1158,7 @@ pub mod tcp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

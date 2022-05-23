@@ -19,7 +19,7 @@ use mz_expr::MapFilterProject;
 use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::MirScalarExpr;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::result::Probability;
 use proptest_derive::Arbitrary;

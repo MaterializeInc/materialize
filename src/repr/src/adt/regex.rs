@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
-use crate::proto::newapi::{RustType, TryFromProtoError};
+use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 
@@ -133,7 +133,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
 
     proptest! {
         #[test]

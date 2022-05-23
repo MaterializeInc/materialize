@@ -31,7 +31,7 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -2292,7 +2292,7 @@ fn verify_base_eq_record_nullability() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
 
     proptest! {
        #[test]

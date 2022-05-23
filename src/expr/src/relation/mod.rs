@@ -23,7 +23,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
@@ -2292,7 +2292,7 @@ impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

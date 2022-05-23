@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
 use crate::chrono::{any_fixed_offset, any_timezone};
-use crate::proto::newapi::{RustType, TryFromProtoError};
+use crate::proto::{RustType, TryFromProtoError};
 
 use mz_lowertest::MzReflect;
 
@@ -2187,7 +2187,7 @@ pub(crate) fn split_timestamp_string(value: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
 
     #[test]
     fn iterate_datetimefield() {

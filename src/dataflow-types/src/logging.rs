@@ -9,11 +9,10 @@
 
 use std::collections::HashMap;
 
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.logging.rs"));
@@ -47,7 +46,7 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
         Ok(LoggingConfig {
             granularity_ns: proto
                 .granularity_ns
-                .from_proto_if_some("ProtoLoggingConfig::granularity_ns")?,
+                .into_rust_if_some("ProtoLoggingConfig::granularity_ns")?,
             active_logs: proto.active_logs.into_rust()?,
             log_logging: proto.log_logging,
         })
@@ -389,7 +388,7 @@ impl LogVariant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

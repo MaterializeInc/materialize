@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row};
 
 use self::proto_map_filter_project::ProtoPredicate;
@@ -1307,18 +1307,18 @@ pub mod plan {
 
     use std::collections::HashMap;
 
-    use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
+
+    use mz_repr::adt::numeric::Numeric;
+    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+    use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
         ProtoSafeMfpPlan, UnaryFunc, UnmaterializableFunc,
     };
-    use mz_repr::adt::numeric::Numeric;
-    use mz_repr::proto::newapi::TryFromProtoError;
-    use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -1777,7 +1777,7 @@ pub mod plan {
 mod tests {
     use super::plan::*;
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

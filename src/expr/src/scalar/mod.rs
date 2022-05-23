@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
-use mz_repr::proto::newapi::IntoRustIfSome;
+use mz_repr::proto::IntoRustIfSome;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
 use mz_repr::arb_datum;
-use mz_repr::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
@@ -1855,7 +1855,7 @@ impl RustType<ProtoDims> for (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::newapi::protobuf_roundtrip;
+    use mz_repr::proto::protobuf_roundtrip;
 
     #[test]
     fn test_reduce() {
