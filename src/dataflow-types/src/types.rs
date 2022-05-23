@@ -1143,13 +1143,77 @@ pub mod sources {
         ///
         /// Almost all sources only present values as part of their records, but Kafka allows a key to be
         /// associated with each record, which has a possibly independent encoding.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum SourceDataEncoding {
             Single(DataEncoding),
             KeyValue {
                 key: DataEncoding,
                 value: DataEncoding,
             },
+        }
+
+        impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
+            fn into_proto(self: &Self) -> ProtoSourceDataEncoding {
+                use proto_source_data_encoding::{Kind, ProtoKeyValue};
+                ProtoSourceDataEncoding {
+                    kind: Some(match self {
+                        SourceDataEncoding::Single(s) => Kind::Single(s.into_proto()),
+                        SourceDataEncoding::KeyValue { key, value } => {
+                            Kind::KeyValue(ProtoKeyValue {
+                                key: Some(key.into_proto()),
+                                value: Some(value.into_proto()),
+                            })
+                        }
+                    }),
+                }
+            }
+
+            fn from_proto(proto: ProtoSourceDataEncoding) -> Result<Self, TryFromProtoError> {
+                use proto_source_data_encoding::{Kind, ProtoKeyValue};
+                let kind = proto.kind.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoSourceDataEncoding::kind")
+                })?;
+                Ok(match kind {
+                    Kind::Single(s) => SourceDataEncoding::Single(s.into_rust()?),
+                    Kind::KeyValue(ProtoKeyValue { key, value }) => SourceDataEncoding::KeyValue {
+                        key: key.into_rust_if_some("ProtoKeyValue::key")?,
+                        value: value.into_rust_if_some("ProtoKeyValue::value")?,
+                    },
+                })
+            }
+        }
+
+        impl SourceDataEncoding {
+            pub fn key_ref(&self) -> Option<&DataEncoding> {
+                match self {
+                    SourceDataEncoding::Single(_) => None,
+                    SourceDataEncoding::KeyValue { key, .. } => Some(key),
+                }
+            }
+
+            /// Return either the Single encoding if this was a `SourceDataEncoding::Single`, else return the value encoding
+            pub fn value(self) -> DataEncoding {
+                match self {
+                    SourceDataEncoding::Single(encoding) => encoding,
+                    SourceDataEncoding::KeyValue { value, .. } => value,
+                }
+            }
+
+            pub fn value_ref(&self) -> &DataEncoding {
+                match self {
+                    SourceDataEncoding::Single(encoding) => encoding,
+                    SourceDataEncoding::KeyValue { value, .. } => value,
+                }
+            }
+
+            pub fn desc(&self) -> Result<(Option<RelationDesc>, RelationDesc), anyhow::Error> {
+                Ok(match self {
+                    SourceDataEncoding::Single(value) => (None, value.desc()?),
+                    SourceDataEncoding::KeyValue { key, value } => {
+                        (Some(key.desc()?), value.desc()?)
+                    }
+                })
+            }
         }
 
         /// A description of how each row should be decoded, from a string of bytes to a sequence of
@@ -1197,39 +1261,6 @@ pub mod sources {
                     Kind::Bytes(()) => DataEncoding::Bytes,
                     Kind::Text(()) => DataEncoding::Text,
                     Kind::RowCodec(e) => DataEncoding::RowCodec(e.into_rust()?),
-                })
-            }
-        }
-
-        impl SourceDataEncoding {
-            pub fn key_ref(&self) -> Option<&DataEncoding> {
-                match self {
-                    SourceDataEncoding::Single(_) => None,
-                    SourceDataEncoding::KeyValue { key, .. } => Some(key),
-                }
-            }
-
-            /// Return either the Single encoding if this was a `SourceDataEncoding::Single`, else return the value encoding
-            pub fn value(self) -> DataEncoding {
-                match self {
-                    SourceDataEncoding::Single(encoding) => encoding,
-                    SourceDataEncoding::KeyValue { value, .. } => value,
-                }
-            }
-
-            pub fn value_ref(&self) -> &DataEncoding {
-                match self {
-                    SourceDataEncoding::Single(encoding) => encoding,
-                    SourceDataEncoding::KeyValue { value, .. } => value,
-                }
-            }
-
-            pub fn desc(&self) -> Result<(Option<RelationDesc>, RelationDesc), anyhow::Error> {
-                Ok(match self {
-                    SourceDataEncoding::Single(value) => (None, value.desc()?),
-                    SourceDataEncoding::KeyValue { key, value } => {
-                        (Some(key.desc()?), value.desc()?)
-                    }
                 })
             }
         }
