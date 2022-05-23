@@ -600,7 +600,7 @@ impl From<&Plan> for ProtoPlan {
                 Plan::TopK { input, top_k_plan } => TopK(
                     ProtoPlanTopK {
                         input: input.into(),
-                        top_k_plan: Some(top_k_plan.into()),
+                        top_k_plan: Some(top_k_plan.into_proto()),
                     }
                     .into(),
                 ),
@@ -751,7 +751,7 @@ impl TryFrom<ProtoPlan> for Plan {
                 input: proto.input.try_into_if_some("ProtoPlanTopK::input")?,
                 top_k_plan: proto
                     .top_k_plan
-                    .try_into_if_some("ProtoPlanTopK::top_k_plan")?,
+                    .into_rust_if_some("ProtoPlanTopK::top_k_plan")?,
             },
             Negate(proto) => Plan::Negate {
                 input: proto.try_into()?,
