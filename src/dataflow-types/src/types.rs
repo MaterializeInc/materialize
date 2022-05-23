@@ -2610,10 +2610,28 @@ pub mod sources {
     /// A source contains enough information to instantiate a stream of changes,
     /// as well as related metadata about the columns, their types, and properties
     /// of the collection.
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SourceDesc {
         pub connector: SourceConnector,
         pub desc: RelationDesc,
+    }
+
+    impl RustType<ProtoSourceDesc> for SourceDesc {
+        fn into_proto(self: &Self) -> ProtoSourceDesc {
+            ProtoSourceDesc {
+                connector: Some(self.connector.into_proto()),
+                desc: Some(self.desc.into_proto()),
+            }
+        }
+
+        fn from_proto(proto: ProtoSourceDesc) -> Result<Self, TryFromProtoError> {
+            Ok(SourceDesc {
+                connector: proto
+                    .connector
+                    .into_rust_if_some("ProtoSourceDesc::connector")?,
+                desc: proto.desc.into_rust_if_some("ProtoSourceDesc::desc")?,
+            })
+        }
     }
 
     /// A stub for generating arbitrary [SourceDesc].

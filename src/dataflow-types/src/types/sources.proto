@@ -14,6 +14,7 @@ import "google/protobuf/empty.proto";
 import "repr/src/chrono.proto";
 import "repr/src/global_id.proto";
 import "repr/src/proto.proto";
+import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
 import "dataflow-types/src/postgres_source.proto";
@@ -243,4 +244,9 @@ message ProtoCompression {
         google.protobuf.Empty gzip = 1;
         google.protobuf.Empty none = 2;
     }
+}
+
+message ProtoSourceDesc {
+    ProtoSourceConnector connector = 1;
+    mz_repr.relation_and_scalar.ProtoRelationDesc desc = 2;
 }
