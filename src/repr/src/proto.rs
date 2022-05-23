@@ -308,7 +308,7 @@ where
     Ok(T::from_proto(U::decode(&*vec)?)?)
 }
 pub mod newapi {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     use uuid::Uuid;
 
@@ -348,13 +348,14 @@ pub mod newapi {
     }
 
     /// A trait that allows `Self` to be used as an entry in a
-    /// `Vec<Self>` representing a Rust `HashMap<K, V>`.
+    /// `Vec<Self>` representing a Rust `*Map<K, V>`.
     pub trait ProtoMapEntry<K, V> {
         fn from_rust<'a>(entry: (&'a K, &'a V)) -> Self;
         fn into_rust(self) -> Result<(K, V), TryFromProtoError>;
     }
 
-    /// Blanket implementation for `Vec<R>` where `R` is a [`RustType`].
+    /// Blanket implementation for `HashMap<K, V>` where there exists `T` such
+    /// that `T` implements `ProtoMapEntry<K, V>`.
     impl<K, V, T> RustType<Vec<T>> for HashMap<K, V>
     where
         K: std::cmp::Eq + std::hash::Hash,
@@ -369,6 +370,25 @@ pub mod newapi {
                 .into_iter()
                 .map(T::into_rust)
                 .collect::<Result<HashMap<_, _>, _>>()?)
+        }
+    }
+
+    /// Blanket implementation for `BTreeMap<K, V>` where there exists `T` such
+    /// that `T` implements `ProtoMapEntry<K, V>`.
+    impl<K, V, T> RustType<Vec<T>> for BTreeMap<K, V>
+    where
+        K: std::cmp::Eq + std::cmp::Ord,
+        T: ProtoMapEntry<K, V>,
+    {
+        fn into_proto(self: &Self) -> Vec<T> {
+            self.iter().map(T::from_rust).collect()
+        }
+
+        fn from_proto(proto: Vec<T>) -> Result<Self, TryFromProtoError> {
+            Ok(proto
+                .into_iter()
+                .map(T::into_rust)
+                .collect::<Result<BTreeMap<_, _>, _>>()?)
         }
     }
 
@@ -403,7 +423,7 @@ pub mod newapi {
         }
     }
 
-    /// Blanket implementation for `Option<R>` where `R` is a [`RustType`].
+    /// Blanket implementation for `Box<R>` where `R` is a [`RustType`].
     impl<R, P> RustType<Box<P>> for Box<R>
     where
         R: RustType<P>,
@@ -530,6 +550,8 @@ pub mod newapi {
         }
     }
 
+    /// Blanket command for testing if `R` can be converted to its corresponding
+    /// `ProtoType` and back.
     pub fn protobuf_roundtrip<R, P>(val: &R) -> anyhow::Result<R>
     where
         P: ProtoType<R> + ::prost::Message + Default,
