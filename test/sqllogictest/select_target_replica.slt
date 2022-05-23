@@ -92,3 +92,8 @@ SET cluster_replica = unknown
 
 query error cluster replica 'test.unknown' does not exist
 SELECT * FROM test
+
+# Clean up.
+
+statement ok
+DROP CLUSTER test
