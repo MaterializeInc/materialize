@@ -110,7 +110,7 @@ global timestamp to increase in an unbounded fashion.
 
 Proposal: All writes across all sessions should be blocked and added to a queue. At the end of X millisecond all pending
 writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits are all assigned the
-current global write timestamp. No reads should be served while the writes are committing.
+current global write timestamp.
 
 NOTE: The `TimestampOracle` provides us the property that the global write timestamp will be higher than all previous
 reads.
