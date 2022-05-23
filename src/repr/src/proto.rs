@@ -359,6 +359,19 @@ impl RustType<u64> for std::num::NonZeroUsize {
     }
 }
 
+impl RustType<ProtoDuration> for std::time::Duration {
+    fn into_proto(self: &Self) -> ProtoDuration {
+        ProtoDuration {
+            secs: self.as_secs(),
+            nanos: self.subsec_nanos(),
+        }
+    }
+
+    fn from_proto(proto: ProtoDuration) -> Result<Self, TryFromProtoError> {
+        Ok(std::time::Duration::new(proto.secs, proto.nanos))
+    }
+}
+
 /// The symmetric counterpart of [`RustType`], similar to
 /// what [`Into`] is to [`From`].
 ///
@@ -390,6 +403,11 @@ where
     fn from_rust(rust: &R) -> Self {
         R::into_proto(rust)
     }
+}
+
+pub fn any_duration() -> impl Strategy<Value = std::time::Duration> {
+    (0..u64::MAX, 0..1_000_000_000u32)
+        .prop_map(|(secs, nanos)| std::time::Duration::new(secs, nanos))
 }
 
 /// Convenience syntax for trying to convert a `Self` value of type
@@ -438,4 +456,23 @@ where
     let vec = P::from_rust(&val).encode_to_vec();
     let val = P::decode(&*vec)?.into_rust()?;
     Ok(val)
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        #[test]
+        fn duration_protobuf_roundtrip(expect in any_duration() ) {
+            let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
 }
