@@ -68,11 +68,7 @@ use mz_expr::AggregateExpr;
 use mz_expr::AggregateFunc;
 use mz_expr::MirScalarExpr;
 use mz_ore::soft_assert_or_log;
-use mz_repr::proto::newapi::IntoRustIfSome;
-use mz_repr::proto::newapi::ProtoType;
-use mz_repr::proto::newapi::RustType;
-use mz_repr::proto::ProtoRepr;
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
@@ -104,25 +100,21 @@ pub enum ReductionType {
     Basic,
 }
 
-impl From<&ReductionType> for ProtoReductionType {
-    fn from(x: &ReductionType) -> Self {
+impl RustType<ProtoReductionType> for ReductionType {
+    fn into_proto(&self) -> ProtoReductionType {
         use proto_reduction_type::Kind;
-        Self {
-            kind: Some(match x {
+        ProtoReductionType {
+            kind: Some(match self {
                 ReductionType::Accumulable => Kind::Accumulable(()),
                 ReductionType::Hierarchical => Kind::Hierarchical(()),
                 ReductionType::Basic => Kind::Basic(()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoReductionType> for ReductionType {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoReductionType) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoReductionType) -> Result<Self, TryFromProtoError> {
         use proto_reduction_type::Kind;
-        let kind = x
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("kind"))?;
         Ok(match kind {
@@ -211,37 +203,33 @@ impl Arbitrary for ReducePlan {
     }
 }
 
-impl From<&ReducePlan> for ProtoReducePlan {
-    fn from(x: &ReducePlan) -> Self {
-        use proto_reduce_plan::Kind;
-        Self {
-            kind: Some(match x {
-                ReducePlan::Distinct => Kind::Distinct(()),
-                ReducePlan::DistinctNegated => Kind::DistinctNegated(()),
-                ReducePlan::Accumulable(plan) => Kind::Accumulable(plan.into()),
-                ReducePlan::Hierarchical(plan) => Kind::Hierarchical(plan.into()),
-                ReducePlan::Basic(plan) => Kind::Basic(plan.into()),
-                ReducePlan::Collation(plan) => Kind::Collation(plan.into()),
+impl RustType<ProtoReducePlan> for ReducePlan {
+    fn into_proto(&self) -> ProtoReducePlan {
+        use proto_reduce_plan::Kind::*;
+        ProtoReducePlan {
+            kind: Some(match self {
+                ReducePlan::Distinct => Distinct(()),
+                ReducePlan::DistinctNegated => DistinctNegated(()),
+                ReducePlan::Accumulable(plan) => Accumulable(plan.into_proto()),
+                ReducePlan::Hierarchical(plan) => Hierarchical(plan.into_proto()),
+                ReducePlan::Basic(plan) => Basic(plan.into_proto()),
+                ReducePlan::Collation(plan) => Collation(plan.into_proto()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoReducePlan> for ReducePlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoReducePlan) -> Result<Self, Self::Error> {
-        use proto_reduce_plan::Kind;
-        let kind = x
+    fn from_proto(proto: ProtoReducePlan) -> Result<Self, TryFromProtoError> {
+        use proto_reduce_plan::Kind::*;
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoReducePlan::kind"))?;
         Ok(match kind {
-            Kind::Distinct(()) => ReducePlan::Distinct,
-            Kind::DistinctNegated(()) => ReducePlan::DistinctNegated,
-            Kind::Accumulable(plan) => ReducePlan::Accumulable(plan.try_into()?),
-            Kind::Hierarchical(plan) => ReducePlan::Hierarchical(plan.try_into()?),
-            Kind::Basic(plan) => ReducePlan::Basic(plan.try_into()?),
-            Kind::Collation(plan) => ReducePlan::Collation(plan.try_into()?),
+            Distinct(()) => ReducePlan::Distinct,
+            DistinctNegated(()) => ReducePlan::DistinctNegated,
+            Accumulable(plan) => ReducePlan::Accumulable(plan.into_rust()?),
+            Hierarchical(plan) => ReducePlan::Hierarchical(plan.into_rust()?),
+            Basic(plan) => ReducePlan::Basic(plan.into_rust()?),
+            Collation(plan) => ReducePlan::Collation(plan.into_rust()?),
         })
     }
 }
@@ -269,55 +257,38 @@ pub struct AccumulablePlan {
     pub distinct_aggrs: Vec<(usize, usize, AggregateExpr)>,
 }
 
-impl From<&(usize, usize, AggregateExpr)> for proto_accumulable_plan::ProtoAggr {
-    fn from(x: &(usize, usize, AggregateExpr)) -> Self {
-        Self {
-            index_agg: x.0.into_proto(),
-            index_inp: x.1.into_proto(),
-            expr: Some(x.2.into_proto()),
+impl RustType<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr) {
+    fn into_proto(&self) -> proto_accumulable_plan::ProtoAggr {
+        proto_accumulable_plan::ProtoAggr {
+            index_agg: self.0.into_proto(),
+            index_inp: self.1.into_proto(),
+            expr: Some(self.2.into_proto()),
         }
     }
-}
 
-impl TryFrom<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_accumulable_plan::ProtoAggr) -> Result<Self, Self::Error> {
+    fn from_proto(proto: proto_accumulable_plan::ProtoAggr) -> Result<Self, TryFromProtoError> {
         Ok((
-            x.index_agg.into_rust()?,
-            x.index_inp.into_rust()?,
-            x.expr.into_rust_if_some("ProtoAggr::expr")?,
+            proto.index_agg.into_rust()?,
+            proto.index_inp.into_rust()?,
+            proto.expr.into_rust_if_some("ProtoAggr::expr")?,
         ))
     }
 }
 
-impl From<&AccumulablePlan> for ProtoAccumulablePlan {
-    fn from(x: &AccumulablePlan) -> Self {
-        Self {
-            full_aggrs: x.full_aggrs.into_proto(),
-            simple_aggrs: x.simple_aggrs.iter().map(Into::into).collect(),
-            distinct_aggrs: x.distinct_aggrs.iter().map(Into::into).collect(),
+impl RustType<ProtoAccumulablePlan> for AccumulablePlan {
+    fn into_proto(&self) -> ProtoAccumulablePlan {
+        ProtoAccumulablePlan {
+            full_aggrs: self.full_aggrs.into_proto(),
+            simple_aggrs: self.simple_aggrs.into_proto(),
+            distinct_aggrs: self.distinct_aggrs.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoAccumulablePlan> for AccumulablePlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoAccumulablePlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoAccumulablePlan) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            full_aggrs: x.full_aggrs.into_rust()?,
-            simple_aggrs: x
-                .simple_aggrs
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-
-            distinct_aggrs: x
-                .distinct_aggrs
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            full_aggrs: proto.full_aggrs.into_rust()?,
+            simple_aggrs: proto.simple_aggrs.into_rust()?,
+            distinct_aggrs: proto.distinct_aggrs.into_rust()?,
         })
     }
 }
@@ -336,29 +307,25 @@ pub enum HierarchicalPlan {
     Bucketed(BucketedPlan),
 }
 
-impl From<&HierarchicalPlan> for ProtoHierarchicalPlan {
-    fn from(x: &HierarchicalPlan) -> Self {
+impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
+    fn into_proto(&self) -> ProtoHierarchicalPlan {
         use proto_hierarchical_plan::Kind;
-        Self {
-            kind: Some(match x {
-                HierarchicalPlan::Monotonic(plan) => Kind::Monotonic(plan.into()),
-                HierarchicalPlan::Bucketed(plan) => Kind::Bucketed(plan.into()),
+        ProtoHierarchicalPlan {
+            kind: Some(match self {
+                HierarchicalPlan::Monotonic(plan) => Kind::Monotonic(plan.into_proto()),
+                HierarchicalPlan::Bucketed(plan) => Kind::Bucketed(plan.into_proto()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoHierarchicalPlan> for HierarchicalPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoHierarchicalPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoHierarchicalPlan) -> Result<Self, TryFromProtoError> {
         use proto_hierarchical_plan::Kind;
-        let kind = x
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoHierarchicalPlan::Kind"))?;
         Ok(match kind {
-            Kind::Monotonic(plan) => HierarchicalPlan::Monotonic(plan.try_into()?),
-            Kind::Bucketed(plan) => HierarchicalPlan::Bucketed(plan.try_into()?),
+            Kind::Monotonic(plan) => HierarchicalPlan::Monotonic(plan.into_rust()?),
+            Kind::Bucketed(plan) => HierarchicalPlan::Bucketed(plan.into_rust()?),
         })
     }
 }
@@ -380,22 +347,18 @@ pub struct MonotonicPlan {
     pub skips: Vec<usize>,
 }
 
-impl From<&MonotonicPlan> for ProtoMonotonicPlan {
-    fn from(x: &MonotonicPlan) -> Self {
-        Self {
-            aggr_funcs: x.aggr_funcs.into_proto(),
-            skips: x.skips.into_proto(),
+impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
+    fn into_proto(&self) -> ProtoMonotonicPlan {
+        ProtoMonotonicPlan {
+            aggr_funcs: self.aggr_funcs.into_proto(),
+            skips: self.skips.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoMonotonicPlan> for MonotonicPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMonotonicPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoMonotonicPlan) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            aggr_funcs: x.aggr_funcs.into_rust()?,
-            skips: x.skips.into_rust()?,
+            aggr_funcs: proto.aggr_funcs.into_rust()?,
+            skips: proto.skips.into_rust()?,
         })
     }
 }
@@ -423,24 +386,20 @@ pub struct BucketedPlan {
     pub buckets: Vec<u64>,
 }
 
-impl From<&BucketedPlan> for ProtoBucketedPlan {
-    fn from(x: &BucketedPlan) -> Self {
+impl RustType<ProtoBucketedPlan> for BucketedPlan {
+    fn into_proto(&self) -> ProtoBucketedPlan {
         ProtoBucketedPlan {
-            aggr_funcs: x.aggr_funcs.into_proto(),
-            skips: x.skips.into_proto(),
-            buckets: x.buckets.clone(),
+            aggr_funcs: self.aggr_funcs.into_proto(),
+            skips: self.skips.into_proto(),
+            buckets: self.buckets.clone(),
         }
     }
-}
 
-impl TryFrom<ProtoBucketedPlan> for BucketedPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoBucketedPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoBucketedPlan) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            aggr_funcs: x.aggr_funcs.into_rust()?,
-            skips: x.skips.into_rust()?,
-            buckets: x.buckets,
+            aggr_funcs: proto.aggr_funcs.into_rust()?,
+            skips: proto.skips.into_rust()?,
+            buckets: proto.buckets,
         })
     }
 }
@@ -472,32 +431,30 @@ pub enum BasicPlan {
     Multiple(Vec<(usize, AggregateExpr)>),
 }
 
-impl From<&(usize, AggregateExpr)> for proto_basic_plan::ProtoSingleBasicPlan {
-    fn from(x: &(usize, AggregateExpr)) -> proto_basic_plan::ProtoSingleBasicPlan {
-        Self {
-            index: x.0.into_proto(),
-            expr: Some(x.1.into_proto()),
+impl RustType<proto_basic_plan::ProtoSingleBasicPlan> for (usize, AggregateExpr) {
+    fn into_proto(&self) -> proto_basic_plan::ProtoSingleBasicPlan {
+        proto_basic_plan::ProtoSingleBasicPlan {
+            index: self.0.into_proto(),
+            expr: Some(self.1.into_proto()),
         }
     }
-}
 
-impl TryFrom<proto_basic_plan::ProtoSingleBasicPlan> for (usize, AggregateExpr) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_basic_plan::ProtoSingleBasicPlan) -> Result<Self, Self::Error> {
+    fn from_proto(
+        proto: proto_basic_plan::ProtoSingleBasicPlan,
+    ) -> Result<Self, TryFromProtoError> {
         Ok((
-            x.index.into_rust()?,
-            x.expr.into_rust_if_some("ProtoSingleBasicPlan::expr")?,
+            proto.index.into_rust()?,
+            proto.expr.into_rust_if_some("ProtoSingleBasicPlan::expr")?,
         ))
     }
 }
 
-impl From<&BasicPlan> for ProtoBasicPlan {
-    fn from(x: &BasicPlan) -> Self {
+impl RustType<ProtoBasicPlan> for BasicPlan {
+    fn into_proto(&self) -> ProtoBasicPlan {
         use proto_basic_plan::*;
 
-        Self {
-            kind: Some(match x {
+        ProtoBasicPlan {
+            kind: Some(match self {
                 BasicPlan::Single(index, expr) => Kind::Single({
                     ProtoSingleBasicPlan {
                         index: index.into_proto(),
@@ -505,30 +462,15 @@ impl From<&BasicPlan> for ProtoBasicPlan {
                     }
                 }),
                 BasicPlan::Multiple(aggrs) => Kind::Multiple(ProtoMultipleBasicPlan {
-                    aggrs: aggrs.iter().map(Into::into).collect(),
+                    aggrs: aggrs.into_proto(),
                 }),
             }),
         }
     }
-}
 
-impl TryFrom<proto_basic_plan::ProtoMultipleBasicPlan> for Vec<(usize, AggregateExpr)> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_basic_plan::ProtoMultipleBasicPlan) -> Result<Self, Self::Error> {
-        x.aggrs
-            .into_iter()
-            .map(TryInto::try_into)
-            .collect::<Result<_, _>>()
-    }
-}
-
-impl TryFrom<ProtoBasicPlan> for BasicPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoBasicPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoBasicPlan) -> Result<Self, TryFromProtoError> {
         use proto_basic_plan::Kind;
-        let kind = x
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoBasicPlan::kind"))?;
 
@@ -537,7 +479,7 @@ impl TryFrom<ProtoBasicPlan> for BasicPlan {
                 x.index.into_rust()?,
                 x.expr.into_rust_if_some("ProtoSingleBasicPlan.expr")?,
             ),
-            Kind::Multiple(x) => BasicPlan::Multiple(x.try_into()?),
+            Kind::Multiple(x) => BasicPlan::Multiple(x.aggrs.into_rust()?),
         })
     }
 }
@@ -562,30 +504,22 @@ pub struct CollationPlan {
     pub aggregate_types: Vec<ReductionType>,
 }
 
-impl From<&CollationPlan> for ProtoCollationPlan {
-    fn from(x: &CollationPlan) -> Self {
-        Self {
-            accumulable: x.accumulable.as_ref().map(Into::into),
-            hierarchical: x.hierarchical.as_ref().map(Into::into),
-            basic: x.basic.as_ref().map(Into::into),
-            aggregate_types: x.aggregate_types.iter().map(Into::into).collect(),
+impl RustType<ProtoCollationPlan> for CollationPlan {
+    fn into_proto(&self) -> ProtoCollationPlan {
+        ProtoCollationPlan {
+            accumulable: self.accumulable.into_proto(),
+            hierarchical: self.hierarchical.into_proto(),
+            basic: self.basic.into_proto(),
+            aggregate_types: self.aggregate_types.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoCollationPlan> for CollationPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoCollationPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoCollationPlan) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            accumulable: x.accumulable.map(TryInto::try_into).transpose()?,
-            hierarchical: x.hierarchical.map(TryInto::try_into).transpose()?,
-            basic: x.basic.map(TryInto::try_into).transpose()?,
-            aggregate_types: x
-                .aggregate_types
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            accumulable: proto.accumulable.into_rust()?,
+            hierarchical: proto.hierarchical.into_rust()?,
+            basic: proto.basic.into_rust()?,
+            aggregate_types: proto.aggregate_types.into_rust()?,
         })
     }
 }
@@ -800,22 +734,22 @@ pub struct KeyValPlan {
     pub val_plan: mz_expr::SafeMfpPlan,
 }
 
-impl From<&KeyValPlan> for ProtoKeyValPlan {
-    fn from(x: &KeyValPlan) -> Self {
-        Self {
-            key_plan: Some(x.key_plan.into_proto()),
-            val_plan: Some(x.val_plan.into_proto()),
+impl RustType<ProtoKeyValPlan> for KeyValPlan {
+    fn into_proto(&self) -> ProtoKeyValPlan {
+        ProtoKeyValPlan {
+            key_plan: Some(self.key_plan.into_proto()),
+            val_plan: Some(self.val_plan.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoKeyValPlan> for KeyValPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoKeyValPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoKeyValPlan) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            key_plan: x.key_plan.into_rust_if_some("ProtoKeyValPlan::key_plan")?,
-            val_plan: x.val_plan.into_rust_if_some("ProtoKeyValPlan::val_plan")?,
+            key_plan: proto
+                .key_plan
+                .into_rust_if_some("ProtoKeyValPlan::key_plan")?,
+            val_plan: proto
+                .val_plan
+                .into_rust_if_some("ProtoKeyValPlan::val_plan")?,
         })
     }
 }
@@ -946,7 +880,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     // This test causes stack overflows if not run with --release,

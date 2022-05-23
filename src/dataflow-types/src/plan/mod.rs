@@ -587,8 +587,8 @@ impl From<&Plan> for ProtoPlan {
                 } => Reduce(
                     ProtoPlanReduce {
                         input: input.into(),
-                        key_val_plan: Some(key_val_plan.into()),
-                        plan: Some(plan.into()),
+                        key_val_plan: Some(key_val_plan.into_proto()),
+                        plan: Some(plan.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
                     }
                     .into(),
@@ -739,8 +739,8 @@ impl TryFrom<ProtoPlan> for Plan {
                 input: proto.input.try_into_if_some("ProtoPlanReduce::input")?,
                 key_val_plan: proto
                     .key_val_plan
-                    .try_into_if_some("ProtoPlanReduce::key_val_plan")?,
-                plan: proto.plan.try_into_if_some("ProtoPlanReduce::plan")?,
+                    .into_rust_if_some("ProtoPlanReduce::key_val_plan")?,
+                plan: proto.plan.into_rust_if_some("ProtoPlanReduce::plan")?,
                 input_key: input_k_try_into(proto.input_key)?,
             },
             TopK(proto) => Plan::TopK {
