@@ -125,7 +125,7 @@ impl From<&AvailableCollections> for ProtoAvailableCollections {
     fn from(x: &AvailableCollections) -> Self {
         Self {
             raw: x.raw,
-            arranged: x.arranged.iter().map(Into::into).collect(),
+            arranged: x.arranged.into_proto(),
         }
     }
 }
@@ -137,11 +137,7 @@ impl TryFrom<ProtoAvailableCollections> for AvailableCollections {
         Ok({
             Self {
                 raw: x.raw,
-                arranged: x
-                    .arranged
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
+                arranged: x.arranged.into_rust()?,
             }
         })
     }
@@ -611,7 +607,7 @@ impl From<&Plan> for ProtoPlan {
                 } => Threshold(
                     ProtoPlanThreshold {
                         input: input.into(),
-                        threshold_plan: Some(threshold_plan.into()),
+                        threshold_plan: Some(threshold_plan.into_proto()),
                     }
                     .into(),
                 ),
@@ -757,8 +753,10 @@ impl TryFrom<ProtoPlan> for Plan {
                 input: proto.try_into()?,
             },
             Threshold(proto) => Plan::Threshold {
-                input: proto.input.try_into_if_some("")?,
-                threshold_plan: proto.threshold_plan.try_into_if_some("")?,
+                input: proto.input.try_into_if_some("ProtoPlanThreshold::input")?,
+                threshold_plan: proto
+                    .threshold_plan
+                    .into_rust_if_some("ProtoPlanThreshold::threshold_plan")?,
             },
             Union(proto) => Plan::Union {
                 inputs: proto
