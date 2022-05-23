@@ -1639,7 +1639,7 @@ impl<S: Append> Catalog<S> {
                 .get_catalog_content_version()
                 .await?
                 // `new` means that it hasn't been initialized
-                .map_or("new".to_string(), |v| v);
+                .unwrap_or_else(|| "new".to_string());
 
             migrate::migrate(&mut catalog).await.map_err(|e| {
                 Error::new(ErrorKind::FailedMigration {

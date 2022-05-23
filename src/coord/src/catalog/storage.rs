@@ -352,7 +352,7 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
-        Ok(self.get_setting("catalog_content_version").await?)
+        self.get_setting("catalog_content_version").await
     }
 
     pub async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
