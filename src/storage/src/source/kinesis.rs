@@ -278,11 +278,7 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    // TODO what to use for the source ID?
-    let config = c
-        .aws
-        .load(aws_external_id_prefix, &format!("{}", source_id))
-        .await;
+    let config = c.aws.load(aws_external_id_prefix, Some(&source_id)).await;
     let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;

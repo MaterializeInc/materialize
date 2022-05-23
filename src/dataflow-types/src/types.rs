@@ -495,6 +495,7 @@ pub mod aws {
     use serde::{Deserialize, Serialize};
 
     use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
+    use mz_repr::GlobalId;
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
@@ -685,7 +686,7 @@ pub mod aws {
         pub async fn load(
             &self,
             external_id_prefix: Option<&AwsExternalIdPrefix>,
-            external_id_suffix: &str,
+            external_id_suffix: Option<&GlobalId>,
         ) -> aws_types::SdkConfig {
             use aws_config::default_provider::credentials::DefaultCredentialsChain;
             use aws_config::default_provider::region::DefaultRegionChain;
@@ -738,8 +739,12 @@ pub mod aws {
                     role = role.region(region.clone());
                 }
                 if let Some(external_id_prefix) = external_id_prefix {
-                    role = role
-                        .external_id(&format!("{}-{}", external_id_prefix.0, external_id_suffix));
+                    let external_id = if let Some(suffix) = external_id_suffix {
+                        format!("{}-{}", external_id_prefix.0, suffix)
+                    } else {
+                        external_id_prefix.0.to_owned()
+                    };
+                    role = role.external_id(external_id);
                 }
                 cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
             }

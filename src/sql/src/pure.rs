@@ -520,7 +520,7 @@ async fn validate_aws_credentials(
     config: &AwsConfig,
     external_id_prefix: Option<&AwsExternalIdPrefix>,
 ) -> Result<(), anyhow::Error> {
-    let config = config.load(external_id_prefix, "").await;
+    let config = config.load(external_id_prefix, None).await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client
         .get_caller_identity()
