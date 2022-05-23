@@ -624,7 +624,7 @@ impl CatalogState {
                     ExternalSourceConnector::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local { .. } => Volatile,
+                SourceConnector::Local { .. } | SourceConnector::Log => Volatile,
             },
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one
@@ -1498,9 +1498,7 @@ impl<S: Append> Catalog<S> {
                         name.clone(),
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
-                            connector: mz_dataflow_types::sources::SourceConnector::Local {
-                                timeline: Timeline::EpochMilliseconds,
-                            },
+                            connector: mz_dataflow_types::sources::SourceConnector::Log,
                             desc: log.variant.desc(),
                             depends_on: vec![],
                         }),
