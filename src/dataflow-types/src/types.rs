@@ -2665,7 +2665,7 @@ pub mod sources {
             ProtoSourceData {
                 kind: Some(match &**self {
                     Ok(row) => Kind::Ok(row.into_proto()),
-                    Err(err) => Kind::Err(err.into()),
+                    Err(err) => Kind::Err(err.into_proto()),
                 }),
             }
         }
@@ -2675,7 +2675,7 @@ pub mod sources {
             match proto.kind {
                 Some(kind) => match kind {
                     Kind::Ok(row) => Ok(SourceData(Ok(row.into_rust()?))),
-                    Kind::Err(err) => Ok(SourceData(Err(err.try_into()?))),
+                    Kind::Err(err) => Ok(SourceData(Err(err.into_rust()?))),
                 },
                 None => Result::Err(TryFromProtoError::missing_field("ProtoSourceData::kind")),
             }
