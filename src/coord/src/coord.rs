@@ -347,7 +347,7 @@ pub struct Coordinator<S> {
     txn_reads: HashMap<u32, TxnReads>,
 
     //TODO(jkosh44)
-    global_timeline_hold: read_holds::ReadHolds<mz_repr::Timestamp>,
+    global_timeline_hold: Option<read_holds::ReadHolds<mz_repr::Timestamp>>,
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
@@ -553,6 +553,8 @@ impl<S: Append + 'static> Coordinator<S> {
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
+        let mut source_ids = BTreeSet::new();
+
         // Sources and indexes may be depended upon by other catalog items,
         // insert them first.
         for entry in &entries {
@@ -586,10 +588,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.logical_compaction_window_ms,
                     )
                     .await;
-                    self.global_timeline_hold
-                        .id_bundle
-                        .storage_ids
-                        .insert(entry.id());
+                    source_ids.insert(entry.id());
                 }
                 CatalogItem::Table(_) => {
                     let since_ts = self.get_local_write_ts();
@@ -635,16 +634,18 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        // TODO(jkosh44) ugh
-        let global_timeline_hold = ReadHolds {
-            time: self.global_timeline_hold.time.clone(),
-            id_bundle: CollectionIdBundle {
-                storage_ids: self.global_timeline_hold.id_bundle.storage_ids.clone(),
-                compute_ids: BTreeSet::new(),
-            },
-            compute_instance: None,
-        };
-        self.acquire_read_holds(&global_timeline_hold).await;
+        if self.strict_serializability {
+            let global_timeline_hold = ReadHolds {
+                time: self.get_local_read_ts(),
+                id_bundle: CollectionIdBundle {
+                    storage_ids: source_ids,
+                    compute_ids: BTreeSet::new(),
+                },
+                compute_instance: None,
+            };
+            self.acquire_read_holds(&global_timeline_hold).await;
+            self.global_timeline_hold = Some(global_timeline_hold);
+        }
 
         for entry in entries {
             match entry.item() {
@@ -813,23 +814,25 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
                 Message::AdvanceLocalInputs => {
                     let now = self.now();
-                    let source_ids = self
-                        .catalog
-                        .entries()
-                        .filter(|entry| matches!(entry.item().typ(), CatalogItemType::Source))
-                        .map(|entry| entry.id())
-                        .collect();
-                    let mut read_holds = ReadHolds {
-                        time: now,
-                        id_bundle: CollectionIdBundle {
-                            storage_ids: source_ids,
-                            compute_ids: BTreeSet::new(),
-                        },
-                        compute_instance: None,
-                    };
-                    self.acquire_read_holds(&read_holds).await;
-                    std::mem::swap(&mut read_holds, &mut self.global_timeline_hold);
-                    self.release_read_hold(read_holds).await;
+                    if self.strict_serializability {
+                        let source_ids = self
+                            .catalog
+                            .entries()
+                            .filter(|entry| matches!(entry.item().typ(), CatalogItemType::Source))
+                            .map(|entry| entry.id())
+                            .collect();
+                        let mut read_holds = Some(ReadHolds {
+                            time: now,
+                            id_bundle: CollectionIdBundle {
+                                storage_ids: source_ids,
+                                compute_ids: BTreeSet::new(),
+                            },
+                            compute_instance: None,
+                        });
+                        self.acquire_read_holds(&read_holds.as_ref().unwrap()).await;
+                        std::mem::swap(&mut read_holds, &mut self.global_timeline_hold);
+                        self.release_read_hold(read_holds.unwrap()).await;
+                    }
 
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
@@ -4956,14 +4959,7 @@ pub async fn serve<S: Append + 'static>(
                 availability_zones,
                 connector_context,
                 strict_serializability,
-                global_timeline_hold: ReadHolds {
-                    time: now_ts,
-                    id_bundle: CollectionIdBundle {
-                        storage_ids: BTreeSet::new(),
-                        compute_ids: BTreeSet::new(),
-                    },
-                    compute_instance: None,
-                },
+                global_timeline_hold: None,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
