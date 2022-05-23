@@ -35,7 +35,7 @@ mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }
 mz-storage = { path = "../storage", default-features = false }
 mz-timely-util = { path = "../timely-util" }
-prometheus = { version = "0.13.0", default-features = false }
+prometheus = { version = "0.13.1", default-features = false }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 scopeguard = "1.1.0"
 serde = { version = "1.0.137", features = ["derive"] }
