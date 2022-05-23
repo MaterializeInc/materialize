@@ -41,7 +41,7 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 
 use crate::error::PosError;
-use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
+use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};
 use crate::util;
 
 mod file;
@@ -639,11 +639,11 @@ pub(crate) async fn build(
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
-
-                sql.expected_error = if matches!(sql.error_match_type, SqlErrorMatchType::Regex) {
-                    subst_re(&sql.expected_error)?
-                } else {
-                    subst(&sql.expected_error)?
+                sql.expected_error = match &sql.expected_error {
+                    SqlExpectedError::Contains(s) => SqlExpectedError::Contains(subst(s)?),
+                    SqlExpectedError::Exact(s) => SqlExpectedError::Exact(subst(s)?),
+                    SqlExpectedError::Regex(s) => SqlExpectedError::Regex(subst_re(&s)?),
+                    SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
                 Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?)
             }

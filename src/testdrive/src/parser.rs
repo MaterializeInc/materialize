@@ -7,15 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{anyhow, bail, Context};
-use lazy_static::lazy_static;
-use regex::Regex;
-
 use std::borrow::ToOwned;
 use std::collections::hash_map;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::str::FromStr;
+
+use anyhow::{anyhow, bail, Context};
+use lazy_static::lazy_static;
+use regex::Regex;
 
 use crate::error::PosError;
 
@@ -59,15 +59,15 @@ pub struct SqlCommand {
 #[derive(Debug, Clone)]
 pub struct FailSqlCommand {
     pub query: String,
-    pub error_match_type: SqlErrorMatchType,
-    pub expected_error: String,
+    pub expected_error: SqlExpectedError,
 }
 
 #[derive(Debug, Clone)]
-pub enum SqlErrorMatchType {
-    Contains,
-    Exact,
-    Regex,
+pub enum SqlExpectedError {
+    Contains(String),
+    Exact(String),
+    Regex(String),
+    Timeout,
 }
 
 pub(crate) fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, PosError> {
@@ -245,25 +245,25 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosErr
     };
     let query = line1[1..].trim().to_string();
 
-    let (expected_error, error_match_type) =
-        if let Some(exp_err) = expected_error.strip_prefix("regex:") {
-            (exp_err, SqlErrorMatchType::Regex)
-        } else if let Some(exp_err) = expected_error.strip_prefix("contains:") {
-            (exp_err, SqlErrorMatchType::Contains)
-        } else if let Some(exp_err) = expected_error.strip_prefix("exact:") {
-            (exp_err, SqlErrorMatchType::Exact)
-        } else {
-            return Err(PosError {
+    let expected_error = if let Some(e) = expected_error.strip_prefix("regex:") {
+        SqlExpectedError::Regex(e.trim().into())
+    } else if let Some(e) = expected_error.strip_prefix("contains:") {
+        SqlExpectedError::Contains(e.trim().into())
+    } else if let Some(e) = expected_error.strip_prefix("exact:") {
+        SqlExpectedError::Exact(e.trim().into())
+    } else if expected_error == "timeout" {
+        SqlExpectedError::Timeout
+    } else {
+        return Err(PosError {
                 pos: Some(err_pos),
                 source: anyhow!(
-                    "Query error must start with match specifier (`regex:`|`contains:`|`exact:`)"
+                    "Query error must start with match specifier (`regex:`|`contains:`|`exact:`|`timeout`)"
                 ),
             });
-        };
+    };
     Ok(FailSqlCommand {
         query: query.trim().to_string(),
-        expected_error: expected_error.trim().to_string(),
-        error_match_type,
+        expected_error,
     })
 }
 
