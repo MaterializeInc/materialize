@@ -62,6 +62,15 @@ message ProtoDebeziumTransactionMetadata {
     uint64 data_transaction_id_idx = 8;
 }
 
+message ProtoDebeziumDedupProjection {
+    uint64 source_idx = 1;
+    uint64 snapshot_idx = 2;
+    ProtoDebeziumSourceProjection source_projection = 3;
+    uint64 transaction_idx = 4;
+    uint64 total_order_idx = 5;
+    ProtoDebeziumTransactionMetadata tx_metadata = 6;
+}
+
 message ProtoDebeziumSourceProjection {
     message ProtoMySql {
         uint64 file = 1;
