@@ -23,7 +23,7 @@ futures = "0.3.21"
 futures-executor = "0.3.21"
 futures-util = "0.3.19"
 globset = { version = "0.4.8", optional = true }
-lazy_static = { version = "1.4.0", optional = true }
+once_cell = { version = "1.12.0", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
 mz-ccsr = { path = "../ccsr", optional = true }
 mz-dataflow-types = { path = "../dataflow-types" }
@@ -67,7 +67,7 @@ server = [
     "crossbeam-channel",
     "csv-core",
     "globset",
-    "lazy_static",
+    "once_cell",
     "mz-avro",
     "mz-ccsr",
     "mz-interchange",

@@ -11,7 +11,7 @@ use std::borrow::Borrow;
 use std::fmt;
 
 use const_format::concatcp;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use uncased::UncasedStr;
 
 use mz_ore::cast;
@@ -111,15 +111,13 @@ const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
     description: "Enables optimizations based on a Query Graph Model (QGM) query representation.",
 };
 
-lazy_static! {
-    static ref DEFAULT_SEARCH_PATH: [String; 1] = [DEFAULT_SCHEMA.to_owned(),];
-    static ref SEARCH_PATH: ServerVar<[String]> = ServerVar {
-        name: UncasedStr::new("search_path"),
-        value: &*DEFAULT_SEARCH_PATH,
-        description:
-            "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
-    };
-}
+static DEFAULT_SEARCH_PATH: Lazy<[String; 1]> = Lazy::new(|| [DEFAULT_SCHEMA.to_owned()]);
+static SEARCH_PATH: Lazy<ServerVar<[String]>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("search_path"),
+    value: &*DEFAULT_SEARCH_PATH,
+    description:
+        "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
+});
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
     name: UncasedStr::new("server_version"),

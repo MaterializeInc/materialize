@@ -25,11 +25,11 @@ use aws_types::credentials::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use mz_coord::catalog::{Catalog, ConnCatalog};
 use mz_coord::session::Session;
 use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::now::NOW_ZERO;
+use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
@@ -663,9 +663,7 @@ fn substitute_vars(
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"\$\{([^}]+)\}").unwrap();
-    }
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
     let mut err = None;
     let out = RE.replace_all(msg, |caps: &Captures| {
         let name = &caps[1];

@@ -36,7 +36,7 @@ use fail::FailScenario;
 use http::header::{HeaderName, HeaderValue};
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use sysinfo::{ProcessorExt, SystemExt};
 use tower_http::cors::{self, AllowOrigin};
 use tracing_subscriber::filter::Targets;
@@ -71,14 +71,12 @@ mod sys;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-lazy_static! {
-    pub static ref VERSION: String = materialized::BUILD_INFO.human_version();
-    pub static ref LONG_VERSION: String = {
-        iter::once(materialized::BUILD_INFO.human_version())
-            .chain(build_info())
-            .join("\n")
-    };
-}
+pub static VERSION: Lazy<String> = Lazy::new(|| materialized::BUILD_INFO.human_version());
+pub static LONG_VERSION: Lazy<String> = Lazy::new(|| {
+    iter::once(materialized::BUILD_INFO.human_version())
+        .chain(build_info())
+        .join("\n")
+});
 
 type OptionalDuration = Option<Duration>;
 

@@ -13,8 +13,8 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use lazy_static::lazy_static;
     use mz_ore::result::ResultExt;
+    use once_cell::sync::Lazy;
     use proc_macro2::TokenTree;
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
@@ -79,13 +79,11 @@ mod tests {
         OptionStructNesting(SecondLayerOfOption),
     }
 
-    lazy_static! {
-        static ref RTI: ReflectedTypeInfo = {
-            let mut rti = ReflectedTypeInfo::default();
-            TestEnum::add_to_reflected_type_info(&mut rti);
-            rti
-        };
-    }
+    static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
+        let mut rti = ReflectedTypeInfo::default();
+        TestEnum::add_to_reflected_type_info(&mut rti);
+        rti
+    });
 
     #[derive(Default)]
     struct TestOverrideDeserializeContext;

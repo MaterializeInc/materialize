@@ -13,7 +13,7 @@ use std::fmt;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use chrono::Timelike;
 use itertools::Itertools;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use serde_json::json;
 
 use mz_avro::types::{AvroMap, DecimalValue, Value};
@@ -27,14 +27,13 @@ use crate::encode::{column_names_and_types, Encode, TypedDatum};
 use crate::envelopes::{self, ENVELOPE_CUSTOM_NAMES};
 use crate::json::build_row_schema_json;
 
-lazy_static! {
-    // TODO(rkhaitan): this schema intentionally omits the data_collections field
-    // that is typically present in Debezium transaction metadata topics. See
-    // https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata
-    // for more information. We chose to omit this field because it is redundant
-    // for sinks where each consistency topic corresponds to exactly one sink.
-    // We will need to add it in order to be able to reingest sinked topics.
-    static ref DEBEZIUM_TRANSACTION_SCHEMA: Schema =
+// TODO(rkhaitan): this schema intentionally omits the data_collections field
+// that is typically present in Debezium transaction metadata topics. See
+// https://debezium.io/documentation/reference/connectors/postgresql.html#postgresql-transaction-metadata
+// for more information. We chose to omit this field because it is redundant
+// for sinks where each consistency topic corresponds to exactly one sink.
+// We will need to add it in order to be able to reingest sinked topics.
+static DEBEZIUM_TRANSACTION_SCHEMA: Lazy<Schema> = Lazy::new(|| {
     Schema::parse(&json!({
         "type": "record",
         "name": "envelope",
@@ -79,8 +78,9 @@ lazy_static! {
                 "default": null,
             },
         ]
-    })).expect("valid schema constructed");
-}
+    }))
+    .expect("valid schema constructed")
+});
 
 fn encode_avro_header(buf: &mut Vec<u8>, schema_id: i32) {
     // The first byte is a magic byte (0) that indicates the Confluent

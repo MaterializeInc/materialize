@@ -14,7 +14,7 @@ use std::error::Error;
 use std::str::FromStr;
 
 use anyhow::{anyhow, bail, Context};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::error::PosError;
@@ -141,9 +141,7 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, PosErro
 
 /// Validate that the string is an allowed variable name (lowercase letters, numbers and dashes)
 pub fn validate_ident(name: &str) -> Result<(), anyhow::Error> {
-    lazy_static! {
-        static ref VALID_KEY_REGEX: Regex = Regex::new("^[a-z0-9\\-]*$").unwrap();
-    }
+    static VALID_KEY_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("^[a-z0-9\\-]*$").unwrap());
     if !VALID_KEY_REGEX.is_match(name) {
         bail!(
             "invalid builtin argument name '{}': \
@@ -161,9 +159,8 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     let line3 = slurp_one(line_reader);
     let mut column_names = None;
     let mut expected_rows = Vec::new();
-    lazy_static! {
-        static ref HASH_REGEX: Regex = Regex::new(r"^(\S+) values hashing to (\S+)$").unwrap();
-    }
+    static HASH_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^(\S+) values hashing to (\S+)$").unwrap());
     match (line2, line3) {
         (Some((pos2, line2)), Some((pos3, line3))) => {
             if line3.len() >= 3 && line3.chars().all(|c| c == '-') {

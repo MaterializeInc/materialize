@@ -17,7 +17,7 @@ use std::fmt;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -52,30 +52,32 @@ pub const NUMERIC_AGG_MAX_PRECISION: u8 = NUMERIC_AGG_WIDTH * 3;
 /// A double-width version of [`Numeric`] for use in aggregations.
 pub type NumericAgg = Decimal<NUMERIC_AGG_WIDTH_USIZE>;
 
-lazy_static! {
-    static ref CX_DATUM: Context<Numeric> = {
-        let mut cx = Context::<Numeric>::default();
-        cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1)).unwrap();
-        cx.set_min_exponent(-isize::from(NUMERIC_DATUM_MAX_PRECISION)).unwrap();
-        cx
-    };
-    static ref CX_AGG: Context<NumericAgg> = {
-        let mut cx = Context::<NumericAgg>::default();
-        cx.set_max_exponent(isize::from(NUMERIC_AGG_MAX_PRECISION - 1)).unwrap();
-        cx.set_min_exponent(-isize::from(NUMERIC_AGG_MAX_PRECISION)).unwrap();
-        cx
-    };
-    static ref U128_SPLITTER_DATUM: Numeric = {
-        let mut cx = Numeric::context();
-        // 1 << 128
-        cx.parse("340282366920938463463374607431768211456").unwrap()
-    };
-    static ref U128_SPLITTER_AGG: NumericAgg = {
-        let mut cx = NumericAgg::context();
-        // 1 << 128
-        cx.parse("340282366920938463463374607431768211456").unwrap()
-    };
-}
+static CX_DATUM: Lazy<Context<Numeric>> = Lazy::new(|| {
+    let mut cx = Context::<Numeric>::default();
+    cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1))
+        .unwrap();
+    cx.set_min_exponent(-isize::from(NUMERIC_DATUM_MAX_PRECISION))
+        .unwrap();
+    cx
+});
+static CX_AGG: Lazy<Context<NumericAgg>> = Lazy::new(|| {
+    let mut cx = Context::<NumericAgg>::default();
+    cx.set_max_exponent(isize::from(NUMERIC_AGG_MAX_PRECISION - 1))
+        .unwrap();
+    cx.set_min_exponent(-isize::from(NUMERIC_AGG_MAX_PRECISION))
+        .unwrap();
+    cx
+});
+static U128_SPLITTER_DATUM: Lazy<Numeric> = Lazy::new(|| {
+    let mut cx = Numeric::context();
+    // 1 << 128
+    cx.parse("340282366920938463463374607431768211456").unwrap()
+});
+static U128_SPLITTER_AGG: Lazy<NumericAgg> = Lazy::new(|| {
+    let mut cx = NumericAgg::context();
+    // 1 << 128
+    cx.parse("340282366920938463463374607431768211456").unwrap()
+});
 
 /// The `max_scale` of a [`ScalarType::Numeric`].
 ///

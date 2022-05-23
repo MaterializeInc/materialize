@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -453,12 +453,10 @@ impl fmt::Display for CastStringToVarChar {
 
 // If we support another vector type, this should likely get hoisted into a
 // position akin to array parsing.
-lazy_static! {
-    static ref INT2VECTOR_CAST_EXPR: MirScalarExpr = MirScalarExpr::CallUnary {
-        func: UnaryFunc::CastStringToInt16(CastStringToInt16),
-        expr: Box::new(MirScalarExpr::Column(0)),
-    };
-}
+static INT2VECTOR_CAST_EXPR: Lazy<MirScalarExpr> = Lazy::new(|| MirScalarExpr::CallUnary {
+    func: UnaryFunc::CastStringToInt16(CastStringToInt16),
+    expr: Box::new(MirScalarExpr::Column(0)),
+});
 
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,

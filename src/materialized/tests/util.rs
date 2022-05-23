@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lazy_static::lazy_static;
 use mz_persist_client::PersistLocation;
+use once_cell::sync::Lazy;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -32,13 +32,13 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
 
-lazy_static! {
-    pub static ref KAFKA_ADDRS: mz_kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
+pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
+    Lazy::new(|| match env::var("KAFKA_ADDRS") {
         Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
         _ => "localhost:9092".parse().unwrap(),
-    };
-    static ref PORT_ALLOCATOR: Arc<PortAllocator> = Arc::new(PortAllocator::new(2100, 2200));
-}
+    });
+static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
+    Lazy::new(|| Arc::new(PortAllocator::new(2100, 2200)));
 
 #[derive(Clone)]
 pub struct Config {

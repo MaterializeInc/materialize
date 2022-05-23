@@ -11,7 +11,7 @@ byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 dec = "0.4.8"
-lazy_static = "1.4.0"
+once_cell = "1.12.0"
 mz-repr = { path = "../repr" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-1"] }
 uuid = "1.0.0"

@@ -12,8 +12,8 @@
 use std::borrow::ToOwned;
 
 use anyhow::{anyhow, bail};
-use lazy_static::lazy_static;
 use mz_repr::ColumnName;
+use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::ast::{Location, Mode, Output, QueryOutput, Record, Sort, Type};
@@ -72,9 +72,8 @@ impl<'a> Parser<'a> {
             return Ok(Record::Halt);
         }
 
-        lazy_static! {
-            static ref COMMENT_AND_LINE_REGEX: Regex = Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap();
-        }
+        static COMMENT_AND_LINE_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap());
         let first_line = self.split_at(&COMMENT_AND_LINE_REGEX)?.trim();
 
         if first_line.is_empty() {
@@ -181,9 +180,8 @@ impl<'a> Parser<'a> {
             Some("error") => expected_error = Some(parse_expected_error(first_line)),
             _ => bail!("invalid statement disposition: {}", first_line),
         };
-        lazy_static! {
-            static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
-        }
+        static DOUBLE_LINE_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
         let sql = self.split_at(&DOUBLE_LINE_REGEX)?;
         Ok(Record::Statement {
             expected_error,
@@ -201,10 +199,8 @@ impl<'a> Parser<'a> {
         let location = self.location();
         if words.peek() == Some(&"error") {
             let error = parse_expected_error(first_line);
-            lazy_static! {
-                static ref DOUBLE_LINE_REGEX: Regex =
-                    Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
-            }
+            static DOUBLE_LINE_REGEX: Lazy<Regex> =
+                Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
             let sql = self.split_at(&DOUBLE_LINE_REGEX)?;
             return Ok(Record::Query {
                 sql,
@@ -243,16 +239,14 @@ impl<'a> Parser<'a> {
             bail!("multiline option is incompatible with all other options");
         }
         let label = words.next();
-        lazy_static! {
-            static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
-            static ref HASH_REGEX: Regex = Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
-            static ref QUERY_OUTPUT_REGEX: Regex = Regex::new(r"\r?\n----").unwrap();
-        }
+        static LINE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new("\r?(\n|$)").unwrap());
+        static HASH_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(\S+) values hashing to (\S+)").unwrap());
+        static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
-        lazy_static! {
-            static ref EOF_REGEX: Regex = Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap();
-            static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
-        }
+        static EOF_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\n|\r\n)EOF(\n|\r\n)").unwrap());
+        static DOUBLE_LINE_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
         let mut output_str = self
             .split_at(if multiline {
                 &EOF_REGEX
@@ -343,10 +337,9 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        lazy_static! {
-            static ref QUERY_OUTPUT_REGEX: Regex = Regex::new(r"\r?\n----").unwrap();
-            static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
-        }
+        static QUERY_OUTPUT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\r?\n----").unwrap());
+        static DOUBLE_LINE_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap());
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
         let output_str = self.split_at(&DOUBLE_LINE_REGEX)?.trim_start();
         let output = Output::Values(output_str.lines().map(String::from).collect());
@@ -388,15 +381,9 @@ fn parse_types(input: &str) -> Result<Vec<Type>, anyhow::Error> {
         .collect()
 }
 
-lazy_static! {
-    static ref WHITESPACE_REGEX: Regex = Regex::new(r"\s+").unwrap();
-}
-
 fn parse_expected_error(line: &str) -> &str {
-    lazy_static! {
-        static ref PGCODE_RE: Regex =
-            Regex::new("(statement|query) error( pgcode [a-zA-Z0-9]{5})? ?").unwrap();
-    }
+    static PGCODE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new("(statement|query) error( pgcode [a-zA-Z0-9]{5})? ?").unwrap());
     // TODO(benesch): one day this should record the expected pgcode, if
     // specified.
     let pos = PGCODE_RE.find(line).unwrap().end();

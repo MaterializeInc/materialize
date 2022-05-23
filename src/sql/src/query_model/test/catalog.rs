@@ -21,36 +21,34 @@ use crate::names::{
 use crate::plan::StatementDesc;
 use crate::DEFAULT_SCHEMA;
 use chrono::MIN_DATETIME;
-use lazy_static::lazy_static;
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_dataflow_types::sources::SourceConnector;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-lazy_static! {
-    static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
-        start_time: MIN_DATETIME,
-        start_instant: Instant::now(),
-        nonce: 0,
-        cluster_id: Uuid::from_u128(0),
-        session_id: Uuid::from_u128(0),
-        experimental_mode: false,
-        build_info: &DUMMY_BUILD_INFO,
-        timestamp_frequency: Duration::from_secs(1),
-        now: NOW_ZERO.clone(),
-    };
-    static ref RTI: ReflectedTypeInfo = {
-        let mut rti = ReflectedTypeInfo::default();
-        TestCatalogCommand::add_to_reflected_type_info(&mut rti);
-        rti
-    };
-}
+static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
+    start_time: MIN_DATETIME,
+    start_instant: Instant::now(),
+    nonce: 0,
+    cluster_id: Uuid::from_u128(0),
+    session_id: Uuid::from_u128(0),
+    experimental_mode: false,
+    build_info: &DUMMY_BUILD_INFO,
+    timestamp_frequency: Duration::from_secs(1),
+    now: NOW_ZERO.clone(),
+});
+static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
+    let mut rti = ReflectedTypeInfo::default();
+    TestCatalogCommand::add_to_reflected_type_info(&mut rti);
+    rti
+});
 
 /// A dummy [`CatalogItem`] implementation.
 ///

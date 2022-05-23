@@ -19,7 +19,7 @@ use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::ipc::read::{read_file_metadata, FileMetadata, FileReader};
 use arrow2::io::ipc::write::{FileWriter, WriteOptions};
 use differential_dataflow::trace::Description;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
@@ -31,9 +31,9 @@ use crate::indexed::encoding::{
 };
 use crate::location::SeqNo;
 
-lazy_static! {
-    /// The Arrow schema we use to encode ((K, V), T, D) tuples.
-    pub static ref SCHEMA_ARROW_KVTD: Arc<Schema> = Arc::new(Schema::from(vec![
+/// The Arrow schema we use to encode ((K, V), T, D) tuples.
+pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
+    Arc::new(Schema::from(vec![
         Field {
             name: "k".into(),
             data_type: DataType::Binary,
@@ -58,8 +58,8 @@ lazy_static! {
             is_nullable: false,
             metadata: BTreeMap::new(),
         },
-    ]));
-}
+    ]))
+});
 
 const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 

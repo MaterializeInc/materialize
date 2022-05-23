@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use proc_macro2::TokenTree;
 use serde_json::Value;
 
@@ -23,14 +23,12 @@ use mz_ore::str::separated;
 use mz_repr::{ColumnType, GlobalId, RelationType, Row, ScalarType};
 use mz_repr_test_util::*;
 
-lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = {
-        let mut rti = ReflectedTypeInfo::default();
-        EvalError::add_to_reflected_type_info(&mut rti);
-        MirRelationExpr::add_to_reflected_type_info(&mut rti);
-        rti
-    };
-}
+pub static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
+    let mut rti = ReflectedTypeInfo::default();
+    EvalError::add_to_reflected_type_info(&mut rti);
+    MirRelationExpr::add_to_reflected_type_info(&mut rti);
+    rti
+});
 
 /// Builds a `MirScalarExpr` from a string.
 ///

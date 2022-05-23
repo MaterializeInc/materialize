@@ -43,9 +43,9 @@ use bytes::BytesMut;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
-use lazy_static::lazy_static;
 use md5::{Digest, Md5};
 use mz_persist_client::PersistLocation;
+use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
@@ -270,8 +270,8 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                 "FAIL"
             }
         )?;
-        lazy_static! {
-            static ref NAMES: Vec<&'static str> = vec![
+        static NAMES: Lazy<Vec<&'static str>> = Lazy::new(|| {
+            vec![
                 "unsupported",
                 "parse-failure",
                 "plan-failure",
@@ -283,8 +283,8 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
                 "bail",
                 "success",
                 "total",
-            ];
-        }
+            ]
+        });
         for (i, n) in self.inner.0.iter().enumerate() {
             if *n > 0 {
                 write!(f, " {}={}", NAMES[i], n)?;
@@ -669,10 +669,8 @@ impl Runner {
         sql: &'a str,
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
-        lazy_static! {
-            static ref UNSUPPORTED_INDEX_STATEMENT_REGEX: Regex =
-                Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap();
-        }
+        static UNSUPPORTED_INDEX_STATEMENT_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new("^(CREATE UNIQUE INDEX|REINDEX)").unwrap());
         if UNSUPPORTED_INDEX_STATEMENT_REGEX.is_match(sql) {
             // sure, we totally made you an index
             return Ok(Outcome::Success);
