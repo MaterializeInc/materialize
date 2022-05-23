@@ -14,11 +14,11 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::cast::CastFrom;
 use mz_ore::task::RuntimeExt;
+use mz_persist_types::Codec64;
 use timely::progress::Antichain;
 use timely::PartialOrder;
-
-use mz_ore::cast::CastFrom;
 use tokio::runtime::Handle;
 use uuid::Uuid;
 
@@ -273,7 +273,7 @@ impl<B: BlobMulti + Send + Sync + 'static> Maintainer<B> {
             differential_dataflow::consolidation::consolidate_updates(&mut consolidation_buffer);
 
             for ((key, val), time, diff) in consolidation_buffer.iter() {
-                builder.push(((key, val), *time, *diff));
+                builder.push(((key, val), u64::encode(time), i64::encode(diff)));
 
                 // Move data from builder into storage as we fill up ColumnarRecords.
                 if let Some(filled) = builder.take_filled() {
@@ -345,7 +345,7 @@ impl<B: BlobMulti + Send + Sync + 'static> Maintainer<B> {
         let batch_part = blob.get_trace_batch_async(key, CacheHint::NeverAdd).await?;
         updates.extend(batch_part.updates.iter().flat_map(|u| {
             u.iter()
-                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
+                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), u64::decode(t), i64::decode(d)))
         }));
 
         Ok(())
@@ -620,7 +620,13 @@ mod tests {
         }
 
         for batch_part in batch_parts.iter() {
-            updates.extend(batch_part.updates.iter().flat_map(|u| u.iter()));
+            updates.extend(
+                batch_part
+                    .updates
+                    .iter()
+                    .flat_map(|u| u.iter())
+                    .map(|(kv, t, d)| (kv, u64::decode(t), i64::decode(d))),
+            );
         }
 
         assert_eq!(updates, test.expected_updates);

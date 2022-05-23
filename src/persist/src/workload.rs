@@ -15,6 +15,7 @@ use std::io::Write;
 use std::mem::size_of;
 
 use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec64;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 
@@ -164,8 +165,9 @@ impl DataGenerator {
             0,
         );
         for record_idx in batch_start..batch_end {
+            let (kv, t, d) = self.gen_record(record_idx);
             assert!(
-                batch.push(self.gen_record(record_idx)),
+                batch.push((kv, Codec64::encode(&t), Codec64::encode(&d))),
                 "generator exceeded batch size; smaller batches needed"
             );
         }
@@ -238,8 +240,8 @@ pub fn flat_blob(data: &DataGenerator) -> Vec<u8> {
         for ((k, v), t, d) in batch.iter() {
             buf.extend_from_slice(k);
             buf.extend_from_slice(v);
-            buf.extend_from_slice(&t.to_le_bytes());
-            buf.extend_from_slice(&d.to_le_bytes());
+            buf.extend_from_slice(&t);
+            buf.extend_from_slice(&d);
         }
     }
     assert_eq!(buf.len(), usize::cast_from(data.goodput_bytes()));

@@ -921,7 +921,7 @@ mod tests {
                 let mut current_upper = 0;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
-                        Some((_, max_ts, _)) => max_ts + 1,
+                        Some((_, max_ts, _)) => u64::decode(max_ts) + 1,
                         None => continue,
                     };
                     // Because we (intentionally) call open inside the task,
@@ -949,7 +949,7 @@ mod tests {
 
                     for ((k, v), t, d) in batch.iter() {
                         builder
-                            .add(&k.to_vec(), &v.to_vec(), &t, &d)
+                            .add(&k.to_vec(), &v.to_vec(), &u64::decode(t), &i64::decode(d))
                             .await
                             .expect("invalid usage");
                     }

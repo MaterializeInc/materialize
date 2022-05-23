@@ -748,9 +748,8 @@ where
         self.val_buf.clear();
         K::encode(key, &mut self.key_buf);
         V::encode(val, &mut self.val_buf);
-        // TODO: Get rid of the from_le_bytes.
-        let t = u64::from_le_bytes(T::encode(ts));
-        let d = i64::from_le_bytes(D::encode(diff));
+        let t = T::encode(ts);
+        let d = D::encode(diff);
 
         if self.records.len() == 0 {
             // Use the first record to attempt to pre-size the builder

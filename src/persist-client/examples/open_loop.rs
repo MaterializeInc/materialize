@@ -406,6 +406,7 @@ mod raw_persist_benchmark {
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
     use mz_persist_client::{PersistClient, ShardId};
+    use mz_persist_types::Codec64;
     use tokio::task::JoinHandle;
 
     use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
@@ -473,11 +474,11 @@ mod raw_persist_benchmark {
 
                     for ((k, v), t, d) in records.iter() {
                         builder
-                            .add(&k.to_vec(), &v.to_vec(), &t, &d)
+                            .add(&k.to_vec(), &v.to_vec(), &u64::decode(t), &i64::decode(d))
                             .await
                             .expect("invalid usage");
 
-                        max_ts = std::cmp::max(max_ts, t);
+                        max_ts = std::cmp::max(max_ts, u64::decode(t));
                     }
 
                     max_ts = max_ts + 1;

@@ -13,13 +13,14 @@
 // Ditto for Log* and the Log. The others are used internally in these top-level
 // structs.
 
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::io::Cursor;
+use std::marker::PhantomData;
 
 use bytes::BufMut;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
-use mz_persist_types::Codec;
+use mz_persist_types::{Codec, Codec64};
 use prost::Message;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -147,9 +148,16 @@ impl TraceBatchMeta {
         {
             let ((_key, _val), _ts, diff) = update;
 
+            // TODO: Don't assume diff is an i64, take a D type param instead.
+            let diff: u64 = Codec64::decode(diff);
+
             // Check data invariants.
             if diff == 0 {
-                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
+                return Err(format!(
+                    "update with 0 diff: {:?}",
+                    PrettyRecord::<u64, i64>(update, PhantomData)
+                )
+                .into());
             }
         }
 
@@ -170,6 +178,11 @@ impl BlobTraceBatchPart {
 
         for update in self.updates.iter().flat_map(|u| u.iter()) {
             let ((_key, _val), ts, diff) = update;
+            // TODO: Don't assume ts and diff are a u64 and a i64, take T and D
+            // type params instead.
+            let ts: u64 = Codec64::decode(ts);
+            let diff: i64 = Codec64::decode(diff);
+
             // Check ts against desc.
             if !self.desc.lower().less_equal(&ts) {
                 return Err(format!(
@@ -197,7 +210,11 @@ impl BlobTraceBatchPart {
 
             // Check data invariants.
             if diff == 0 {
-                return Err(format!("update with 0 diff: {:?}", PrettyRecord(update)).into());
+                return Err(format!(
+                    "update with 0 diff: {:?}",
+                    PrettyRecord::<u64, i64>(update, PhantomData)
+                )
+                .into());
             }
         }
         Ok(())
@@ -236,12 +253,26 @@ impl fmt::Debug for PrettyBytes<'_> {
     }
 }
 
-struct PrettyRecord<'a>(((&'a [u8], &'a [u8]), u64, i64));
+struct PrettyRecord<'a, T, D>(
+    ((&'a [u8], &'a [u8]), [u8; 8], [u8; 8]),
+    PhantomData<(T, D)>,
+);
 
-impl fmt::Debug for PrettyRecord<'_> {
+impl<T, D> fmt::Debug for PrettyRecord<'_, T, D>
+where
+    T: Debug + Codec64,
+    D: Debug + Codec64,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ((k, v), ts, diff) = &self.0;
-        fmt::Debug::fmt(&((PrettyBytes(&k), PrettyBytes(&v)), ts, diff), f)
+        fmt::Debug::fmt(
+            &(
+                (PrettyBytes(&k), PrettyBytes(&v)),
+                T::decode(*ts),
+                D::decode(*diff),
+            ),
+            f,
+        )
     }
 }
 
@@ -626,7 +657,7 @@ mod tests {
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000)),
                 sizes(DataGenerator::new(1_000, record_size_bytes, 1_000 / 100)),
             ),
-            "1/1=1036 25/1=2787 1000/1=73031 1000/100=113076"
+            "1/1=1031 25/1=2782 1000/1=73026 1000/100=113071"
         );
     }
 }
