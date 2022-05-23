@@ -97,10 +97,8 @@ After a restart the Coordinator must reestablish the global timestamp to some va
 of the previous global timestamp before the restart. This ensures that a read or write after the restart is assigned a
 timestamp greater than or equal to all reads and writes before the restart.
 
-For an initial implementation the Coordinator will record all global timestamps in the catalog. On restart the
-Coordinator can read this value from the catalog.
-
-TODO: better implementation.
+Everytime the global timestamp is increased, the global write timestamp will be saved in the catalog. When Materialize
+restarts, it will read this timestamp and use it as the global read timestamp.
 
 The properties described in this section and the [Global Timestamp](#Global Timestamp) section are sufficient to ensure
 Strict Serializability across restarts.
