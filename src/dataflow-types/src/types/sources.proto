@@ -52,6 +52,12 @@ message ProtoIncludedColumnPos {
     uint64 pos = 2;
 }
 
+message ProtoDebeziumEnvelope {
+    uint64 before_idx = 1;
+    uint64 after_idx = 2;
+    ProtoDebeziumMode mode = 3;
+}
+
 message ProtoDebeziumTransactionMetadata {
     mz_repr.global_id.ProtoGlobalId tx_metadata_global_id = 1;
     uint64 tx_status_idx = 2;

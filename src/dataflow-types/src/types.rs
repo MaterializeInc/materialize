@@ -1823,13 +1823,33 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumEnvelope {
         /// The column index containing the `before` row
         pub before_idx: usize,
         /// The column index containing the `after` row
         pub after_idx: usize,
         pub mode: DebeziumMode,
+    }
+
+    impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
+        fn into_proto(self: &Self) -> ProtoDebeziumEnvelope {
+            ProtoDebeziumEnvelope {
+                before_idx: self.before_idx.into_proto(),
+                after_idx: self.after_idx.into_proto(),
+                mode: Some(self.mode.into_proto()),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumEnvelope) -> Result<Self, TryFromProtoError> {
+            Ok(DebeziumEnvelope {
+                before_idx: proto.before_idx.into_rust()?,
+                after_idx: proto.after_idx.into_rust()?,
+                mode: proto
+                    .mode
+                    .into_rust_if_some("ProtoDebeziumEnvelope::mode")?,
+            })
+        }
     }
 
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
