@@ -3,7 +3,7 @@ name = "mz-perf-kinesis"
 description = "Tool to test Materialize's performance with AWS Kinesis."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]

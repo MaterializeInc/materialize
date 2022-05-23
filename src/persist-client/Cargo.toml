@@ -3,7 +3,7 @@ name = "mz-persist-client"
 description = "Client for Materialize pTVC durability system"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 autoexamples = false
 # Since we intentionally will only ever have one bench target, auto discovery of

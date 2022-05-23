@@ -3,7 +3,7 @@ name = "mz-persist-types"
 description = "Types for the persist crate."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 # NB: This is meant to be a strong, independent abstraction boundary. Please

@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// TODO(#12635): Remove override.
+#![allow(clippy::await_holding_refcell_ref)]
+
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
