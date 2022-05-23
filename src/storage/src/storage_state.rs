@@ -250,11 +250,11 @@ impl<'a, A: Allocate, B: StorageCapture> ActiveStorageState<'a, A, B> {
                         .retain(|input| input.capability.upgrade().is_some());
 
                     // Stash the data for use by future renders of the table.
-                    for update in updates {
-                        table_state
-                            .data
-                            .push((update.row, update.timestamp, update.diff));
-                    }
+                    table_state.data.extend(
+                        updates
+                            .into_iter()
+                            .map(|update| (update.row, update.timestamp, update.diff)),
+                    );
 
                     // Consolidate the data in the table if it's doubled in size
                     // since the last consolidation.
