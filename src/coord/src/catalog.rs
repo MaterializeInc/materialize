@@ -1637,16 +1637,17 @@ impl<S: Append> Catalog<S> {
                 .storage()
                 .await
                 .get_catalog_content_version()
-                .await?;
-            crate::catalog::migrate::migrate(&mut catalog)
-                .await
-                .map_err(|e| {
-                    Error::new(ErrorKind::FailedMigration {
-                        last_seen_version,
-                        this_version: catalog.config().build_info.version,
-                        cause: e.to_string(),
-                    })
-                })?;
+                .await?
+                // `new` means that it hasn't been initialized
+                .map_or("new".to_string(), |v| v);
+
+            migrate::migrate(&mut catalog).await.map_err(|e| {
+                Error::new(ErrorKind::FailedMigration {
+                    last_seen_version,
+                    this_version: catalog.config().build_info.version,
+                    cause: e.to_string(),
+                })
+            })?;
             catalog
                 .storage()
                 .await
@@ -1888,7 +1889,7 @@ impl<S: Append> Catalog<S> {
                 Err(e) => {
                     return Err(Error::new(ErrorKind::Corruption {
                         detail: format!("failed to deserialize item {} ({}): {}", id, name, e),
-                    }))
+                    }));
                 }
             };
             let oid = c.allocate_oid().await?;
@@ -3785,7 +3786,7 @@ mod tests {
             vec![
                 mz_catalog_schema.clone(),
                 pg_catalog_schema.clone(),
-                conn_catalog.search_path[0].clone()
+                conn_catalog.search_path[0].clone(),
             ]
         );
         assert_eq!(
@@ -3794,7 +3795,7 @@ mod tests {
                 mz_temp_schema.clone(),
                 mz_catalog_schema.clone(),
                 pg_catalog_schema.clone(),
-                conn_catalog.search_path[0].clone()
+                conn_catalog.search_path[0].clone(),
             ]
         );
 
@@ -3819,7 +3820,7 @@ mod tests {
             vec![
                 mz_temp_schema.clone(),
                 mz_catalog_schema.clone(),
-                pg_catalog_schema.clone()
+                pg_catalog_schema.clone(),
             ]
         );
 
@@ -3843,7 +3844,7 @@ mod tests {
             vec![
                 mz_temp_schema.clone(),
                 pg_catalog_schema.clone(),
-                mz_catalog_schema.clone()
+                mz_catalog_schema.clone(),
             ]
         );
 
@@ -3863,7 +3864,7 @@ mod tests {
             vec![
                 mz_catalog_schema.clone(),
                 pg_catalog_schema.clone(),
-                mz_temp_schema.clone()
+                mz_temp_schema.clone(),
             ]
         );
         assert_eq!(
