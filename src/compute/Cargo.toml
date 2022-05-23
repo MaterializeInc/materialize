@@ -8,8 +8,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.57"
-async-stream = "0.3.3"
-async-trait = "0.1.53"
 axum = "0.5.6"
 clap = { version = "3.1.18", features = ["derive", "env"] }
 crossbeam-channel = "0.5.4"
@@ -17,7 +15,6 @@ dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
-futures-util = "0.3.19"
 http = "0.2.7"
 itertools = "0.10.3"
 mz-avro = { path = "../avro", features = ["snappy"] }
@@ -27,9 +24,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
-mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
-mz-persist-types = { path = "../persist-types" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }
 mz-repr = { path = "../repr" }

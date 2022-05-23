@@ -15,7 +15,6 @@ http = { version = "0.2.7" }
 mz-build-info = { path = "../build-info" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
-mz-persist-client = { path = "../persist-client" }
 mz-pid-file = { path = "../pid-file" }
 mz-prof = { path = "../prof" }
 mz-storage = { path = "../storage", features = ["server"] }
@@ -24,7 +23,6 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.18.2", features = ["net"] }
 tracing = "0.1.34"
 tracing-subscriber = "0.3.11"
-url = { version = "2.2.2", features = ["serde"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 # According to jemalloc developers, `background_threads` should always be

@@ -2282,24 +2282,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyper-proxy"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca815a891b24fdfb243fa3239c86154392b0953ee584aa1a2a1f66d20cbe75cc"
-dependencies = [
- "bytes",
- "futures",
- "headers",
- "http",
- "hyper",
- "hyper-tls",
- "native-tls",
- "tokio",
- "tokio-native-tls",
- "tower-service",
-]
-
-[[package]]
 name = "hyper-timeout"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2380,28 +2362,6 @@ dependencies = [
  "lazy_static",
  "number_prefix",
  "regex",
-]
-
-[[package]]
-name = "inotify"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abf888f9575c290197b2c948dc9e9ff10bd1a39ad1ea8585f734585fa6b9d3f9"
-dependencies = [
- "bitflags",
- "futures-core",
- "inotify-sys",
- "libc",
- "tokio",
-]
-
-[[package]]
-name = "inotify-sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -2806,9 +2766,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
- "atty",
  "axum",
- "backtrace",
  "base64",
  "bytes",
  "cc",
@@ -2823,8 +2781,6 @@ dependencies = [
  "http",
  "hyper",
  "hyper-openssl",
- "hyper-proxy",
- "hyper-tls",
  "include_dir",
  "itertools",
  "jsonwebtoken",
@@ -2854,7 +2810,6 @@ dependencies = [
  "mz-secrets-filesystem",
  "mz-secrets-kubernetes",
  "mz-stash",
- "native-tls",
  "nix",
  "num_cpus",
  "openssl",
@@ -2887,9 +2842,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "urlencoding",
  "uuid 1.0.0",
- "whoami",
 ]
 
 [[package]]
@@ -3127,7 +3080,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
  "url",
 ]
 
@@ -3136,8 +3088,6 @@ name = "mz-compute"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-stream",
- "async-trait",
  "axum",
  "clap",
  "crossbeam-channel",
@@ -3145,7 +3095,6 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "futures",
- "futures-util",
  "http",
  "itertools",
  "mz-avro",
@@ -3155,9 +3104,7 @@ dependencies = [
  "mz-interchange",
  "mz-kafka-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-client",
- "mz-persist-types",
  "mz-pid-file",
  "mz-prof",
  "mz-repr",
@@ -3181,8 +3128,6 @@ name = "mz-coord"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bincode",
- "byteorder",
  "bytes",
  "chrono",
  "const_format",
@@ -3200,7 +3145,6 @@ dependencies = [
  "mz-expr",
  "mz-kafka-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-types",
  "mz-pgrepr",
  "mz-postgres-util",
@@ -3257,14 +3201,12 @@ dependencies = [
  "globset",
  "http",
  "http-serde",
- "itertools",
  "maplit",
  "mz-ccsr",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
  "mz-orchestrator",
- "mz-orchestrator-kubernetes",
  "mz-ore",
  "mz-persist",
  "mz-persist-client",
@@ -3519,9 +3461,6 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-orchestrator",
- "mz-secrets-kubernetes",
- "punycode",
- "regex",
  "serde_json",
  "sha2",
 ]
@@ -3561,7 +3500,6 @@ dependencies = [
  "futures",
  "http",
  "hyper",
- "hyper-proxy",
  "hyper-tls",
  "lazy_static",
  "native-tls",
@@ -3664,7 +3602,6 @@ dependencies = [
  "num_enum",
  "proptest",
  "proptest-derive",
- "rand",
  "serde",
  "serde_json",
  "tempfile",
@@ -3733,7 +3670,6 @@ dependencies = [
  "futures",
  "itertools",
  "mz-coord",
- "mz-dataflow-types",
  "mz-expr",
  "mz-frontegg-auth",
  "mz-ore",
@@ -3904,7 +3840,6 @@ dependencies = [
  "aws-sdk-sts",
  "bytes",
  "chrono",
- "csv",
  "datadriven",
  "enum-kinds",
  "globset",
@@ -3920,7 +3855,6 @@ dependencies = [
  "mz-kafka-util",
  "mz-lowertest",
  "mz-ore",
- "mz-persist-client",
  "mz-pgrepr",
  "mz-postgres-util",
  "mz-repr",
@@ -3971,7 +3905,6 @@ dependencies = [
  "lazy_static",
  "materialized",
  "md-5",
- "mz-dataflow-types",
  "mz-orchestrator-process",
  "mz-ore",
  "mz-persist-client",
@@ -3986,7 +3919,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tower-http",
- "tracing",
  "uuid 1.0.0",
  "walkdir",
 ]
@@ -4025,19 +3957,15 @@ dependencies = [
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "bincode",
- "bytes",
  "chrono",
  "crossbeam-channel",
  "csv-core",
  "differential-dataflow",
- "flate2",
  "futures",
  "futures-executor",
  "futures-util",
  "globset",
- "inotify",
  "lazy_static",
- "log",
  "mz-avro",
  "mz-ccsr",
  "mz-dataflow-types",
@@ -4046,9 +3974,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-kinesis-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-client",
- "mz-persist-types",
  "mz-pgcopy",
  "mz-postgres-util",
  "mz-repr",
@@ -5171,12 +5097,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "punycode"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
-
-[[package]]
 name = "quick-error"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5798,7 +5718,6 @@ dependencies = [
  "mz-build-info",
  "mz-dataflow-types",
  "mz-ore",
- "mz-persist-client",
  "mz-pid-file",
  "mz-prof",
  "mz-storage",
@@ -5808,7 +5727,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]
@@ -6869,16 +6787,6 @@ dependencies = [
  "either",
  "lazy_static",
  "libc",
-]
-
-[[package]]
-name = "whoami"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524b58fa5a20a2fb3014dd6358b70e6579692a56ef6fce928834e488f42f65e8"
-dependencies = [
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]

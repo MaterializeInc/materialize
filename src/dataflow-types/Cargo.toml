@@ -22,7 +22,6 @@ futures = "0.3.21"
 globset = { version = "0.4.8", features = ["serde1"] }
 http = "0.2.7"
 http-serde = "1.1.0"
-itertools = "0.10.3"
 maplit = "1.0.2"
 mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
@@ -32,7 +31,6 @@ mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
-mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }

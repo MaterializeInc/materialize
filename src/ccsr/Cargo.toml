@@ -21,4 +21,3 @@ lazy_static = "1.4.0"
 mz-ore = { path = "../ore", features = ["task"] }
 serde_json = "1.0.81"
 tokio = { version = "1.18.2", features = ["macros"] }
-tracing = "0.1.34"
