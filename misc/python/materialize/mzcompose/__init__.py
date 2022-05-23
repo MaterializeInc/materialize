@@ -220,7 +220,7 @@ class Composition:
         compose.setdefault("volumes", {}).update(
             {
                 "mzdata": None,
-                "postgres": None,
+                "pgdata": None,
                 "tmp": None,
                 "secrets": None,
             }
@@ -925,6 +925,12 @@ class ServiceConfig(TypedDict, total=False):
 
     TODO(benesch): this should use a nested TypedDict.
     """
+
+    ulimits: Dict[str, Any]
+    """Override the default ulimits for a container."""
+
+    working_dir: str
+    """Overrides the container's working directory."""
 
 
 class Service:

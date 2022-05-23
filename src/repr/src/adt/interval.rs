@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
 use crate::adt::numeric::{DecimalLike, Numeric};
-use crate::proto::TryFromProtoError;
+use crate::proto::newapi::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 
@@ -51,24 +51,20 @@ impl Default for Interval {
     }
 }
 
-impl From<&Interval> for ProtoInterval {
-    fn from(x: &Interval) -> Self {
+impl RustType<ProtoInterval> for Interval {
+    fn into_proto(&self) -> ProtoInterval {
         ProtoInterval {
-            months: x.months,
-            days: x.days,
-            micros: x.micros,
+            months: self.months,
+            days: self.days,
+            micros: self.micros,
         }
     }
-}
 
-impl TryFrom<ProtoInterval> for Interval {
-    type Error = TryFromProtoError;
-
-    fn try_from(repr: ProtoInterval) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoInterval) -> Result<Self, TryFromProtoError> {
         Ok(Interval {
-            months: repr.months,
-            days: repr.days,
-            micros: repr.micros,
+            months: proto.months,
+            days: proto.days,
+            micros: proto.micros,
         })
     }
 }

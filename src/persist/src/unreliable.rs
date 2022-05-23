@@ -11,7 +11,7 @@
 
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use rand::prelude::SmallRng;
@@ -24,26 +24,26 @@ use crate::location::{
 };
 
 #[derive(Debug)]
-struct UnreliableCore {
+struct UnreliableCoreOld {
     unavailable: bool,
     // TODO: Delays, what else?
 }
 
 /// A handle for controlling the behavior of an unreliable delegate.
 #[derive(Clone, Debug)]
-pub struct UnreliableHandle {
-    core: Arc<Mutex<UnreliableCore>>,
+pub struct UnreliableHandleOld {
+    core: Arc<Mutex<UnreliableCoreOld>>,
 }
 
-impl Default for UnreliableHandle {
+impl Default for UnreliableHandleOld {
     fn default() -> Self {
-        UnreliableHandle {
-            core: Arc::new(Mutex::new(UnreliableCore { unavailable: false })),
+        UnreliableHandleOld {
+            core: Arc::new(Mutex::new(UnreliableCoreOld { unavailable: false })),
         }
     }
 }
 
-impl UnreliableHandle {
+impl UnreliableHandleOld {
     fn check_unavailable(&self, details: &str) -> Result<(), Error> {
         let unavailable = self
             .core
@@ -58,7 +58,7 @@ impl UnreliableHandle {
     }
 
     /// Cause all later operators to return an "unavailable" error.
-    pub fn make_unavailable(&mut self) -> &mut UnreliableHandle {
+    pub fn make_unavailable(&mut self) -> &mut UnreliableHandleOld {
         self.core
             .lock()
             .expect("never panics while holding lock")
@@ -67,7 +67,7 @@ impl UnreliableHandle {
     }
 
     /// Cause all later operators to succeed.
-    pub fn make_available(&mut self) -> &mut UnreliableHandle {
+    pub fn make_available(&mut self) -> &mut UnreliableHandleOld {
         self.core
             .lock()
             .expect("never panics while holding lock")
@@ -79,20 +79,20 @@ impl UnreliableHandle {
 /// An unreliable delegate to [Log].
 #[derive(Debug)]
 pub struct UnreliableLog<L> {
-    handle: UnreliableHandle,
+    handle: UnreliableHandleOld,
     log: L,
 }
 
 impl<L: Log> UnreliableLog<L> {
     /// Returns a new [UnreliableLog] and a handle for controlling it.
-    pub fn new(log: L) -> (Self, UnreliableHandle) {
-        let h = UnreliableHandle::default();
+    pub fn new(log: L) -> (Self, UnreliableHandleOld) {
+        let h = UnreliableHandleOld::default();
         let log = Self::from_handle(log, h.clone());
         (log, h)
     }
 
     /// Returns a new [UnreliableLog] sharing the given handle.
-    pub fn from_handle(log: L, handle: UnreliableHandle) -> Self {
+    pub fn from_handle(log: L, handle: UnreliableHandleOld) -> Self {
         UnreliableLog { handle, log }
     }
 }
@@ -131,27 +131,27 @@ impl<L: Log> Log for UnreliableLog<L> {
 /// Configuration for opening an [UnreliableBlob].
 #[derive(Debug)]
 pub struct UnreliableBlobConfig<B: Blob> {
-    handle: UnreliableHandle,
+    handle: UnreliableHandleOld,
     blob: B::Config,
 }
 
 /// An unreliable delegate to [Blob].
 #[derive(Debug)]
 pub struct UnreliableBlob<B> {
-    handle: UnreliableHandle,
+    handle: UnreliableHandleOld,
     blob: B,
 }
 
 impl<B: BlobRead> UnreliableBlob<B> {
     /// Returns a new [UnreliableBlob] and a handle for controlling it.
-    pub fn new(blob: B) -> (Self, UnreliableHandle) {
-        let h = UnreliableHandle::default();
+    pub fn new(blob: B) -> (Self, UnreliableHandleOld) {
+        let h = UnreliableHandleOld::default();
         let blob = Self::from_handle(blob, h.clone());
         (blob, h)
     }
 
     /// Returns a new [UnreliableLog] sharing the given handle.
-    pub fn from_handle(blob: B, handle: UnreliableHandle) -> Self {
+    pub fn from_handle(blob: B, handle: UnreliableHandleOld) -> Self {
         UnreliableBlob { handle, blob }
     }
 }
@@ -216,56 +216,100 @@ where
     }
 }
 
+#[derive(Debug)]
+struct UnreliableCore {
+    rng: SmallRng,
+    should_happen: f64,
+    should_timeout: f64,
+    // TODO: Delays, what else?
+}
+
+/// A handle for controlling the behavior of an unreliable delegate.
+#[derive(Clone, Debug)]
+pub struct UnreliableHandle {
+    core: Arc<Mutex<UnreliableCore>>,
+}
+
+impl Default for UnreliableHandle {
+    fn default() -> Self {
+        let seed = UNIX_EPOCH
+            .elapsed()
+            .map_or(0, |x| u64::from(x.subsec_nanos()));
+        Self::new(seed, 0.95, 0.05)
+    }
+}
+
+impl UnreliableHandle {
+    /// Returns a new [UnreliableHandle].
+    pub fn new(seed: u64, should_happen: f64, should_timeout: f64) -> Self {
+        assert!(should_happen >= 0.0);
+        assert!(should_happen <= 1.0);
+        assert!(should_timeout >= 0.0);
+        assert!(should_timeout <= 1.0);
+        let core = UnreliableCore {
+            rng: SmallRng::seed_from_u64(seed),
+            should_happen,
+            should_timeout,
+        };
+        UnreliableHandle {
+            core: Arc::new(Mutex::new(core)),
+        }
+    }
+
+    /// Cause all later calls to sometimes return an error.
+    pub fn partially_available(&self, should_happen: f64, should_timeout: f64) {
+        assert!(should_happen >= 0.0);
+        assert!(should_happen <= 1.0);
+        assert!(should_timeout >= 0.0);
+        assert!(should_timeout <= 1.0);
+        let mut core = self.core.lock().expect("mutex poisoned");
+        core.should_happen = should_happen;
+        core.should_timeout = should_timeout;
+    }
+
+    /// Cause all later calls to return an error.
+    pub fn totally_unavailable(&self) {
+        self.partially_available(0.0, 1.0);
+    }
+
+    /// Cause all later calls to succeed.
+    pub fn totally_available(&self) {
+        self.partially_available(1.0, 0.0);
+    }
+
+    fn should_happen(&self) -> bool {
+        let mut core = self.core.lock().expect("mutex poisoned");
+        let should_happen = core.should_happen;
+        core.rng.gen_bool(should_happen)
+    }
+
+    fn should_timeout(&self) -> bool {
+        let mut core = self.core.lock().expect("mutex poisoned");
+        let should_timeout = core.should_timeout;
+        core.rng.gen_bool(should_timeout)
+    }
+}
+
 /// An unreliable delegate to [BlobMulti].
 #[derive(Debug)]
 pub struct UnreliableBlobMulti {
-    rng: tokio::sync::Mutex<SmallRng>,
-    should_happen: f64,
-    should_timeout: f64,
+    handle: UnreliableHandle,
     blob: Arc<dyn BlobMulti + Send + Sync>,
 }
 
 impl UnreliableBlobMulti {
     /// Returns a new [UnreliableBlobMulti].
-    ///
-    /// TODO: Once we turn down the old persist API, return an
-    /// [UnreliableHandle] with the previous totally available or unavailable
-    /// behavior, plus the new partially available behavior
-    ///
-    /// TODO: Ditto the unreliability should be set via [UnreliableHandle].
-    pub fn new_from_seed(
-        seed: u64,
-        should_happen: f64,
-        should_timeout: f64,
-        blob: Arc<dyn BlobMulti + Send + Sync>,
-    ) -> Self {
-        assert!(should_happen >= 0.0);
-        assert!(should_happen <= 1.0);
-        assert!(should_timeout >= 0.0);
-        assert!(should_timeout <= 1.0);
-        UnreliableBlobMulti {
-            rng: tokio::sync::Mutex::new(SmallRng::seed_from_u64(seed)),
-            should_happen,
-            should_timeout,
-            blob,
-        }
-    }
-
-    async fn should_happen(&self) -> bool {
-        self.rng.lock().await.gen_bool(self.should_happen)
-    }
-
-    async fn should_timeout(&self) -> bool {
-        self.rng.lock().await.gen_bool(self.should_timeout)
+    pub fn new(blob: Arc<dyn BlobMulti + Send + Sync>, handle: UnreliableHandle) -> Self {
+        UnreliableBlobMulti { handle, blob }
     }
 }
 
 #[async_trait]
 impl BlobMulti for UnreliableBlobMulti {
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self.blob.get(deadline, key).await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -273,9 +317,9 @@ impl BlobMulti for UnreliableBlobMulti {
     }
 
     async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self.blob.list_keys(deadline).await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -289,9 +333,9 @@ impl BlobMulti for UnreliableBlobMulti {
         value: Vec<u8>,
         atomic: Atomicity,
     ) -> Result<(), ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self.blob.set(deadline, key, value, atomic).await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -299,9 +343,9 @@ impl BlobMulti for UnreliableBlobMulti {
     }
 
     async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self.blob.delete(deadline, key).await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -312,44 +356,14 @@ impl BlobMulti for UnreliableBlobMulti {
 /// An unreliable delegate to [Consensus].
 #[derive(Debug)]
 pub struct UnreliableConsensus {
-    rng: tokio::sync::Mutex<SmallRng>,
-    should_happen: f64,
-    should_timeout: f64,
+    handle: UnreliableHandle,
     consensus: Arc<dyn Consensus + Send + Sync>,
 }
 
 impl UnreliableConsensus {
     /// Returns a new [UnreliableConsensus].
-    ///
-    /// TODO: Once we turn down the old persist API, return an
-    /// [UnreliableHandle] with the previous totally available or unavailable
-    /// behavior, plus the new partially available behavior
-    ///
-    /// TODO: Ditto the unreliability should be set via [UnreliableHandle].
-    pub fn new_from_seed(
-        seed: u64,
-        should_happen: f64,
-        should_timeout: f64,
-        consensus: Arc<dyn Consensus + Send + Sync>,
-    ) -> Self {
-        assert!(should_happen >= 0.0);
-        assert!(should_happen <= 1.0);
-        assert!(should_timeout >= 0.0);
-        assert!(should_timeout <= 1.0);
-        UnreliableConsensus {
-            rng: tokio::sync::Mutex::new(SmallRng::seed_from_u64(seed)),
-            should_happen,
-            should_timeout,
-            consensus,
-        }
-    }
-
-    async fn should_happen(&self) -> bool {
-        self.rng.lock().await.gen_bool(self.should_happen)
-    }
-
-    async fn should_timeout(&self) -> bool {
-        self.rng.lock().await.gen_bool(self.should_timeout)
+    pub fn new(consensus: Arc<dyn Consensus + Send + Sync>, handle: UnreliableHandle) -> Self {
+        UnreliableConsensus { consensus, handle }
     }
 }
 
@@ -360,9 +374,9 @@ impl Consensus for UnreliableConsensus {
         deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self.consensus.head(deadline, key).await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -376,12 +390,12 @@ impl Consensus for UnreliableConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self
                 .consensus
                 .compare_and_set(deadline, key, expected, new)
                 .await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -394,9 +408,9 @@ impl Consensus for UnreliableConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self.consensus.scan(deadline, key, from).await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -409,9 +423,9 @@ impl Consensus for UnreliableConsensus {
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
-        if self.should_happen().await {
+        if self.handle.should_happen() {
             let res = self.consensus.truncate(deadline, key, seqno).await;
-            if !self.should_timeout().await {
+            if !self.handle.should_timeout() {
                 return res;
             }
         }
@@ -421,8 +435,10 @@ impl Consensus for UnreliableConsensus {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::location::Atomicity::RequireAtomic;
-    use crate::mem::{MemBlob, MemLog};
+    use crate::mem::{MemBlob, MemBlobMulti, MemBlobMultiConfig, MemConsensus, MemLog};
 
     use super::*;
 
@@ -465,5 +481,70 @@ mod tests {
         handle.make_available();
         assert!(blob.set("a", b"3".to_vec(), RequireAtomic).await.is_ok());
         assert!(blob.get("a").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn unreliable_blob_multi() {
+        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()))
+            as Arc<dyn BlobMulti + Send + Sync>;
+        let handle = UnreliableHandle::default();
+        let blob = UnreliableBlobMulti::new(blob, handle.clone());
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+
+        // Use a fixed seed so this test doesn't flake.
+        {
+            (*handle.core.lock().expect("mutex poisoned")).rng = SmallRng::seed_from_u64(0);
+        }
+
+        // By default, it's partially reliable.
+        let mut succeeded = 0;
+        for _ in 0..100 {
+            if blob.get(deadline, "a").await.is_ok() {
+                succeeded += 1;
+            }
+        }
+        // Intentionally have pretty loose bounds so this assertion doesn't
+        // become a maintenance burden if the rng impl changes.
+        assert!(succeeded > 50 && succeeded < 99, "succeeded={}", succeeded);
+
+        // Reliable doesn't error.
+        handle.totally_available();
+        assert!(blob.get(deadline, "a").await.is_ok());
+
+        // Unreliable does error.
+        handle.totally_unavailable();
+        assert!(blob.get(deadline, "a").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn unreliable_consensus() {
+        let consensus = Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>;
+        let handle = UnreliableHandle::default();
+        let consensus = UnreliableConsensus::new(consensus, handle.clone());
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+
+        // Use a fixed seed so this test doesn't flake.
+        {
+            (*handle.core.lock().expect("mutex poisoned")).rng = SmallRng::seed_from_u64(0);
+        }
+
+        // By default, it's partially reliable.
+        let mut succeeded = 0;
+        for _ in 0..100 {
+            if consensus.head(deadline, "key").await.is_ok() {
+                succeeded += 1;
+            }
+        }
+        // Intentionally have pretty loose bounds so this assertion doesn't
+        // become a maintenance burden if the rng impl changes.
+        assert!(succeeded > 50 && succeeded < 99, "succeeded={}", succeeded);
+
+        // Reliable doesn't error.
+        handle.totally_available();
+        assert!(consensus.head(deadline, "key").await.is_ok());
+
+        // Unreliable does error.
+        handle.totally_unavailable();
+        assert!(consensus.head(deadline, "key").await.is_err());
     }
 }

@@ -24,6 +24,7 @@ use tokio_postgres::types::{FromSql, Type};
 
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric};
 use mz_sql_parser::ast::{
     CreateClusterReplicaStatement, CreateClusterStatement, CreateDatabaseStatement,
@@ -32,7 +33,7 @@ use mz_sql_parser::ast::{
 };
 
 use crate::action::{Action, ControlFlow, State};
-use crate::parser::{FailSqlCommand, SqlCommand, SqlErrorMatchType, SqlOutput};
+use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -361,43 +362,31 @@ enum ErrorMatcher {
     Contains(String),
     Exact(String),
     Regex(Regex),
+    Timeout,
 }
 
 impl ErrorMatcher {
-    fn as_str(&self) -> &str {
+    fn is_match(&self, err: &String) -> bool {
         match self {
-            ErrorMatcher::Contains(s) | ErrorMatcher::Exact(s) => s.as_str(),
-            ErrorMatcher::Regex(r) => r.as_str(),
+            ErrorMatcher::Contains(s) => err.contains(s),
+            ErrorMatcher::Exact(s) => err == s,
+            ErrorMatcher::Regex(r) => r.is_match(err),
+            // Timeouts never match errors directly. If we are matching an error
+            // message, it means the query returned a result (i.e., an error
+            // result), which means the query did not time out as expected.
+            ErrorMatcher::Timeout => false,
         }
     }
+}
 
-    fn match_string(&self, err_string: &String) -> Result<(), anyhow::Error> {
-        match &self {
-            ErrorMatcher::Contains(s) => {
-                if !err_string.contains(s) {
-                    bail!(
-                        "expected error containing '{}', but got '{}'",
-                        s,
-                        err_string
-                    );
-                }
-            }
-            ErrorMatcher::Exact(s) => {
-                if err_string != s {
-                    bail!("expected exact error '{}', but got '{}'", s, err_string);
-                }
-            }
-            ErrorMatcher::Regex(r) => {
-                if !r.is_match(err_string) {
-                    bail!(
-                        "expected error matching regex '{}', but got '{}'",
-                        r.as_str(),
-                        err_string
-                    );
-                }
-            }
+impl fmt::Display for ErrorMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ErrorMatcher::Contains(s) => write!(f, "error containing {}", s.quoted()),
+            ErrorMatcher::Exact(s) => write!(f, "exact error {}", s.quoted()),
+            ErrorMatcher::Regex(s) => write!(f, "error matching regex {}", s.as_str().quoted()),
+            ErrorMatcher::Timeout => f.write_str("timeout"),
         }
-        Ok(())
     }
 }
 
@@ -417,10 +406,11 @@ pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, anyhow::Erro
         Err(_) => None,
     };
 
-    let expected_error = match cmd.error_match_type {
-        SqlErrorMatchType::Contains => ErrorMatcher::Contains(cmd.expected_error),
-        SqlErrorMatchType::Exact => ErrorMatcher::Exact(cmd.expected_error),
-        SqlErrorMatchType::Regex => ErrorMatcher::Regex(Regex::new(&cmd.expected_error)?),
+    let expected_error = match cmd.expected_error {
+        SqlExpectedError::Contains(s) => ErrorMatcher::Contains(s),
+        SqlExpectedError::Exact(s) => ErrorMatcher::Exact(s),
+        SqlExpectedError::Regex(s) => ErrorMatcher::Regex(s.parse()?),
+        SqlExpectedError::Timeout => ErrorMatcher::Timeout,
     };
 
     Ok(FailSqlAction {
@@ -484,11 +474,21 @@ impl Action for FailSqlAction {
             }
         }).await;
 
-        // Check the error again in order to detech 'deadline has elapsed' timeout errors
-        if let Err(err) = res {
-            self.check_error(state, &err.to_string())?;
+        // If a timeout was expected, check whether the retry operation timed
+        // out, which indicates that the test passed.
+        if let ErrorMatcher::Timeout = self.expected_error {
+            if let Err(e) = &res {
+                if e.is::<tokio::time::error::Elapsed>() {
+                    println!("query timed out as expected");
+                    return Ok(ControlFlow::Continue);
+                }
+            }
         }
 
+        // Otherwise, return the error if any. Note that this is the error
+        // returned by the retry operation (e.g., "expected timeout, but query
+        // succeeded"), *not* an error returned from Materialize itself.
+        res?;
         Ok(ControlFlow::Continue)
     }
 }
@@ -496,26 +496,27 @@ impl Action for FailSqlAction {
 impl FailSqlAction {
     async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         match state.pgclient.query(query, &[]).await {
-            Ok(_) => bail!(
-                "query succeeded, but expected error '{}'",
-                self.expected_error.as_str()
-            ),
+            Ok(_) => bail!("query succeeded, but expected {}", self.expected_error,),
             Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
-                Some(err) => self.check_error(state, &err.message().to_string()),
+                Some(err) => {
+                    let mut err_string = err.to_string();
+                    if let Some(regex) = &state.regex {
+                        err_string = regex
+                            .replace_all(&err_string, state.regex_replacement.as_str())
+                            .to_string();
+                    }
+                    if !self.expected_error.is_match(&err_string) {
+                        bail!(
+                            "expected {}, got {}",
+                            self.expected_error,
+                            err_string.quoted()
+                        );
+                    }
+                    Ok(())
+                }
                 None => Err(err.into()),
             },
         }
-    }
-
-    fn check_error(&self, state: &State, err_string: &String) -> Result<(), anyhow::Error> {
-        let mut err_string = err_string.clone();
-
-        if let Some(regex) = &state.regex {
-            err_string = regex
-                .replace_all(&err_string, state.regex_replacement.as_str())
-                .to_string();
-        }
-        self.expected_error.match_string(&err_string)
     }
 }
 

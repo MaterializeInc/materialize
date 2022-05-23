@@ -3,7 +3,7 @@ name = "mz-orchestrator"
 description = "Service orchestration."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]

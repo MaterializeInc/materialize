@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
-use crate::proto::TryFromProtoError;
+use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 
@@ -94,28 +94,26 @@ impl fmt::Display for GlobalId {
     }
 }
 
-impl From<&GlobalId> for ProtoGlobalId {
-    fn from(x: &GlobalId) -> Self {
+impl RustType<ProtoGlobalId> for GlobalId {
+    fn into_proto(&self) -> ProtoGlobalId {
+        use proto_global_id::Kind::*;
         ProtoGlobalId {
-            kind: Some(match x {
-                GlobalId::System(x) => proto_global_id::Kind::System(*x),
-                GlobalId::User(x) => proto_global_id::Kind::User(*x),
-                GlobalId::Transient(x) => proto_global_id::Kind::Transient(*x),
-                GlobalId::Explain => proto_global_id::Kind::Explain(()),
+            kind: Some(match self {
+                GlobalId::System(x) => System(*x),
+                GlobalId::User(x) => User(*x),
+                GlobalId::Transient(x) => Transient(*x),
+                GlobalId::Explain => Explain(()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoGlobalId> for GlobalId {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoGlobalId) -> Result<Self, Self::Error> {
-        match x.kind {
-            Some(proto_global_id::Kind::System(x)) => Ok(GlobalId::System(x)),
-            Some(proto_global_id::Kind::User(x)) => Ok(GlobalId::User(x)),
-            Some(proto_global_id::Kind::Transient(x)) => Ok(GlobalId::Transient(x)),
-            Some(proto_global_id::Kind::Explain(_)) => Ok(GlobalId::Explain),
+    fn from_proto(proto: ProtoGlobalId) -> Result<Self, TryFromProtoError> {
+        use proto_global_id::Kind::*;
+        match proto.kind {
+            Some(System(x)) => Ok(GlobalId::System(x)),
+            Some(User(x)) => Ok(GlobalId::User(x)),
+            Some(Transient(x)) => Ok(GlobalId::Transient(x)),
+            Some(Explain(_)) => Ok(GlobalId::Explain),
             None => Err(TryFromProtoError::missing_field("ProtoGlobalId::kind")),
         }
     }
@@ -127,12 +125,12 @@ impl Codec for GlobalId {
     }
 
     fn encode<B: BufMut>(&self, buf: &mut B) {
-        let proto: ProtoGlobalId = self.into();
+        let proto: ProtoGlobalId = self.into_proto();
         Message::encode(&proto, buf).expect("provided buffer had sufficient capacity")
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
         let proto: ProtoGlobalId = Message::decode(buf).map_err(|err| err.to_string())?;
-        GlobalId::try_from(proto).map_err(|err| err.to_string())
+        proto.into_rust().map_err(|err| err.to_string())
     }
 }

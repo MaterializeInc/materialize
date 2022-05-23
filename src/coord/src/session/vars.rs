@@ -61,6 +61,12 @@ const CLUSTER: ServerVar<str> = ServerVar {
     description: "Sets the current cluster (Materialize).",
 };
 
+const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
+    name: UncasedStr::new("cluster_replica"),
+    value: &None,
+    description: "Sets a target cluster replica for SELECT queries (Materialize).",
+};
+
 const DATABASE: ServerVar<str> = ServerVar {
     name: UncasedStr::new("database"),
     value: DEFAULT_DATABASE_NAME,
@@ -190,6 +196,7 @@ pub struct Vars {
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
     cluster: SessionVar<str>,
+    cluster_replica: SessionVar<Option<String>>,
     database: SessionVar<str>,
     date_style: ServerVar<str>,
     extra_float_digits: SessionVar<i32>,
@@ -213,6 +220,7 @@ impl Default for Vars {
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
             cluster: SessionVar::new(&CLUSTER),
+            cluster_replica: SessionVar::new(&CLUSTER_REPLICA),
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
@@ -240,6 +248,7 @@ impl Vars {
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
+            &self.cluster_replica,
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
@@ -292,6 +301,8 @@ impl Vars {
             Ok(&self.client_min_messages)
         } else if name == CLUSTER.name {
             Ok(&self.cluster)
+        } else if name == CLUSTER_REPLICA.name {
+            Ok(&self.cluster_replica)
         } else if name == DATABASE.name {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
@@ -360,6 +371,8 @@ impl Vars {
             }
         } else if name == CLUSTER.name {
             self.cluster.set(value, local)
+        } else if name == CLUSTER_REPLICA.name {
+            self.cluster_replica.set(value, local)
         } else if name == DATABASE.name {
             self.database.set(value, local)
         } else if name == DATE_STYLE.name {
@@ -456,6 +469,7 @@ impl Vars {
             client_encoding: _,
             client_min_messages,
             cluster,
+            cluster_replica,
             database,
             date_style: _,
             extra_float_digits,
@@ -474,6 +488,7 @@ impl Vars {
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
         cluster.end_transaction(action);
+        cluster_replica.end_transaction(action);
         database.end_transaction(action);
         extra_float_digits.end_transaction(action);
         qgm_optimizations.end_transaction(action);
@@ -500,6 +515,11 @@ impl Vars {
     /// Returns the value of the `cluster` configuration parameter.
     pub fn cluster(&self) -> &str {
         self.cluster.value()
+    }
+
+    /// Returns the value of the `cluster_replica` configuration parameter.
+    pub fn cluster_replica(&self) -> Option<&str> {
+        self.cluster_replica.value().as_deref()
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
@@ -778,6 +798,27 @@ impl Value for [String] {
 
     fn format(&self) -> String {
         self.join(", ")
+    }
+}
+
+impl Value for Option<String> {
+    const TYPE_NAME: &'static str = "optional string";
+
+    fn parse(s: &str) -> Result<Self::Owned, ()> {
+        // TODO(teskje): Remove this workaround of treating empty string
+        // values as NULL once we have support for DEFAULT values (#12551).
+        let parsed = match s {
+            "" => None,
+            _ => Some(s.into()),
+        };
+        Ok(parsed)
+    }
+
+    fn format(&self) -> String {
+        match self {
+            Some(s) => s.clone(),
+            None => "".into(),
+        }
     }
 }
 

@@ -119,7 +119,7 @@ use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };
-use mz_secrets::{SecretOp, SecretsController};
+use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident, InsertSource,
@@ -236,6 +236,7 @@ pub struct Config<S> {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
+    pub secrets_reader: SecretsReader,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
     pub connector_context: ConnectorContext,
@@ -359,6 +360,9 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
+    /// Handle to secrets reader that gives us access to user secrets
+    #[allow(dead_code)]
+    secrets_reader: SecretsReader,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -1367,6 +1371,12 @@ impl<S: Append + 'static> Coordinator<S> {
                         // is always safe.
                     }
 
+                    Statement::AlterSecret(_)
+                        if self.secrets_controller.supports_multi_statement_txn() =>
+                    {
+                        // if the controller supports this, its safe combine
+                    }
+
                     // Statements below must by run singly (in Started).
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
@@ -1753,7 +1763,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_alter_index_reset_options(plan).await, session);
             }
             Plan::AlterSecret(plan) => {
-                tx.send(self.sequence_alter_secret(&session, plan).await, session);
+                tx.send(
+                    self.sequence_alter_secret(&mut session, plan).await,
+                    session,
+                );
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id()).await;
@@ -2902,6 +2915,9 @@ impl<S: Append + 'static> Coordinator<S> {
                             _ => unreachable!("multi-table write transaction should fail immediately when the second table is added to the transaction"),
                         }
                     }
+                    TransactionOps::Secrets(secrets) => {
+                        self.secrets_controller.apply(secrets).await?
+                    }
                     _ => {}
                 }
             }
@@ -3037,15 +3053,48 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(session.vars().cluster())?;
 
-        if compute_instance.replicas_by_id.is_empty() {
+        let target_replica_name = session.vars().cluster_replica();
+        let mut target_replica = target_replica_name
+            .map(|name| {
+                compute_instance
+                    .replica_id_by_name
+                    .get(name)
+                    .copied()
+                    .ok_or(CoordError::UnknownClusterReplica {
+                        cluster_name: compute_instance.name.clone(),
+                        replica_name: name.to_string(),
+                    })
+            })
+            .transpose()?;
+
+        let source_ids = source.depends_on();
+
+        let num_replicas = compute_instance.replicas_by_id.len();
+        if num_replicas == 0 {
             return Err(CoordError::NoClusterReplicasAvailable(
                 compute_instance.name.clone(),
             ));
         }
 
-        let compute_instance = compute_instance.id;
+        // Reading from log sources on replicated compute instances is only
+        // allowed if a target replica is selected. Otherwise, we have no way
+        // of knowing which replica we read the introspection data from.
+        let log_reads = source_ids
+            .iter()
+            .flat_map(|id| self.catalog.log_dependencies(*id))
+            .map(|id| self.catalog.get_entry(&id).name().item.clone())
+            .collect::<Vec<_>>();
+        if !log_reads.is_empty() && target_replica.is_none() {
+            if num_replicas == 1 {
+                target_replica = compute_instance.replicas_by_id.keys().next().copied();
+            } else {
+                return Err(CoordError::UntargetedLogRead {
+                    log_names: log_reads,
+                });
+            }
+        }
 
-        let source_ids = source.depends_on();
+        let compute_instance = compute_instance.id;
 
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
@@ -3231,6 +3280,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 conn_id,
                 source.arity(),
                 compute_instance,
+                target_replica,
             )
             .await?;
 
@@ -4204,19 +4254,17 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_alter_secret(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         plan: AlterSecretPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let AlterSecretPlan { id, mut secret_as } = plan;
 
         let payload = self.extract_secret(session, &mut secret_as)?;
 
-        self.secrets_controller
-            .apply(vec![SecretOp::Ensure {
-                id,
-                contents: payload,
-            }])
-            .await?;
+        session.add_transaction_ops(TransactionOps::Secrets(vec![SecretOp::Ensure {
+            id,
+            contents: payload,
+        }]))?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
@@ -4723,6 +4771,7 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry,
         now,
         secrets_controller,
+        secrets_reader,
         replica_sizes,
         availability_zones,
         connector_context,
@@ -4772,6 +4821,7 @@ pub async fn serve<S: Append + 'static>(
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
                 secrets_controller,
+                secrets_reader,
                 replica_sizes,
                 availability_zones,
                 connector_context,
@@ -4920,7 +4970,7 @@ pub fn describe<S: Append>(
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
 
-    use mz_dataflow_types::client::ComputeInstanceId;
+    use mz_dataflow_types::client::{ComputeInstanceId, ReplicaId};
     use mz_stash::Append;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
@@ -5058,6 +5108,7 @@ pub mod fast_path_peek {
             conn_id: u32,
             source_arity: usize,
             compute_instance: ComputeInstanceId,
+            target_replica: Option<ReplicaId>,
         ) -> Result<crate::ExecuteResponse, CoordError> {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             if let Plan::Constant(rows) = fast_path {
@@ -5195,6 +5246,7 @@ pub mod fast_path_peek {
                     timestamp,
                     finishing.clone(),
                     map_filter_project,
+                    target_replica,
                 )
                 .await
                 .unwrap();

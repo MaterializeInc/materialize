@@ -9,32 +9,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# build and run a rust test and its constituent services.
+# cargo-test — build constituent services and run `cargo test`.
 
-set -euo pipefail
-
-. misc/shlib/shlib.bash
-
-channel=
-build_flags=()
-positional_args=()
-
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        +*)
-            channel="$1"
-            shift
-            ;;
-        --timings|--no-default-features)
-            build_flags+=("$1")
-            shift
-            ;;
-        *)
-            positional_args+=("$1")
-            shift
-            ;;
-    esac
-done
-
-cargo ${channel:+"$channel"} build "${build_flags[@]}" --bin storaged --bin computed
-cargo test "${build_flags[@]}" -- "${positional_args[@]}"
+exec "$(dirname "$0")"/run cargo-test

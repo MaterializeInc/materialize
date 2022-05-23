@@ -15,9 +15,26 @@ use timely::progress::Antichain;
 use tokio_postgres::Config;
 
 use mz_stash::{
-    Append, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction, Timestamp,
-    TypedCollection,
+    Append, Memory, Postgres, Sqlite, Stash, StashCollection, StashError, TableTransaction,
+    Timestamp, TypedCollection,
 };
+
+#[tokio::test]
+async fn test_stash_memory() -> Result<(), anyhow::Error> {
+    {
+        let file = NamedTempFile::new()?;
+        let conn = Sqlite::open(file.path())?;
+        let mut memory = Memory::new(conn);
+        test_stash(&mut memory).await?;
+    }
+    {
+        let file = NamedTempFile::new()?;
+        let conn = Sqlite::open(file.path())?;
+        let mut memory = Memory::new(conn);
+        test_append(&mut memory).await?;
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn test_stash_sqlite() -> Result<(), anyhow::Error> {
@@ -197,6 +214,22 @@ async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
         stash.peek_one(other).await?,
         BTreeMap::from([("k2".to_string(), "v2".to_string())])
     );
+
+    // Verify the upper got bumped.
+    assert_eq!(
+        stash.since(orders).await?.into_option().unwrap(),
+        stash.upper(orders).await?.into_option().unwrap() - 1
+    );
+    // Multiple empty batches should bump the upper and the since because append
+    // must also compact and consolidate.
+    for _ in 0..5 {
+        let orders_batch = orders.make_batch(stash).await?;
+        stash.append(vec![orders_batch]).await?;
+        assert_eq!(
+            stash.since(orders).await?.into_option().unwrap(),
+            stash.upper(orders).await?.into_option().unwrap() - 1
+        );
+    }
 
     test_stash_table(stash).await?;
 

@@ -4,7 +4,7 @@ description = "Authentication interfaces to Frontegg."
 version = "0.0.0"
 edition = "2021"
 publish = false
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 
 [dependencies]
 anyhow = "1.0.57"

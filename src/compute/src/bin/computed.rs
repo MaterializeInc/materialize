@@ -216,6 +216,8 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
+    mz_ore::panic::set_abort_on_panic();
+
     mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
         log_filter: args.log_filter.clone(),
         opentelemetry_endpoint: None,

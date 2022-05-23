@@ -170,7 +170,7 @@ fn current_state(reqs: &[Input]) -> Result<(PersistState, String), Error> {
     impl StartRuntime for GoldenStartRuntime {
         fn start_runtime(
             &mut self,
-            unreliable: crate::unreliable::UnreliableHandle,
+            unreliable: crate::unreliable::UnreliableHandleOld,
         ) -> Result<RuntimeClient, Error> {
             let blob = self.0.blob_no_reentrance()?;
             let blob = UnreliableBlob::from_handle(blob, unreliable);

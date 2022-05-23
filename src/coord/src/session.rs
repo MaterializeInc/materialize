@@ -17,16 +17,16 @@ use std::mem;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::OwnedMutexGuard;
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
+use mz_secrets::SecretOp;
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
-use crate::command::RowsFuture;
 use crate::coord::{CoordTimestamp, PeekResponseUnary};
 use crate::error::CoordError;
 
@@ -217,6 +217,12 @@ impl<T: CoordTimestamp> Session<T> {
                         _ => {
                             return Err(CoordError::WriteOnlyTransaction);
                         }
+                    },
+                    TransactionOps::Secrets(secret_txn_ops) => match add_ops {
+                        TransactionOps::Secrets(mut add_secret_ops) => {
+                            secret_txn_ops.append(&mut add_secret_ops);
+                        }
+                        _ => return Err(CoordError::SecretsOnlyTransaction),
                     },
                 }
             }
@@ -525,13 +531,6 @@ impl InProgressRows {
 /// A channel of batched rows.
 pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
 
-/// Converts a RowsFuture to a RowBatchStream.
-pub async fn row_future_to_stream(rows: RowsFuture) -> RowBatchStream {
-    let (tx, rx) = unbounded_channel();
-    tx.send(rows.await).expect("send must succeed");
-    rx
-}
-
 /// The transaction status of a session.
 ///
 /// PostgreSQL's transaction states are in backend/access/transam/xact.c.
@@ -656,6 +655,8 @@ pub enum TransactionOps<T> {
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must only do
     /// other writes.
     Writes(Vec<WriteOp>),
+    /// This transaction has had a secrets DDL operation and must only do other secrets operations
+    Secrets(Vec<SecretOp>),
 }
 
 /// An `INSERT` waiting to be committed.

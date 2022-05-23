@@ -182,4 +182,5 @@ echo $SSL_SECRET > secrets/cert_creds
 chmod -R a+r secrets/
 # The PostgreSQL key must be only user accessible to satisfy PostgreSQL's
 # security checks.
+cp secrets/postgres.key secrets/postgres-world-readable.key
 chmod -R og-rwx secrets/postgres.key

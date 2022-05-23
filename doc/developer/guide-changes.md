@@ -926,5 +926,5 @@ submit a PR to fix it!
 [rust-rdkafka]: https://github.com/fede1024/rust-rdkafka
 [rust-prometheus]: https://github.com/MaterializeInc/rust-prometheus
 [rust-postgres]: https://github.com/sfackler/rust-postgres
-[sqlparser]: https://github.com/ballista-compute/sqlparser-rs
+[sqlparser]: https://github.com/sqlparser-rs/sqlparser-rs
 [Tokio]: https://tokio.rs

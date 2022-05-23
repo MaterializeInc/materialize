@@ -4,7 +4,7 @@ description = "Internal utility libraries for Materialize."
 version = "0.0.0"
 license = "Apache-2.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
@@ -28,7 +28,7 @@ lazy_static = "1.4.0"
 openssl = { version = "0.10.40", features = ["vendored"], optional = true }
 paste = "1.0.7"
 pin-project = "1.0.0"
-prometheus = { version = "0.13.0", default-features = false, optional = true }
+prometheus = { version = "0.13.1", default-features = false, optional = true }
 smallvec = { version = "1.8.0", optional = true }
 stacker = { version = "0.1.14", optional = true }
 tokio = { version = "1.18.2", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
@@ -51,7 +51,6 @@ tonic = { version = "0.7.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
 native-tls = { version = "0.2.10", features = ["alpn"], optional = true }
 hyper = { version = "0.14.18", features = ["http1", "server"], optional = true }
-hyper-proxy = { version = "0.9.1", optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
 opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"], optional = true }
 opentelemetry-otlp = { version = "0.10.0", optional = true }
@@ -75,7 +74,6 @@ tracing_ = [
   "native-tls",
   "http",
   "hyper",
-  "hyper-proxy",
   "hyper-tls",
   "opentelemetry",
   "opentelemetry-otlp",

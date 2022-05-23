@@ -12,10 +12,15 @@ use std::fmt::{self, Write};
 use std::num::ParseIntError;
 use std::str::FromStr;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_kafka_util.addr.rs"));
+
 /// Represents the addresses of several Kafka brokers.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaAddrs(Vec<(String, u16)>);
 
 impl FromStr for KafkaAddrs {
@@ -45,6 +50,44 @@ impl fmt::Display for KafkaAddrs {
             write!(f, "{}:{}", host, port)?;
         }
         Ok(())
+    }
+}
+
+impl From<&(String, u16)> for proto_kafka_addrs::ProtoKafkaAddr {
+    fn from((host, port): &(String, u16)) -> Self {
+        proto_kafka_addrs::ProtoKafkaAddr {
+            host: host.clone(),
+            port: port.into_proto(),
+        }
+    }
+}
+
+impl TryFrom<proto_kafka_addrs::ProtoKafkaAddr> for (String, u16) {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: proto_kafka_addrs::ProtoKafkaAddr) -> Result<Self, Self::Error> {
+        Ok((x.host, u16::from_proto(x.port)?))
+    }
+}
+
+impl From<&KafkaAddrs> for ProtoKafkaAddrs {
+    fn from(x: &KafkaAddrs) -> Self {
+        ProtoKafkaAddrs {
+            addrs: x.0.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<ProtoKafkaAddrs> for KafkaAddrs {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoKafkaAddrs) -> Result<Self, Self::Error> {
+        Ok(KafkaAddrs(
+            x.addrs
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
     }
 }
 

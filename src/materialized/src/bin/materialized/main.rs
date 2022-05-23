@@ -21,25 +21,22 @@ use std::cmp;
 use std::env;
 use std::ffi::CStr;
 use std::fs;
+use std::iter;
 use std::net::SocketAddr;
-use std::panic;
-use std::panic::PanicInfo;
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use backtrace::Backtrace;
-use clap::{AppSettings, ArgEnum, Parser};
+use clap::{ArgEnum, Parser};
 use fail::FailScenario;
 use http::header::{HeaderName, HeaderValue};
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use lazy_static::lazy_static;
-use mz_persist_client::PersistLocation;
 use sysinfo::{ProcessorExt, SystemExt};
 use tower_http::cors::{self, AllowOrigin};
 use tracing_subscriber::filter::Targets;
@@ -58,6 +55,7 @@ use mz_ore::cli::KeyValueArg;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+use mz_persist_client::PersistLocation;
 
 mod sys;
 
@@ -73,6 +71,15 @@ mod sys;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+lazy_static! {
+    pub static ref VERSION: String = materialized::BUILD_INFO.human_version();
+    pub static ref LONG_VERSION: String = {
+        iter::once(materialized::BUILD_INFO.human_version())
+            .chain(build_info())
+            .join("\n")
+    };
+}
+
 type OptionalDuration = Option<Duration>;
 
 fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
@@ -84,15 +91,13 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 
 /// The streaming SQL materialized view engine.
 #[derive(Parser, Debug)]
-#[clap(next_line_help = true, args_override_self = true, global_setting = AppSettings::NoAutoVersion)]
+#[clap(
+    next_line_help = true,
+    args_override_self = true,
+    version = VERSION.as_str(),
+    long_version = LONG_VERSION.as_str(),
+)]
 pub struct Args {
-    // === Special modes. ===
-    /// Print version information and exit.
-    ///
-    /// Specify twice to additionally print version information for selected
-    /// dependencies.
-    #[clap(short, long, parse(from_occurrences))]
-    version: usize,
     /// [DANGEROUS] Enable experimental features.
     #[clap(long, env = "MZ_EXPERIMENTAL")]
     experimental: bool,
@@ -228,14 +233,6 @@ pub struct Args {
     )]
     log_filter: Targets,
 
-    /// Prevent dumping of backtraces on SIGSEGV/SIGBUS
-    ///
-    /// In the case of OOMs and memory corruptions, it may be advantageous to NOT dump backtraces,
-    /// as the attempt to dump the backtraces will segfault on its own, corrupting the core file
-    /// further and obfuscating the original bug.
-    #[clap(long, hide = true, env = "MZ_NO_SIGBUS_SIGSEGV_BACKTRACES")]
-    no_sigbus_sigsegv_backtraces: bool,
-
     // == Connection options.
     /// The address on which to listen for connections.
     #[clap(
@@ -359,14 +356,11 @@ pub struct Args {
     #[clap(long, env = "MZ_PERSIST_BLOB_URL")]
     persist_blob_url: Option<Url>,
     /// Where the persist library should perform consensus.
-    ///
-    /// Defaults to the `persist/consensus` SQLite database in the data
-    /// directory.
     #[clap(long, env = "MZ_PERSIST_CONSENSUS_URL")]
-    persist_consensus_url: Option<Url>,
+    persist_consensus_url: Url,
     /// Postgres catalog stash connection string.
     #[clap(long, env = "MZ_CATALOG_POSTGRES_STASH", value_name = "POSTGRES_URL")]
-    catalog_postgres_stash: Option<String>,
+    catalog_postgres_stash: String,
 
     // === AWS options. ===
     /// An external ID to be supplied to all AWS AssumeRole operations.
@@ -439,11 +433,10 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
+    mz_ore::panic::set_abort_on_panic();
+
     // Configure signal handling as soon as possible. We want signals to be
     // handled to our liking ASAP.
-    if !args.no_sigbus_sigsegv_backtraces {
-        sys::enable_sigbus_sigsegv_backtraces()?;
-    }
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
@@ -483,20 +476,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         #[cfg(feature = "tokio-console")]
         tokio_console: args.tokio_console,
     }))?;
-    panic::set_hook(Box::new(handle_panic));
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
-
-    if args.version > 0 {
-        println!("materialized {}", materialized::BUILD_INFO.human_version());
-        if args.version > 1 {
-            for bi in build_info() {
-                println!("{}", bi);
-            }
-        }
-        return Ok(());
-    }
 
     // Configure connections.
     let tls = if args.tls_mode == "disable" {
@@ -633,22 +615,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             ),
             Some(blob_url) => blob_url.to_string(),
         },
-        consensus_uri: match args.persist_consensus_url {
-            None => {
-                #[cfg(target_os = "macos")]
-                let host = "/tmp";
-                #[cfg(not(target_os = "macos"))]
-                let host = "/var/run/postgresql";
-                format!(
-                    "postgres://{}@{}",
-                    urlencoding::encode(&whoami::username()),
-                    urlencoding::encode(host),
-                )
-            }
-            Some(consensus_url) => consensus_url.to_string(),
-        },
+        consensus_uri: args.persist_consensus_url.to_string(),
     };
-    let catalog_postgres_stash = args.catalog_postgres_stash;
+    let catalog_postgres_stash = Some(args.catalog_postgres_stash);
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
@@ -807,57 +776,6 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
     loop {
         thread::park();
     }
-}
-
-lazy_static! {
-    static ref PANIC_MUTEX: Mutex<()> = Mutex::new(());
-}
-
-fn handle_panic(panic_info: &PanicInfo) {
-    let _guard = PANIC_MUTEX.lock();
-
-    let thr = thread::current();
-    let thr_name = thr.name().unwrap_or("<unnamed>");
-
-    let msg = match panic_info.payload().downcast_ref::<&'static str>() {
-        Some(s) => *s,
-        None => match panic_info.payload().downcast_ref::<String>() {
-            Some(s) => &s[..],
-            None => "Box<Any>",
-        },
-    };
-
-    let location = if let Some(loc) = panic_info.location() {
-        loc.to_string()
-    } else {
-        "<unknown>".to_string()
-    };
-
-    ::tracing::error!(
-        target: "panic",
-        "{msg}
-thread: {thr_name}
-location: {location}
-version: {version} ({sha})
-backtrace:
-{backtrace:?}",
-        msg = msg,
-        thr_name = thr_name,
-        location = location,
-        version = materialized::BUILD_INFO.version,
-        sha = materialized::BUILD_INFO.sha,
-        backtrace = Backtrace::new(),
-    );
-    eprintln!(
-        r#"materialized encountered an internal error and crashed.
-
-We rely on bug reports to diagnose and fix these errors. Please
-copy and paste the above details and file a report at:
-
-    https://materialize.com/s/bug
-"#,
-    );
-    process::exit(1);
 }
 
 fn build_info() -> Vec<String> {

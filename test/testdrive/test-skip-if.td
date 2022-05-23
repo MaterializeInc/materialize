@@ -13,7 +13,7 @@ SELECT false;
 
 # false skip result means we run this and see the failure
 ! SELECT nonsense;
-exact:column "nonsense" does not exist
+contains:column "nonsense" does not exist
 
 $ skip-if
 SELECT true;

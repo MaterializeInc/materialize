@@ -3,7 +3,7 @@ name = "mz-dataflow-types"
 description = "Types for the dataflow crate."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
@@ -22,7 +22,6 @@ futures = "0.3.21"
 globset = { version = "0.4.8", features = ["serde1"] }
 http = "0.2.7"
 http-serde = "1.1.0"
-itertools = "0.10.3"
 maplit = "1.0.2"
 mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
@@ -32,13 +31,12 @@ mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-orchestrator = { path = "../orchestrator" }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
-mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-stash = { path = "../stash" }
 prost = "0.10.3"
-regex = "1.5.4"
+regex = "1.5.6"
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

@@ -29,7 +29,6 @@ services:
       --data-directory=/mzdata
       --experimental
       --timestamp-frequency 100ms
-      --no-sigbus-sigsegv-backtraces
     image: antithesis-materialized:${ANT_IMAGE_TAG}
     volumes:
       - mzdata:/mzdata:rw

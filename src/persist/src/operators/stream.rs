@@ -512,7 +512,7 @@ mod tests {
     use crate::error::Error;
     use crate::indexed::ListenEvent;
     use crate::mem::MemRegistry;
-    use crate::unreliable::UnreliableHandle;
+    use crate::unreliable::UnreliableHandleOld;
 
     use super::*;
 
@@ -626,7 +626,7 @@ mod tests {
     fn seal_frontier_advance_only_on_success() -> Result<(), Error> {
         mz_ore::test::init_logging();
         let mut registry = MemRegistry::new();
-        let mut unreliable = UnreliableHandle::default();
+        let mut unreliable = UnreliableHandleOld::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
 
         timely::execute_directly(move |worker| {
@@ -679,7 +679,7 @@ mod tests {
     fn regression_9419_seal_close() -> Result<(), Error> {
         mz_ore::test::init_logging();
         let mut registry = MemRegistry::new();
-        let mut unreliable = UnreliableHandle::default();
+        let mut unreliable = UnreliableHandleOld::default();
         let p = registry.runtime_unreliable(unreliable.clone())?;
 
         timely::execute_directly(move |worker| {

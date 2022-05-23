@@ -75,7 +75,7 @@ disruptions_disabled = [
 > INSERT INTO panic_table VALUES ('panic!');
 
 ! INSERT INTO panic_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
-contains: deadline has elapsed
+timeout
 """,
         ),
     ),
@@ -230,4 +230,4 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.kill(*cleanup_list)
         c.rm(*cleanup_list, destroy_volumes=True)
 
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")

@@ -130,7 +130,7 @@ $ kafka-verify format=avro sink=materialize.public.env_pw_snk sort-messages=true
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
-exact:error publishing kafka schemas for sink: unable to publish value schema to registry in kafka sink: server error 401: Unauthorized
+contains:error publishing kafka schemas for sink: unable to publish value schema to registry in kafka sink: server error 401: Unauthorized
 
 # Ensure that we get an ssl error if we forget to set certs
 ! CREATE MATERIALIZED SOURCE data

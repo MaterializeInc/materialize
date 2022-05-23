@@ -19,7 +19,7 @@ LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
-    "postgres:/var/lib/postgresql",
+    "pgdata:/var/lib/postgresql",
     "tmp:/share/tmp",
 ]
 
@@ -46,7 +46,6 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -107,7 +106,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port, *extra_ports],
+                "ports": [port, 5432, *extra_ports],
                 "environment": environment,
                 "volumes": volumes,
             }
@@ -135,7 +134,6 @@ class Computed(Service):
             environment = [
                 "COMPUTED_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
             ]
 
         if volumes is None:
@@ -521,7 +519,6 @@ class Testdrive(Service):
             environment = [
                 "TMPDIR=/share/tmp",
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -559,7 +556,7 @@ class Testdrive(Service):
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://postgres:postgres@postgres/postgres"
+                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=catalog"
             )
 
         if no_reset:
@@ -623,12 +620,10 @@ class SqlLogicTest(Service):
         name: str = "sqllogictest-svc",
         mzbuild: str = "sqllogictest",
         environment: List[str] = [
-            "RUST_BACKTRACE=full",
             "PGUSER=postgres",
             "PGHOST=postgres",
             "PGPASSWORD=postgres",
             "MZ_SOFT_ASSERTIONS=1",
-            "RUST_BACKTRACE=1",
         ],
         volumes: List[str] = ["../..:/workdir"],
         depends_on: List[str] = ["postgres"],

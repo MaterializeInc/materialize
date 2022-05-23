@@ -188,9 +188,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8589c784ff02ac80dafc5e4116c3a2a3743ac5e0c902483518a88eec6559cf99"
+checksum = "345fd392ab01f746c717b1357165b76f0b67a60192007b234058c9045fdcf695"
 dependencies = [
  "flate2",
  "futures-core",
@@ -2275,28 +2275,10 @@ dependencies = [
  "once_cell",
  "openssl",
  "openssl-sys",
- "parking_lot 0.12.0",
+ "parking_lot",
  "tokio",
  "tokio-openssl",
  "tower-layer",
-]
-
-[[package]]
-name = "hyper-proxy"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca815a891b24fdfb243fa3239c86154392b0953ee584aa1a2a1f66d20cbe75cc"
-dependencies = [
- "bytes",
- "futures",
- "headers",
- "http",
- "hyper",
- "hyper-tls",
- "native-tls",
- "tokio",
- "tokio-native-tls",
- "tower-service",
 ]
 
 [[package]]
@@ -2362,9 +2344,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.7.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc633605454125dec4b66843673f01c7df2b89479b32e0ed634e43a91cff62a5"
+checksum = "0f647032dfaa1f8b6dc29bd3edb7bbef4861b8b8007ebb118d6db284fd59f6ee"
 dependencies = [
  "autocfg",
  "hashbrown",
@@ -2380,28 +2362,6 @@ dependencies = [
  "lazy_static",
  "number_prefix",
  "regex",
-]
-
-[[package]]
-name = "inotify"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abf888f9575c290197b2c948dc9e9ff10bd1a39ad1ea8585f734585fa6b9d3f9"
-dependencies = [
- "bitflags",
- "futures-core",
- "inotify-sys",
- "libc",
- "tokio",
-]
-
-[[package]]
-name = "inotify-sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -2806,9 +2766,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
- "atty",
  "axum",
- "backtrace",
  "base64",
  "bytes",
  "cc",
@@ -2823,8 +2781,6 @@ dependencies = [
  "http",
  "hyper",
  "hyper-openssl",
- "hyper-proxy",
- "hyper-tls",
  "include_dir",
  "itertools",
  "jsonwebtoken",
@@ -2854,7 +2810,6 @@ dependencies = [
  "mz-secrets-filesystem",
  "mz-secrets-kubernetes",
  "mz-stash",
- "native-tls",
  "nix",
  "num_cpus",
  "openssl",
@@ -2887,9 +2842,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "urlencoding",
  "uuid 1.0.0",
- "whoami",
 ]
 
 [[package]]
@@ -3127,7 +3080,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
  "url",
 ]
 
@@ -3136,8 +3088,6 @@ name = "mz-compute"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-stream",
- "async-trait",
  "axum",
  "clap",
  "crossbeam-channel",
@@ -3145,8 +3095,6 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "futures",
- "futures-executor",
- "futures-util",
  "http",
  "itertools",
  "mz-avro",
@@ -3156,9 +3104,7 @@ dependencies = [
  "mz-interchange",
  "mz-kafka-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-client",
- "mz-persist-types",
  "mz-pid-file",
  "mz-prof",
  "mz-repr",
@@ -3182,8 +3128,6 @@ name = "mz-coord"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bincode",
- "byteorder",
  "bytes",
  "chrono",
  "const_format",
@@ -3201,7 +3145,6 @@ dependencies = [
  "mz-expr",
  "mz-kafka-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-types",
  "mz-pgrepr",
  "mz-postgres-util",
@@ -3258,14 +3201,12 @@ dependencies = [
  "globset",
  "http",
  "http-serde",
- "itertools",
  "maplit",
  "mz-ccsr",
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
  "mz-orchestrator",
- "mz-orchestrator-kubernetes",
  "mz-ore",
  "mz-persist",
  "mz-persist-client",
@@ -3418,7 +3359,12 @@ dependencies = [
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
+ "mz-repr",
  "num_cpus",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
  "rand",
  "rdkafka",
  "serde",
@@ -3515,9 +3461,6 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "mz-orchestrator",
- "mz-secrets-kubernetes",
- "punycode",
- "regex",
  "serde_json",
  "sha2",
 ]
@@ -3557,7 +3500,6 @@ dependencies = [
  "futures",
  "http",
  "hyper",
- "hyper-proxy",
  "hyper-tls",
  "lazy_static",
  "native-tls",
@@ -3617,7 +3559,6 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "lazy_static",
- "libsqlite3-sys",
  "md-5",
  "mz-build-info",
  "mz-ore",
@@ -3659,7 +3600,8 @@ dependencies = [
  "mz-persist-types",
  "num_cpus",
  "num_enum",
- "rand",
+ "proptest",
+ "proptest-derive",
  "serde",
  "serde_json",
  "tempfile",
@@ -3728,7 +3670,6 @@ dependencies = [
  "futures",
  "itertools",
  "mz-coord",
- "mz-dataflow-types",
  "mz-expr",
  "mz-frontegg-auth",
  "mz-ore",
@@ -3802,7 +3743,9 @@ dependencies = [
  "dec",
  "enum-kinds",
  "fast-float",
+ "globset",
  "hex",
+ "http",
  "itertools",
  "lazy_static",
  "mz-lowertest",
@@ -3897,7 +3840,6 @@ dependencies = [
  "aws-sdk-sts",
  "bytes",
  "chrono",
- "csv",
  "datadriven",
  "enum-kinds",
  "globset",
@@ -3913,7 +3855,6 @@ dependencies = [
  "mz-kafka-util",
  "mz-lowertest",
  "mz-ore",
- "mz-persist-client",
  "mz-pgrepr",
  "mz-postgres-util",
  "mz-repr",
@@ -3964,7 +3905,6 @@ dependencies = [
  "lazy_static",
  "materialized",
  "md-5",
- "mz-dataflow-types",
  "mz-orchestrator-process",
  "mz-ore",
  "mz-persist-client",
@@ -3979,7 +3919,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tower-http",
- "tracing",
  "uuid 1.0.0",
  "walkdir",
 ]
@@ -4018,19 +3957,15 @@ dependencies = [
  "aws-sdk-s3",
  "aws-sdk-sqs",
  "bincode",
- "bytes",
  "chrono",
  "crossbeam-channel",
  "csv-core",
  "differential-dataflow",
- "flate2",
  "futures",
  "futures-executor",
  "futures-util",
  "globset",
- "inotify",
  "lazy_static",
- "log",
  "mz-avro",
  "mz-ccsr",
  "mz-dataflow-types",
@@ -4039,9 +3974,7 @@ dependencies = [
  "mz-kafka-util",
  "mz-kinesis-util",
  "mz-ore",
- "mz-persist",
  "mz-persist-client",
- "mz-persist-types",
  "mz-pgcopy",
  "mz-postgres-util",
  "mz-repr",
@@ -4505,9 +4438,9 @@ dependencies = [
 
 [[package]]
 name = "os_info"
-version = "3.3.0"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04304d855bb5385d4b595edf0147b8e281871766b75dd4c87b2bdf3c9e5c2d19"
+checksum = "0eca3ecae1481e12c3d9379ec541b238a16f0b75c9a409942daa8ec20dbfdb62"
 dependencies = [
  "log",
  "serde",
@@ -4531,37 +4464,12 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d7744ac029df22dca6284efe4e898991d28e3085c706c972bcd7da4a27a15eb"
-dependencies = [
- "instant",
- "lock_api",
- "parking_lot_core 0.8.3",
-]
-
-[[package]]
-name = "parking_lot"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "87f5ec2493a61ac0506c0f4199f99070cbe83857b0337006a30f3e6719b8ef58"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.9.1",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa7a782938e745763fe6907fc6ba86946d72f49fe7e21de074e08128a99fb018"
-dependencies = [
- "cfg-if",
- "instant",
- "libc",
- "redox_syscall",
- "smallvec",
- "winapi",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -4830,9 +4738,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f9307de92566887d485ac6f20df17b0fe1704fffdbad0bdbc05a3864d3082f6"
+checksum = "a97149c0eacaa6b8f8cedea99f68bb3a0517fa20f8de8d8c24c1a810f38d235d"
 dependencies = [
  "backtrace",
  "cfg-if",
@@ -4841,7 +4749,7 @@ dependencies = [
  "log",
  "nix",
  "once_cell",
- "parking_lot 0.12.0",
+ "parking_lot",
  "smallvec",
  "symbolic-demangle",
  "tempfile",
@@ -4963,13 +4871,12 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.10.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95e344cafeaeefe487300c361654bcfc85db3ac53619eeccced29f5ea18c4c70"
+checksum = "0941606b9934e2d98a3677759a971756eb821f75764d0e0d26946d08e74d9104"
 dependencies = [
  "bitflags",
  "byteorder",
- "flate2",
  "hex",
  "lazy_static",
  "libc",
@@ -4977,16 +4884,16 @@ dependencies = [
 
 [[package]]
 name = "prometheus"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7f64969ffd5dd8f39bd57a68ac53c163a095ed9d0fb707146da1b27025a3504"
+checksum = "cface98dfa6d645ea4c789839f176e4b072265d085bfcc48eaa8d137f58d3c39"
 dependencies = [
  "cfg-if",
  "fnv",
  "lazy_static",
  "libc",
  "memchr",
- "parking_lot 0.11.1",
+ "parking_lot",
  "procfs",
  "thiserror",
 ]
@@ -5020,8 +4927,7 @@ dependencies = [
 [[package]]
 name = "prost"
 version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc03e116981ff7d8da8e5c220e374587b98d294af7ba7dd7fda761158f00086f"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -5030,12 +4936,10 @@ dependencies = [
 [[package]]
 name = "prost-build"
 version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65a1118354442de7feb8a2a76f3d80ef01426bd45542c8c1fdffca41a758f846"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
  "cfg-if",
- "cmake",
  "heck",
  "itertools",
  "lazy_static",
@@ -5044,6 +4948,7 @@ dependencies = [
  "petgraph",
  "prost",
  "prost-types",
+ "protobuf-src",
  "regex",
  "tempfile",
  "which",
@@ -5052,8 +4957,7 @@ dependencies = [
 [[package]]
 name = "prost-derive"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b670f45da57fb8542ebdbb6105a925fe571b67f9e7ed9f47a06a84e72b4e7cc"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "anyhow",
  "itertools",
@@ -5079,8 +4983,7 @@ dependencies = [
 [[package]]
 name = "prost-types"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d0a014229361011dc8e69c8a1ec6c2e8d0f2af7c91e3ea3f5b2170298461e68"
+source = "git+https://github.com/MaterializeInc/prost.git?branch=v0.10#28cff98c6ad1f514ea9afc5e773a44746f75e32d"
 dependencies = [
  "bytes",
  "prost",
@@ -5166,12 +5069,6 @@ dependencies = [
  "sha2",
  "uritemplate-next",
 ]
-
-[[package]]
-name = "punycode"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
 
 [[package]]
 name = "quick-error"
@@ -5329,9 +5226,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.5.5"
+version = "1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a11647b6b25ff05a515cb92c365cec08801e83423a235b51e231e1808747286"
+checksum = "d83f127d94bdbcda4c8cc2e50f6f84f4b611f69c902699ca385a39c3a75f9ff1"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5350,9 +5247,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.6.25"
+version = "0.6.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f497285884f3fcff424ffc933e56d7cbca511def0c9831a7f9b5f6153e3cc89b"
+checksum = "49b3de9ec5dc0a3417da371aab17d729997c15010e7fd24ff707773a33bddb64"
 
 [[package]]
 name = "remove_dir_all"
@@ -5795,7 +5692,6 @@ dependencies = [
  "mz-build-info",
  "mz-dataflow-types",
  "mz-ore",
- "mz-persist-client",
  "mz-pid-file",
  "mz-prof",
  "mz-storage",
@@ -5805,7 +5701,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "url",
 ]
 
 [[package]]
@@ -5931,9 +5826,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.23.12"
+version = "0.23.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56b1e20ee77901236c389ff74618a899ff5fd34719a7ff0fd1d64f0acca5179a"
+checksum = "3977ec2e0520829be45c8a2df70db2bf364714d8a748316a10c3c35d4d2b01c9"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",
@@ -6183,7 +6078,7 @@ dependencies = [
  "mio",
  "num_cpus",
  "once_cell",
- "parking_lot 0.12.0",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -6256,7 +6151,7 @@ dependencies = [
  "fallible-iterator",
  "futures",
  "log",
- "parking_lot 0.12.0",
+ "parking_lot",
  "percent-encoding",
  "phf",
  "pin-project-lite",
@@ -6377,9 +6272,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-build"
-version = "0.7.0"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d17087af5c80e5d5fc8ba9878e60258065a0a757e35efe7a05b7904bece1943"
+checksum = "d9263bf4c9bfaae7317c1c2faf7f18491d2fe476f70c414b73bf5d445b00ffa1"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -6866,16 +6761,6 @@ dependencies = [
  "either",
  "lazy_static",
  "libc",
-]
-
-[[package]]
-name = "whoami"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524b58fa5a20a2fb3014dd6358b70e6579692a56ef6fce928834e488f42f65e8"
-dependencies = [
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]

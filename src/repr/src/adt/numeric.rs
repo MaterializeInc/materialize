@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
 
@@ -129,38 +129,27 @@ impl TryFrom<usize> for NumericMaxScale {
     }
 }
 
-impl From<&NumericMaxScale> for ProtoNumericMaxScale {
-    fn from(max_scale: &NumericMaxScale) -> Self {
+impl RustType<ProtoNumericMaxScale> for NumericMaxScale {
+    fn into_proto(&self) -> ProtoNumericMaxScale {
         ProtoNumericMaxScale {
-            value: max_scale.0.into_proto(),
+            value: self.0.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoNumericMaxScale> for NumericMaxScale {
-    type Error = TryFromProtoError;
-
-    fn try_from(max_scale: ProtoNumericMaxScale) -> Result<Self, Self::Error> {
-        Ok(NumericMaxScale(u8::from_proto(max_scale.value)?))
+    fn from_proto(max_scale: ProtoNumericMaxScale) -> Result<Self, TryFromProtoError> {
+        Ok(NumericMaxScale(max_scale.value.into_rust()?))
     }
 }
 
-impl From<&Option<NumericMaxScale>> for ProtoOptionalNumericMaxScale {
-    fn from(max_scale: &Option<NumericMaxScale>) -> Self {
+impl RustType<ProtoOptionalNumericMaxScale> for Option<NumericMaxScale> {
+    fn into_proto(&self) -> ProtoOptionalNumericMaxScale {
         ProtoOptionalNumericMaxScale {
-            value: max_scale.as_ref().map(From::from),
+            value: self.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoOptionalNumericMaxScale> for Option<NumericMaxScale> {
-    type Error = TryFromProtoError;
-
-    fn try_from(max_scale: ProtoOptionalNumericMaxScale) -> Result<Self, Self::Error> {
-        match max_scale.value {
-            Some(value) => Ok(Some(value.try_into()?)),
-            None => Ok(None),
-        }
+    fn from_proto(max_scale: ProtoOptionalNumericMaxScale) -> Result<Self, TryFromProtoError> {
+        max_scale.value.into_rust()
     }
 }
 
@@ -752,7 +741,7 @@ impl DecimalLike for Numeric {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use crate::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

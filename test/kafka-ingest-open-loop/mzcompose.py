@@ -245,4 +245,4 @@ def workflow_smoke_test(c: Composition) -> None:
         )
         c.kill("materialized")
         c.rm("materialized", "testdrive", "kafka", destroy_volumes=True)
-        c.rm_volumes("mzdata")
+        c.rm_volumes("mzdata", "pgdata")

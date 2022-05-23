@@ -62,4 +62,8 @@ impl SecretsController for FilesystemSecretsController {
 
         return Ok(());
     }
+
+    fn supports_multi_statement_txn(&self) -> bool {
+        false
+    }
 }

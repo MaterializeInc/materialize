@@ -406,15 +406,18 @@ impl ErrorResponse {
             CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             CoordError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             CoordError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            CoordError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             CoordError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
+            CoordError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction" and "single table write transaction" are
             // not things in Postgres. This error code is the generic "bad txn thing"
             // code, so it's probably the best choice.
             CoordError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
+            CoordError::SecretsOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
         };
         ErrorResponse {
             severity,

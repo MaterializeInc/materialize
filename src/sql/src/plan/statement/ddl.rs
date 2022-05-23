@@ -1865,6 +1865,9 @@ pub fn plan_create_views(
                 SourceConnector::Local { .. } => {
                     bail!("cannot generate views from local sources")
                 }
+                SourceConnector::Log => {
+                    bail!("cannot generate views from log sources")
+                }
             }
         }
     }

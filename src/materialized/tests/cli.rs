@@ -26,7 +26,7 @@ fn test_version() {
     let expected_version = materialized::BUILD_INFO.version;
     assert!(!expected_version.is_empty());
     cmd()
-        .arg("--version")
+        .arg("-V")
         .assert()
         .success()
         .stdout(predicates::str::starts_with(format!(

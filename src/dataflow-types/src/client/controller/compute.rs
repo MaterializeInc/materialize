@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, ReplicaId};
+use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, SourceInstanceDesc};
@@ -145,10 +145,7 @@ impl<T> ComputeControllerState<T>
 where
     T: Timestamp + Lattice,
 {
-    pub(super) async fn new(
-        // client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
-        logging: &Option<LoggingConfig>,
-    ) -> Result<Self, anyhow::Error> {
+    pub(super) async fn new(logging: &Option<LoggingConfig>) -> Result<Self, anyhow::Error> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -164,7 +161,10 @@ where
         }
         let mut client = crate::client::replicated::ActiveReplication::default();
         client
-            .send(ComputeCommand::CreateInstance(logging.clone()))
+            .send(ComputeCommand::CreateInstance(InstanceConfig {
+                replica_id: Default::default(),
+                logging: logging.clone(),
+            }))
             .await?;
 
         Ok(Self {
@@ -401,6 +401,7 @@ where
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), ComputeError> {
         let since = self.as_ref().collection(id)?.read_capabilities.frontier();
 
@@ -423,6 +424,7 @@ where
                 timestamp,
                 finishing,
                 map_filter_project,
+                target_replica,
             }))
             .await
             .map_err(ComputeError::from)

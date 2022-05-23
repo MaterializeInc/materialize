@@ -53,7 +53,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::newapi::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
@@ -1506,38 +1506,34 @@ impl fmt::Display for ParseError {
 
 impl Error for ParseError {}
 
-impl From<&ParseError> for ProtoParseError {
-    fn from(error: &ParseError) -> Self {
+impl RustType<ProtoParseError> for ParseError {
+    fn into_proto(&self) -> ProtoParseError {
         use proto_parse_error::*;
         use Kind::*;
-        let kind = match error.kind {
+        let kind = match self.kind {
             ParseErrorKind::OutOfRange => OutOfRange(()),
             ParseErrorKind::InvalidInputSyntax => InvalidInputSyntax(()),
         };
         ProtoParseError {
             kind: Some(kind),
-            type_name: error.type_name.clone(),
-            input: error.input.clone(),
-            details: error.details.clone(),
+            type_name: self.type_name.clone(),
+            input: self.input.clone(),
+            details: self.details.clone(),
         }
     }
-}
 
-impl TryFrom<ProtoParseError> for ParseError {
-    type Error = TryFromProtoError;
-
-    fn try_from(error: ProtoParseError) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoParseError) -> Result<Self, TryFromProtoError> {
         use proto_parse_error::Kind::*;
 
-        if let Some(kind) = error.kind {
+        if let Some(kind) = proto.kind {
             Ok(ParseError {
                 kind: match kind {
                     OutOfRange(()) => ParseErrorKind::OutOfRange,
                     InvalidInputSyntax(()) => ParseErrorKind::InvalidInputSyntax,
                 },
-                type_name: error.type_name,
-                input: error.input,
-                details: error.details,
+                type_name: proto.type_name,
+                input: proto.input,
+                details: proto.details,
             })
         } else {
             Err(TryFromProtoError::missing_field("ProtoParseError::kind"))
@@ -1566,22 +1562,18 @@ impl fmt::Display for ParseHexError {
     }
 }
 
-impl From<&ParseHexError> for ProtoParseHexError {
-    fn from(error: &ParseHexError) -> Self {
+impl RustType<ProtoParseHexError> for ParseHexError {
+    fn into_proto(&self) -> ProtoParseHexError {
         use proto_parse_hex_error::*;
         use Kind::*;
-        let kind = match error {
+        let kind = match self {
             ParseHexError::InvalidHexDigit(v) => InvalidHexDigit(v.into_proto()),
             ParseHexError::OddLength => OddLength(()),
         };
         ProtoParseHexError { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoParseHexError> for ParseHexError {
-    type Error = TryFromProtoError;
-
-    fn try_from(error: ProtoParseHexError) -> Result<Self, Self::Error> {
+    fn from_proto(error: ProtoParseHexError) -> Result<Self, TryFromProtoError> {
         use proto_parse_hex_error::Kind::*;
         match error.kind {
             Some(kind) => match kind {
@@ -1598,7 +1590,7 @@ impl TryFrom<ProtoParseHexError> for ParseHexError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use crate::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

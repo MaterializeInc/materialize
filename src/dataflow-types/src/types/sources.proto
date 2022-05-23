@@ -9,14 +9,94 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
+import "repr/src/proto.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
+import "dataflow-types/src/postgres_source.proto";
+import "dataflow-types/src/types/aws.proto";
+import "kafka-util/src/addr.proto";
 
 package mz_dataflow_types.types.sources;
+
+message ProtoIncludedColumnPos {
+    string name = 1;
+    uint64 pos = 2;
+}
+
+message ProtoKafkaSourceConnector {
+    mz_kafka_util.addr.ProtoKafkaAddrs addrs = 1;
+    string topic = 2;
+    map<string, string> config_options = 3;
+    map<int32, int64> start_offsets = 4;
+    optional string group_id_prefix = 5;
+    mz_repr.proto.ProtoU128 cluster_id = 6;
+    ProtoIncludedColumnPos include_timestamp = 7;
+    ProtoIncludedColumnPos include_partition = 8;
+    ProtoIncludedColumnPos include_topic = 9;
+    ProtoIncludedColumnPos include_offset = 10;
+    ProtoIncludedColumnPos include_headers = 11;
+}
+
+message ProtoExternalSourceConnector {
+    oneof kind {
+        ProtoKafkaSourceConnector kafka = 1;
+        ProtoKinesisSourceConnector kinesis = 2;
+        ProtoS3SourceConnector s3 = 3;
+        ProtoPostgresSourceConnector postgres = 4;
+        ProtoPubNubSourceConnector pubnub = 5;
+        ProtoPersistSourceConnector persist = 6;
+    }
+}
 
 message ProtoSourceData {
     oneof kind {
         mz_repr.row.ProtoRow ok = 1;
         errors.ProtoDataflowError err = 2;
+    }
+}
+
+message ProtoKinesisSourceConnector {
+    string stream_name = 1;
+    mz_dataflow_types.types.aws.ProtoAwsConfig aws = 2;
+}
+
+message ProtoPostgresSourceConnector {
+    string conn = 1;
+    string publication = 2;
+    string slot_name = 3;
+    mz_dataflow_types.postgres_source.PostgresSourceDetails details = 4;
+}
+
+message ProtoPubNubSourceConnector {
+    string subscribe_key = 1;
+    string channel = 2;
+}
+
+message ProtoPersistSourceConnector {
+    string consensus_uri = 1;
+    string blob_uri = 2;
+    string shard_id = 3;
+}
+
+message ProtoS3SourceConnector {
+    repeated ProtoS3KeySource key_sources = 1;
+    optional string pattern = 2;
+    mz_dataflow_types.types.aws.ProtoAwsConfig aws = 3;
+    ProtoCompression compression = 4;
+}
+
+message ProtoS3KeySource {
+    oneof kind {
+        string scan = 1;
+        string sqs_notifications = 2;
+    }
+}
+
+message ProtoCompression {
+    oneof kind {
+        google.protobuf.Empty gzip = 1;
+        google.protobuf.Empty none = 2;
     }
 }

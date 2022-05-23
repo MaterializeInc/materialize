@@ -235,7 +235,7 @@ This repository has the following basic structure:
     <https://materialize.com/docs>.
   * **`misc`** contains a variety of supporting tools and projects. Some
     highlights:
-    * **`misc/dbt-materialize` contains the Materialize [dbt] adapter.
+    * **`misc/dbt-materialize`** contains the Materialize [dbt] adapter.
     * **`misc/python`** contains Python developer tools, like
       [mzbuild](mzbuild.md).
     * **`misc/nix`** contains an experimental [Nix] configuration for

@@ -155,6 +155,92 @@ impl Sqlite {
         drop(insert_stmt);
         Ok(())
     }
+
+    fn compact_batch_tx<'a, I>(tx: &Transaction, compactions: I) -> Result<(), StashError>
+    where
+        I: Iterator<Item = (Id, &'a Antichain<Timestamp>)>,
+    {
+        let mut compact_stmt =
+            tx.prepare("UPDATE sinces SET since = $since WHERE collection_id = $collection_id")?;
+        for (collection_id, new_since) in compactions {
+            let since = Self::since_tx(&tx, collection_id)?;
+            let upper = Self::upper_tx(&tx, collection_id)?;
+            if PartialOrder::less_than(&upper, new_since) {
+                return Err(StashError::from(format!(
+                    "compact request {} is greater than the current upper frontier {}",
+                    AntichainFormatter(new_since),
+                    AntichainFormatter(&upper)
+                )));
+            }
+            if PartialOrder::less_than(new_since, &since) {
+                return Err(StashError::from(format!(
+                    "compact request {} is less than the current since frontier {}",
+                    AntichainFormatter(new_since),
+                    AntichainFormatter(&since)
+                )));
+            }
+            compact_stmt.execute(
+                named_params! {"$since": new_since.as_option(), "$collection_id": collection_id},
+            )?;
+        }
+        drop(compact_stmt);
+        Ok(())
+    }
+
+    fn consolidate_batch_tx<'a, I>(tx: &Transaction<'a>, collections: I) -> Result<(), StashError>
+    where
+        I: Iterator<Item = Id>,
+    {
+        let mut consolidation_stmt = tx.prepare(
+            "DELETE FROM data
+             WHERE collection_id = $collection_id AND time <= $since
+             RETURNING key, value, diff",
+        )?;
+        let mut insert_stmt = tx.prepare(
+            "INSERT INTO data (collection_id, key, value, time, diff)
+             VALUES ($collection_id, $key, $value, $time, $diff)",
+        )?;
+        let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
+
+        for collection_id in collections {
+            let since = Self::since_tx(&tx, collection_id)?.into_option();
+            match since {
+                Some(since) => {
+                    let mut updates = consolidation_stmt
+                        .query_and_then(
+                            named_params! {
+                                "$collection_id": collection_id,
+                                "$since": since,
+                            },
+                            |row| {
+                                let key = row.get("key")?;
+                                let value = row.get("value")?;
+                                let diff = row.get("diff")?;
+                                Ok::<_, StashError>(((key, value), since, diff))
+                            },
+                        )?
+                        .collect::<Result<Vec<((Vec<u8>, Vec<u8>), i64, i64)>, _>>()?;
+                    differential_dataflow::consolidation::consolidate_updates(&mut updates);
+                    for ((key, value), time, diff) in updates {
+                        insert_stmt.execute(named_params! {
+                            "$collection_id": collection_id,
+                            "$key": key,
+                            "$value": value,
+                            "$time": time,
+                            "$diff": diff,
+                        })?;
+                    }
+                }
+                None => {
+                    drop_stmt.execute(named_params! {
+                        "$collection_id": collection_id,
+                    })?;
+                }
+            }
+        }
+        drop((consolidation_stmt, insert_stmt, drop_stmt));
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -355,30 +441,12 @@ impl Stash for Sqlite {
         V: Data,
     {
         let tx = self.conn.transaction()?;
-        let mut compact_stmt =
-            tx.prepare("UPDATE sinces SET since = $since WHERE collection_id = $collection_id")?;
-        for (collection, new_since) in compactions {
-            let since = Self::since_tx(&tx, collection.id)?;
-            let upper = Self::upper_tx(&tx, collection.id)?;
-            if PartialOrder::less_than(&upper, new_since) {
-                return Err(StashError::from(format!(
-                    "compact request {} is greater than the current upper frontier {}",
-                    AntichainFormatter(new_since),
-                    AntichainFormatter(&upper)
-                )));
-            }
-            if PartialOrder::less_than(new_since, &since) {
-                return Err(StashError::from(format!(
-                    "compact request {} is less than the current since frontier {}",
-                    AntichainFormatter(new_since),
-                    AntichainFormatter(&since)
-                )));
-            }
-            compact_stmt.execute(
-                named_params! {"$since": new_since.as_option(), "$collection_id": collection.id},
-            )?;
-        }
-        drop(compact_stmt);
+        Self::compact_batch_tx(
+            &tx,
+            compactions
+                .iter()
+                .map(|(collection, since)| (collection.id, since)),
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -403,55 +471,7 @@ impl Stash for Sqlite {
         V: Data,
     {
         let tx = self.conn.transaction()?;
-
-        let mut consolidation_stmt = tx.prepare(
-            "DELETE FROM data
-             WHERE collection_id = $collection_id AND time <= $since
-             RETURNING key, value, diff",
-        )?;
-        let mut insert_stmt = tx.prepare(
-            "INSERT INTO data (collection_id, key, value, time, diff)
-             VALUES ($collection_id, $key, $value, $time, $diff)",
-        )?;
-        let mut drop_stmt = tx.prepare("DELETE FROM data WHERE collection_id = $collection_id")?;
-
-        for collection in collections {
-            let since = Self::since_tx(&tx, collection.id)?.into_option();
-            match since {
-                Some(since) => {
-                    let mut updates = consolidation_stmt
-                        .query_and_then(
-                            named_params! {
-                                "$collection_id": collection.id,
-                                "$since": since,
-                            },
-                            |row| {
-                                let key = row.get("key")?;
-                                let value = row.get("value")?;
-                                let diff = row.get("diff")?;
-                                Ok::<_, StashError>(((key, value), since, diff))
-                            },
-                        )?
-                        .collect::<Result<Vec<((Vec<u8>, Vec<u8>), i64, i64)>, _>>()?;
-                    differential_dataflow::consolidation::consolidate_updates(&mut updates);
-                    for ((key, value), time, diff) in updates {
-                        insert_stmt.execute(named_params! {
-                            "$collection_id": collection.id,
-                            "$key": key,
-                            "$value": value,
-                            "$time": time,
-                            "$diff": diff,
-                        })?;
-                    }
-                }
-                None => {
-                    drop_stmt.execute(named_params! {
-                        "$collection_id": collection.id,
-                    })?;
-                }
-            }
-        }
-        drop((consolidation_stmt, insert_stmt, drop_stmt));
+        Self::consolidate_batch_tx(&tx, collections.iter().map(|collection| collection.id))?;
         tx.commit()?;
         Ok(())
     }
@@ -503,14 +523,18 @@ impl Append for Sqlite {
         I::IntoIter: Send,
     {
         let tx = self.conn.transaction()?;
+        let mut consolidate = Vec::new();
         for batch in batches {
+            consolidate.push(batch.collection_id);
             let upper = Self::upper_tx(&tx, batch.collection_id)?;
             if upper != batch.lower {
                 return Err("unexpected lower".into());
             }
             Self::update_many_tx(&tx, batch.collection_id, batch.entries.into_iter())?;
             Self::seal_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.upper)))?;
+            Self::compact_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.compact)))?;
         }
+        Self::consolidate_batch_tx(&tx, consolidate.iter().map(|id| *id))?;
         tx.commit()?;
         Ok(())
     }

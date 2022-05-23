@@ -15,8 +15,7 @@ use std::iter;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
 use itertools::Itertools;
-use mz_repr::proto::ProtoRepr;
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::proto::TryIntoIfSome;
 use num::{CheckedAdd, Integer, Signed};
 use ordered_float::OrderedFloat;
@@ -1884,7 +1883,7 @@ pub struct AnalyzedRegex(
 impl From<&AnalyzedRegex> for ProtoAnalyzedRegex {
     fn from(x: &AnalyzedRegex) -> Self {
         ProtoAnalyzedRegex {
-            regex: Some((&x.0).into()),
+            regex: Some(x.0.into_proto()),
             groups: x.1.iter().map(Into::into).collect(),
         }
     }
@@ -1895,7 +1894,7 @@ impl TryFrom<ProtoAnalyzedRegex> for AnalyzedRegex {
 
     fn try_from(x: ProtoAnalyzedRegex) -> Result<Self, Self::Error> {
         Ok(AnalyzedRegex(
-            x.regex.try_into_if_some("ProtoAnalyzedRegex::regex")?,
+            x.regex.into_rust_if_some("ProtoAnalyzedRegex::regex")?,
             x.groups
                 .into_iter()
                 .map(TryFrom::try_from)
@@ -2015,10 +2014,10 @@ impl From<&TableFunc> for ProtoTableFunc {
                 TableFunc::GenerateSeriesTimestamp => Kind::GenerateSeriesTimestamp(()),
                 TableFunc::GenerateSeriesTimestampTz => Kind::GenerateSeriesTimestampTz(()),
                 TableFunc::Repeat => Kind::Repeat(()),
-                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into()),
-                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into()),
+                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into_proto()),
+                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into_proto()),
                 TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
-                    types: types.iter().map(Into::into).collect(),
+                    types: types.into_proto(),
                     width: width.into_proto(),
                 }),
                 TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
@@ -2042,25 +2041,21 @@ impl TryFrom<ProtoTableFunc> for TableFunc {
             Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
             Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
             Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.try_into()?),
-            Kind::CsvExtract(x) => TableFunc::CsvExtract(usize::from_proto(x)?),
+            Kind::CsvExtract(x) => TableFunc::CsvExtract(x.into_rust()?),
             Kind::GenerateSeriesInt32(()) => TableFunc::GenerateSeriesInt32,
             Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
             Kind::GenerateSeriesTimestamp(()) => TableFunc::GenerateSeriesTimestamp,
             Kind::GenerateSeriesTimestampTz(()) => TableFunc::GenerateSeriesTimestampTz,
             Kind::Repeat(()) => TableFunc::Repeat,
             Kind::UnnestArray(x) => TableFunc::UnnestArray {
-                el_typ: x.try_into()?,
+                el_typ: x.into_rust()?,
             },
             Kind::UnnestList(x) => TableFunc::UnnestList {
-                el_typ: x.try_into()?,
+                el_typ: x.into_rust()?,
             },
             Kind::Wrap(x) => TableFunc::Wrap {
-                width: usize::from_proto(x.width)?,
-                types: x
-                    .types
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
+                width: x.width.into_rust()?,
+                types: x.types.into_rust()?,
             },
             Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
         })
