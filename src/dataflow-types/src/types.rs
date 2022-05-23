@@ -29,7 +29,7 @@ use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
-use crate::types::aws::AwsExternalId;
+use crate::types::aws::AwsExternalIdPrefix;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 use crate::Plan;
@@ -496,6 +496,7 @@ pub mod aws {
     use serde::{Deserialize, Serialize};
 
     use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
+    use mz_repr::GlobalId;
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
@@ -536,20 +537,22 @@ pub mod aws {
         }
     }
 
-    /// An [external ID] to use for all AWS AssumeRole operations.
+    /// A prefix for an [external ID] to use for all AWS AssumeRole operations.
+    /// It should be concatenanted with a non-user-provided suffix identifying the source or sink.
+    /// The ID used for the suffix should never be reused if the source or sink is deleted.
     ///
     /// **WARNING:** it is critical for security that this ID is **not**
     /// provided by end users of Materialize. It must be provided by the
     /// operator of the Materialize service.
     ///
     /// This type protects against accidental construction of an
-    /// `AwsExternalId`. The only approved way to construct an `AwsExternalId`
+    /// `AwsExternalIdPrefix`. The only approved way to construct an `AwsExternalIdPrefix`
     /// is via [`ConnectorContext::from_cli_args`].
     ///
     /// [`ConnectorContext::from_cli_args`]: crate::ConnectorContext::from_cli_args
     /// [external ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct AwsExternalId(pub(super) String);
+    pub struct AwsExternalIdPrefix(pub(super) String);
 
     /// AWS configuration overrides for a source or sink.
     ///
@@ -681,7 +684,11 @@ pub mod aws {
     impl AwsConfig {
         /// Loads the AWS SDK configuration object from the environment, then
         /// applies the overrides from this object.
-        pub async fn load(&self, external_id: Option<&AwsExternalId>) -> aws_types::SdkConfig {
+        pub async fn load(
+            &self,
+            external_id_prefix: Option<&AwsExternalIdPrefix>,
+            external_id_suffix: Option<&GlobalId>,
+        ) -> aws_types::SdkConfig {
             use aws_config::default_provider::credentials::DefaultCredentialsChain;
             use aws_config::default_provider::region::DefaultRegionChain;
             use aws_config::sts::AssumeRoleProvider;
@@ -732,8 +739,13 @@ pub mod aws {
                 if let Some(region) = &region {
                     role = role.region(region.clone());
                 }
-                if let Some(external_id) = external_id {
-                    role = role.external_id(&external_id.0);
+                if let Some(external_id_prefix) = external_id_prefix {
+                    let external_id = if let Some(suffix) = external_id_suffix {
+                        format!("{}-{}", external_id_prefix.0, suffix)
+                    } else {
+                        external_id_prefix.0.to_owned()
+                    };
+                    role = role.external_id(external_id);
                 }
                 cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
             }
@@ -757,8 +769,8 @@ pub mod aws {
 pub struct ConnectorContext {
     /// The level for librdkafka's logs.
     pub librdkafka_log_level: tracing::Level,
-    /// An external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id: Option<AwsExternalId>,
+    /// A prefix for an external ID to use for all AWS AssumeRole operations.
+    pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
 }
 
 impl ConnectorContext {
@@ -768,14 +780,14 @@ impl ConnectorContext {
     /// provided by the operator of the Materialize service (i.e., via a CLI
     /// argument or environment variable) and not the end user of Materialize
     /// (e.g., via a configuration option in a SQL statement). See
-    /// [`AwsExternalId`] for details.
+    /// [`AwsExternalIdPrefix`] for details.
     pub fn from_cli_args(
         filter: &tracing_subscriber::filter::Targets,
-        aws_external_id: Option<String>,
+        aws_external_id_prefix: Option<String>,
     ) -> ConnectorContext {
         ConnectorContext {
             librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
-            aws_external_id: aws_external_id.map(AwsExternalId),
+            aws_external_id_prefix: aws_external_id_prefix.map(AwsExternalIdPrefix),
         }
     }
 }
@@ -784,7 +796,7 @@ impl Default for ConnectorContext {
     fn default() -> ConnectorContext {
         ConnectorContext {
             librdkafka_log_level: tracing::Level::INFO,
-            aws_external_id: None,
+            aws_external_id_prefix: None,
         }
     }
 }

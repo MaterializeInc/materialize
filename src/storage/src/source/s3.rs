@@ -47,7 +47,7 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
-use mz_dataflow_types::aws::{AwsConfig, AwsExternalId};
+use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{Compression, ExternalSourceConnector, MzOffset, S3KeySource};
 use mz_dataflow_types::ConnectorContext;
@@ -121,18 +121,22 @@ struct KeyInfo {
 }
 
 async fn download_objects_task(
-    source_id: String,
+    source_id: GlobalId,
     mut rx: Receiver<S3Result<KeyInfo>>,
     tx: Sender<S3Result<InternalMessage>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_config: AwsConfig,
-    aws_external_id: Option<AwsExternalId>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     activator: SyncActivator,
     compression: Compression,
     metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id.as_ref()).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .await;
     let client = aws_sdk_s3::Client::new(&config);
+
+    let source_id = source_id.to_string();
 
     struct BucketInfo {
         keys: HashSet<String>,
@@ -236,15 +240,19 @@ async fn download_objects_task(
 
 async fn scan_bucket_task(
     bucket: String,
-    source_id: String,
+    source_id: GlobalId,
     glob: Option<GlobMatcher>,
     aws_config: AwsConfig,
-    aws_external_id: Option<AwsExternalId>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id.as_ref()).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .await;
     let client = aws_sdk_s3::Client::new(&config);
+
+    let source_id = source_id.to_string();
 
     let glob = glob.as_ref();
     let prefix = glob.map(|g| find_prefix(g.glob().glob()));
@@ -348,11 +356,11 @@ async fn scan_bucket_task(
 }
 
 async fn read_sqs_task(
-    source_id: String,
+    source_id: GlobalId,
     glob: Option<GlobMatcher>,
     queue: String,
     aws_config: AwsConfig,
-    aws_external_id: Option<AwsExternalId>,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     tx: Sender<S3Result<KeyInfo>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
@@ -362,8 +370,12 @@ async fn read_sqs_task(
         source_id, queue,
     );
 
-    let config = aws_config.load(aws_external_id.as_ref()).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .await;
     let client = aws_sdk_sqs::Client::new(&config);
+
+    let source_id = source_id.to_string();
 
     let glob = glob.as_ref();
 
@@ -800,12 +812,12 @@ impl SourceReader for S3SourceReader {
             task::spawn(
                 || format!("s3_download:{}", source_id),
                 download_objects_task(
-                    source_id.to_string(),
+                    source_id,
                     keys_rx,
                     dataflow_tx,
                     shutdown_rx.clone(),
                     s3_conn.aws.clone(),
-                    connector_context.aws_external_id.clone(),
+                    connector_context.aws_external_id_prefix.clone(),
                     consumer_activator,
                     s3_conn.compression,
                     metrics.clone(),
@@ -824,10 +836,10 @@ impl SourceReader for S3SourceReader {
                             || task_name,
                             scan_bucket_task(
                                 bucket,
-                                source_id.to_string(),
+                                source_id,
                                 glob.clone(),
                                 s3_conn.aws.clone(),
-                                connector_context.aws_external_id.clone(),
+                                connector_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
                             ),
@@ -841,11 +853,11 @@ impl SourceReader for S3SourceReader {
                         task::spawn(
                             || format!("s3_read_sqs:{}", source_id),
                             read_sqs_task(
-                                source_id.to_string(),
+                                source_id,
                                 glob.clone(),
                                 queue,
                                 s3_conn.aws.clone(),
-                                connector_context.aws_external_id.clone(),
+                                connector_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
                                 metrics.clone(),
