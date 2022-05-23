@@ -84,6 +84,15 @@ where
             }));
         }
 
+        // If the time iterval is empty, the list of updates must also be empty.
+        if desc.upper() == desc.lower() && !keys.is_empty() {
+            return Break(Err(InvalidUsage::InvalidEmptyTimeInterval {
+                lower: desc.lower().clone(),
+                upper: desc.upper().clone(),
+                keys: keys.to_vec(),
+            }));
+        }
+
         let shard_upper = self.upper();
         if &shard_upper != desc.lower() {
             return Break(Ok(Upper(shard_upper)));
@@ -513,6 +522,8 @@ mod codec_impls {
 mod tests {
     use super::*;
 
+    use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
+
     fn desc<T: Timestamp>(lower: T, upper: T) -> Description<T> {
         Description::new(
             Antichain::from_elem(lower),
@@ -597,5 +608,45 @@ mod tests {
             .flat_map(|(keys, _)| keys.iter())
             .collect::<Vec<_>>();
         assert_eq!(actual, vec!["key1", "key2", "key3"]);
+    }
+
+    #[test]
+    fn compare_and_append() {
+        mz_ore::test::init_logging();
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
+
+        // State is initally empty.
+        assert_eq!(state.trace.len(), 0);
+
+        // Cannot insert a batch with a lower != current shard upper.
+        assert_eq!(
+            state.compare_and_append(&["key1".to_owned()], &desc(1, 2)),
+            Break(Ok(Upper(Antichain::from_elem(0))))
+        );
+
+        // Insert an empty batch with an upper > lower..
+        assert_eq!(state.compare_and_append(&[], &desc(0, 5)), Continue(()));
+
+        // Cannot insert a batch with a upper less than the lower.
+        assert_eq!(
+            state.compare_and_append(&["key1".to_owned()], &desc(5, 4)),
+            Break(Err(InvalidBounds {
+                lower: Antichain::from_elem(5),
+                upper: Antichain::from_elem(4)
+            }))
+        );
+
+        // Cannot insert a nonempty batch with an upper equal to lower.
+        assert_eq!(
+            state.compare_and_append(&["key1".to_owned()], &desc(5, 5)),
+            Break(Err(InvalidEmptyTimeInterval {
+                lower: Antichain::from_elem(5),
+                upper: Antichain::from_elem(5),
+                keys: vec!["key1".to_owned()],
+            }))
+        );
+
+        // Can insert an empty batch with an upper equal to lower.
+        assert_eq!(state.compare_and_append(&[], &desc(5, 5)), Continue(()));
     }
 }
