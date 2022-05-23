@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::any_uuid;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
@@ -263,14 +263,14 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
     fn into_proto(&self) -> ProtoBuildDesc {
         ProtoBuildDesc {
             id: Some(self.id.into_proto()),
-            plan: Some((&self.plan).into()),
+            plan: Some(self.plan.into_proto()),
         }
     }
 
     fn from_proto(x: ProtoBuildDesc) -> Result<Self, TryFromProtoError> {
         Ok(BuildDesc {
             id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
-            plan: x.plan.try_into_if_some("ProtoBuildDesc::plan")?,
+            plan: x.plan.into_rust_if_some("ProtoBuildDesc::plan")?,
         })
     }
 }
@@ -314,7 +314,7 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
         ProtoSourceInstanceDesc {
             description: serde_json::to_string(&self.description).unwrap(),
             arguments: Some(self.arguments.into_proto()),
-            storage_metadata: Some((&self.storage_metadata).into()),
+            storage_metadata: Some(self.storage_metadata.into_proto()),
         }
     }
 
@@ -327,7 +327,7 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
                 .into_rust_if_some("ProtoSourceInstanceDesc::arguments")?,
             storage_metadata: proto
                 .storage_metadata
-                .try_into_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
+                .into_rust_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
         })
     }
 }
@@ -1100,9 +1100,7 @@ impl RustType<ProtoDataflowDescription>
                 .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
             as_of: proto.as_of.map(Into::into),
             debug_name: proto.debug_name,
-            id: proto
-                .id
-                .from_proto_if_some("ProtoDataflowDescription::id")?,
+            id: proto.id.into_rust_if_some("ProtoDataflowDescription::id")?,
         })
     }
 }
