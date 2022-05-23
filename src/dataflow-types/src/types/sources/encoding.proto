@@ -9,9 +9,16 @@
 
 syntax = "proto3";
 
+import "ccsr/src/config.proto";
 import "repr/src/adt/regex.proto";
 
 package mz_dataflow_types.types.sources.encoding;
+
+message ProtoAvroEncoding {
+    string schema = 1;
+    mz_ccsr.config.ProtoClientConfig schema_registry_config = 2;
+    bool confluent_wire_format = 3;
+}
 
 message ProtoProtobufEncoding {
     bytes descriptors = 1;

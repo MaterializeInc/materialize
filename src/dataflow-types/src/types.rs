@@ -1300,11 +1300,29 @@ pub mod sources {
         }
 
         /// Encoding in Avro format.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct AvroEncoding {
             pub schema: String,
             pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
             pub confluent_wire_format: bool,
+        }
+
+        impl RustType<ProtoAvroEncoding> for AvroEncoding {
+            fn into_proto(self: &Self) -> ProtoAvroEncoding {
+                ProtoAvroEncoding {
+                    schema: self.schema.clone(),
+                    schema_registry_config: self.schema_registry_config.into_proto(),
+                    confluent_wire_format: self.confluent_wire_format,
+                }
+            }
+
+            fn from_proto(proto: ProtoAvroEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(AvroEncoding {
+                    schema: proto.schema,
+                    schema_registry_config: proto.schema_registry_config.into_rust()?,
+                    confluent_wire_format: proto.confluent_wire_format,
+                })
+            }
         }
 
         /// Encoding in Protobuf format.
