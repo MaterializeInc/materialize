@@ -267,7 +267,7 @@ impl CoordError {
                 "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
                  active cluster. Note that subsequent `SELECT` queries will only be answered by \
                  the selected replica, which might reduce availability. To undo the replica \
-                 selection, use `SET cluster_replica = ''`.".into()),
+                 selection, use `SET cluster_replica = DEFAULT`.".into()),
             _ => None,
         }
     }

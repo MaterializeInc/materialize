@@ -21,7 +21,7 @@ use mz_repr::{RelationDesc, ScalarType};
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
     ExecuteStatement, FetchStatement, PrepareStatement, Raw, SetVariableStatement,
-    SetVariableValue, ShowVariableStatement, Value,
+    ShowVariableStatement, Value,
 };
 use crate::names::Aug;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -47,11 +47,7 @@ pub fn plan_set_variable(
 ) -> Result<Plan, anyhow::Error> {
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
-        value: match value {
-            SetVariableValue::Literal(Value::String(s)) => s,
-            SetVariableValue::Literal(lit) => lit.to_string(),
-            SetVariableValue::Ident(ident) => ident.into_string(),
-        },
+        value,
         local,
     }))
 }

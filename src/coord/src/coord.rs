@@ -2823,10 +2823,18 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session
-            .vars_mut()
-            .set(&plan.name, &plan.value, plan.local)?;
-        Ok(ExecuteResponse::SetVariable { name: plan.name })
+        use mz_sql::ast::{SetVariableValue, Value};
+
+        let vars = session.vars_mut();
+        let (name, local) = (plan.name, plan.local);
+        match plan.value {
+            SetVariableValue::Literal(Value::String(s)) => vars.set(&name, &s, local)?,
+            SetVariableValue::Literal(lit) => vars.set(&name, &lit.to_string(), local)?,
+            SetVariableValue::Ident(ident) => vars.set(&name, &ident.into_string(), local)?,
+            SetVariableValue::Default => vars.reset(&name, local)?,
+        }
+
+        Ok(ExecuteResponse::SetVariable { name })
     }
 
     async fn sequence_end_transaction(

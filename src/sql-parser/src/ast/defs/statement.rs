@@ -1883,6 +1883,7 @@ impl_display!(TransactionIsolationLevel);
 pub enum SetVariableValue {
     Ident(Ident),
     Literal(Value),
+    Default,
 }
 
 impl AstDisplay for SetVariableValue {
@@ -1891,6 +1892,7 @@ impl AstDisplay for SetVariableValue {
         match self {
             Ident(ident) => f.write_node(ident),
             Literal(literal) => f.write_node(literal),
+            Default => f.write_str("DEFAULT"),
         }
     }
 }

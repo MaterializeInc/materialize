@@ -4044,6 +4044,7 @@ impl<'a> Parser<'a> {
             let token = self.peek_token();
             let value = match (self.parse_value(), token) {
                 (Ok(value), _) => SetVariableValue::Literal(value),
+                (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
                 (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
                 (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
                 (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,

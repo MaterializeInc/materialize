@@ -41,8 +41,8 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,
-    TransactionAccessMode,
+    ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw,
+    SetVariableValue, Statement, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -289,7 +289,7 @@ pub struct ShowVariablePlan {
 #[derive(Debug)]
 pub struct SetVariablePlan {
     pub name: String,
-    pub value: String,
+    pub value: SetVariableValue,
     pub local: bool,
 }
 

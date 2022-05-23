@@ -338,9 +338,9 @@ SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Li
 parse-statement
 SET a = default
 ----
-SET a = default
+SET a = DEFAULT
 =>
-SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Ident(Ident("default")) })
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Default })
 
 parse-statement
 SET LOCAL a = b

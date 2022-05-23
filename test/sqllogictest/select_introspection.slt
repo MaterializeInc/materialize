@@ -89,7 +89,7 @@ SELECT * FROM test
 # Verify that untargeted introspection queries are disallowd.
 
 statement ok
-SET cluster_replica = ''
+SET cluster_replica = DEFAULT
 
 query error log source reads must target a replica
 SELECT * FROM mz_materializations
