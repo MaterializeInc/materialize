@@ -531,16 +531,20 @@ impl QueryWhen {
         }
     }
     /// Returns whether the candidate must be advanced to the upper.
-    pub fn advance_to_upper(&self, uses_tables: bool) -> bool {
+    pub fn advance_to_upper(&self, uses_tables: bool, strict_serializability: bool) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => !uses_tables,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => {
+                !uses_tables && !strict_serializability
+            }
             QueryWhen::AtTimestamp(_) => false,
         }
     }
     /// Returns whether the candidate must be advanced to the global table timestamp.
-    pub fn advance_to_table_ts(&self, uses_tables: bool) -> bool {
+    pub fn advance_to_table_ts(&self, uses_tables: bool, strict_serializability: bool) -> bool {
         match self {
-            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => uses_tables,
+            QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => {
+                uses_tables || strict_serializability
+            }
             QueryWhen::AtTimestamp(_) => false,
         }
     }

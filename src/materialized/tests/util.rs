@@ -50,6 +50,7 @@ pub struct Config {
     workers: usize,
     logical_compaction_window: Option<Duration>,
     now: NowFn,
+    strict_serializability: bool,
 }
 
 impl Default for Config {
@@ -63,6 +64,7 @@ impl Default for Config {
             workers: 1,
             logical_compaction_window: None,
             now: SYSTEM_TIME.clone(),
+            strict_serializability: false,
         }
     }
 }
@@ -114,6 +116,11 @@ impl Config {
 
     pub fn with_now(mut self, now: NowFn) -> Self {
         self.now = now;
+        self
+    }
+
+    pub fn strict_serializability(mut self) -> Self {
+        self.strict_serializability = true;
         self
     }
 }
@@ -173,6 +180,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         replica_sizes: Default::default(),
         availability_zones: Default::default(),
         connector_context: Default::default(),
+        strict_serializability: config.strict_serializability,
     }))?;
     let server = Server {
         inner,

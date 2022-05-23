@@ -3619,10 +3619,10 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.advance_by(since.borrow());
         }
         let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        if when.advance_to_table_ts(uses_tables) {
+        if when.advance_to_table_ts(uses_tables, self.strict_serializability) {
             candidate.join_assign(&self.get_local_read_ts());
         }
-        if when.advance_to_upper(uses_tables) {
+        if when.advance_to_upper(uses_tables, self.strict_serializability) {
             let upper = self.least_valid_write(&id_bundle, compute_instance);
 
             // We peek at the largest element not in advance of `upper`, which
@@ -3644,6 +3644,9 @@ impl<S: Append + 'static> Coordinator<S> {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&candidate) {
+            assert!(
+                !self.strict_serializability || self.get_local_read_ts().less_equal(&candidate)
+            );
             Ok(candidate)
         } else {
             let invalid_indexes = id_bundle
