@@ -20,6 +20,15 @@ import "kafka-util/src/addr.proto";
 
 package mz_dataflow_types.types.sources;
 
+message ProtoKeyEnvelope {
+    oneof kind {
+        google.protobuf.Empty none = 1;
+        google.protobuf.Empty flattened = 2;
+        google.protobuf.Empty legacy_upsert = 3;
+        string named = 4;
+    }
+}
+
 message ProtoIncludedColumnPos {
     string name = 1;
     uint64 pos = 2;

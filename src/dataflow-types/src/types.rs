@@ -1622,7 +1622,7 @@ pub mod sources {
     }
 
     /// Whether and how to include the decoded key of a stream in dataflows
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum KeyEnvelope {
         /// Never include the key in the output row
         None,
@@ -1636,6 +1636,33 @@ pub mod sources {
         /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
         ///   that Record will get the given name.
         Named(String),
+    }
+
+    impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
+        fn into_proto(self: &Self) -> ProtoKeyEnvelope {
+            use proto_key_envelope::Kind;
+            ProtoKeyEnvelope {
+                kind: Some(match self {
+                    KeyEnvelope::None => Kind::None(()),
+                    KeyEnvelope::Flattened => Kind::Flattened(()),
+                    KeyEnvelope::LegacyUpsert => Kind::LegacyUpsert(()),
+                    KeyEnvelope::Named(name) => Kind::Named(name.clone()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoKeyEnvelope) -> Result<Self, TryFromProtoError> {
+            use proto_key_envelope::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoKeyEnvelope::kind"))?;
+            Ok(match kind {
+                Kind::None(()) => KeyEnvelope::None,
+                Kind::Flattened(()) => KeyEnvelope::Flattened,
+                Kind::LegacyUpsert(()) => KeyEnvelope::LegacyUpsert,
+                Kind::Named(name) => KeyEnvelope::Named(name),
+            })
+        }
     }
 
     /// A column that was created via an `INCLUDE` expression
