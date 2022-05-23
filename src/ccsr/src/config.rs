@@ -9,16 +9,38 @@
 
 use std::time::Duration;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use mz_repr::proto::newapi::RustType;
+use mz_repr::proto::TryFromProtoError;
 
 use crate::client::Client;
 use crate::tls::{Certificate, Identity};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+include!(concat!(env!("OUT_DIR"), "/mz_ccsr.config.rs"));
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Auth {
     pub username: String,
     pub password: Option<String>,
+}
+
+impl RustType<ProtoAuth> for Auth {
+    fn into_proto(self: &Self) -> ProtoAuth {
+        ProtoAuth {
+            username: self.username.clone(),
+            password: self.password.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoAuth) -> Result<Self, TryFromProtoError> {
+        Ok(Auth {
+            username: proto.username,
+            password: proto.password,
+        })
+    }
 }
 
 /// Configuration for a `Client`.
