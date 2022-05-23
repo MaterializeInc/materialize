@@ -1112,7 +1112,7 @@ pub mod sources {
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
     use mz_repr::chrono::any_naive_datetime;
-    use mz_repr::proto::{any_uuid, TryFromProtoError, TryIntoIfSome};
+    use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError, TryIntoIfSome};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -2647,6 +2647,103 @@ pub mod sources {
 
         /// A source for compute logging data.
         Log,
+    }
+
+    impl Arbitrary for SourceConnector {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                (
+                    any::<ExternalSourceConnector>(),
+                    any::<encoding::SourceDataEncoding>(),
+                    any::<SourceEnvelope>(),
+                    any::<Vec<IncludedColumnSource>>(),
+                    any_duration(),
+                    any::<Timeline>(),
+                )
+                    .prop_map(
+                        |(
+                            connector,
+                            encoding,
+                            envelope,
+                            metadata_columns,
+                            ts_frequency,
+                            timeline,
+                        )| {
+                            SourceConnector::External {
+                                connector,
+                                encoding,
+                                envelope,
+                                metadata_columns,
+                                ts_frequency,
+                                timeline,
+                            }
+                        }
+                    ),
+                any::<Timeline>().prop_map(|timeline| SourceConnector::Local { timeline }),
+                Just(SourceConnector::Log)
+            ]
+            .boxed()
+        }
+    }
+
+    impl RustType<ProtoSourceConnector> for SourceConnector {
+        fn into_proto(self: &Self) -> ProtoSourceConnector {
+            use proto_source_connector::{Kind, ProtoExternal, ProtoLocal};
+            ProtoSourceConnector {
+                kind: Some(match self {
+                    SourceConnector::External {
+                        connector,
+                        encoding,
+                        envelope,
+                        metadata_columns,
+                        ts_frequency,
+                        timeline,
+                    } => Kind::External(ProtoExternal {
+                        connector: Some(connector.into()),
+                        encoding: Some(encoding.into_proto()),
+                        envelope: Some(envelope.into_proto()),
+                        metadata_columns: metadata_columns.into_proto(),
+                        ts_frequency: Some(ts_frequency.into_proto()),
+                        timeline: Some(timeline.into_proto()),
+                    }),
+                    SourceConnector::Local { timeline } => Kind::Local(ProtoLocal {
+                        timeline: Some(timeline.into_proto()),
+                    }),
+                    SourceConnector::Log => Kind::Log(()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoSourceConnector) -> Result<Self, TryFromProtoError> {
+            use proto_source_connector::{Kind, ProtoExternal, ProtoLocal};
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnector::kind"))?;
+            Ok(match kind {
+                Kind::External(ProtoExternal {
+                    connector,
+                    encoding,
+                    envelope,
+                    metadata_columns,
+                    ts_frequency,
+                    timeline,
+                }) => SourceConnector::External {
+                    connector: connector.try_into_if_some("ProtoExternal::connector")?,
+                    encoding: encoding.into_rust_if_some("ProtoExternal::encoding")?,
+                    envelope: envelope.into_rust_if_some("ProtoExternal::envelope")?,
+                    metadata_columns: metadata_columns.into_rust()?,
+                    ts_frequency: ts_frequency.into_rust_if_some("ProtoExternal::ts_frequency")?,
+                    timeline: timeline.into_rust_if_some("ProtoExternal::timeline")?,
+                },
+                Kind::Local(ProtoLocal { timeline }) => SourceConnector::Local {
+                    timeline: timeline.into_rust_if_some("ProtoLocal::timeline")?,
+                },
+                Kind::Log(()) => SourceConnector::Log,
+            })
+        }
     }
 
     impl SourceConnector {

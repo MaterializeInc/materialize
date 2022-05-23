@@ -18,6 +18,7 @@ import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
 import "dataflow-types/src/postgres_source.proto";
 import "dataflow-types/src/types/aws.proto";
+import "dataflow-types/src/types/sources/encoding.proto";
 import "kafka-util/src/addr.proto";
 
 package mz_dataflow_types.types.sources;
@@ -159,6 +160,27 @@ message ProtoKafkaSourceConnector {
     ProtoIncludedColumnPos include_topic = 9;
     ProtoIncludedColumnPos include_offset = 10;
     ProtoIncludedColumnPos include_headers = 11;
+}
+
+message ProtoSourceConnector {
+    message ProtoExternal {
+        ProtoExternalSourceConnector connector = 1;
+        mz_dataflow_types.types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
+        ProtoSourceEnvelope envelope = 3;
+        repeated ProtoIncludedColumnSource metadata_columns = 4;
+        mz_repr.proto.ProtoDuration ts_frequency = 5;
+        ProtoTimeline timeline = 6;
+    }
+
+    message ProtoLocal {
+        ProtoTimeline timeline = 1;
+    }
+
+    oneof kind {
+        ProtoExternal external = 1;
+        ProtoLocal local = 2;
+        google.protobuf.Empty log = 3;
+    }
 }
 
 message ProtoExternalSourceConnector {
