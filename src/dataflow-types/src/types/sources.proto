@@ -22,6 +22,17 @@ import "kafka-util/src/addr.proto";
 
 package mz_dataflow_types.types.sources;
 
+message ProtoIncludedColumnSource {
+    oneof kind {
+        google.protobuf.Empty default_position = 1;
+        google.protobuf.Empty partition = 2;
+        google.protobuf.Empty offset = 3;
+        google.protobuf.Empty timestamp = 4;
+        google.protobuf.Empty topic = 5;
+        google.protobuf.Empty headers = 6;
+    }
+}
+
 message ProtoKeyEnvelope {
     oneof kind {
         google.protobuf.Empty none = 1;

@@ -1610,7 +1610,7 @@ pub mod sources {
     }
 
     /// Which piece of metadata a column corresponds to
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum IncludedColumnSource {
         /// The materialize-specific notion of "position"
         ///
@@ -1621,6 +1621,37 @@ pub mod sources {
         Timestamp,
         Topic,
         Headers,
+    }
+
+    impl RustType<ProtoIncludedColumnSource> for IncludedColumnSource {
+        fn into_proto(self: &Self) -> ProtoIncludedColumnSource {
+            use proto_included_column_source::Kind;
+            ProtoIncludedColumnSource {
+                kind: Some(match self {
+                    IncludedColumnSource::DefaultPosition => Kind::DefaultPosition(()),
+                    IncludedColumnSource::Partition => Kind::Partition(()),
+                    IncludedColumnSource::Offset => Kind::Offset(()),
+                    IncludedColumnSource::Timestamp => Kind::Timestamp(()),
+                    IncludedColumnSource::Topic => Kind::Topic(()),
+                    IncludedColumnSource::Headers => Kind::Headers(()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoIncludedColumnSource) -> Result<Self, TryFromProtoError> {
+            use proto_included_column_source::Kind;
+            let kind = proto.kind.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoIncludedColumnSource::kind")
+            })?;
+            Ok(match kind {
+                Kind::DefaultPosition(()) => IncludedColumnSource::DefaultPosition,
+                Kind::Partition(()) => IncludedColumnSource::Partition,
+                Kind::Offset(()) => IncludedColumnSource::Offset,
+                Kind::Timestamp(()) => IncludedColumnSource::Timestamp,
+                Kind::Topic(()) => IncludedColumnSource::Topic,
+                Kind::Headers(()) => IncludedColumnSource::Headers,
+            })
+        }
     }
 
     /// Whether and how to include the decoded key of a stream in dataflows
