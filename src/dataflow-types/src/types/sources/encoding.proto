@@ -13,6 +13,12 @@ import "repr/src/adt/regex.proto";
 
 package mz_dataflow_types.types.sources.encoding;
 
+message ProtoProtobufEncoding {
+    bytes descriptors = 1;
+    string message_name = 2;
+    bool confluent_wire_format = 3;
+}
+
 message ProtoCsvEncoding {
     ProtoColumnSpec columns = 1;
     uint32 delimiter = 2;

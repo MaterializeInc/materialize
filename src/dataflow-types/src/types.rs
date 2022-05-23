@@ -1308,11 +1308,29 @@ pub mod sources {
         }
 
         /// Encoding in Protobuf format.
-        #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+        #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
         pub struct ProtobufEncoding {
             pub descriptors: Vec<u8>,
             pub message_name: String,
             pub confluent_wire_format: bool,
+        }
+
+        impl RustType<ProtoProtobufEncoding> for ProtobufEncoding {
+            fn into_proto(self: &Self) -> ProtoProtobufEncoding {
+                ProtoProtobufEncoding {
+                    descriptors: self.descriptors.clone(),
+                    message_name: self.message_name.clone(),
+                    confluent_wire_format: self.confluent_wire_format,
+                }
+            }
+
+            fn from_proto(proto: ProtoProtobufEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(ProtobufEncoding {
+                    descriptors: proto.descriptors,
+                    message_name: proto.message_name,
+                    confluent_wire_format: proto.confluent_wire_format,
+                })
+            }
         }
 
         /// Arguments necessary to define how to decode from CSV format
@@ -1332,7 +1350,9 @@ pub mod sources {
 
             fn from_proto(proto: ProtoCsvEncoding) -> Result<Self, TryFromProtoError> {
                 Ok(CsvEncoding {
-                    columns: proto.columns.into_rust_if_some("ProtoCsvEncoding::columns")?,
+                    columns: proto
+                        .columns
+                        .into_rust_if_some("ProtoCsvEncoding::columns")?,
                     delimiter: proto.delimiter.into_rust()?,
                 })
             }
