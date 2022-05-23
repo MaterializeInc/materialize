@@ -122,6 +122,11 @@ pub enum CoordError {
     /// The named parameter is unknown to the system.
     UnknownParameter(String),
     UnknownPreparedStatement(String),
+    /// The named cluster replica does not exist.
+    UnknownClusterReplica {
+        cluster_name: String,
+        replica_name: String,
+    },
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
@@ -368,6 +373,13 @@ impl fmt::Display for CoordError {
             CoordError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())
             }
+            CoordError::UnknownClusterReplica {
+                cluster_name,
+                replica_name,
+            } => write!(
+                f,
+                "cluster replica '{cluster_name}.{replica_name}' does not exist"
+            ),
             CoordError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }

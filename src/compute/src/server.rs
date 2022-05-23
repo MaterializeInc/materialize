@@ -191,8 +191,9 @@ where
             for cmd in cmds {
                 let mut should_drop_compute = false;
                 match &cmd {
-                    ComputeCommand::CreateInstance(_logging) => {
+                    ComputeCommand::CreateInstance(config) => {
                         self.compute_state = Some(ComputeState {
+                            replica_id: config.replica_id,
                             traces: TraceManager::new(
                                 self.metrics_bundle.1.clone(),
                                 self.timely_worker.index(),

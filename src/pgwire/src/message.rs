@@ -406,6 +406,7 @@ impl ErrorResponse {
             CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
             CoordError::UnknownPreparedStatement(_) => SqlState::UNDEFINED_PSTATEMENT,
             CoordError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            CoordError::UnknownClusterReplica { .. } => SqlState::UNDEFINED_OBJECT,
             CoordError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,

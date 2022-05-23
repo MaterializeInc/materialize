@@ -31,12 +31,10 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use mz_repr::GlobalId;
 
-use crate::client::Peek;
-
-use super::PeekResponse;
 use super::ReplicaId;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
+use super::{Peek, PeekResponse};
 
 /// Spawns a task that repeatedly sends messages back and forth
 /// between a client and its owner, and return channels to communicate with it.
@@ -182,12 +180,8 @@ where
         let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.history.iter() {
             let mut command = command.clone();
-            // Replace dataflow identifiers with new unique ids.
-            if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
-                for dataflow in dataflows.iter_mut() {
-                    dataflow.id = uuid::Uuid::new_v4();
-                }
-            }
+            specialize_command(&mut command, replica_id);
+
             cmd_tx
                 .send(command)
                 .expect("Channel to client has gone away!")
@@ -253,14 +247,9 @@ where
         }
 
         // Clone the command for each active replica.
-        for (_id, (tx, _)) in self.replicas.iter_mut() {
+        for (id, (tx, _)) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
-            // Replace dataflow identifiers with new unique ids.
-            if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
-                for dataflow in dataflows.iter_mut() {
-                    dataflow.id = uuid::Uuid::new_v4();
-                }
-            }
+            specialize_command(&mut command, *id);
 
             // Errors are suppressed by this client, which awaits a reconnection in `recv` and
             // will rehydrate the client when that happens.
@@ -397,6 +386,24 @@ where
             }
             // Indicate completion of the communication.
             Ok(None)
+        }
+    }
+}
+
+/// Specialize a command for the given `ReplicaId`.
+///
+/// Most `ComputeCommand`s are independent of the target replica, but some
+/// contain replica-specific fields that must be adjusted before sending.
+fn specialize_command<T>(command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+    // Tell new instances their replica ID.
+    if let ComputeCommand::CreateInstance(config) = command {
+        config.replica_id = replica_id;
+    }
+
+    // Replace dataflow identifiers with new unique ids.
+    if let ComputeCommand::CreateDataflows(dataflows) = command {
+        for dataflow in dataflows.iter_mut() {
+            dataflow.id = uuid::Uuid::new_v4();
         }
     }
 }

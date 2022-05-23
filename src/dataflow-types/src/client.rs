@@ -75,6 +75,35 @@ pub enum ConcreteComputeInstanceReplicaConfig {
     },
 }
 
+#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Configuration sent to new compute instances.
+pub struct InstanceConfig {
+    /// The instance's replica ID.
+    pub replica_id: ReplicaId,
+    /// Optionally, request the installation of logging sources.
+    pub logging: Option<LoggingConfig>,
+}
+
+impl From<&InstanceConfig> for ProtoInstanceConfig {
+    fn from(x: &InstanceConfig) -> Self {
+        ProtoInstanceConfig {
+            replica_id: x.replica_id,
+            logging: x.logging.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<ProtoInstanceConfig> for InstanceConfig {
+    type Error = TryFromProtoError;
+
+    fn try_from(x: ProtoInstanceConfig) -> Result<Self, Self::Error> {
+        Ok(Self {
+            replica_id: x.replica_id,
+            logging: x.logging.map(TryInto::try_into).transpose()?,
+        })
+    }
+}
+
 /// Peek at an arrangement.
 ///
 /// This request elicits data from the worker, by naming an
@@ -104,6 +133,11 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
     pub map_filter_project: mz_expr::SafeMfpPlan,
+    /// Target replica of this peek.
+    ///
+    /// If `Some`, the peek is only handled by the given replica.
+    /// If `None`, the peek is handled by all replicas.
+    pub target_replica: Option<ReplicaId>,
 }
 
 impl From<&Peek> for ProtoPeek {
@@ -115,6 +149,7 @@ impl From<&Peek> for ProtoPeek {
             timestamp: x.timestamp,
             finishing: Some((&x.finishing).into()),
             map_filter_project: Some((&x.map_filter_project).into()),
+            target_replica: x.target_replica,
         }
     }
 }
@@ -135,6 +170,7 @@ impl TryFrom<ProtoPeek> for Peek {
             map_filter_project: x
                 .map_filter_project
                 .try_into_if_some("ProtoPeek::map_filter_project")?,
+            target_replica: x.target_replica,
         })
     }
 }
@@ -143,9 +179,7 @@ impl TryFrom<ProtoPeek> for Peek {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// Indicates the creation of an instance, and is the first command for its compute instance.
-    ///
-    /// Optionally, request that the logging sources in the contained configuration are installed.
-    CreateInstance(Option<LoggingConfig>),
+    CreateInstance(InstanceConfig),
     /// Indicates the termination of an instance, and is the last command for its compute instance.
     DropInstance,
 
@@ -180,9 +214,7 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
         use proto_compute_command::*;
         ProtoComputeCommand {
             kind: Some(match x {
-                ComputeCommand::CreateInstance(logging) => CreateInstance(ProtoCreateInstance {
-                    logging: logging.as_ref().map(Into::into),
-                }),
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into()),
                 ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
@@ -216,9 +248,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         match x.kind {
-            Some(CreateInstance(ProtoCreateInstance { logging })) => Ok(
-                ComputeCommand::CreateInstance(logging.map(TryInto::try_into).transpose()?),
-            ),
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.try_into()?)),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
                 Ok(ComputeCommand::CreateDataflows(
@@ -263,7 +293,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            any::<Option<LoggingConfig>>().prop_map(ComputeCommand::CreateInstance),
+            any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
             Just(ComputeCommand::DropInstance),
             proptest::collection::vec(
                 any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>(),
@@ -364,8 +394,8 @@ impl<T> ComputeCommand<T> {
                     }
                 }
             }
-            ComputeCommand::CreateInstance(logging) => {
-                if let Some(logging_config) = logging {
+            ComputeCommand::CreateInstance(config) => {
+                if let Some(logging_config) = &config.logging {
                     start.extend(logging_config.log_identifiers());
                 }
             }
