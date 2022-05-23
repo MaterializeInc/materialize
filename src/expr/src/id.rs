@@ -12,12 +12,12 @@ use std::str::FromStr;
 
 use anyhow::Error;
 use bytes::BufMut;
+use mz_repr::proto::newapi::{ProtoType, RustType};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_repr::global_id::ProtoGlobalId;
 use mz_repr::proto::TryFromProtoError;
 use mz_repr::GlobalId;
 
@@ -60,7 +60,7 @@ impl From<&Id> for ProtoId {
     fn from(x: &Id) -> Self {
         ProtoId {
             kind: Some(match x {
-                Id::Global(g) => proto_id::Kind::Global(ProtoGlobalId::from(g)),
+                Id::Global(g) => proto_id::Kind::Global(g.into_proto()),
                 Id::Local(l) => proto_id::Kind::Local(l.into()),
             }),
         }
@@ -72,7 +72,7 @@ impl TryFrom<ProtoId> for Id {
 
     fn try_from(x: ProtoId) -> Result<Self, Self::Error> {
         match x.kind {
-            Some(proto_id::Kind::Global(x)) => Ok(Id::Global(x.try_into()?)),
+            Some(proto_id::Kind::Global(x)) => Ok(Id::Global(x.into_rust()?)),
             Some(proto_id::Kind::Local(x)) => Ok(Id::Local(x.try_into()?)),
             None => Err(TryFromProtoError::missing_field("ProtoId::kind")),
         }

@@ -19,7 +19,6 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
-use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::de::DeserializeOwned;
@@ -30,7 +29,8 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::proto::any_uuid;
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
+use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -143,8 +143,8 @@ pub struct Peek<T = mz_repr::Timestamp> {
 impl From<&Peek> for ProtoPeek {
     fn from(x: &Peek) -> Self {
         ProtoPeek {
-            id: Some((&x.id).into()),
-            key: x.key.as_ref().map(Into::into),
+            id: Some(x.id.into_proto()),
+            key: x.key.into_proto(),
             uuid: Some(x.uuid.into_proto()),
             timestamp: x.timestamp,
             finishing: Some((&x.finishing).into()),
@@ -159,8 +159,8 @@ impl TryFrom<ProtoPeek> for Peek {
 
     fn try_from(x: ProtoPeek) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: x.id.try_into_if_some("ProtoPeek::id")?,
-            key: x.key.map(|x| x.try_into()).transpose()?,
+            id: x.id.into_rust_if_some("ProtoPeek::id")?,
+            key: x.key.into_rust()?,
             uuid: Uuid::from_proto(
                 x.uuid
                     .ok_or_else(|| TryFromProtoError::missing_field("ProtoPeek::uuid"))?,
@@ -226,7 +226,7 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
                         collections: collections
                             .iter()
                             .map(|(id, frontier)| ProtoCompaction {
-                                id: Some(id.into()),
+                                id: Some(id.into_proto()),
                                 frontier: Some(frontier.into()),
                             })
                             .collect(),
@@ -264,7 +264,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                         .into_iter()
                         .map(|collection| {
                             Ok((
-                                collection.id.try_into_if_some("ProtoCompaction::id")?,
+                                collection.id.into_rust_if_some("ProtoCompaction::id")?,
                                 collection.frontier.map(Into::into).ok_or_else(|| {
                                     TryFromProtoError::missing_field("ProtoCompaction::frontier")
                                 })?,
@@ -602,7 +602,7 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
                         traces: traces
                             .iter()
                             .map(|(id, trace)| ProtoTrace {
-                                id: Some(id.into()),
+                                id: Some(id.into_proto()),
                                 updates: trace
                                     // Clone because the `iter()` expects
                                     // `trace` to be mutable.
@@ -622,7 +622,7 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
                     resp: Some(resp.into()),
                 }),
                 ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
-                    id: Some(id.into()),
+                    id: Some(id.into_proto()),
                     resp: Some(resp.into()),
                 }),
             }),
@@ -648,7 +648,7 @@ impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                                 .into_iter()
                                 .map(|update| (update.timestamp, update.diff)),
                         );
-                        Ok((trace.id.try_into_if_some("ProtoTrace::id")?, batch))
+                        Ok((trace.id.into_rust_if_some("ProtoTrace::id")?, batch))
                     })
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
@@ -657,7 +657,7 @@ impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                 resp.resp.try_into_if_some("ProtoPeekResponseKind::resp")?,
             )),
             Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
-                resp.id.try_into_if_some("ProtoTailResponseKind::id")?,
+                resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
                 resp.resp.try_into_if_some("ProtoTailResponseKind::resp")?,
             )),
             None => Err(TryFromProtoError::missing_field(

@@ -13,6 +13,7 @@ use std::iter::once;
 
 use bytes::BufMut;
 use futures::future::BoxFuture;
+use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
 use prost::{self, Message};
 use uuid::Uuid;
 
@@ -1170,16 +1171,18 @@ impl Codec for ItemKey {
 
     fn encode<B: BufMut>(&self, buf: &mut B) {
         let proto = ProtoItemKey {
-            gid: Some(ProtoGlobalId::from(&self.gid)),
+            gid: Some(self.gid.into_proto()),
         };
         Message::encode(&proto, buf).expect("provided buffer had sufficient capacity")
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
         let proto: ProtoItemKey = Message::decode(buf).map_err(|err| err.to_string())?;
-        Ok(Self {
-            gid: GlobalId::try_from(proto.gid.unwrap()).unwrap(),
-        })
+        let gid = proto
+            .gid
+            .into_rust_if_some("ProtoItemKey.gid")
+            .map_err(|e| e.to_string())?;
+        Ok(Self { gid })
     }
 }
 

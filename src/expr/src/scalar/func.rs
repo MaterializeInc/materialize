@@ -41,7 +41,8 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::chrono::any_naive_datetime;
-use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::TryIntoIfSome;
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -3100,7 +3101,7 @@ impl TryFrom<ProtoBinaryFunc> for BinaryFunc {
                 TimezoneTimestamp(()) => Ok(BinaryFunc::TimezoneTimestamp),
                 TimezoneTimestampTz(()) => Ok(BinaryFunc::TimezoneTimestampTz),
                 TimezoneTime(wall_time) => Ok(BinaryFunc::TimezoneTime {
-                    wall_time: ProtoRepr::from_proto(wall_time)?,
+                    wall_time: wall_time.into_rust()?,
                 }),
                 TimezoneIntervalTimestamp(()) => Ok(BinaryFunc::TimezoneIntervalTimestamp),
                 TimezoneIntervalTimestampTz(()) => Ok(BinaryFunc::TimezoneIntervalTimestampTz),
@@ -3786,10 +3787,10 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastRegTypeToOid(_) => CastRegTypeToOid(()),
             UnaryFunc::CastInt64ToInt16(_) => CastInt64ToInt16(()),
             UnaryFunc::CastInt64ToInt32(_) => CastInt64ToInt32(()),
-            UnaryFunc::CastInt16ToNumeric(func) => CastInt16ToNumeric((&func.0).into()),
-            UnaryFunc::CastInt32ToNumeric(func) => CastInt32ToNumeric((&func.0).into()),
+            UnaryFunc::CastInt16ToNumeric(func) => CastInt16ToNumeric(func.0.into_proto()),
+            UnaryFunc::CastInt32ToNumeric(func) => CastInt32ToNumeric(func.0.into_proto()),
             UnaryFunc::CastInt64ToBool(_) => CastInt64ToBool(()),
-            UnaryFunc::CastInt64ToNumeric(func) => CastInt64ToNumeric((&func.0).into()),
+            UnaryFunc::CastInt64ToNumeric(func) => CastInt64ToNumeric(func.0.into_proto()),
             UnaryFunc::CastInt64ToFloat32(_) => CastInt64ToFloat32(()),
             UnaryFunc::CastInt64ToFloat64(_) => CastInt64ToFloat64(()),
             UnaryFunc::CastInt64ToOid(_) => CastInt64ToOid(()),
@@ -3799,8 +3800,8 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastFloat32ToInt64(_) => CastFloat32ToInt64(()),
             UnaryFunc::CastFloat32ToFloat64(_) => CastFloat32ToFloat64(()),
             UnaryFunc::CastFloat32ToString(_) => CastFloat32ToString(()),
-            UnaryFunc::CastFloat32ToNumeric(func) => CastFloat32ToNumeric((&func.0).into()),
-            UnaryFunc::CastFloat64ToNumeric(func) => CastFloat64ToNumeric((&func.0).into()),
+            UnaryFunc::CastFloat32ToNumeric(func) => CastFloat32ToNumeric(func.0.into_proto()),
+            UnaryFunc::CastFloat64ToNumeric(func) => CastFloat64ToNumeric(func.0.into_proto()),
             UnaryFunc::CastFloat64ToInt16(_) => CastFloat64ToInt16(()),
             UnaryFunc::CastFloat64ToInt32(_) => CastFloat64ToInt32(()),
             UnaryFunc::CastFloat64ToInt64(_) => CastFloat64ToInt64(()),
@@ -3825,19 +3826,19 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastStringToDate(_) => CastStringToDate(()),
             UnaryFunc::CastStringToArray(inner) => {
                 CastStringToArray(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
             UnaryFunc::CastStringToList(inner) => {
                 CastStringToList(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
             UnaryFunc::CastStringToMap(inner) => {
                 CastStringToMap(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
@@ -3845,17 +3846,17 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastStringToTimestamp(_) => CastStringToTimestamp(()),
             UnaryFunc::CastStringToTimestampTz(_) => CastStringToTimestampTz(()),
             UnaryFunc::CastStringToInterval(_) => CastStringToInterval(()),
-            UnaryFunc::CastStringToNumeric(func) => CastStringToNumeric((&func.0).into()),
+            UnaryFunc::CastStringToNumeric(func) => CastStringToNumeric(func.0.into_proto()),
             UnaryFunc::CastStringToUuid(_) => CastStringToUuid(()),
             UnaryFunc::CastStringToChar(func) => CastStringToChar(ProtoCastStringToChar {
-                length: func.length.as_ref().map(Into::into),
+                length: func.length.into_proto(),
                 fail_on_len: func.fail_on_len,
             }),
             UnaryFunc::PadChar(func) => PadChar(ProtoPadChar {
-                length: func.length.as_ref().map(Into::into),
+                length: func.length.into_proto(),
             }),
             UnaryFunc::CastStringToVarChar(func) => CastStringToVarChar(ProtoCastStringToVarChar {
-                length: func.length.as_ref().map(Into::into),
+                length: func.length.into_proto(),
                 fail_on_len: func.fail_on_len,
             }),
             UnaryFunc::CastCharToString(_) => CastCharToString(()),
@@ -3886,26 +3887,26 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CastJsonbToInt64(_) => CastJsonbToInt64(()),
             UnaryFunc::CastJsonbToFloat32(_) => CastJsonbToFloat32(()),
             UnaryFunc::CastJsonbToFloat64(_) => CastJsonbToFloat64(()),
-            UnaryFunc::CastJsonbToNumeric(func) => CastJsonbToNumeric((&func.0).into()),
+            UnaryFunc::CastJsonbToNumeric(func) => CastJsonbToNumeric(func.0.into_proto()),
             UnaryFunc::CastJsonbToBool(_) => CastJsonbToBool(()),
             UnaryFunc::CastUuidToString(_) => CastUuidToString(()),
-            UnaryFunc::CastRecordToString(func) => CastRecordToString((&func.ty).into()),
+            UnaryFunc::CastRecordToString(func) => CastRecordToString(func.ty.into_proto()),
             UnaryFunc::CastRecord1ToRecord2(inner) => {
                 CastRecord1ToRecord2(ProtoCastRecord1ToRecord2 {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_exprs: inner.cast_exprs.iter().map(Into::into).collect(),
                 })
             }
-            UnaryFunc::CastArrayToString(func) => CastArrayToString((&func.ty).into()),
-            UnaryFunc::CastListToString(func) => CastListToString((&func.ty).into()),
+            UnaryFunc::CastArrayToString(func) => CastArrayToString(func.ty.into_proto()),
+            UnaryFunc::CastListToString(func) => CastListToString(func.ty.into_proto()),
             UnaryFunc::CastList1ToList2(inner) => {
                 CastList1ToList2(Box::new(ProtoCastToVariableType {
-                    return_ty: Some((&inner.return_ty).into()),
+                    return_ty: Some(inner.return_ty.into_proto()),
                     cast_expr: Some(Box::new((&*inner.cast_expr).into())),
                 }))
             }
             UnaryFunc::CastArrayToListOneDim(_) => CastArrayToListOneDim(()),
-            UnaryFunc::CastMapToString(func) => CastMapToString((&func.ty).into()),
+            UnaryFunc::CastMapToString(func) => CastMapToString(func.ty.into_proto()),
             UnaryFunc::CastInt2VectorToString(_) => CastInt2VectorToString(()),
             UnaryFunc::CeilFloat32(_) => CeilFloat32(()),
             UnaryFunc::CeilFloat64(_) => CeilFloat64(()),
@@ -3921,23 +3922,23 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::CharLength(_) => CharLength(()),
             UnaryFunc::Chr(_) => Chr(()),
             UnaryFunc::IsLikeMatch(pattern) => IsLikeMatch((&pattern.0).into()),
-            UnaryFunc::IsRegexpMatch(regex) => IsRegexpMatch((&regex.0).into()),
-            UnaryFunc::RegexpMatch(regex) => RegexpMatch((&regex.0).into()),
-            UnaryFunc::ExtractInterval(func) => ExtractInterval((&func.0).into()),
-            UnaryFunc::ExtractTime(func) => ExtractTime((&func.0).into()),
-            UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp((&func.0).into()),
-            UnaryFunc::ExtractTimestampTz(func) => ExtractTimestampTz((&func.0).into()),
-            UnaryFunc::ExtractDate(func) => ExtractDate((&func.0).into()),
-            UnaryFunc::DatePartInterval(func) => DatePartInterval((&func.0).into()),
-            UnaryFunc::DatePartTime(func) => DatePartTime((&func.0).into()),
-            UnaryFunc::DatePartTimestamp(func) => DatePartTimestamp((&func.0).into()),
-            UnaryFunc::DatePartTimestampTz(func) => DatePartTimestampTz((&func.0).into()),
-            UnaryFunc::DateTruncTimestamp(func) => DateTruncTimestamp((&func.0).into()),
-            UnaryFunc::DateTruncTimestampTz(func) => DateTruncTimestampTz((&func.0).into()),
-            UnaryFunc::TimezoneTimestamp(func) => TimezoneTimestamp((&func.0).into()),
-            UnaryFunc::TimezoneTimestampTz(func) => TimezoneTimestampTz((&func.0).into()),
+            UnaryFunc::IsRegexpMatch(regex) => IsRegexpMatch(regex.0.into_proto()),
+            UnaryFunc::RegexpMatch(regex) => RegexpMatch(regex.0.into_proto()),
+            UnaryFunc::ExtractInterval(func) => ExtractInterval(func.0.into_proto()),
+            UnaryFunc::ExtractTime(func) => ExtractTime(func.0.into_proto()),
+            UnaryFunc::ExtractTimestamp(func) => ExtractTimestamp(func.0.into_proto()),
+            UnaryFunc::ExtractTimestampTz(func) => ExtractTimestampTz(func.0.into_proto()),
+            UnaryFunc::ExtractDate(func) => ExtractDate(func.0.into_proto()),
+            UnaryFunc::DatePartInterval(func) => DatePartInterval(func.0.into_proto()),
+            UnaryFunc::DatePartTime(func) => DatePartTime(func.0.into_proto()),
+            UnaryFunc::DatePartTimestamp(func) => DatePartTimestamp(func.0.into_proto()),
+            UnaryFunc::DatePartTimestampTz(func) => DatePartTimestampTz(func.0.into_proto()),
+            UnaryFunc::DateTruncTimestamp(func) => DateTruncTimestamp(func.0.into_proto()),
+            UnaryFunc::DateTruncTimestampTz(func) => DateTruncTimestampTz(func.0.into_proto()),
+            UnaryFunc::TimezoneTimestamp(func) => TimezoneTimestamp(func.0.into_proto()),
+            UnaryFunc::TimezoneTimestampTz(func) => TimezoneTimestampTz(func.0.into_proto()),
             UnaryFunc::TimezoneTime(func) => TimezoneTime(ProtoTimezoneTime {
-                tz: Some((&func.tz).into()),
+                tz: Some(func.tz.into_proto()),
                 wall_time: Some(func.wall_time.into_proto()),
             }),
             UnaryFunc::ToTimestamp(_) => ToTimestamp(()),
@@ -3982,7 +3983,7 @@ impl From<&UnaryFunc> for ProtoUnaryFunc {
             UnaryFunc::ExpNumeric(_) => ExpNumeric(()),
             UnaryFunc::Sleep(_) => Sleep(()),
             UnaryFunc::Panic(_) => Panic(()),
-            UnaryFunc::RescaleNumeric(func) => RescaleNumeric((&func.0).into()),
+            UnaryFunc::RescaleNumeric(func) => RescaleNumeric(func.0.into_proto()),
             UnaryFunc::PgColumnSize(_) => PgColumnSize(()),
             UnaryFunc::MzRowSize(_) => MzRowSize(()),
             UnaryFunc::MzTypeName(_) => MzTypeName(()),
@@ -4050,14 +4051,14 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastInt64ToInt16(()) => Ok(impls::CastInt64ToInt16.into()),
                 CastInt64ToInt32(()) => Ok(impls::CastInt64ToInt32.into()),
                 CastInt16ToNumeric(max_scale) => {
-                    Ok(impls::CastInt16ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastInt16ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastInt32ToNumeric(max_scale) => {
-                    Ok(impls::CastInt32ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastInt32ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastInt64ToBool(()) => Ok(impls::CastInt64ToBool.into()),
                 CastInt64ToNumeric(max_scale) => {
-                    Ok(impls::CastInt64ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastInt64ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastInt64ToFloat32(()) => Ok(impls::CastInt64ToFloat32.into()),
                 CastInt64ToFloat64(()) => Ok(impls::CastInt64ToFloat64.into()),
@@ -4069,10 +4070,10 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastFloat32ToFloat64(()) => Ok(impls::CastFloat32ToFloat64.into()),
                 CastFloat32ToString(()) => Ok(impls::CastFloat32ToString.into()),
                 CastFloat32ToNumeric(max_scale) => {
-                    Ok(impls::CastFloat32ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastFloat32ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastFloat64ToNumeric(max_scale) => {
-                    Ok(impls::CastFloat64ToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastFloat64ToNumeric(max_scale.into_rust()?).into())
                 }
                 CastFloat64ToInt16(()) => Ok(impls::CastFloat64ToInt16.into()),
                 CastFloat64ToInt32(()) => Ok(impls::CastFloat64ToInt32.into()),
@@ -4099,7 +4100,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToArray(inner) => Ok(impls::CastStringToArray {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastStringToArray::return_ty")?,
+                        .into_rust_if_some("ProtoCastStringToArray::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastStringToArray::cast_expr")?,
@@ -4108,7 +4109,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToList(inner) => Ok(impls::CastStringToList {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastStringToList::return_ty")?,
+                        .into_rust_if_some("ProtoCastStringToList::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastStringToList::cast_expr")?,
@@ -4117,7 +4118,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToMap(inner) => Ok(impls::CastStringToMap {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastStringToMap::return_ty")?,
+                        .into_rust_if_some("ProtoCastStringToMap::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastStringToMap::cast_expr")?,
@@ -4128,20 +4129,20 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastStringToTimestampTz(()) => Ok(impls::CastStringToTimestampTz.into()),
                 CastStringToInterval(()) => Ok(impls::CastStringToInterval.into()),
                 CastStringToNumeric(max_scale) => {
-                    Ok(impls::CastStringToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastStringToNumeric(max_scale.into_rust()?).into())
                 }
                 CastStringToUuid(()) => Ok(impls::CastStringToUuid.into()),
                 CastStringToChar(func) => Ok(impls::CastStringToChar {
-                    length: func.length.map(TryInto::try_into).transpose()?,
+                    length: func.length.into_rust()?,
                     fail_on_len: func.fail_on_len,
                 }
                 .into()),
                 PadChar(func) => Ok(impls::PadChar {
-                    length: func.length.map(TryInto::try_into).transpose()?,
+                    length: func.length.into_rust()?,
                 }
                 .into()),
                 CastStringToVarChar(func) => Ok(impls::CastStringToVarChar {
-                    length: func.length.map(TryInto::try_into).transpose()?,
+                    length: func.length.into_rust()?,
                     fail_on_len: func.fail_on_len,
                 }
                 .into()),
@@ -4174,17 +4175,18 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CastJsonbToFloat32(()) => Ok(impls::CastJsonbToFloat32.into()),
                 CastJsonbToFloat64(()) => Ok(impls::CastJsonbToFloat64.into()),
                 CastJsonbToNumeric(max_scale) => {
-                    Ok(impls::CastJsonbToNumeric(max_scale.try_into()?).into())
+                    Ok(impls::CastJsonbToNumeric(max_scale.into_rust()?).into())
                 }
                 CastJsonbToBool(()) => Ok(impls::CastJsonbToBool.into()),
                 CastUuidToString(()) => Ok(impls::CastUuidToString.into()),
-                CastRecordToString(ty) => {
-                    Ok(impls::CastRecordToString { ty: ty.try_into()? }.into())
+                CastRecordToString(ty) => Ok(impls::CastRecordToString {
+                    ty: ty.into_rust()?,
                 }
+                .into()),
                 CastRecord1ToRecord2(inner) => Ok(impls::CastRecord1ToRecord2 {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastRecord1ToRecord2::return_ty")?,
+                        .into_rust_if_some("ProtoCastRecord1ToRecord2::return_ty")?,
                     cast_exprs: inner
                         .cast_exprs
                         .into_iter()
@@ -4192,19 +4194,28 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                         .collect::<Result<Vec<_>, _>>()?,
                 }
                 .into()),
-                CastArrayToString(ty) => Ok(impls::CastArrayToString { ty: ty.try_into()? }.into()),
-                CastListToString(ty) => Ok(impls::CastListToString { ty: ty.try_into()? }.into()),
+                CastArrayToString(ty) => Ok(impls::CastArrayToString {
+                    ty: ty.into_rust()?,
+                }
+                .into()),
+                CastListToString(ty) => Ok(impls::CastListToString {
+                    ty: ty.into_rust()?,
+                }
+                .into()),
                 CastList1ToList2(inner) => Ok(impls::CastList1ToList2 {
                     return_ty: inner
                         .return_ty
-                        .try_into_if_some("ProtoCastList1ToList2::return_ty")?,
+                        .into_rust_if_some("ProtoCastList1ToList2::return_ty")?,
                     cast_expr: inner
                         .cast_expr
                         .try_into_if_some("ProtoCastList1ToList2::cast_expr")?,
                 }
                 .into()),
                 CastArrayToListOneDim(()) => Ok(impls::CastArrayToListOneDim.into()),
-                CastMapToString(ty) => Ok(impls::CastMapToString { ty: ty.try_into()? }.into()),
+                CastMapToString(ty) => Ok(impls::CastMapToString {
+                    ty: ty.into_rust()?,
+                }
+                .into()),
                 CastInt2VectorToString(_) => Ok(impls::CastInt2VectorToString.into()),
                 CeilFloat32(_) => Ok(impls::CeilFloat32.into()),
                 CeilFloat64(_) => Ok(impls::CeilFloat64.into()),
@@ -4220,34 +4231,34 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 CharLength(_) => Ok(impls::CharLength.into()),
                 Chr(_) => Ok(impls::Chr.into()),
                 IsLikeMatch(pattern) => Ok(impls::IsLikeMatch(pattern.try_into()?).into()),
-                IsRegexpMatch(regex) => Ok(impls::IsRegexpMatch(regex.try_into()?).into()),
-                RegexpMatch(regex) => Ok(impls::RegexpMatch(regex.try_into()?).into()),
-                ExtractInterval(units) => Ok(impls::ExtractInterval(units.try_into()?).into()),
-                ExtractTime(units) => Ok(impls::ExtractTime(units.try_into()?).into()),
-                ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.try_into()?).into()),
+                IsRegexpMatch(regex) => Ok(impls::IsRegexpMatch(regex.into_rust()?).into()),
+                RegexpMatch(regex) => Ok(impls::RegexpMatch(regex.into_rust()?).into()),
+                ExtractInterval(units) => Ok(impls::ExtractInterval(units.into_rust()?).into()),
+                ExtractTime(units) => Ok(impls::ExtractTime(units.into_rust()?).into()),
+                ExtractTimestamp(units) => Ok(impls::ExtractTimestamp(units.into_rust()?).into()),
                 ExtractTimestampTz(units) => {
-                    Ok(impls::ExtractTimestampTz(units.try_into()?).into())
+                    Ok(impls::ExtractTimestampTz(units.into_rust()?).into())
                 }
-                ExtractDate(units) => Ok(impls::ExtractDate(units.try_into()?).into()),
-                DatePartInterval(units) => Ok(impls::DatePartInterval(units.try_into()?).into()),
-                DatePartTime(units) => Ok(impls::DatePartTime(units.try_into()?).into()),
-                DatePartTimestamp(units) => Ok(impls::DatePartTimestamp(units.try_into()?).into()),
+                ExtractDate(units) => Ok(impls::ExtractDate(units.into_rust()?).into()),
+                DatePartInterval(units) => Ok(impls::DatePartInterval(units.into_rust()?).into()),
+                DatePartTime(units) => Ok(impls::DatePartTime(units.into_rust()?).into()),
+                DatePartTimestamp(units) => Ok(impls::DatePartTimestamp(units.into_rust()?).into()),
                 DatePartTimestampTz(units) => {
-                    Ok(impls::DatePartTimestampTz(units.try_into()?).into())
+                    Ok(impls::DatePartTimestampTz(units.into_rust()?).into())
                 }
                 DateTruncTimestamp(units) => {
-                    Ok(impls::DateTruncTimestamp(units.try_into()?).into())
+                    Ok(impls::DateTruncTimestamp(units.into_rust()?).into())
                 }
                 DateTruncTimestampTz(units) => {
-                    Ok(impls::DateTruncTimestampTz(units.try_into()?).into())
+                    Ok(impls::DateTruncTimestampTz(units.into_rust()?).into())
                 }
-                TimezoneTimestamp(tz) => Ok(impls::TimezoneTimestamp(tz.try_into()?).into()),
-                TimezoneTimestampTz(tz) => Ok(impls::TimezoneTimestampTz(tz.try_into()?).into()),
+                TimezoneTimestamp(tz) => Ok(impls::TimezoneTimestamp(tz.into_rust()?).into()),
+                TimezoneTimestampTz(tz) => Ok(impls::TimezoneTimestampTz(tz.into_rust()?).into()),
                 TimezoneTime(func) => Ok(impls::TimezoneTime {
-                    tz: func.tz.try_into_if_some("ProtoTimezoneTime::tz")?,
+                    tz: func.tz.into_rust_if_some("ProtoTimezoneTime::tz")?,
                     wall_time: func
                         .wall_time
-                        .from_proto_if_some("ProtoTimezoneTime::wall_time")?,
+                        .into_rust_if_some("ProtoTimezoneTime::wall_time")?,
                 }
                 .into()),
                 ToTimestamp(()) => Ok(impls::ToTimestamp.into()),
@@ -4293,7 +4304,7 @@ impl TryFrom<ProtoUnaryFunc> for UnaryFunc {
                 Sleep(()) => Ok(impls::Sleep.into()),
                 Panic(()) => Ok(impls::Panic.into()),
                 RescaleNumeric(max_scale) => {
-                    Ok(impls::RescaleNumeric(max_scale.try_into()?).into())
+                    Ok(impls::RescaleNumeric(max_scale.into_rust()?).into())
                 }
                 PgColumnSize(()) => Ok(impls::PgColumnSize.into()),
                 MzRowSize(()) => Ok(impls::MzRowSize.into()),
@@ -5751,12 +5762,12 @@ impl From<&VariadicFunc> for ProtoVariadicFunc {
             VariadicFunc::Replace => Replace(()),
             VariadicFunc::JsonbBuildArray => JsonbBuildArray(()),
             VariadicFunc::JsonbBuildObject => JsonbBuildObject(()),
-            VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into()),
-            VariadicFunc::ArrayToString { elem_type } => ArrayToString(elem_type.into()),
+            VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into_proto()),
+            VariadicFunc::ArrayToString { elem_type } => ArrayToString(elem_type.into_proto()),
             VariadicFunc::ArrayIndex { offset } => ArrayIndex(offset.into_proto()),
-            VariadicFunc::ListCreate { elem_type } => ListCreate(elem_type.into()),
+            VariadicFunc::ListCreate { elem_type } => ListCreate(elem_type.into_proto()),
             VariadicFunc::RecordCreate { field_names } => RecordCreate(ProtoRecordCreate {
-                field_names: field_names.iter().map(Into::into).collect(),
+                field_names: field_names.into_proto(),
             }),
             VariadicFunc::ListIndex => ListIndex(()),
             VariadicFunc::ListSliceLinear => ListSliceLinear(()),
@@ -5791,22 +5802,19 @@ impl TryFrom<ProtoVariadicFunc> for VariadicFunc {
                 JsonbBuildArray(()) => Ok(VariadicFunc::JsonbBuildArray),
                 JsonbBuildObject(()) => Ok(VariadicFunc::JsonbBuildObject),
                 ArrayCreate(elem_type) => Ok(VariadicFunc::ArrayCreate {
-                    elem_type: elem_type.try_into()?,
+                    elem_type: elem_type.into_rust()?,
                 }),
                 ArrayToString(elem_type) => Ok(VariadicFunc::ArrayToString {
-                    elem_type: elem_type.try_into()?,
+                    elem_type: elem_type.into_rust()?,
                 }),
                 ArrayIndex(offset) => Ok(VariadicFunc::ArrayIndex {
                     offset: usize::from_proto(offset)?,
                 }),
                 ListCreate(elem_type) => Ok(VariadicFunc::ListCreate {
-                    elem_type: elem_type.try_into()?,
+                    elem_type: elem_type.into_rust()?,
                 }),
                 RecordCreate(ProtoRecordCreate { field_names }) => Ok(VariadicFunc::RecordCreate {
-                    field_names: field_names
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<_, TryFromProtoError>>()?,
+                    field_names: field_names.into_rust()?,
                 }),
                 ListIndex(()) => Ok(VariadicFunc::ListIndex),
                 ListSliceLinear(()) => Ok(VariadicFunc::ListSliceLinear),

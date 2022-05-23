@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::newapi::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 
@@ -87,31 +87,25 @@ impl Deref for Regex {
     }
 }
 
-impl ProtoRepr for regex::Regex {
-    type Repr = String;
-
-    fn into_proto(self: Self) -> Self::Repr {
+impl RustType<String> for regex::Regex {
+    fn into_proto(&self) -> String {
         self.as_str().to_string()
     }
 
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        Ok(regex::Regex::new(&repr).map_err(TryFromProtoError::from)?)
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(regex::Regex::new(&proto).map_err(TryFromProtoError::from)?)
     }
 }
 
-impl From<&Regex> for ProtoRegex {
-    fn from(x: &Regex) -> Self {
+impl RustType<ProtoRegex> for Regex {
+    fn into_proto(&self) -> ProtoRegex {
         ProtoRegex {
-            regex: x.0.as_str().to_string(),
+            regex: self.0.as_str().to_string(),
         }
     }
-}
 
-impl TryFrom<ProtoRegex> for Regex {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoRegex) -> Result<Self, Self::Error> {
-        Ok(Regex(regex::Regex::from_proto(x.regex)?))
+    fn from_proto(proto: ProtoRegex) -> Result<Self, TryFromProtoError> {
+        Ok(Regex(regex::Regex::from_proto(proto.regex)?))
     }
 }
 
@@ -139,7 +133,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use crate::proto::newapi::protobuf_roundtrip;
 
     proptest! {
         #[test]

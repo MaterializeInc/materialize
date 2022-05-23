@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::mem;
 
+use mz_repr::proto::newapi::IntoRustIfSome;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,8 @@ use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::regex::Regex;
 use mz_repr::arb_datum;
-use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::TryIntoIfSome;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
@@ -143,7 +145,7 @@ impl TryFrom<ProtoMirScalarExpr> for MirScalarExpr {
             Column(i) => MirScalarExpr::Column(usize::from_proto(i)?),
             Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
                 lit.try_into_if_some("ProtoLiteral::lit")?,
-                typ.try_into_if_some("ProtoLiteral::typ")?,
+                typ.into_rust_if_some("ProtoLiteral::typ")?,
             ),
             CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.try_into()?),
             CallUnary(call_unary) => MirScalarExpr::CallUnary {
@@ -191,7 +193,7 @@ impl From<&MirScalarExpr> for ProtoMirScalarExpr {
                 MirScalarExpr::Column(i) => Column(i.into_proto()),
                 MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
                     lit: Some(lit.into()),
-                    typ: Some(typ.into()),
+                    typ: Some(typ.into_proto()),
                 }),
                 MirScalarExpr::CallUnmaterializable(func) => CallUnmaterializable(func.into()),
                 MirScalarExpr::CallUnary { func, expr } => CallUnary(Box::new(ProtoCallUnary {
@@ -241,7 +243,7 @@ impl From<&Result<Row, EvalError>> for proto_literal::ProtoLiteralData {
         use proto_literal::proto_literal_data::Result::*;
         proto_literal::ProtoLiteralData {
             result: Some(match x {
-                Result::Ok(row) => Ok(row.into()),
+                Result::Ok(row) => Ok(row.into_proto()),
                 Result::Err(err) => Err(err.into()),
             }),
         }
@@ -1706,7 +1708,7 @@ impl From<&EvalError> for ProtoEvalError {
                 max_layer: max_layer.into_proto(),
                 val: *val,
             }),
-            EvalError::InvalidArray(error) => InvalidArray(error.into()),
+            EvalError::InvalidArray(error) => InvalidArray(error.into_proto()),
             EvalError::InvalidEncodingName(v) => InvalidEncodingName(v.clone()),
             EvalError::InvalidHashAlgorithm(v) => InvalidHashAlgorithm(v.clone()),
             EvalError::InvalidByteSequence {
@@ -1731,8 +1733,8 @@ impl From<&EvalError> for ProtoEvalError {
                 typ: typ.clone(),
             }),
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
-            EvalError::Parse(error) => Parse(error.into()),
-            EvalError::ParseHex(error) => ParseHex(error.into()),
+            EvalError::Parse(error) => Parse(error.into_proto()),
+            EvalError::ParseHex(error) => ParseHex(error.into_proto()),
             EvalError::Internal(v) => Internal(v.clone()),
             EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.clone()),
             EvalError::NegativeOutOfDomain(v) => NegativeOutOfDomain(v.clone()),
@@ -1812,7 +1814,7 @@ impl TryFrom<ProtoEvalError> for EvalError {
                     max_layer: usize::from_proto(v.max_layer)?,
                     val: v.val,
                 }),
-                InvalidArray(error) => Ok(EvalError::InvalidArray(error.try_into()?)),
+                InvalidArray(error) => Ok(EvalError::InvalidArray(error.into_rust()?)),
                 InvalidEncodingName(v) => Ok(EvalError::InvalidEncodingName(v)),
                 InvalidHashAlgorithm(v) => Ok(EvalError::InvalidHashAlgorithm(v)),
                 InvalidByteSequence(v) => Ok(EvalError::InvalidByteSequence {
@@ -1831,8 +1833,8 @@ impl TryFrom<ProtoEvalError> for EvalError {
                 UnknownUnits(v) => Ok(EvalError::UnknownUnits(v)),
                 UnsupportedUnits(v) => Ok(EvalError::UnsupportedUnits(v.units, v.typ)),
                 UnterminatedLikeEscapeSequence(()) => Ok(EvalError::UnterminatedLikeEscapeSequence),
-                Parse(error) => Ok(EvalError::Parse(error.try_into()?)),
-                ParseHex(error) => Ok(EvalError::ParseHex(error.try_into()?)),
+                Parse(error) => Ok(EvalError::Parse(error.into_rust()?)),
+                ParseHex(error) => Ok(EvalError::ParseHex(error.into_rust()?)),
                 Internal(v) => Ok(EvalError::Internal(v)),
                 InfinityOutOfDomain(v) => Ok(EvalError::InfinityOutOfDomain(v)),
                 NegativeOutOfDomain(v) => Ok(EvalError::NegativeOutOfDomain(v)),

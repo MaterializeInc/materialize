@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
-use crate::proto::TryFromProtoError;
+use crate::proto::newapi::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.char.rs"));
 
@@ -173,25 +173,22 @@ pub fn format_str_pad(s: &str, length: Option<CharLength>) -> String {
     format_char_str(s, length, false, CharWhiteSpace::Pad).unwrap()
 }
 
-impl From<&CharLength> for ProtoCharLength {
-    fn from(x: &CharLength) -> Self {
-        ProtoCharLength { value: x.0 }
+impl RustType<ProtoCharLength> for CharLength {
+    fn into_proto(self: &Self) -> ProtoCharLength {
+        ProtoCharLength { value: self.0 }
     }
-}
 
-impl TryFrom<ProtoCharLength> for CharLength {
-    type Error = TryFromProtoError;
-
-    fn try_from(repr: ProtoCharLength) -> Result<Self, Self::Error> {
-        Ok(CharLength(repr.value))
+    fn from_proto(proto: ProtoCharLength) -> Result<Self, TryFromProtoError> {
+        Ok(CharLength(proto.value))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
+    use crate::proto::newapi::protobuf_roundtrip;
 
     proptest! {
         #[test]

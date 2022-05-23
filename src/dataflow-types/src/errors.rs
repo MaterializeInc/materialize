@@ -10,6 +10,7 @@
 use std::fmt::Display;
 
 use bytes::BufMut;
+use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -88,7 +89,7 @@ impl SourceError {
 impl From<&SourceError> for ProtoSourceError {
     fn from(error: &SourceError) -> Self {
         ProtoSourceError {
-            source_id: Some((&error.source_id).into()),
+            source_id: Some(error.source_id.into_proto()),
             error: Some((&error.error).into()),
         }
     }
@@ -101,7 +102,7 @@ impl TryFrom<ProtoSourceError> for SourceError {
         Ok(SourceError {
             source_id: error
                 .source_id
-                .try_into_if_some("ProtoSourceError::source_id")?,
+                .into_rust_if_some("ProtoSourceError::source_id")?,
             error: error.error.try_into_if_some("ProtoSourceError::error")?,
         })
     }

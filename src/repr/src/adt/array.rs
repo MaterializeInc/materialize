@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::newapi::{RustType, TryFromProtoError};
 use crate::row::DatumList;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.array.rs"));
@@ -180,11 +180,11 @@ impl Error for InvalidArrayError {
     }
 }
 
-impl From<&InvalidArrayError> for ProtoInvalidArrayError {
-    fn from(error: &InvalidArrayError) -> Self {
+impl RustType<ProtoInvalidArrayError> for InvalidArrayError {
+    fn into_proto(&self) -> ProtoInvalidArrayError {
         use proto_invalid_array_error::*;
         use Kind::*;
-        let kind = match error {
+        let kind = match self {
             InvalidArrayError::TooManyDimensions(dims) => TooManyDimensions(dims.into_proto()),
             InvalidArrayError::WrongCardinality { actual, expected } => {
                 WrongCardinality(ProtoWrongCardinality {
@@ -195,14 +195,10 @@ impl From<&InvalidArrayError> for ProtoInvalidArrayError {
         };
         ProtoInvalidArrayError { kind: Some(kind) }
     }
-}
 
-impl TryFrom<ProtoInvalidArrayError> for InvalidArrayError {
-    type Error = TryFromProtoError;
-
-    fn try_from(error: ProtoInvalidArrayError) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoInvalidArrayError) -> Result<Self, TryFromProtoError> {
         use proto_invalid_array_error::Kind::*;
-        match error.kind {
+        match proto.kind {
             Some(kind) => match kind {
                 TooManyDimensions(dims) => Ok(InvalidArrayError::TooManyDimensions(
                     usize::from_proto(dims)?,
@@ -221,9 +217,10 @@ impl TryFrom<ProtoInvalidArrayError> for InvalidArrayError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use super::*;
+    use crate::proto::newapi::protobuf_roundtrip;
 
     proptest! {
         #[test]

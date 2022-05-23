@@ -22,54 +22,48 @@ use chrono::{
 use chrono_tz::{Tz, TZ_VARIANTS};
 use proptest::prelude::Strategy;
 
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::newapi::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.chrono.rs"));
 
-impl ProtoRepr for NaiveDate {
-    type Repr = ProtoNaiveDate;
-
-    fn into_proto(self: Self) -> Self::Repr {
+impl RustType<ProtoNaiveDate> for NaiveDate {
+    fn into_proto(&self) -> ProtoNaiveDate {
         ProtoNaiveDate {
             year: self.year(),
             ordinal: self.ordinal(),
         }
     }
 
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        NaiveDate::from_yo_opt(repr.year, repr.ordinal).ok_or_else(|| {
+    fn from_proto(proto: ProtoNaiveDate) -> Result<Self, TryFromProtoError> {
+        NaiveDate::from_yo_opt(proto.year, proto.ordinal).ok_or_else(|| {
             TryFromProtoError::DateConversionError(format!(
                 "NaiveDate::from_yo_opt({},{}) failed",
-                repr.year, repr.ordinal
+                proto.year, proto.ordinal
             ))
         })
     }
 }
 
-impl ProtoRepr for NaiveTime {
-    type Repr = ProtoNaiveTime;
-
-    fn into_proto(self: Self) -> Self::Repr {
+impl RustType<ProtoNaiveTime> for NaiveTime {
+    fn into_proto(&self) -> ProtoNaiveTime {
         ProtoNaiveTime {
             secs: self.num_seconds_from_midnight(),
             frac: self.nanosecond(),
         }
     }
 
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        NaiveTime::from_num_seconds_from_midnight_opt(repr.secs, repr.frac).ok_or_else(|| {
+    fn from_proto(proto: ProtoNaiveTime) -> Result<Self, TryFromProtoError> {
+        NaiveTime::from_num_seconds_from_midnight_opt(proto.secs, proto.frac).ok_or_else(|| {
             TryFromProtoError::DateConversionError(format!(
                 "NaiveTime::from_num_seconds_from_midnight_opt({},{}) failed",
-                repr.secs, repr.frac
+                proto.secs, proto.frac
             ))
         })
     }
 }
 
-impl ProtoRepr for NaiveDateTime {
-    type Repr = ProtoNaiveDateTime;
-
-    fn into_proto(self: Self) -> Self::Repr {
+impl RustType<ProtoNaiveDateTime> for NaiveDateTime {
+    fn into_proto(&self) -> ProtoNaiveDateTime {
         ProtoNaiveDateTime {
             year: self.year(),
             ordinal: self.ordinal(),
@@ -78,53 +72,48 @@ impl ProtoRepr for NaiveDateTime {
         }
     }
 
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        let date = NaiveDate::from_yo_opt(repr.year, repr.ordinal).ok_or_else(|| {
+    fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
+        let date = NaiveDate::from_yo_opt(proto.year, proto.ordinal).ok_or_else(|| {
             TryFromProtoError::DateConversionError(format!(
                 "NaiveDate::from_yo_opt({},{}) failed",
-                repr.year, repr.ordinal
+                proto.year, proto.ordinal
             ))
         })?;
 
-        let time = NaiveTime::from_num_seconds_from_midnight_opt(repr.secs, repr.frac).ok_or_else(
-            || {
+        let time = NaiveTime::from_num_seconds_from_midnight_opt(proto.secs, proto.frac)
+            .ok_or_else(|| {
                 TryFromProtoError::DateConversionError(format!(
                     "NaiveTime::from_num_seconds_from_midnight_opt({},{}) failed",
-                    repr.secs, repr.frac
+                    proto.secs, proto.frac
                 ))
-            },
-        )?;
+            })?;
 
         Ok(NaiveDateTime::new(date, time))
     }
 }
 
-impl ProtoRepr for DateTime<Utc> {
-    type Repr = ProtoNaiveDateTime;
-
-    fn into_proto(self: Self) -> Self::Repr {
+impl RustType<ProtoNaiveDateTime> for DateTime<Utc> {
+    fn into_proto(&self) -> ProtoNaiveDateTime {
         self.naive_utc().into_proto()
     }
 
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        Ok(DateTime::from_utc(NaiveDateTime::from_proto(repr)?, Utc))
+    fn from_proto(proto: ProtoNaiveDateTime) -> Result<Self, TryFromProtoError> {
+        Ok(DateTime::from_utc(NaiveDateTime::from_proto(proto)?, Utc))
     }
 }
 
-impl ProtoRepr for FixedOffset {
-    type Repr = ProtoFixedOffset;
-
-    fn into_proto(self: Self) -> Self::Repr {
+impl RustType<ProtoFixedOffset> for FixedOffset {
+    fn into_proto(&self) -> ProtoFixedOffset {
         ProtoFixedOffset {
             local_minus_utc: self.local_minus_utc(),
         }
     }
 
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        FixedOffset::east_opt(repr.local_minus_utc).ok_or_else(|| {
+    fn from_proto(proto: ProtoFixedOffset) -> Result<Self, TryFromProtoError> {
+        FixedOffset::east_opt(proto.local_minus_utc).ok_or_else(|| {
             TryFromProtoError::DateConversionError(format!(
                 "FixedOffset::east_opt({}) failed.",
-                repr.local_minus_utc
+                proto.local_minus_utc
             ))
         })
     }
@@ -132,17 +121,15 @@ impl ProtoRepr for FixedOffset {
 
 /// Encode a Tz as string representation. This is not the most space efficient solution, but
 /// it is immune to changes in the chrono_tz (and is fully compatible with its public API).
-impl ProtoRepr for chrono_tz::Tz {
-    type Repr = ProtoTz;
-
-    fn into_proto(self: Self) -> Self::Repr {
+impl RustType<ProtoTz> for chrono_tz::Tz {
+    fn into_proto(&self) -> ProtoTz {
         ProtoTz {
             name: self.name().into(),
         }
     }
 
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        Tz::from_str(&repr.name).map_err(TryFromProtoError::DateConversionError)
+    fn from_proto(proto: ProtoTz) -> Result<Self, TryFromProtoError> {
+        Tz::from_str(&proto.name).map_err(TryFromProtoError::DateConversionError)
     }
 }
 
@@ -173,35 +160,35 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::protobuf_repr_roundtrip;
+    use crate::proto::newapi::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
 
         #[test]
         fn naive_date_protobuf_roundtrip(expect in any_naive_date() ) {
-            let actual = protobuf_repr_roundtrip(&expect);
+            let actual = protobuf_roundtrip::<_, ProtoNaiveDate>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[test]
         fn naive_date_time_protobuf_roundtrip(expect in any_naive_datetime() ) {
-            let actual = protobuf_repr_roundtrip(&expect);
+            let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[test]
         fn date_time_protobuf_roundtrip(expect in any_datetime() ) {
-            let actual = protobuf_repr_roundtrip(&expect);
+            let actual = protobuf_roundtrip::<_, ProtoNaiveDateTime>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[test]
         fn fixed_offset_protobuf_roundtrip(expect in any_fixed_offset() ) {
-            let actual = protobuf_repr_roundtrip(&expect);
+            let actual = protobuf_roundtrip::<_, ProtoFixedOffset>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
