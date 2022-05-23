@@ -1720,7 +1720,7 @@ pub mod sources {
     /// Some sources (namely postgres and pubnub) skip any explicit envelope handling, effectively
     /// asserting that `SourceEnvelope` is `None` with `KeyEnvelope::None`.
     // TODO(guswynn): update this ^ when SimpleSource is gone.
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceEnvelope {
         /// The most trivial version is `None`, which typically produces triples where the diff
         /// is ALWAYS `1`
@@ -1743,6 +1743,35 @@ pub mod sources {
         /// An envelope for sources that directly read differential Rows. This is internal and
         /// cannot be requested via SQL.
         DifferentialRow,
+    }
+
+    impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
+        fn into_proto(self: &Self) -> ProtoSourceEnvelope {
+            use proto_source_envelope::Kind;
+            ProtoSourceEnvelope {
+                kind: Some(match self {
+                    SourceEnvelope::None(e) => Kind::None(e.into_proto()),
+                    SourceEnvelope::Debezium(e) => Kind::Debezium(e.into_proto()),
+                    SourceEnvelope::Upsert(e) => Kind::Upsert(e.into_proto()),
+                    SourceEnvelope::CdcV2 => Kind::CdcV2(()),
+                    SourceEnvelope::DifferentialRow => Kind::DifferentialRow(()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoSourceEnvelope) -> Result<Self, TryFromProtoError> {
+            use proto_source_envelope::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceEnvelope::kind"))?;
+            Ok(match kind {
+                Kind::None(e) => SourceEnvelope::None(e.into_rust()?),
+                Kind::Debezium(e) => SourceEnvelope::Debezium(e.into_rust()?),
+                Kind::Upsert(e) => SourceEnvelope::Upsert(e.into_rust()?),
+                Kind::CdcV2(()) => SourceEnvelope::CdcV2,
+                Kind::DifferentialRow(()) => SourceEnvelope::DifferentialRow,
+            })
+        }
     }
 
     /// `UnplannedSourceEnvelope` is a `SourceEnvelope` missing some information. This information
