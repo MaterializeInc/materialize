@@ -183,7 +183,7 @@ where
     match src.connector.clone() {
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands. Defers entirely to `render_table`
-        SourceConnector::Local { .. } => {
+        SourceConnector::Local { .. } | SourceConnector::Log => {
             let mut table = render_table(as_of_frontier, scope);
 
             let table_state = match storage_state.table_state.get_mut(&src_id) {

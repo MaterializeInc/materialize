@@ -2146,6 +2146,9 @@ pub mod sources {
 
         /// A local "source" is fed by a local input handle.
         Local { timeline: Timeline },
+
+        /// A source for compute logging data.
+        Log,
     }
 
     impl SourceConnector {
@@ -2174,6 +2177,7 @@ pub mod sources {
             match self {
                 SourceConnector::External { connector, .. } => connector.name(),
                 SourceConnector::Local { .. } => "local",
+                SourceConnector::Log => "log",
             }
         }
 
@@ -2181,6 +2185,7 @@ pub mod sources {
             match self {
                 SourceConnector::External { timeline, .. } => timeline.clone(),
                 SourceConnector::Local { timeline, .. } => timeline.clone(),
+                SourceConnector::Log => Timeline::EpochMilliseconds,
             }
         }
 
@@ -2218,6 +2223,7 @@ pub mod sources {
                 }
                 SourceConnector::External { .. } => None,
                 SourceConnector::Local { .. } => None,
+                SourceConnector::Log => None,
             };
 
             Ok(result)

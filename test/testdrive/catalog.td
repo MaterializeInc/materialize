@@ -373,23 +373,23 @@ mz_worker_materialization_frontiers
 > SHOW FULL SOURCES FROM mz_catalog
 name                                          type   materialized  volatility  connector_type
 ---------------------------------------------------------------------------------------------
-mz_arrangement_sharing_internal               system true          volatile    local
-mz_arrangement_batches_internal               system true          volatile    local
-mz_arrangement_records_internal               system true          volatile    local
-mz_dataflow_channels                          system true          volatile    local
-mz_dataflow_operator_addresses                system true          volatile    local
-mz_dataflow_operator_reachability_internal    system true          volatile    local
-mz_dataflow_operators                         system true          volatile    local
-mz_materialization_dependencies               system true          volatile    local
-mz_materializations                           system true          volatile    local
-mz_message_counts_received_internal           system true          volatile    local
-mz_message_counts_sent_internal               system true          volatile    local
-mz_peek_active                                system true          volatile    local
-mz_peek_durations                             system true          volatile    local
-mz_scheduling_elapsed_internal                system true          volatile    local
-mz_scheduling_histogram_internal              system true          volatile    local
-mz_scheduling_parks_internal                  system true          volatile    local
-mz_worker_materialization_frontiers           system true          volatile    local
+mz_arrangement_sharing_internal               system true          volatile    log
+mz_arrangement_batches_internal               system true          volatile    log
+mz_arrangement_records_internal               system true          volatile    log
+mz_dataflow_channels                          system true          volatile    log
+mz_dataflow_operator_addresses                system true          volatile    log
+mz_dataflow_operator_reachability_internal    system true          volatile    log
+mz_dataflow_operators                         system true          volatile    log
+mz_materialization_dependencies               system true          volatile    log
+mz_materializations                           system true          volatile    log
+mz_message_counts_received_internal           system true          volatile    log
+mz_message_counts_sent_internal               system true          volatile    log
+mz_peek_active                                system true          volatile    log
+mz_peek_durations                             system true          volatile    log
+mz_scheduling_elapsed_internal                system true          volatile    log
+mz_scheduling_histogram_internal              system true          volatile    log
+mz_scheduling_parks_internal                  system true          volatile    log
+mz_worker_materialization_frontiers           system true          volatile    log
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types

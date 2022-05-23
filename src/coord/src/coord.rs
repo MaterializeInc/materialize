@@ -3053,8 +3053,8 @@ impl<S: Append + 'static> Coordinator<S> {
             .catalog
             .resolve_compute_instance(session.vars().cluster())?;
 
-        let compute_replica_name = session.vars().cluster_replica();
-        let compute_replica = compute_replica_name
+        let target_replica_name = session.vars().cluster_replica();
+        let mut target_replica = target_replica_name
             .map(|name| {
                 compute_instance
                     .replica_id_by_name
@@ -3067,15 +3067,34 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .transpose()?;
 
-        if compute_instance.replicas_by_id.is_empty() {
+        let source_ids = source.depends_on();
+
+        let num_replicas = compute_instance.replicas_by_id.len();
+        if num_replicas == 0 {
             return Err(CoordError::NoClusterReplicasAvailable(
                 compute_instance.name.clone(),
             ));
         }
 
-        let compute_instance = compute_instance.id;
+        // Reading from log sources on replicated compute instances is only
+        // allowed if a target replica is selected. Otherwise, we have no way
+        // of knowing which replica we read the introspection data from.
+        let log_reads = source_ids
+            .iter()
+            .flat_map(|id| self.catalog.log_dependencies(*id))
+            .map(|id| self.catalog.get_entry(&id).name().item.clone())
+            .collect::<Vec<_>>();
+        if !log_reads.is_empty() && target_replica.is_none() {
+            if num_replicas == 1 {
+                target_replica = compute_instance.replicas_by_id.keys().next().copied();
+            } else {
+                return Err(CoordError::UntargetedLogRead {
+                    log_names: log_reads,
+                });
+            }
+        }
 
-        let source_ids = source.depends_on();
+        let compute_instance = compute_instance.id;
 
         let timeline = self.validate_timeline(source_ids.clone())?;
         let conn_id = session.conn_id();
@@ -3261,7 +3280,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 conn_id,
                 source.arity(),
                 compute_instance,
-                compute_replica,
+                target_replica,
             )
             .await?;
 
@@ -5089,7 +5108,7 @@ pub mod fast_path_peek {
             conn_id: u32,
             source_arity: usize,
             compute_instance: ComputeInstanceId,
-            compute_replica: Option<ReplicaId>,
+            target_replica: Option<ReplicaId>,
         ) -> Result<crate::ExecuteResponse, CoordError> {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             if let Plan::Constant(rows) = fast_path {
@@ -5227,7 +5246,7 @@ pub mod fast_path_peek {
                     timestamp,
                     finishing.clone(),
                     map_filter_project,
-                    compute_replica,
+                    target_replica,
                 )
                 .await
                 .unwrap();

@@ -410,6 +410,7 @@ impl ErrorResponse {
             CoordError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unsupported(..) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
+            CoordError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction" and "single table write transaction" are
             // not things in Postgres. This error code is the generic "bad txn thing"

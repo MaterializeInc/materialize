@@ -135,6 +135,9 @@ pub enum CoordError {
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
     UnmaterializableFunction(UnmaterializableFunc),
+    UntargetedLogRead {
+        log_names: Vec<String>,
+    },
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
     /// The transaction only supports single table writes
@@ -195,6 +198,10 @@ impl CoordError {
                     source_name,
                     existing_indexes.join("\n    ")))
             }
+            CoordError::UntargetedLogRead { log_names } => Some(format!(
+                "The query references the following log sources:\n    {}",
+                log_names.join("\n    "),
+            )),
             _ => None,
         }
     }
@@ -246,6 +253,11 @@ impl CoordError {
             CoordError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
+            CoordError::UntargetedLogRead { .. } => Some(
+                "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
+                 active cluster. Note that subsequent `SELECT` queries will only be answered by \
+                 the selected replica, which might reduce availability. To undo the replica \
+                 selection, use `SET cluster_replica = ''`.".into()),
             _ => None,
         }
     }
@@ -380,6 +392,9 @@ impl fmt::Display for CoordError {
                 f,
                 "cluster replica '{cluster_name}.{replica_name}' does not exist"
             ),
+            CoordError::UntargetedLogRead { .. } => {
+                f.write_str("log source reads must target a replica")
+            }
             CoordError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
             }
