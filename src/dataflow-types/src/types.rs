@@ -3468,10 +3468,26 @@ pub mod sinks {
     }
 
     /// TODO(JLDLaughlin): Documentation.
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PublishedSchemaInfo {
         pub key_schema_id: Option<i32>,
         pub value_schema_id: i32,
+    }
+
+    impl RustType<ProtoPublishedSchemaInfo> for PublishedSchemaInfo {
+        fn into_proto(self: &Self) -> ProtoPublishedSchemaInfo {
+            ProtoPublishedSchemaInfo {
+                key_schema_id: self.key_schema_id.clone(),
+                value_schema_id: self.value_schema_id,
+            }
+        }
+
+        fn from_proto(proto: ProtoPublishedSchemaInfo) -> Result<Self, TryFromProtoError> {
+            Ok(PublishedSchemaInfo {
+                key_schema_id: proto.key_schema_id,
+                value_schema_id: proto.value_schema_id,
+            })
+        }
     }
 
     #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
