@@ -28,6 +28,7 @@ use std::str::FromStr;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use mz_repr::proto::newapi::RustType;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
@@ -134,18 +135,14 @@ pub struct CollectionMetadata {
     pub timestamp_shard_id: ShardId,
 }
 
-impl From<&CollectionMetadata> for ProtoCollectionMetadata {
+impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     // TODO: This is just a stub.
-    fn from(_: &CollectionMetadata) -> Self {
+    fn into_proto(&self) -> ProtoCollectionMetadata {
         ProtoCollectionMetadata {}
     }
-}
 
-impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
     // TODO: This is just a stub.
-    type Error = TryFromProtoError;
-
-    fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
+    fn from_proto(_proto: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
         let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
