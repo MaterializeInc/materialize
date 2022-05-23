@@ -1919,7 +1919,7 @@ pub mod sources {
     /// this metadata depends on the type of connector used. This struct records the relevant indices
     /// in the record, calculated during planning, so that the dataflow operator can unpack the
     /// structure and extract the relevant information.
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum DebeziumSourceProjection {
         MySql {
             file: usize,
@@ -1934,6 +1934,65 @@ pub mod sources {
             change_lsn: usize,
             event_serial_no: usize,
         },
+    }
+
+    impl RustType<ProtoDebeziumSourceProjection> for DebeziumSourceProjection {
+        fn into_proto(self: &Self) -> ProtoDebeziumSourceProjection {
+            use proto_debezium_source_projection::{
+                Kind, ProtoMySql, ProtoPostgres, ProtoSqlServer,
+            };
+            ProtoDebeziumSourceProjection {
+                kind: Some(match self {
+                    DebeziumSourceProjection::MySql { file, pos, row } => Kind::MySql(ProtoMySql {
+                        file: file.into_proto(),
+                        pos: pos.into_proto(),
+                        row: row.into_proto(),
+                    }),
+                    DebeziumSourceProjection::Postgres { sequence, lsn } => {
+                        Kind::Postgres(ProtoPostgres {
+                            sequence: sequence.into_proto(),
+                            lsn: lsn.into_proto(),
+                        })
+                    }
+                    DebeziumSourceProjection::SqlServer {
+                        change_lsn,
+                        event_serial_no,
+                    } => Kind::SqlServer(ProtoSqlServer {
+                        change_lsn: change_lsn.into_proto(),
+                        event_serial_no: event_serial_no.into_proto(),
+                    }),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumSourceProjection) -> Result<Self, TryFromProtoError> {
+            use proto_debezium_source_projection::{
+                Kind, ProtoMySql, ProtoPostgres, ProtoSqlServer,
+            };
+            let kind = proto.kind.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoDebeziumSourceProjection::kind")
+            })?;
+            Ok(match kind {
+                Kind::MySql(ProtoMySql { file, pos, row }) => DebeziumSourceProjection::MySql {
+                    file: file.into_rust()?,
+                    pos: pos.into_rust()?,
+                    row: row.into_rust()?,
+                },
+                Kind::Postgres(ProtoPostgres { sequence, lsn }) => {
+                    DebeziumSourceProjection::Postgres {
+                        sequence: sequence.into_rust()?,
+                        lsn: lsn.into_rust()?,
+                    }
+                }
+                Kind::SqlServer(ProtoSqlServer {
+                    change_lsn,
+                    event_serial_no,
+                }) => DebeziumSourceProjection::SqlServer {
+                    change_lsn: change_lsn.into_rust()?,
+                    event_serial_no: event_serial_no.into_rust()?,
+                },
+            })
+        }
     }
 
     /// Computes the indices of the value's relation description that appear in the key.

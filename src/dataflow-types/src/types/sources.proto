@@ -50,6 +50,30 @@ message ProtoIncludedColumnPos {
     uint64 pos = 2;
 }
 
+message ProtoDebeziumSourceProjection {
+    message ProtoMySql {
+        uint64 file = 1;
+        uint64 pos = 2;
+        uint64 row = 3;
+    }
+
+    message ProtoPostgres {
+        optional uint64 sequence = 1;
+        uint64 lsn = 2;
+    }
+
+    message ProtoSqlServer {
+        uint64 change_lsn = 1;
+        uint64 event_serial_no = 2;
+    }
+
+    oneof kind {
+        ProtoMySql my_sql = 1;
+        ProtoPostgres postgres = 2;
+        ProtoSqlServer sql_server = 3;
+    }
+}
+
 message ProtoKafkaSourceConnector {
     mz_kafka_util.addr.ProtoKafkaAddrs addrs = 1;
     string topic = 2;
