@@ -3360,15 +3360,15 @@ pub mod sources {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use mz_repr::proto::protobuf_roundtrip;
+        use mz_repr::proto::newapi::protobuf_roundtrip;
         use proptest::prelude::*;
 
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(32))]
 
             #[test]
-            fn external_source_connector_protobuf_roundtrip(expect in any::<ExternalSourceConnector>()) {
-                let actual = protobuf_roundtrip::<_, ProtoExternalSourceConnector>(&expect);
+            fn source_desc_protobuf_roundtrip(expect in any::<SourceDesc>()) {
+                let actual = protobuf_roundtrip::<_, ProtoSourceDesc>(&expect);
                 assert!(actual.is_ok());
                 assert_eq!(actual.unwrap(), expect);
             }
