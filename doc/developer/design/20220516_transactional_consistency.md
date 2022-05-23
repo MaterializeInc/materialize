@@ -139,54 +139,57 @@ that read.
 
 ### Upstream Source Acknowledgements
 
-There are two interpretations for this section. For now I've included proposals for both interpretations 
+To achieve strict serializability of acknowledgements of upstream sources, acknowledgements should behave the same as a
+write transaction. The data being acknowledged is the write of the transaction and the acknowledgement is the commit.
+Materialize therefore must satisfy the following properties:
 
-Acknowledging data from an upstream source should behave the same as a write transaction. The data being acknowledged is
-the write of the transaction and the acknowledgement is the commit.
-
-For these acknowledgements to be Strictly Serializable, Materialize must satisfy the following properties:
-
-1. For data with a timestamp `ts`, that has been acknowledged, all reads must have a timestamp greater than or equal
+1. If data with a timestamp `ts` has been acknowledged, then all reads must have a timestamp greater than or equal
    to `ts`.
-2. For data with a timestamp `ts` that has not been acknowledged, no read can have a timestamp greater than or equal
+2. If data with a timestamp `ts` has not been acknowledged, then no read can have a timestamp greater than or equal
    to `ts`.
 
-Proposal: The following proposal is loosely based off of [Google Percolator](https://research.google/pubs/pub36726/)
-transactions which are based off of Two Phase Commit.
+Property 1 prevents the following scenario: a client goes to an upstream source and sees that some data has been
+acknowledged by Materialize but then can't see that data in Materialize.
 
-1. STORAGE does not assign a timestamp to ingested data until it is read to acknowledge the data (data that doesn't
-   require acknowledgements can still be timestamped by STORAGE).
-2. When STORAGE is ready to acknowledge some data it sends an `ACK` request to the Coordinator.
-3. The Coordinator will add the `ACK` request to the queue of writes as described
-   in [Group Commit/Write Coalesce](#Group Commit/Write Coalesce).
-4. The Coordinator includes an `ACK` response with a timestamp for the ingested data with the pending writes to STORAGE.
-5. Once STORAGE responds that all writes have been made durable AND upstream data has been acknowledged then the
-   Coordinator can increase the global timestamp.
+Property 2 prevents the following scenario: a client sees some data in Materialize, but doesn't see that it's been
+acknowledged by an upstream source.
 
----
+This guarantee is actually too strong for our needs and has very negative availability ramifications. Once an
+acknowledgement has been sent by Materialize, then no reads can be serviced until the upstream source has confirmed that
+it has received our acknowledgement. Before the confirmation, Materialize has no way of knowing if the acknowledgement
+has been received, and any timestamp selected for a read will be susceptible to one of the negative scenarios described
+above. This means is that if any upstream source is unresponsive to an acknowledgement, then all reads will be halted
+until that source is responsive again.
+
+We actually care more about property 1 than property 2, because property 1 allows us to provide guarantees like the
+following: A client is using synchronous replication with an upstream source. When their transaction commits in the
+upstream source, they are guaranteed to also be able to see the transaction in Materialize. However, they may actually
+see the transaction in Materialize before their transaction commits in the upstream source. This is still a powerful and
+useful guarantee to provide. Therefore, we should remove the second bullet point from correctness property 1 and instead
+add the following correctness property:
+> Any write from an upstream source that has been acknowledged by Materialize will be visible in all future queries.
 
 Proposal: When STORAGE wants to acknowledge some data that has a timestamp `ts`, it must wait until it knows that the
 global timestamp is larger than or equal to `ts`. STORAGE can discover this by one of the following ways (NOTE: these
-aren't separate proposals, they will all work together):
+aren't separate proposals, they can all work together):
 
-- STORAGE will send an `ACK` request to the Coordinator timestamped with `ts`. The Coordinator will wait for the
-  global timestamp to advance to `ts` and then send a response back to STORAGE indicating that it's OK to send the
+- STORAGE will send an `ACK` request to the Coordinator timestamped with `ts`. The Coordinator will wait for the global
+  timestamp to advance to `ts` and then send a response back to STORAGE indicating that it's OK to send the
   acknowledgement.
 - If STORAGE receives a read with a timestamp larger than or equal to `ts`, then it knows that the global timestamp must
   have advanced to `ts` or greater, and it's safe to send the acknowledgement.
-- If STORAGE receives an updated Read Capability for the global timestamp (
-  see [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp)) larger than or equal to `ts`,
-  then it knows that the global timestamp must have advanced to `ts` or greater, and it's safe to send the
-  acknowledgement.
+- If STORAGE receives an updated Read Capability for the global timestamp (see
+  [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp)) larger than or equal to `ts`, then it
+  knows that the global timestamp must have advanced to `ts` or greater, and it's safe to send the acknowledgement.
 
 NOTE: There are some race conditions here such as:
 
-1. STORAGE sends an ACK request for `ts`.
+1. STORAGE sends an ACK request for `ts` to the Coordinator.
 2. STORAGE receives a read at `ts`.
-3. STORAGE sends the ACK for `ts`.
-4. STORAGES receives ACK OK response.
+3. STORAGE sends the ACK for `ts` to an upstream source.
+4. STORAGES receives ACK OK response from the Coordinator.
 
-This is fine and STORAGE should just ignore the ACK OK response.
+This is fine and STORAGE can just ignore the ACK OK response.
 
 ## Alternatives
 
@@ -217,22 +220,6 @@ This is fine and STORAGE should just ignore the ACK OK response.
   clock tick. This way no object's `upper` would have to advance past the current global timestamp if the global
   timestamp tracked the wall clock. CockroachDB uses similar timestamps
   here: https://github.com/cockroachdb/cockroach/blob/711ccb5b8fba4e6a826ed6ba46c0fc346233a0f7/pkg/sql/sem/builtins/builtins.go#L8548-L8560
-- Instead of STORAGE nodes requesting timestamps every time it needs to acknowledge data, the Coordinator can send every
-  global timestamp to STORAGE. The Coordinator would wait for STORAGE to acknowledge the new timestamp before
-  incrementing it. This would work well in combination with HLTs.
-- Instead of STORAGE nodes requesting timestamps every time it needs to acknowledge data, the Coordinator would wait to
-  increase the global timestamp until it is certain that STORAGE has acknowledged all data at or below the new
-  timestamp. This would require some form of communication between the Coordinator and STORAGE for every global
-  timestamp increase.
-- The current architecture has every node responsible for generating their own timestamps. This makes timestamps
-  incomparable across nodes, which makes it more difficult to order events across nodes. Instead, if we alter how we
-  generate timestamps so that all timestamps are comparable, this would become easier. Some potential options are:
-    - Timestamp Oracle (TSO) like [Google Percolator](https://research.google/pubs/pub36726/)
-      , [TiDB](https://tikv.org/deep-dive/distributed-transaction/timestamp-oracle/),
-      and [Apache Fluo](https://fluo.apache.org//docs/fluo/1.2/getting-started/design).
-    - Logical Vector Clocks
-    - Hybrid Logical Clocks like [CockroachDB](https://fluo.apache.org//docs/fluo/1.2/getting-started/design)
-      and [YugabtyeDB](https://fluo.apache.org//docs/fluo/1.2/getting-started/design)
 
 ## Open Questions
 
