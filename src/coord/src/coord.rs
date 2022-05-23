@@ -2951,7 +2951,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 ..
             } = txn
             {
-                if self.strict_serializability {
+                // if self.strict_serializability {
+                if true {
                     self.pending_writes.push((tx, session));
                     return;
                 }
