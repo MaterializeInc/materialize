@@ -36,39 +36,32 @@ a b
 
 # Verify that SELECTs on introspection tables work.
 
-query I
+statement ok
 SELECT * FROM mz_materializations
-----
 
 # Verify that we are always hitting the same replica.
 # We check that the number of peeks in mz_peek_durations (which is a
 # replica-specific introspection source) increases by one with every query.
 # We sleep between checks to give dataflow logging time to catch up.
 
-query I
+statement ok
 SELECT mz_internal.mz_sleep(0.1)
-----
-NULL
 
 query I
 SELECT sum(count) FROM mz_peek_durations
 ----
 2
 
-query I
+statement ok
 SELECT mz_internal.mz_sleep(0.1)
-----
-NULL
 
 query I
 SELECT sum(count) FROM mz_peek_durations
 ----
 3
 
-query I
+statement ok
 SELECT mz_internal.mz_sleep(0.1)
-----
-NULL
 
 query I
 SELECT sum(count) FROM mz_peek_durations
@@ -93,7 +86,35 @@ SET cluster_replica = unknown
 query error cluster replica 'test.unknown' does not exist
 SELECT * FROM test
 
+# Verify that untargeted introspection queries are disallowd.
+
+statement ok
+SET cluster_replica = ''
+
+query error log source reads must target a replica
+SELECT * FROM mz_materializations
+
+statement ok
+CREATE MATERIALIZED VIEW introspection_view AS SELECT * FROM mz_materializations
+
+query error log source reads must target a replica
+SELECT * FROM introspection_view
+
+# Verify that introspection queries on unreplicated clusters are allowed.
+
+statement ok
+DROP CLUSTER REPLICA test.replica_b;
+
+statement ok
+SELECT * FROM mz_materializations
+
+statement ok
+SELECT * FROM introspection_view
+
 # Clean up.
+
+statement ok
+DROP VIEW introspection_view
 
 statement ok
 DROP CLUSTER test
