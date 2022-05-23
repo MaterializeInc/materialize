@@ -1125,10 +1125,18 @@ pub mod sources {
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
         use anyhow::Context;
+        use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
         use serde::{Deserialize, Serialize};
 
         use mz_interchange::{avro, protobuf};
+        use mz_repr::adt::regex::any_regex;
+        use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
         use mz_repr::{ColumnType, RelationDesc, ScalarType};
+
+        include!(concat!(
+            env!("OUT_DIR"),
+            "/mz_dataflow_types.types.sources.encoding.rs"
+        ));
 
         /// A description of how to interpret data from various sources
         ///
@@ -1344,6 +1352,31 @@ pub mod sources {
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct RegexEncoding {
             pub regex: mz_repr::adt::regex::Regex,
+        }
+
+        impl Arbitrary for RegexEncoding {
+            type Strategy = BoxedStrategy<Self>;
+            type Parameters = ();
+
+            fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+                any_regex()
+                    .prop_map(|regex| RegexEncoding { regex })
+                    .boxed()
+            }
+        }
+
+        impl RustType<ProtoRegexEncoding> for RegexEncoding {
+            fn into_proto(self: &Self) -> ProtoRegexEncoding {
+                ProtoRegexEncoding {
+                    regex: Some(self.regex.into_proto()),
+                }
+            }
+
+            fn from_proto(proto: ProtoRegexEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(RegexEncoding {
+                    regex: proto.regex.into_rust_if_some("ProtoRegexEncoding::regex")?,
+                })
+            }
         }
     }
 

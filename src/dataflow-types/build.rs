@@ -15,6 +15,7 @@ fn main() {
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_persist.gen.persist", "::mz_persist::gen::persist")
+        .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
         .extern_path(".mz_repr.proto", "::mz_repr::proto")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
@@ -32,6 +33,7 @@ fn main() {
                 "dataflow-types/src/postgres_source.proto",
                 "dataflow-types/src/types/aws.proto",
                 "dataflow-types/src/types/sources.proto",
+                "dataflow-types/src/types/sources/encoding.proto",
                 "dataflow-types/src/plan.proto",
                 "dataflow-types/src/plan/join.proto",
                 "dataflow-types/src/plan/reduce.proto",
