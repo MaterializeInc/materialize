@@ -111,9 +111,11 @@ Write read cycles (write followed by read followed by write followed by read etc
 global timestamp to increase in an unbounded fashion.
 
 Proposal: All writes across all sessions should be blocked and added to a queue. At the end of X millisecond all pending
-writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits are all assigned a
-timestamp 1 larger than the current global timestamp. Once all commits have been made durable or aborted then the global
-timestamp should be increased to timestamp of the commit. No reads should be served while the writes are committing.
+writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits are all assigned the
+current global write timestamp. No reads should be served while the writes are committing.
+
+NOTE: The `TimestampOracle` provides us the property that the global write timestamp will be higher than all previous
+reads.
 
 This approach limits the per session write throughput to 1 write transaction per X milliseconds for user tables.
 
@@ -176,8 +178,9 @@ aren't separate proposals, they can all work together):
 - STORAGE will send an `ACK` request to the Coordinator timestamped with `ts`. The Coordinator will wait for the global
   timestamp to advance to `ts` and then send a response back to STORAGE indicating that it's OK to send the
   acknowledgement.
-- If STORAGE receives a read with a timestamp larger than or equal to `ts`, then it knows that the global timestamp must
-  have advanced to `ts` or greater, and it's safe to send the acknowledgement.
+- If STORAGE receives a read that doesn't use `AS OF`, is in the same timeline as the data being acknowledged, and has a
+  timestamp larger than or equal to `ts`, then it knows that the global timestamp must have advanced to `ts` or greater,
+  and it's safe to send the acknowledgement.
 - If STORAGE receives an updated Read Capability for the global timestamp (see
   [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp)) larger than or equal to `ts`, then it
   knows that the global timestamp must have advanced to `ts` or greater, and it's safe to send the acknowledgement.
