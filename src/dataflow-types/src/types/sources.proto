@@ -42,6 +42,14 @@ message ProtoKeyEnvelope {
     }
 }
 
+message ProtoTimeline {
+    oneof kind {
+        google.protobuf.Empty epoch_milliseconds = 1;
+        string external = 2;
+        string user = 3;
+    }
+}
+
 message ProtoSourceEnvelope {
     oneof kind {
         ProtoKeyEnvelope none = 1;

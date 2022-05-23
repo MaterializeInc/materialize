@@ -1729,7 +1729,9 @@ pub mod sources {
     /// Some variants here have attached data used to differentiate incomparable
     /// instantiations. These attached data types should be expanded in the future
     /// if we need to tell apart more kinds of sources.
-    #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+    #[derive(
+        Arbitrary, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash,
+    )]
     pub enum Timeline {
         /// EpochMilliseconds means the timestamp is the number of milliseconds since
         /// the Unix epoch.
@@ -1742,6 +1744,31 @@ pub mod sources {
         /// String is specified by the user, allowing them to decide sources that are
         /// joinable.
         User(String),
+    }
+
+    impl RustType<ProtoTimeline> for Timeline {
+        fn into_proto(self: &Self) -> ProtoTimeline {
+            use proto_timeline::Kind;
+            ProtoTimeline {
+                kind: Some(match self {
+                    Timeline::EpochMilliseconds => Kind::EpochMilliseconds(()),
+                    Timeline::External(s) => Kind::External(s.clone()),
+                    Timeline::User(s) => Kind::User(s.clone()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoTimeline) -> Result<Self, TryFromProtoError> {
+            use proto_timeline::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeline::kind"))?;
+            Ok(match kind {
+                Kind::EpochMilliseconds(()) => Timeline::EpochMilliseconds,
+                Kind::External(s) => Timeline::External(s),
+                Kind::User(s) => Timeline::User(s),
+            })
+        }
     }
 
     /// `SourceEnvelope`s, describe how to turn a stream of messages from `SourceConnector`s,
