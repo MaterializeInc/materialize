@@ -25,7 +25,9 @@ use timely::progress::frontier::Antichain;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_repr::proto::any_uuid;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::newapi::{
+    IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError,
+};
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
@@ -33,6 +35,8 @@ use crate::types::aws::AwsExternalIdPrefix;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 use crate::Plan;
+
+use proto_dataflow_description::*;
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.rs"));
 
@@ -1000,43 +1004,12 @@ impl RustType<ProtoDataflowDescription>
     for DataflowDescription<crate::plan::Plan, CollectionMetadata>
 {
     fn into_proto(&self) -> ProtoDataflowDescription {
-        use proto_dataflow_description::*;
         ProtoDataflowDescription {
-            source_imports: self
-                .source_imports
-                .iter()
-                .map(|(id, source_instance_desc)| ProtoSourceImport {
-                    id: Some(id.into_proto()),
-                    source_instance_desc: Some(source_instance_desc.into_proto()),
-                })
-                .collect(),
-            index_imports: self
-                .index_imports
-                .iter()
-                .map(|(id, (index_desc, typ))| ProtoIndex {
-                    id: Some(id.into_proto()),
-                    index_desc: Some(index_desc.into_proto()),
-                    typ: Some(typ.into_proto()),
-                })
-                .collect(),
+            source_imports: self.source_imports.into_proto(),
+            index_imports: self.index_imports.into_proto(),
             objects_to_build: self.objects_to_build.into_proto(),
-            index_exports: self
-                .index_exports
-                .iter()
-                .map(|(id, (index_desc, typ))| ProtoIndex {
-                    id: Some(id.into_proto()),
-                    index_desc: Some(index_desc.into_proto()),
-                    typ: Some(typ.into_proto()),
-                })
-                .collect(),
-            sink_exports: self
-                .sink_exports
-                .iter()
-                .map(|(id, sink_desc)| ProtoSinkExport {
-                    id: Some(id.into_proto()),
-                    sink_desc: serde_json::to_string(sink_desc).unwrap(),
-                })
-                .collect(),
+            index_exports: self.index_exports.into_proto(),
+            sink_exports: self.sink_exports.into_proto(),
             as_of: self.as_of.as_ref().map(Into::into),
             debug_name: self.debug_name.clone(),
             id: Some(self.id.into_proto()),
@@ -1045,63 +1018,73 @@ impl RustType<ProtoDataflowDescription>
 
     fn from_proto(proto: ProtoDataflowDescription) -> Result<Self, TryFromProtoError> {
         Ok(DataflowDescription {
-            source_imports: proto
-                .source_imports
-                .into_iter()
-                .map(|inner| {
-                    Ok((
-                        inner.id.into_rust_if_some("ProtoSourceImport::id")?,
-                        inner
-                            .source_instance_desc
-                            .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
-                    ))
-                })
-                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
-            index_imports: proto
-                .index_imports
-                .into_iter()
-                .map(|inner| {
-                    Ok((
-                        inner.id.into_rust_if_some("ProtoIndex::id")?,
-                        (
-                            inner
-                                .index_desc
-                                .into_rust_if_some("ProtoIndex::index_desc")?,
-                            inner.typ.into_rust_if_some("ProtoIndex::typ")?,
-                        ),
-                    ))
-                })
-                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
+            source_imports: proto.source_imports.into_rust()?,
+            index_imports: proto.index_imports.into_rust()?,
             objects_to_build: proto.objects_to_build.into_rust()?,
-            index_exports: proto
-                .index_exports
-                .into_iter()
-                .map(|inner| {
-                    Ok((
-                        inner.id.into_rust_if_some("ProtoIndex::id")?,
-                        (
-                            inner
-                                .index_desc
-                                .into_rust_if_some("ProtoIndex::index_desc")?,
-                            inner.typ.into_rust_if_some("ProtoIndex::typ")?,
-                        ),
-                    ))
-                })
-                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
-            sink_exports: proto
-                .sink_exports
-                .into_iter()
-                .map(|inner| {
-                    Ok((
-                        inner.id.into_rust_if_some("ProtoSinkExport::id")?,
-                        serde_json::from_str(&inner.sink_desc).map_err(TryFromProtoError::from)?,
-                    ))
-                })
-                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
+            index_exports: proto.index_exports.into_rust()?,
+            sink_exports: proto.sink_exports.into_rust()?,
             as_of: proto.as_of.map(Into::into),
             debug_name: proto.debug_name,
             id: proto.id.into_rust_if_some("ProtoDataflowDescription::id")?,
         })
+    }
+}
+
+impl ProtoMapEntry<GlobalId, SourceInstanceDesc<CollectionMetadata>> for ProtoSourceImport {
+    fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceInstanceDesc<CollectionMetadata>)) -> Self {
+        ProtoSourceImport {
+            id: Some(entry.0.into_proto()),
+            source_instance_desc: Some(entry.1.into_proto()),
+        }
+    }
+
+    fn into_rust(
+        self,
+    ) -> Result<(GlobalId, SourceInstanceDesc<CollectionMetadata>), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoSourceImport::id")?,
+            self.source_instance_desc
+                .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
+        ))
+    }
+}
+
+impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndex {
+    fn from_rust<'a>(
+        (id, (index_desc, typ)): (&'a GlobalId, &'a (IndexDesc, RelationType)),
+    ) -> Self {
+        ProtoIndex {
+            id: Some(id.into_proto()),
+            index_desc: Some(index_desc.into_proto()),
+            typ: Some(typ.into_proto()),
+        }
+    }
+
+    fn into_rust(self) -> Result<(GlobalId, (IndexDesc, RelationType)), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoIndex::id")?,
+            (
+                self.index_desc
+                    .into_rust_if_some("ProtoIndex::index_desc")?,
+                self.typ.into_rust_if_some("ProtoIndex::typ")?,
+            ),
+        ))
+    }
+}
+
+impl ProtoMapEntry<GlobalId, SinkDesc> for ProtoSinkExport {
+    fn from_rust<'a>((id, sink_desc): (&'a GlobalId, &'a SinkDesc)) -> Self {
+        ProtoSinkExport {
+            id: Some(id.into_proto()),
+            sink_desc: serde_json::to_string(sink_desc).unwrap(),
+        }
+    }
+
+    fn into_rust(self) -> Result<(GlobalId, SinkDesc), TryFromProtoError> {
+        Ok((
+            self.id.into_rust_if_some("ProtoSinkExport::id")?,
+            serde_json::from_str(&self.sink_desc).map_err(TryFromProtoError::from)?,
+        ))
     }
 }
 
