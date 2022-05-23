@@ -113,7 +113,7 @@ global timestamp to increase in an unbounded fashion.
 Proposal: All writes across all sessions should be blocked and added to a queue. At the end of X millisecond all pending
 writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits are all assigned a
 timestamp 1 larger than the current global timestamp. Once all commits have been made durable or aborted then the global
-timestamp should be increased to timestamp of the commit.
+timestamp should be increased to timestamp of the commit. No reads should be served while the writes are committing.
 
 This approach limits the per session write throughput to 1 write transaction per X milliseconds for user tables.
 
@@ -152,7 +152,7 @@ Property 1 prevents the following scenario: a client goes to an upstream source 
 acknowledged by Materialize but then can't see that data in Materialize.
 
 Property 2 prevents the following scenario: a client sees some data in Materialize, but doesn't see that it's been
-acknowledged by an upstream source.
+acknowledged in an upstream source.
 
 This guarantee is actually too strong for our needs and has very negative availability ramifications. Once an
 acknowledgement has been sent by Materialize, then no reads can be serviced until the upstream source has confirmed that
@@ -161,12 +161,12 @@ has been received, and any timestamp selected for a read will be susceptible to 
 above. This means is that if any upstream source is unresponsive to an acknowledgement, then all reads will be halted
 until that source is responsive again.
 
-We actually care more about property 1 than property 2, because property 1 allows us to provide guarantees like the
-following: A client is using synchronous replication with an upstream source. When their transaction commits in the
-upstream source, they are guaranteed to also be able to see the transaction in Materialize. However, they may actually
-see the transaction in Materialize before their transaction commits in the upstream source. This is still a powerful and
-useful guarantee to provide. Therefore, we should remove the second bullet point from correctness property 1 and instead
-add the following correctness property:
+Property 1 alone is still a useful property, because property 1 allows us to provide guarantees like the following: A
+client is using synchronous replication with an upstream source. When their transaction commits in the upstream source,
+they are guaranteed to also be able to see the transaction in Materialize. However, they may actually see the
+transaction in Materialize before their transaction commits in the upstream source. This is still a powerful and useful
+guarantee to provide. Therefore, we should remove the second bullet point from the correctness property and instead add
+the following correctness property:
 > Any write from an upstream source that has been acknowledged by Materialize will be visible in all future queries.
 
 Proposal: When STORAGE wants to acknowledge some data that has a timestamp `ts`, it must wait until it knows that the
