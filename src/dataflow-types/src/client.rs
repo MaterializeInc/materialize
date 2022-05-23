@@ -88,7 +88,7 @@ impl From<&InstanceConfig> for ProtoInstanceConfig {
     fn from(x: &InstanceConfig) -> Self {
         ProtoInstanceConfig {
             replica_id: x.replica_id,
-            logging: x.logging.as_ref().map(Into::into),
+            logging: x.logging.into_proto(),
         }
     }
 }
@@ -99,7 +99,7 @@ impl TryFrom<ProtoInstanceConfig> for InstanceConfig {
     fn try_from(x: ProtoInstanceConfig) -> Result<Self, Self::Error> {
         Ok(Self {
             replica_id: x.replica_id,
-            logging: x.logging.map(TryInto::try_into).transpose()?,
+            logging: x.logging.into_rust()?,
         })
     }
 }

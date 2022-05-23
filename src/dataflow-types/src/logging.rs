@@ -9,11 +9,11 @@
 
 use std::collections::HashMap;
 
-use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::{FromProtoIfSome, ProtoRepr, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.logging.rs"));
@@ -34,50 +34,38 @@ impl LoggingConfig {
     }
 }
 
-impl From<&LoggingConfig> for ProtoLoggingConfig {
-    fn from(x: &LoggingConfig) -> Self {
+impl RustType<ProtoLoggingConfig> for LoggingConfig {
+    fn into_proto(&self) -> ProtoLoggingConfig {
         ProtoLoggingConfig {
-            granularity_ns: Some(x.granularity_ns.into_proto()),
-            active_logs: x.active_logs.iter().map(Into::into).collect(),
-            log_logging: x.log_logging,
+            granularity_ns: Some(self.granularity_ns.into_proto()),
+            active_logs: self.active_logs.into_proto(),
+            log_logging: self.log_logging,
         }
     }
-}
 
-impl TryFrom<ProtoLoggingConfig> for LoggingConfig {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoLoggingConfig) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoLoggingConfig) -> Result<Self, TryFromProtoError> {
         Ok(LoggingConfig {
-            granularity_ns: x
+            granularity_ns: proto
                 .granularity_ns
                 .from_proto_if_some("ProtoLoggingConfig::granularity_ns")?,
-            active_logs: x
-                .active_logs
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<HashMap<_, _>, _>>()?,
-            log_logging: x.log_logging,
+            active_logs: proto.active_logs.into_rust()?,
+            log_logging: proto.log_logging,
         })
     }
 }
 
-impl From<(&LogVariant, &GlobalId)> for ProtoActiveLog {
-    fn from(x: (&LogVariant, &GlobalId)) -> Self {
+impl ProtoMapEntry<LogVariant, GlobalId> for ProtoActiveLog {
+    fn from_rust<'a>(entry: (&'a LogVariant, &'a GlobalId)) -> Self {
         ProtoActiveLog {
-            key: Some(x.0.into()),
-            value: Some(x.1.into_proto()),
+            key: Some(entry.0.into_proto()),
+            value: Some(entry.1.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoActiveLog> for (LogVariant, GlobalId) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoActiveLog) -> Result<Self, Self::Error> {
+    fn into_rust(self) -> Result<(LogVariant, GlobalId), TryFromProtoError> {
         Ok((
-            x.key.try_into_if_some("ProtoActiveLog::key")?,
-            x.value.into_rust_if_some("ProtoActiveLog::value")?,
+            self.key.into_rust_if_some("ProtoActiveLog::key")?,
+            self.value.into_rust_if_some("ProtoActiveLog::value")?,
         ))
     }
 }
@@ -89,36 +77,24 @@ pub enum LogVariant {
     Materialized(MaterializedLog),
 }
 
-impl From<&LogVariant> for ProtoLogVariant {
-    fn from(x: &LogVariant) -> Self {
+impl RustType<ProtoLogVariant> for LogVariant {
+    fn into_proto(&self) -> ProtoLogVariant {
+        use proto_log_variant::Kind::*;
         ProtoLogVariant {
-            kind: Some(match x {
-                LogVariant::Timely(timely) => proto_log_variant::Kind::Timely(timely.into()),
-                LogVariant::Differential(differential) => {
-                    proto_log_variant::Kind::Differential(differential.into())
-                }
-                LogVariant::Materialized(materialize) => {
-                    proto_log_variant::Kind::Materialized(materialize.into())
-                }
+            kind: Some(match self {
+                LogVariant::Timely(x) => Timely(x.into_proto()),
+                LogVariant::Differential(x) => Differential(x.into_proto()),
+                LogVariant::Materialized(x) => Materialized(x.into_proto()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoLogVariant> for LogVariant {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoLogVariant) -> Result<Self, Self::Error> {
-        match x.kind {
-            Some(proto_log_variant::Kind::Timely(timely)) => {
-                Ok(LogVariant::Timely(timely.try_into()?))
-            }
-            Some(proto_log_variant::Kind::Differential(differential)) => {
-                Ok(LogVariant::Differential(differential.try_into()?))
-            }
-            Some(proto_log_variant::Kind::Materialized(materialized)) => {
-                Ok(LogVariant::Materialized(materialized.try_into()?))
-            }
+    fn from_proto(proto: ProtoLogVariant) -> Result<Self, TryFromProtoError> {
+        use proto_log_variant::Kind::*;
+        match proto.kind {
+            Some(Timely(x)) => Ok(LogVariant::Timely(x.into_rust()?)),
+            Some(Differential(x)) => Ok(LogVariant::Differential(x.into_rust()?)),
+            Some(Materialized(x)) => Ok(LogVariant::Materialized(x.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoLogVariant::kind")),
         }
     }
@@ -137,11 +113,11 @@ pub enum TimelyLog {
     Reachability,
 }
 
-impl From<&TimelyLog> for ProtoTimelyLog {
-    fn from(x: &TimelyLog) -> Self {
+impl RustType<ProtoTimelyLog> for TimelyLog {
+    fn into_proto(&self) -> ProtoTimelyLog {
         use proto_timely_log::Kind::*;
         ProtoTimelyLog {
-            kind: Some(match x {
+            kind: Some(match self {
                 TimelyLog::Operates => Operates(()),
                 TimelyLog::Channels => Channels(()),
                 TimelyLog::Elapsed => Elapsed(()),
@@ -154,14 +130,10 @@ impl From<&TimelyLog> for ProtoTimelyLog {
             }),
         }
     }
-}
 
-impl TryFrom<ProtoTimelyLog> for TimelyLog {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoTimelyLog) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoTimelyLog) -> Result<Self, TryFromProtoError> {
         use proto_timely_log::Kind::*;
-        match x.kind {
+        match proto.kind {
             Some(Operates(())) => Ok(TimelyLog::Operates),
             Some(Channels(())) => Ok(TimelyLog::Channels),
             Some(Elapsed(())) => Ok(TimelyLog::Elapsed),
@@ -183,25 +155,21 @@ pub enum DifferentialLog {
     Sharing,
 }
 
-impl From<&DifferentialLog> for ProtoDifferentialLog {
-    fn from(x: &DifferentialLog) -> Self {
+impl RustType<ProtoDifferentialLog> for DifferentialLog {
+    fn into_proto(&self) -> ProtoDifferentialLog {
         use proto_differential_log::Kind::*;
         ProtoDifferentialLog {
-            kind: Some(match x {
+            kind: Some(match self {
                 DifferentialLog::ArrangementBatches => ArrangementBatches(()),
                 DifferentialLog::ArrangementRecords => ArrangementRecords(()),
                 DifferentialLog::Sharing => Sharing(()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoDifferentialLog> for DifferentialLog {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoDifferentialLog) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoDifferentialLog) -> Result<Self, TryFromProtoError> {
         use proto_differential_log::Kind::*;
-        match x.kind {
+        match proto.kind {
             Some(ArrangementBatches(())) => Ok(DifferentialLog::ArrangementBatches),
             Some(ArrangementRecords(())) => Ok(DifferentialLog::ArrangementRecords),
             Some(Sharing(())) => Ok(DifferentialLog::Sharing),
@@ -221,11 +189,11 @@ pub enum MaterializedLog {
     PeekDuration,
 }
 
-impl From<&MaterializedLog> for ProtoMaterializedLog {
-    fn from(x: &MaterializedLog) -> Self {
+impl RustType<ProtoMaterializedLog> for MaterializedLog {
+    fn into_proto(&self) -> ProtoMaterializedLog {
         use proto_materialized_log::Kind::*;
         ProtoMaterializedLog {
-            kind: Some(match x {
+            kind: Some(match self {
                 MaterializedLog::DataflowCurrent => DataflowCurrent(()),
                 MaterializedLog::DataflowDependency => DataflowDependency(()),
                 MaterializedLog::FrontierCurrent => FrontierCurrent(()),
@@ -234,14 +202,10 @@ impl From<&MaterializedLog> for ProtoMaterializedLog {
             }),
         }
     }
-}
 
-impl TryFrom<ProtoMaterializedLog> for MaterializedLog {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMaterializedLog) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoMaterializedLog) -> Result<Self, TryFromProtoError> {
         use proto_materialized_log::Kind::*;
-        match x.kind {
+        match proto.kind {
             Some(DataflowCurrent(())) => Ok(MaterializedLog::DataflowCurrent),
             Some(DataflowDependency(())) => Ok(MaterializedLog::DataflowDependency),
             Some(FrontierCurrent(())) => Ok(MaterializedLog::FrontierCurrent),
@@ -425,7 +389,7 @@ impl LogVariant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {
