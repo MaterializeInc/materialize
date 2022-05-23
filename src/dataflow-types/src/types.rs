@@ -1316,10 +1316,26 @@ pub mod sources {
         }
 
         /// Arguments necessary to define how to decode from CSV format
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct CsvEncoding {
             pub columns: ColumnSpec,
             pub delimiter: u8,
+        }
+
+        impl RustType<ProtoCsvEncoding> for CsvEncoding {
+            fn into_proto(self: &Self) -> ProtoCsvEncoding {
+                ProtoCsvEncoding {
+                    columns: Some(self.columns.into_proto()),
+                    delimiter: self.delimiter.into_proto(),
+                }
+            }
+
+            fn from_proto(proto: ProtoCsvEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(CsvEncoding {
+                    columns: proto.columns.into_rust_if_some("ProtoCsvEncoding::columns")?,
+                    delimiter: proto.delimiter.into_rust()?,
+                })
+            }
         }
 
         /// Determines the RelationDesc and decoding of CSV objects

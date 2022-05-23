@@ -13,6 +13,11 @@ import "repr/src/adt/regex.proto";
 
 package mz_dataflow_types.types.sources.encoding;
 
+message ProtoCsvEncoding {
+    ProtoColumnSpec columns = 1;
+    uint32 delimiter = 2;
+}
+
 message ProtoColumnSpec {
     message ProtoHeader {
         repeated string names = 1;
