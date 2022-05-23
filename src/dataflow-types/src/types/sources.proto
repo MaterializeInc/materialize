@@ -29,6 +29,17 @@ message ProtoKeyEnvelope {
     }
 }
 
+message ProtoUpsertStyle {
+    message ProtoDebezium {
+        uint64 after_idx = 1;
+    }
+
+    oneof kind {
+        ProtoKeyEnvelope default = 1;
+        ProtoDebezium debezium = 2;
+    }
+}
+
 message ProtoIncludedColumnPos {
     string name = 1;
     uint64 pos = 2;

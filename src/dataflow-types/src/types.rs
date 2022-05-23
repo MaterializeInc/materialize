@@ -1767,13 +1767,40 @@ pub mod sources {
         pub key_indices: Vec<usize>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum UpsertStyle {
         /// `ENVELOPE UPSERT`, where the key shape depends on the independent
         /// `KeyEnvelope`
         Default(KeyEnvelope),
         /// `ENVELOPE DEBEZIUM UPSERT`
         Debezium { after_idx: usize },
+    }
+
+    impl RustType<ProtoUpsertStyle> for UpsertStyle {
+        fn into_proto(self: &Self) -> ProtoUpsertStyle {
+            use proto_upsert_style::{Kind, ProtoDebezium};
+            ProtoUpsertStyle {
+                kind: Some(match self {
+                    UpsertStyle::Default(e) => Kind::Default(e.into_proto()),
+                    UpsertStyle::Debezium { after_idx } => Kind::Debezium(ProtoDebezium {
+                        after_idx: after_idx.into_proto(),
+                    }),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoUpsertStyle) -> Result<Self, TryFromProtoError> {
+            use proto_upsert_style::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoUpsertStyle::kind"))?;
+            Ok(match kind {
+                Kind::Default(e) => UpsertStyle::Default(e.into_rust()?),
+                Kind::Debezium(d) => UpsertStyle::Debezium {
+                    after_idx: d.after_idx.into_rust()?,
+                },
+            })
+        }
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
