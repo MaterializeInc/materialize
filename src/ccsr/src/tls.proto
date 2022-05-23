@@ -15,3 +15,7 @@ message ProtoIdentity {
     bytes der = 1;
     string pass = 2;
 }
+
+message ProtoCertificate {
+    bytes der = 1;
+}
