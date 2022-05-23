@@ -58,12 +58,12 @@ impl PeekResponse {
     }
 }
 
-impl From<&PeekResponse> for ProtoPeekResponse {
-    fn from(x: &PeekResponse) -> Self {
+impl RustType<ProtoPeekResponse> for PeekResponse {
+    fn into_proto(&self) -> ProtoPeekResponse {
         use proto_peek_response::Kind::*;
         use proto_peek_response::*;
         ProtoPeekResponse {
-            kind: Some(match x {
+            kind: Some(match self {
                 PeekResponse::Rows(rows) => Rows(ProtoRows {
                     rows: rows
                         .iter()
@@ -78,14 +78,10 @@ impl From<&PeekResponse> for ProtoPeekResponse {
             }),
         }
     }
-}
 
-impl TryFrom<ProtoPeekResponse> for PeekResponse {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoPeekResponse) -> Result<Self, TryFromProtoError> {
         use proto_peek_response::Kind::*;
-        match x.kind {
+        match proto.kind {
             Some(Rows(rows)) => Ok(PeekResponse::Rows(
                 rows.rows
                     .into_iter()
@@ -134,25 +130,21 @@ pub enum TailResponse<T = mz_repr::Timestamp> {
     DroppedAt(Antichain<T>),
 }
 
-impl From<&TailResponse<mz_repr::Timestamp>> for ProtoTailResponse {
-    fn from(x: &TailResponse<mz_repr::Timestamp>) -> Self {
+impl RustType<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoTailResponse {
         use proto_tail_response::Kind::*;
         ProtoTailResponse {
-            kind: Some(match x {
-                TailResponse::Batch(tail_batch) => Batch(tail_batch.into()),
+            kind: Some(match self {
+                TailResponse::Batch(tail_batch) => Batch(tail_batch.into_proto()),
                 TailResponse::DroppedAt(antichain) => DroppedAt(antichain.into()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoTailResponse> for TailResponse<mz_repr::Timestamp> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoTailResponse) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoTailResponse) -> Result<Self, TryFromProtoError> {
         use proto_tail_response::Kind::*;
-        match x.kind {
-            Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.try_into()?)),
+        match proto.kind {
+            Some(Batch(tail_batch)) => Ok(TailResponse::Batch(tail_batch.into_rust()?)),
             Some(DroppedAt(antichain)) => Ok(TailResponse::DroppedAt(antichain.into())),
             None => Err(TryFromProtoError::missing_field("ProtoTailResponse::kind")),
         }
@@ -184,13 +176,13 @@ pub struct TailBatch<T> {
     pub updates: Vec<(T, Row, Diff)>,
 }
 
-impl From<&TailBatch<mz_repr::Timestamp>> for ProtoTailBatch {
-    fn from(x: &TailBatch<mz_repr::Timestamp>) -> Self {
+impl RustType<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoTailBatch {
         use proto_tail_batch::ProtoUpdate;
         ProtoTailBatch {
-            lower: Some((&x.lower).into()),
-            upper: Some((&x.upper).into()),
-            updates: x
+            lower: Some((&self.lower).into()),
+            upper: Some((&self.upper).into()),
+            updates: self
                 .updates
                 .iter()
                 .map(|(t, r, d)| ProtoUpdate {
@@ -201,22 +193,18 @@ impl From<&TailBatch<mz_repr::Timestamp>> for ProtoTailBatch {
                 .collect(),
         }
     }
-}
 
-impl TryFrom<ProtoTailBatch> for TailBatch<mz_repr::Timestamp> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoTailBatch) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoTailBatch) -> Result<Self, TryFromProtoError> {
         Ok(TailBatch {
-            lower: x
+            lower: proto
                 .lower
                 .map(Into::into)
                 .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::lower"))?,
-            upper: x
+            upper: proto
                 .upper
                 .map(Into::into)
                 .ok_or_else(|| TryFromProtoError::missing_field("ProtoTailUpdate::upper"))?,
-            updates: x
+            updates: proto
                 .updates
                 .into_iter()
                 .map(|update| {
@@ -271,19 +259,15 @@ pub struct BuildDesc<P> {
     pub plan: P,
 }
 
-impl From<&BuildDesc<crate::plan::Plan>> for ProtoBuildDesc {
-    fn from(x: &BuildDesc<crate::plan::Plan>) -> Self {
+impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
+    fn into_proto(&self) -> ProtoBuildDesc {
         ProtoBuildDesc {
-            id: Some(x.id.into_proto()),
-            plan: Some((&x.plan).into()),
+            id: Some(self.id.into_proto()),
+            plan: Some((&self.plan).into()),
         }
     }
-}
 
-impl TryFrom<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoBuildDesc) -> Result<Self, Self::Error> {
+    fn from_proto(x: ProtoBuildDesc) -> Result<Self, TryFromProtoError> {
         Ok(BuildDesc {
             id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
             plan: x.plan.try_into_if_some("ProtoBuildDesc::plan")?,
@@ -325,26 +309,23 @@ impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
     }
 }
 
-impl From<&SourceInstanceDesc<CollectionMetadata>> for ProtoSourceInstanceDesc {
-    fn from(x: &SourceInstanceDesc<CollectionMetadata>) -> Self {
+impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
+    fn into_proto(&self) -> ProtoSourceInstanceDesc {
         ProtoSourceInstanceDesc {
-            description: serde_json::to_string(&x.description).unwrap(),
-            arguments: Some((&x.arguments).into()),
-            storage_metadata: Some((&x.storage_metadata).into()),
+            description: serde_json::to_string(&self.description).unwrap(),
+            arguments: Some(self.arguments.into_proto()),
+            storage_metadata: Some((&self.storage_metadata).into()),
         }
     }
-}
 
-impl TryFrom<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoSourceInstanceDesc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoSourceInstanceDesc) -> Result<Self, TryFromProtoError> {
         Ok(SourceInstanceDesc {
-            description: serde_json::from_str(&x.description).map_err(TryFromProtoError::from)?,
-            arguments: x
+            description: serde_json::from_str(&proto.description)
+                .map_err(TryFromProtoError::from)?,
+            arguments: proto
                 .arguments
-                .try_into_if_some("ProtoSourceInstanceDesc::arguments")?,
-            storage_metadata: x
+                .into_rust_if_some("ProtoSourceInstanceDesc::arguments")?,
+            storage_metadata: proto
                 .storage_metadata
                 .try_into_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
         })
@@ -358,20 +339,16 @@ pub struct SourceInstanceArguments {
     pub operators: Option<crate::LinearOperator>,
 }
 
-impl From<&SourceInstanceArguments> for ProtoSourceInstanceArguments {
-    fn from(x: &SourceInstanceArguments) -> Self {
+impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {
+    fn into_proto(&self) -> ProtoSourceInstanceArguments {
         ProtoSourceInstanceArguments {
-            operators: x.operators.as_ref().map(Into::into),
+            operators: self.operators.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoSourceInstanceArguments> for SourceInstanceArguments {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoSourceInstanceArguments) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoSourceInstanceArguments) -> Result<Self, TryFromProtoError> {
         Ok(SourceInstanceArguments {
-            operators: x.operators.map(TryInto::try_into).transpose()?,
+            operators: proto.operators.into_rust()?,
         })
     }
 }
@@ -495,8 +472,8 @@ pub mod aws {
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
-    use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
     use mz_repr::GlobalId;
+    use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
@@ -521,19 +498,15 @@ pub mod aws {
         }
     }
 
-    impl From<&SerdeUri> for ProtoSerdeUri {
-        fn from(x: &SerdeUri) -> Self {
+    impl RustType<ProtoSerdeUri> for SerdeUri {
+        fn into_proto(&self) -> ProtoSerdeUri {
             ProtoSerdeUri {
-                uri: x.0.to_string(),
+                uri: self.0.to_string(),
             }
         }
-    }
 
-    impl TryFrom<ProtoSerdeUri> for SerdeUri {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoSerdeUri) -> Result<Self, Self::Error> {
-            Ok(SerdeUri(x.uri.parse()?))
+        fn from_proto(proto: ProtoSerdeUri) -> Result<Self, TryFromProtoError> {
+            Ok(SerdeUri(proto.uri.parse()?))
         }
     }
 
@@ -572,28 +545,24 @@ pub mod aws {
         pub endpoint: Option<SerdeUri>,
     }
 
-    impl From<&AwsConfig> for ProtoAwsConfig {
-        fn from(x: &AwsConfig) -> Self {
+    impl RustType<ProtoAwsConfig> for AwsConfig {
+        fn into_proto(&self) -> ProtoAwsConfig {
             ProtoAwsConfig {
-                credentials: Some((&x.credentials).into()),
-                region: x.region.clone(),
-                role: x.role.as_ref().map(Into::into),
-                endpoint: x.endpoint.as_ref().map(Into::into),
+                credentials: Some((&self.credentials).into_proto()),
+                region: self.region.clone(),
+                role: self.role.into_proto(),
+                endpoint: self.endpoint.into_proto(),
             }
         }
-    }
 
-    impl TryFrom<ProtoAwsConfig> for AwsConfig {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoAwsConfig) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoAwsConfig) -> Result<Self, TryFromProtoError> {
             Ok(AwsConfig {
-                credentials: x
+                credentials: proto
                     .credentials
-                    .try_into_if_some("ProtoAwsConfig::credentials")?,
-                region: x.region,
-                role: x.role.map(|c| c.try_into()).transpose()?,
-                endpoint: x.endpoint.map(|c| c.try_into()).transpose()?,
+                    .into_rust_if_some("ProtoAwsConfig::credentials")?,
+                region: proto.region,
+                role: proto.role.into_rust()?,
+                endpoint: proto.endpoint.into_rust()?,
             })
         }
     }
@@ -615,11 +584,11 @@ pub mod aws {
         },
     }
 
-    impl From<&AwsCredentials> for ProtoAwsCredentials {
-        fn from(x: &AwsCredentials) -> Self {
+    impl RustType<ProtoAwsCredentials> for AwsCredentials {
+        fn into_proto(&self) -> ProtoAwsCredentials {
             use proto_aws_credentials::{Kind, ProtoStatic};
             ProtoAwsCredentials {
-                kind: Some(match x {
+                kind: Some(match self {
                     AwsCredentials::Default => Kind::Default(()),
                     AwsCredentials::Profile { profile_name } => Kind::Profile(profile_name.clone()),
                     AwsCredentials::Static {
@@ -634,14 +603,10 @@ pub mod aws {
                 }),
             }
         }
-    }
 
-    impl TryFrom<ProtoAwsCredentials> for AwsCredentials {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoAwsCredentials) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoAwsCredentials) -> Result<Self, TryFromProtoError> {
             use proto_aws_credentials::{Kind, ProtoStatic};
-            let kind = x
+            let kind = proto
                 .kind
                 .ok_or_else(|| TryFromProtoError::missing_field("ProtoAwsCredentials::kind"))?;
             Ok(match kind {
@@ -667,17 +632,15 @@ pub mod aws {
         pub arn: String,
     }
 
-    impl From<&AwsAssumeRole> for ProtoAwsAssumeRole {
-        fn from(x: &AwsAssumeRole) -> Self {
-            ProtoAwsAssumeRole { arn: x.arn.clone() }
+    impl RustType<ProtoAwsAssumeRole> for AwsAssumeRole {
+        fn into_proto(&self) -> ProtoAwsAssumeRole {
+            ProtoAwsAssumeRole {
+                arn: self.arn.clone(),
+            }
         }
-    }
 
-    impl TryFrom<ProtoAwsAssumeRole> for AwsAssumeRole {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoAwsAssumeRole) -> Result<Self, Self::Error> {
-            Ok(AwsAssumeRole { arn: x.arn })
+        fn from_proto(proto: ProtoAwsAssumeRole) -> Result<Self, TryFromProtoError> {
+            Ok(AwsAssumeRole { arn: proto.arn })
         }
     }
 
@@ -1033,40 +996,40 @@ impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P,
     }
 }
 
-impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
-    for ProtoDataflowDescription
+impl RustType<ProtoDataflowDescription>
+    for DataflowDescription<crate::plan::Plan, CollectionMetadata>
 {
-    fn from(x: &DataflowDescription<crate::plan::Plan, CollectionMetadata>) -> Self {
+    fn into_proto(&self) -> ProtoDataflowDescription {
         use proto_dataflow_description::*;
         ProtoDataflowDescription {
-            source_imports: x
+            source_imports: self
                 .source_imports
                 .iter()
                 .map(|(id, source_instance_desc)| ProtoSourceImport {
                     id: Some(id.into_proto()),
-                    source_instance_desc: Some(source_instance_desc.into()),
+                    source_instance_desc: Some(source_instance_desc.into_proto()),
                 })
                 .collect(),
-            index_imports: x
+            index_imports: self
                 .index_imports
                 .iter()
                 .map(|(id, (index_desc, typ))| ProtoIndex {
                     id: Some(id.into_proto()),
-                    index_desc: Some(index_desc.into()),
+                    index_desc: Some(index_desc.into_proto()),
                     typ: Some(typ.into_proto()),
                 })
                 .collect(),
-            objects_to_build: x.objects_to_build.iter().map(Into::into).collect(),
-            index_exports: x
+            objects_to_build: self.objects_to_build.into_proto(),
+            index_exports: self
                 .index_exports
                 .iter()
                 .map(|(id, (index_desc, typ))| ProtoIndex {
                     id: Some(id.into_proto()),
-                    index_desc: Some(index_desc.into()),
+                    index_desc: Some(index_desc.into_proto()),
                     typ: Some(typ.into_proto()),
                 })
                 .collect(),
-            sink_exports: x
+            sink_exports: self
                 .sink_exports
                 .iter()
                 .map(|(id, sink_desc)| ProtoSinkExport {
@@ -1074,21 +1037,15 @@ impl From<&DataflowDescription<crate::plan::Plan, CollectionMetadata>>
                     sink_desc: serde_json::to_string(sink_desc).unwrap(),
                 })
                 .collect(),
-            as_of: x.as_of.as_ref().map(Into::into),
-            debug_name: x.debug_name.clone(),
-            id: Some(x.id.into_proto()),
+            as_of: self.as_of.as_ref().map(Into::into),
+            debug_name: self.debug_name.clone(),
+            id: Some(self.id.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoDataflowDescription>
-    for DataflowDescription<crate::plan::Plan, CollectionMetadata>
-{
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoDataflowDescription) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoDataflowDescription) -> Result<Self, TryFromProtoError> {
         Ok(DataflowDescription {
-            source_imports: x
+            source_imports: proto
                 .source_imports
                 .into_iter()
                 .map(|inner| {
@@ -1096,11 +1053,11 @@ impl TryFrom<ProtoDataflowDescription>
                         inner.id.into_rust_if_some("ProtoSourceImport::id")?,
                         inner
                             .source_instance_desc
-                            .try_into_if_some("ProtoSourceImport::source_instance_desc")?,
+                            .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
                     ))
                 })
-                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
-            index_imports: x
+                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
+            index_imports: proto
                 .index_imports
                 .into_iter()
                 .map(|inner| {
@@ -1109,18 +1066,14 @@ impl TryFrom<ProtoDataflowDescription>
                         (
                             inner
                                 .index_desc
-                                .try_into_if_some("ProtoIndex::index_desc")?,
+                                .into_rust_if_some("ProtoIndex::index_desc")?,
                             inner.typ.into_rust_if_some("ProtoIndex::typ")?,
                         ),
                     ))
                 })
-                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
-            objects_to_build: x
-                .objects_to_build
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
-            index_exports: x
+                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
+            objects_to_build: proto.objects_to_build.into_rust()?,
+            index_exports: proto
                 .index_exports
                 .into_iter()
                 .map(|inner| {
@@ -1129,13 +1082,13 @@ impl TryFrom<ProtoDataflowDescription>
                         (
                             inner
                                 .index_desc
-                                .try_into_if_some("ProtoIndex::index_desc")?,
+                                .into_rust_if_some("ProtoIndex::index_desc")?,
                             inner.typ.into_rust_if_some("ProtoIndex::typ")?,
                         ),
                     ))
                 })
-                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
-            sink_exports: x
+                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
+            sink_exports: proto
                 .sink_exports
                 .into_iter()
                 .map(|inner| {
@@ -1144,10 +1097,12 @@ impl TryFrom<ProtoDataflowDescription>
                         serde_json::from_str(&inner.sink_desc).map_err(TryFromProtoError::from)?,
                     ))
                 })
-                .collect::<Result<BTreeMap<_, _>, Self::Error>>()?,
-            as_of: x.as_of.map(Into::into),
-            debug_name: x.debug_name,
-            id: x.id.from_proto_if_some("ProtoDataflowDescription::id")?,
+                .collect::<Result<BTreeMap<_, _>, TryFromProtoError>>()?,
+            as_of: proto.as_of.map(Into::into),
+            debug_name: proto.debug_name,
+            id: proto
+                .id
+                .from_proto_if_some("ProtoDataflowDescription::id")?,
         })
     }
 }
@@ -1177,7 +1132,7 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::{any_uuid, TryFromProtoError, TryIntoIfSome};
+    use mz_repr::proto::{any_uuid, TryFromProtoError};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -1533,22 +1488,18 @@ pub mod sources {
         pub pos: usize,
     }
 
-    impl From<&IncludedColumnPos> for ProtoIncludedColumnPos {
-        fn from(x: &IncludedColumnPos) -> Self {
+    impl RustType<ProtoIncludedColumnPos> for IncludedColumnPos {
+        fn into_proto(&self) -> ProtoIncludedColumnPos {
             ProtoIncludedColumnPos {
-                name: x.name.clone(),
-                pos: x.pos.into_proto(),
+                name: self.name.clone(),
+                pos: self.pos.into_proto(),
             }
         }
-    }
 
-    impl TryFrom<ProtoIncludedColumnPos> for IncludedColumnPos {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoIncludedColumnPos) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoIncludedColumnPos) -> Result<Self, TryFromProtoError> {
             Ok(IncludedColumnPos {
-                name: x.name,
-                pos: usize::from_proto(x.pos)?,
+                name: proto.name,
+                pos: usize::from_proto(proto.pos)?,
             })
         }
     }
@@ -1998,44 +1949,40 @@ pub mod sources {
         }
     }
 
-    impl From<&KafkaSourceConnector> for ProtoKafkaSourceConnector {
-        fn from(x: &KafkaSourceConnector) -> Self {
+    impl RustType<ProtoKafkaSourceConnector> for KafkaSourceConnector {
+        fn into_proto(&self) -> ProtoKafkaSourceConnector {
             ProtoKafkaSourceConnector {
-                addrs: Some((&x.addrs).into_proto()),
-                topic: x.topic.clone(),
-                config_options: x.config_options.clone().into_iter().collect(),
-                start_offsets: x.start_offsets.clone(),
-                group_id_prefix: x.group_id_prefix.clone(),
-                cluster_id: Some(x.cluster_id.into_proto()),
-                include_timestamp: x.include_timestamp.as_ref().map(Into::into),
-                include_partition: x.include_partition.as_ref().map(Into::into),
-                include_topic: x.include_topic.as_ref().map(Into::into),
-                include_offset: x.include_offset.as_ref().map(Into::into),
-                include_headers: x.include_headers.as_ref().map(Into::into),
+                addrs: Some((&self.addrs).into_proto()),
+                topic: self.topic.clone(),
+                config_options: self.config_options.clone().into_iter().collect(),
+                start_offsets: self.start_offsets.clone(),
+                group_id_prefix: self.group_id_prefix.clone(),
+                cluster_id: Some(self.cluster_id.into_proto()),
+                include_timestamp: self.include_timestamp.into_proto(),
+                include_partition: self.include_partition.into_proto(),
+                include_topic: self.include_topic.into_proto(),
+                include_offset: self.include_offset.into_proto(),
+                include_headers: self.include_headers.into_proto(),
             }
         }
-    }
 
-    impl TryFrom<ProtoKafkaSourceConnector> for KafkaSourceConnector {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoKafkaSourceConnector) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoKafkaSourceConnector) -> Result<Self, TryFromProtoError> {
             Ok(KafkaSourceConnector {
-                addrs: x
+                addrs: proto
                     .addrs
                     .into_rust_if_some("ProtoKafkaSourceConnector::addrs")?,
-                topic: x.topic,
-                config_options: x.config_options.into_iter().collect(),
-                start_offsets: x.start_offsets,
-                group_id_prefix: x.group_id_prefix,
-                cluster_id: Uuid::from_proto(x.cluster_id.ok_or_else(|| {
-                    TryFromProtoError::missing_field("ProtoPostgresSourceConnector::details")
-                })?)?,
-                include_timestamp: x.include_timestamp.map(TryInto::try_into).transpose()?,
-                include_partition: x.include_partition.map(TryInto::try_into).transpose()?,
-                include_topic: x.include_topic.map(TryInto::try_into).transpose()?,
-                include_offset: x.include_offset.map(TryInto::try_into).transpose()?,
-                include_headers: x.include_headers.map(TryInto::try_into).transpose()?,
+                topic: proto.topic,
+                config_options: proto.config_options.into_iter().collect(),
+                start_offsets: proto.start_offsets,
+                group_id_prefix: proto.group_id_prefix,
+                cluster_id: proto
+                    .cluster_id
+                    .into_rust_if_some("ProtoPostgresSourceConnector::details")?,
+                include_timestamp: proto.include_timestamp.into_rust()?,
+                include_partition: proto.include_partition.into_rust()?,
+                include_topic: proto.include_topic.into_rust()?,
+                include_offset: proto.include_offset.into_rust()?,
+                include_headers: proto.include_headers.into_rust()?,
             })
         }
     }
@@ -2090,24 +2037,20 @@ pub mod sources {
         None,
     }
 
-    impl From<&Compression> for ProtoCompression {
-        fn from(x: &Compression) -> Self {
+    impl RustType<ProtoCompression> for Compression {
+        fn into_proto(&self) -> ProtoCompression {
             use proto_compression::Kind;
             ProtoCompression {
-                kind: Some(match x {
+                kind: Some(match self {
                     Compression::Gzip => Kind::Gzip(()),
                     Compression::None => Kind::None(()),
                 }),
             }
         }
-    }
 
-    impl TryFrom<ProtoCompression> for Compression {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoCompression) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoCompression) -> Result<Self, TryFromProtoError> {
             use proto_compression::Kind;
-            Ok(match x.kind {
+            Ok(match proto.kind {
                 Some(Kind::Gzip(())) => Compression::Gzip,
                 Some(Kind::None(())) => Compression::None,
                 None => {
@@ -2252,37 +2195,41 @@ pub mod sources {
         Persist(PersistSourceConnector),
     }
 
-    impl From<&ExternalSourceConnector> for ProtoExternalSourceConnector {
-        fn from(x: &ExternalSourceConnector) -> Self {
+    impl RustType<ProtoExternalSourceConnector> for ExternalSourceConnector {
+        fn into_proto(&self) -> ProtoExternalSourceConnector {
             use proto_external_source_connector::Kind;
             ProtoExternalSourceConnector {
-                kind: Some(match x {
-                    ExternalSourceConnector::Kafka(kafka) => Kind::Kafka(kafka.into()),
-                    ExternalSourceConnector::Kinesis(kinesis) => Kind::Kinesis(kinesis.into()),
-                    ExternalSourceConnector::S3(s3) => Kind::S3(s3.into()),
-                    ExternalSourceConnector::Postgres(postgres) => Kind::Postgres(postgres.into()),
-                    ExternalSourceConnector::PubNub(pubnub) => Kind::Pubnub(pubnub.into()),
-                    ExternalSourceConnector::Persist(persist) => Kind::Persist(persist.into()),
+                kind: Some(match self {
+                    ExternalSourceConnector::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
+                    ExternalSourceConnector::Kinesis(kinesis) => {
+                        Kind::Kinesis(kinesis.into_proto())
+                    }
+                    ExternalSourceConnector::S3(s3) => Kind::S3(s3.into_proto()),
+                    ExternalSourceConnector::Postgres(postgres) => {
+                        Kind::Postgres(postgres.into_proto())
+                    }
+                    ExternalSourceConnector::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
+                    ExternalSourceConnector::Persist(persist) => {
+                        Kind::Persist(persist.into_proto())
+                    }
                 }),
             }
         }
-    }
 
-    impl TryFrom<ProtoExternalSourceConnector> for ExternalSourceConnector {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoExternalSourceConnector) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoExternalSourceConnector) -> Result<Self, TryFromProtoError> {
             use proto_external_source_connector::Kind;
-            let kind = x.kind.ok_or_else(|| {
+            let kind = proto.kind.ok_or_else(|| {
                 TryFromProtoError::missing_field("ProtoExternalSourceConnector::kind")
             })?;
             Ok(match kind {
-                Kind::Kafka(kafka) => ExternalSourceConnector::Kafka(kafka.try_into()?),
-                Kind::Kinesis(kinesis) => ExternalSourceConnector::Kinesis(kinesis.try_into()?),
-                Kind::S3(s3) => ExternalSourceConnector::S3(s3.try_into()?),
-                Kind::Postgres(postgres) => ExternalSourceConnector::Postgres(postgres.try_into()?),
-                Kind::Pubnub(pubnub) => ExternalSourceConnector::PubNub(pubnub.try_into()?),
-                Kind::Persist(persist) => ExternalSourceConnector::Persist(persist.try_into()?),
+                Kind::Kafka(kafka) => ExternalSourceConnector::Kafka(kafka.into_rust()?),
+                Kind::Kinesis(kinesis) => ExternalSourceConnector::Kinesis(kinesis.into_rust()?),
+                Kind::S3(s3) => ExternalSourceConnector::S3(s3.into_rust()?),
+                Kind::Postgres(postgres) => {
+                    ExternalSourceConnector::Postgres(postgres.into_rust()?)
+                }
+                Kind::Pubnub(pubnub) => ExternalSourceConnector::PubNub(pubnub.into_rust()?),
+                Kind::Persist(persist) => ExternalSourceConnector::Persist(persist.into_rust()?),
             })
         }
     }
@@ -2478,22 +2425,20 @@ pub mod sources {
         pub aws: AwsConfig,
     }
 
-    impl From<&KinesisSourceConnector> for ProtoKinesisSourceConnector {
-        fn from(x: &KinesisSourceConnector) -> Self {
+    impl RustType<ProtoKinesisSourceConnector> for KinesisSourceConnector {
+        fn into_proto(&self) -> ProtoKinesisSourceConnector {
             ProtoKinesisSourceConnector {
-                stream_name: x.stream_name.clone(),
-                aws: Some((&x.aws).into()),
+                stream_name: self.stream_name.clone(),
+                aws: Some(self.aws.into_proto()),
             }
         }
-    }
 
-    impl TryFrom<ProtoKinesisSourceConnector> for KinesisSourceConnector {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoKinesisSourceConnector) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoKinesisSourceConnector) -> Result<Self, TryFromProtoError> {
             Ok(KinesisSourceConnector {
-                stream_name: x.stream_name,
-                aws: x.aws.try_into_if_some("ProtoKinesisSourceConnector::aws")?,
+                stream_name: proto.stream_name,
+                aws: proto
+                    .aws
+                    .into_rust_if_some("ProtoKinesisSourceConnector::aws")?,
             })
         }
     }
@@ -2506,27 +2451,23 @@ pub mod sources {
         pub details: PostgresSourceDetails,
     }
 
-    impl From<&PostgresSourceConnector> for ProtoPostgresSourceConnector {
-        fn from(x: &PostgresSourceConnector) -> Self {
+    impl RustType<ProtoPostgresSourceConnector> for PostgresSourceConnector {
+        fn into_proto(&self) -> ProtoPostgresSourceConnector {
             ProtoPostgresSourceConnector {
-                conn: x.conn.clone(),
-                publication: x.publication.clone(),
-                slot_name: x.slot_name.clone(),
-                details: Some(x.details.clone()),
+                conn: self.conn.clone(),
+                publication: self.publication.clone(),
+                slot_name: self.slot_name.clone(),
+                details: Some(self.details.clone()),
             }
         }
-    }
 
-    impl TryFrom<ProtoPostgresSourceConnector> for PostgresSourceConnector {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoPostgresSourceConnector) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoPostgresSourceConnector) -> Result<Self, TryFromProtoError> {
             Ok(PostgresSourceConnector {
-                conn: x.conn,
-                publication: x.publication,
-                slot_name: x.slot_name,
+                conn: proto.conn,
+                publication: proto.publication,
+                slot_name: proto.slot_name,
                 // try_into_if_some doesn't work because PostgresSourceDetails doesn't implement ToString/Display
-                details: x.details.ok_or_else(|| {
+                details: proto.details.ok_or_else(|| {
                     TryFromProtoError::missing_field("ProtoPostgresSourceConnector::details")
                 })?,
             })
@@ -2539,22 +2480,18 @@ pub mod sources {
         pub channel: String,
     }
 
-    impl From<&PubNubSourceConnector> for ProtoPubNubSourceConnector {
-        fn from(x: &PubNubSourceConnector) -> Self {
+    impl RustType<ProtoPubNubSourceConnector> for PubNubSourceConnector {
+        fn into_proto(&self) -> ProtoPubNubSourceConnector {
             ProtoPubNubSourceConnector {
-                subscribe_key: x.subscribe_key.clone(),
-                channel: x.channel.clone(),
+                subscribe_key: self.subscribe_key.clone(),
+                channel: self.channel.clone(),
             }
         }
-    }
 
-    impl TryFrom<ProtoPubNubSourceConnector> for PubNubSourceConnector {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoPubNubSourceConnector) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoPubNubSourceConnector) -> Result<Self, TryFromProtoError> {
             Ok(PubNubSourceConnector {
-                subscribe_key: x.subscribe_key,
-                channel: x.channel,
+                subscribe_key: proto.subscribe_key,
+                channel: proto.channel,
             })
         }
     }
@@ -2566,25 +2503,21 @@ pub mod sources {
         pub shard_id: ShardId,
     }
 
-    impl From<&PersistSourceConnector> for ProtoPersistSourceConnector {
-        fn from(x: &PersistSourceConnector) -> Self {
+    impl RustType<ProtoPersistSourceConnector> for PersistSourceConnector {
+        fn into_proto(&self) -> ProtoPersistSourceConnector {
             ProtoPersistSourceConnector {
-                consensus_uri: x.consensus_uri.clone(),
-                blob_uri: x.blob_uri.clone(),
-                shard_id: x.shard_id.to_string(),
+                consensus_uri: self.consensus_uri.clone(),
+                blob_uri: self.blob_uri.clone(),
+                shard_id: self.shard_id.to_string(),
             }
         }
-    }
 
-    impl TryFrom<ProtoPersistSourceConnector> for PersistSourceConnector {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoPersistSourceConnector) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoPersistSourceConnector) -> Result<Self, TryFromProtoError> {
             Ok(PersistSourceConnector {
-                consensus_uri: x.consensus_uri,
-                blob_uri: x.blob_uri,
-                shard_id: ShardId::from_str(&x.shard_id)
-                    .map_err(|_| TryFromProtoError::InvalidShardId(x.shard_id))?,
+                consensus_uri: proto.consensus_uri,
+                blob_uri: proto.blob_uri,
+                shard_id: ShardId::from_str(&proto.shard_id)
+                    .map_err(|_| TryFromProtoError::InvalidShardId(proto.shard_id))?,
             })
         }
     }
@@ -2630,28 +2563,20 @@ pub mod sources {
         }
     }
 
-    impl From<&S3SourceConnector> for ProtoS3SourceConnector {
-        fn from(x: &S3SourceConnector) -> Self {
+    impl RustType<ProtoS3SourceConnector> for S3SourceConnector {
+        fn into_proto(&self) -> ProtoS3SourceConnector {
             ProtoS3SourceConnector {
-                key_sources: x.key_sources.iter().map(Into::into).collect(),
-                pattern: x.pattern.as_ref().map(|g| g.glob().into()),
-                aws: Some((&x.aws).into()),
-                compression: Some((&x.compression).into()),
+                key_sources: self.key_sources.into_proto(),
+                pattern: self.pattern.as_ref().map(|g| g.glob().into()),
+                aws: Some(self.aws.into_proto()),
+                compression: Some(self.compression.into_proto()),
             }
         }
-    }
 
-    impl TryFrom<ProtoS3SourceConnector> for S3SourceConnector {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoS3SourceConnector) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoS3SourceConnector) -> Result<Self, TryFromProtoError> {
             Ok(S3SourceConnector {
-                key_sources: x
-                    .key_sources
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<_, _>>()?,
-                pattern: x
+                key_sources: proto.key_sources.into_rust()?,
+                pattern: proto
                     .pattern
                     .map(|p| {
                         GlobBuilder::new(&p)
@@ -2660,10 +2585,10 @@ pub mod sources {
                             .build()
                     })
                     .transpose()?,
-                aws: x.aws.try_into_if_some("ProtoS3SourceConnector::aws")?,
-                compression: x
+                aws: proto.aws.into_rust_if_some("ProtoS3SourceConnector::aws")?,
+                compression: proto
                     .compression
-                    .try_into_if_some("ProtoS3SourceConnector::compression")?,
+                    .into_rust_if_some("ProtoS3SourceConnector::compression")?,
             })
         }
     }
@@ -2690,11 +2615,11 @@ pub mod sources {
         SqsNotifications { queue: String },
     }
 
-    impl From<&S3KeySource> for ProtoS3KeySource {
-        fn from(x: &S3KeySource) -> Self {
+    impl RustType<ProtoS3KeySource> for S3KeySource {
+        fn into_proto(&self) -> ProtoS3KeySource {
             use proto_s3_key_source::Kind;
             ProtoS3KeySource {
-                kind: Some(match x {
+                kind: Some(match self {
                     S3KeySource::Scan { bucket } => Kind::Scan(bucket.clone()),
                     S3KeySource::SqsNotifications { queue } => {
                         Kind::SqsNotifications(queue.clone())
@@ -2702,14 +2627,10 @@ pub mod sources {
                 }),
             }
         }
-    }
 
-    impl TryFrom<ProtoS3KeySource> for S3KeySource {
-        type Error = TryFromProtoError;
-
-        fn try_from(x: ProtoS3KeySource) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoS3KeySource) -> Result<Self, TryFromProtoError> {
             use proto_s3_key_source::Kind;
-            Ok(match x.kind {
+            Ok(match proto.kind {
                 Some(Kind::Scan(s)) => S3KeySource::Scan { bucket: s },
                 Some(Kind::SqsNotifications(s)) => S3KeySource::SqsNotifications { queue: s },
                 None => {
@@ -2738,24 +2659,20 @@ pub mod sources {
         }
     }
 
-    impl From<&SourceData> for ProtoSourceData {
-        fn from(x: &SourceData) -> Self {
+    impl RustType<ProtoSourceData> for SourceData {
+        fn into_proto(&self) -> ProtoSourceData {
             use proto_source_data::Kind;
             ProtoSourceData {
-                kind: Some(match &**x {
+                kind: Some(match &**self {
                     Ok(row) => Kind::Ok(row.into_proto()),
                     Err(err) => Kind::Err(err.into()),
                 }),
             }
         }
-    }
 
-    impl TryFrom<ProtoSourceData> for SourceData {
-        type Error = TryFromProtoError;
-
-        fn try_from(data: ProtoSourceData) -> Result<Self, Self::Error> {
+        fn from_proto(proto: ProtoSourceData) -> Result<Self, TryFromProtoError> {
             use proto_source_data::Kind;
-            match data.kind {
+            match proto.kind {
                 Some(kind) => match kind {
                     Kind::Ok(row) => Ok(SourceData(Ok(row.into_rust()?))),
                     Kind::Err(err) => Ok(SourceData(Err(err.try_into()?))),
@@ -2771,21 +2688,21 @@ pub mod sources {
         }
 
         fn encode<B: BufMut>(&self, buf: &mut B) {
-            ProtoSourceData::from(self)
+            self.into_proto()
                 .encode(buf)
                 .expect("no required fields means no initialization errors");
         }
 
         fn decode(buf: &[u8]) -> Result<Self, String> {
             let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
-            Self::try_from(proto).map_err(|err| err.to_string())
+            proto.into_rust().map_err(|err| err.to_string())
         }
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-        use mz_repr::proto::protobuf_roundtrip;
+        use mz_repr::proto::newapi::protobuf_roundtrip;
         use proptest::prelude::*;
 
         proptest! {
@@ -3016,22 +2933,18 @@ pub struct IndexDesc {
     pub key: Vec<MirScalarExpr>,
 }
 
-impl From<&IndexDesc> for ProtoIndexDesc {
-    fn from(x: &IndexDesc) -> Self {
+impl RustType<ProtoIndexDesc> for IndexDesc {
+    fn into_proto(&self) -> ProtoIndexDesc {
         ProtoIndexDesc {
-            on_id: Some(x.on_id.into_proto()),
-            key: x.key.into_proto(),
+            on_id: Some(self.on_id.into_proto()),
+            key: self.key.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoIndexDesc> for IndexDesc {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoIndexDesc) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoIndexDesc) -> Result<Self, TryFromProtoError> {
         Ok(IndexDesc {
-            on_id: x.on_id.into_rust_if_some("ProtoIndexDesc::on_id")?,
-            key: x.key.into_rust()?,
+            on_id: proto.on_id.into_rust_if_some("ProtoIndexDesc::on_id")?,
+            key: proto.key.into_rust()?,
         })
     }
 }
@@ -3059,26 +2972,18 @@ pub struct LinearOperator {
     pub projection: Vec<usize>,
 }
 
-impl From<&LinearOperator> for ProtoLinearOperator {
-    fn from(x: &LinearOperator) -> Self {
+impl RustType<ProtoLinearOperator> for LinearOperator {
+    fn into_proto(&self) -> ProtoLinearOperator {
         ProtoLinearOperator {
-            predicates: x.predicates.into_proto(),
-            projection: x.projection.iter().map(|x| x.into_proto()).collect(),
+            predicates: self.predicates.into_proto(),
+            projection: self.projection.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoLinearOperator> for LinearOperator {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoLinearOperator) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoLinearOperator) -> Result<Self, TryFromProtoError> {
         Ok(LinearOperator {
-            predicates: x.predicates.into_rust()?,
-            projection: x
-                .projection
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<Vec<_>, _>>()?,
+            predicates: proto.predicates.into_rust()?,
+            projection: proto.projection.into_rust()?,
         })
     }
 }
@@ -3094,7 +2999,7 @@ impl LinearOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_repr::proto::newapi::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

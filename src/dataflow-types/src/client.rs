@@ -29,8 +29,8 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::proto::{any_uuid, FromProtoIfSome};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -211,7 +211,7 @@ impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
                 ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
-                        dataflows: dataflows.iter().map(Into::into).collect(),
+                        dataflows: dataflows.into_proto(),
                     })
                 }
                 ComputeCommand::AllowCompaction(collections) => {
@@ -244,12 +244,7 @@ impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
             Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.try_into()?)),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
-                Ok(ComputeCommand::CreateDataflows(
-                    dataflows
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<_>, _>>()?,
-                ))
+                Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(ComputeCommand::AllowCompaction(
@@ -612,11 +607,11 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
                 }
                 ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseKind {
                     id: Some(id.into_proto()),
-                    resp: Some(resp.into()),
+                    resp: Some(resp.into_proto()),
                 }),
                 ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
                     id: Some(id.into_proto()),
-                    resp: Some(resp.into()),
+                    resp: Some(resp.into_proto()),
                 }),
             }),
         }
@@ -647,11 +642,11 @@ impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
             )),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.from_proto_if_some("ProtoPeekResponseKind::id")?,
-                resp.resp.try_into_if_some("ProtoPeekResponseKind::resp")?,
+                resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
             )),
             Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
                 resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
-                resp.resp.try_into_if_some("ProtoTailResponseKind::resp")?,
+                resp.resp.into_rust_if_some("ProtoTailResponseKind::resp")?,
             )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",
