@@ -66,7 +66,7 @@ impl TryFrom<ProtoJoinPlan> for JoinPlan {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoJoinPlan::kind"))?;
         Ok(match kind {
-            Kind::Linear(inner) => JoinPlan::Linear(inner.try_into()?),
+            Kind::Linear(inner) => JoinPlan::Linear(inner.into_rust()?),
             Kind::Delta(inner) => JoinPlan::Delta(inner.into_rust()?),
         })
     }
@@ -77,7 +77,7 @@ impl From<&JoinPlan> for ProtoJoinPlan {
         use proto_join_plan::Kind;
         ProtoJoinPlan {
             kind: Some(match repr {
-                JoinPlan::Linear(inner) => Kind::Linear(inner.into()),
+                JoinPlan::Linear(inner) => Kind::Linear(inner.into_proto()),
                 JoinPlan::Delta(inner) => Kind::Delta(inner.into_proto()),
             }),
         }
@@ -116,7 +116,7 @@ impl Arbitrary for JoinClosure {
 impl From<&JoinClosure> for ProtoJoinClosure {
     fn from(x: &JoinClosure) -> Self {
         Self {
-            ready_equivalences: x.ready_equivalences.iter().map(Into::into).collect(),
+            ready_equivalences: x.ready_equivalences.into_proto(),
             before: Some(x.before.into_proto()),
         }
     }
@@ -127,12 +127,7 @@ impl TryFrom<ProtoJoinClosure> for JoinClosure {
 
     fn try_from(x: ProtoJoinClosure) -> Result<Self, Self::Error> {
         Ok(Self {
-            ready_equivalences: x
-                .ready_equivalences
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, TryFromProtoError>>()?,
-
+            ready_equivalences: x.ready_equivalences.into_rust()?,
             before: x.before.into_rust_if_some("ProtoJoinClosure::before")?,
         })
     }
