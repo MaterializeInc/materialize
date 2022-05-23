@@ -22,16 +22,13 @@ If you want to run tests on something like `MirRelationExpr`, specifying it in
 Rust is not only onerous but makes the tests hard to read.
 
 This crate supports converting a specification written in a readable syntax (see
-[#syntax]) into a Rust object that way you can directly test the lower layers of
-the stack. It also supports converting the Rust object back into the readable
-syntax.
+[Syntax](#syntax)) into a Rust object that way you can directly test the lower
+layers of the stack. It also supports converting the Rust object back into the
+readable syntax.
 
-Note that this crate can help create not only a Rust object to run tests on but
-also the test itself. Suppose you want to run `funcX`, a function with `n`
-arguments. Instead of initializing each of the `n` arguments one by one in Rust
-code, you can define a struct or enum with those `n` arguments as fields and use
-this crate to convert a test specification into an instance of the struct or
-enum. Then, you can feed the fields of the struct into `funcX`.
+If your test involves multiple objects, you can still utilize this crate. Just
+make all the objects into fields of a single struct. For more information, see
+[Test Design](#test-design).
 
 ## Syntax
 
@@ -275,3 +272,39 @@ To convert a Rust object back into the readable syntax:
 2) Feed the json into the method `from_json`.
 
 [serde_json::Value]: https://docs.serde.rs/serde_json/enum.Value.html
+
+## Test Design
+
+Suppose you want to test `funcX`, a function with `n` arguments.
+
+Instead of trying to construct or deserialize each of the `n` arguments one by
+one, you could define a struct with the `n` arguments as fields so that you can
+deserialize all the arguments in one go.
+```
+struct FuncXParams {
+    arg1: ...
+    arg2: ...
+    ...
+    argn: ...
+}
+```
+Also, calling `FuncXParams::add_to_reflected_type_info` would allow
+automatically and recursively populating `ReflectedTypeInfo` with all the
+information required to construct all of the arguments.
+
+Likewise, if you want to run arbitrary sequences of functions selected from a
+finite set `{Func1, ..., Funcj}`, you can define a enum where each variant
+represents a different function and its arguments.
+```
+enum PotentialFunc {
+    Func1{arg1: ..., ..., argi: ... }
+    ...
+    Funcj{arg1: ..., ..., argn: ...}
+}
+```
+You can either:
+* express the sequence of functions as a `Vec<PotentialFunc>`
+* have a `while` loop that parses the sequence of functions by calling
+  `deserialize_optional::<PotentialFunc, _, _>` repeatedly on your input string.
+  Using the `while` loop allows you to not have `[]` around the sequence of
+  functions.

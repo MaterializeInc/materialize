@@ -26,7 +26,7 @@ use mz_dataflow_types::sources::SourceConnector;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
-use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -308,63 +308,52 @@ impl ExprHumanizer for TestCatalog {
 
 /// Contains the arguments for a command for [TestCatalog].
 ///
-/// See [lowertest] for the command syntax.
+/// See [mz_lowertest] for the command syntax.
 #[derive(Debug, Serialize, Deserialize, MzReflect)]
 pub enum TestCatalogCommand {
     /// Insert a source into the catalog.
     Defsource {
         source_name: String,
-        typ: RelationType,
-        #[serde(default)]
-        column_names: Vec<String>,
+        desc: RelationDesc,
     },
 }
 
 impl TestCatalog {
     pub(crate) fn execute_commands(&mut self, spec: &str) -> Result<String, String> {
         let mut stream_iter = tokenize(spec)?.into_iter();
-        loop {
-            let command: Option<TestCatalogCommand> = deserialize_optional(
-                &mut stream_iter,
-                "TestCatalogCommand",
-                &RTI,
-                &mut GenericTestDeserializeContext::default(),
-            )?;
-            if let Some(command) = command {
-                match command {
-                    TestCatalogCommand::Defsource {
-                        source_name,
-                        typ,
-                        column_names,
-                    } => {
-                        assert_eq!(
-                            typ.arity(),
-                            column_names.len(),
-                            "Ensure that there are the right number of column names for source {}",
-                            source_name
-                        );
-                        let id = GlobalId::User(self.tables.len() as u64);
-                        self.id_to_name.insert(id, source_name.clone());
-                        self.tables.insert(
-                            source_name.clone(),
-                            TestCatalogItem::BaseTable {
-                                name: QualifiedObjectName {
-                                    qualifiers: ObjectQualifiers {
-                                        database_spec: ResolvedDatabaseSpecifier::Id(
-                                            self.active_database().unwrap().clone(),
-                                        ),
-                                        schema_spec: SchemaSpecifier::Id(SchemaId(1)),
-                                    },
-                                    item: source_name,
+        while let Some(command) = deserialize_optional::<TestCatalogCommand, _, _>(
+            &mut stream_iter,
+            "TestCatalogCommand",
+            &RTI,
+            &mut GenericTestDeserializeContext::default(),
+        )? {
+            match command {
+                TestCatalogCommand::Defsource { source_name, desc } => {
+                    assert_eq!(
+                        desc.typ().arity(),
+                        desc.iter_names().count(),
+                        "Ensure that there are the right number of column names for source {}",
+                        source_name
+                    );
+                    let id = GlobalId::User(self.tables.len() as u64);
+                    self.id_to_name.insert(id, source_name.clone());
+                    self.tables.insert(
+                        source_name.clone(),
+                        TestCatalogItem::BaseTable {
+                            name: QualifiedObjectName {
+                                qualifiers: ObjectQualifiers {
+                                    database_spec: ResolvedDatabaseSpecifier::Id(
+                                        self.active_database().unwrap().clone(),
+                                    ),
+                                    schema_spec: SchemaSpecifier::Id(SchemaId(1)),
                                 },
-                                id,
-                                desc: RelationDesc::new(typ, column_names.into_iter()),
+                                item: source_name,
                             },
-                        );
-                    }
+                            id,
+                            desc,
+                        },
+                    );
                 }
-            } else {
-                break;
             }
         }
         Ok("ok\n".to_string())
