@@ -308,7 +308,7 @@ where
     Ok(T::from_proto(U::decode(&*vec)?)?)
 }
 pub mod newapi {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
 
     use uuid::Uuid;
 
@@ -389,6 +389,23 @@ pub mod newapi {
                 .into_iter()
                 .map(T::into_rust)
                 .collect::<Result<BTreeMap<_, _>, _>>()?)
+        }
+    }
+
+    /// Blanket implementation for `BTreeSet<R>` where `R` is a [`RustType`].
+    impl<R, P> RustType<Vec<P>> for BTreeSet<R>
+    where
+        R: RustType<P> + std::cmp::Ord,
+    {
+        fn into_proto(self: &Self) -> Vec<P> {
+            self.iter().map(R::into_proto).collect()
+        }
+
+        fn from_proto(proto: Vec<P>) -> Result<Self, TryFromProtoError> {
+            proto
+                .into_iter()
+                .map(R::from_proto)
+                .collect::<Result<BTreeSet<_>, _>>()
         }
     }
 
