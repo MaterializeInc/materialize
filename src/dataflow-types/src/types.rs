@@ -475,6 +475,7 @@ pub mod aws {
 
     use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::GlobalId;
+    use mz_repr::url::URL_PATTERN;
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
@@ -486,8 +487,7 @@ pub mod aws {
     /// It doesn't cover the full spectrum of valid URIs, but just a wide enough sample
     /// to test our Protobuf roundtripping logic.
     fn any_serde_uri() -> impl Strategy<Value = SerdeUri> {
-        r"(http|https)://[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}"
-            .prop_map(|s| SerdeUri(s.parse().unwrap()))
+        URL_PATTERN.prop_map(|s| SerdeUri(s.parse().unwrap()))
     }
 
     impl Arbitrary for SerdeUri {
@@ -1131,7 +1131,7 @@ pub mod sources {
 
         use mz_interchange::{avro, protobuf};
         use mz_repr::adt::regex::any_regex;
-        use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+        use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
         use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
         include!(concat!(

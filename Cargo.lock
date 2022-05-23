@@ -3771,6 +3771,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "smallvec",
+ "url",
  "uuid 1.0.0",
 ]
 

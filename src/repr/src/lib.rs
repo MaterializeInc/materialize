@@ -33,6 +33,7 @@ pub mod chrono;
 pub mod global_id;
 pub mod proto;
 pub mod strconv;
+pub mod url;
 pub mod util;
 
 pub use datum_vec::{DatumVec, DatumVecBorrow};
