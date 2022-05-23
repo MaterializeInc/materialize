@@ -3145,7 +3145,6 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "futures",
- "futures-executor",
  "futures-util",
  "http",
  "itertools",

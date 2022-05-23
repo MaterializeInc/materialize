@@ -7,9 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// TODO(#12634): Remove override.
-#![allow(clippy::await_holding_lock)]
-
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp;
@@ -17,7 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -43,6 +40,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
+use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 use mz_avro::types::Value;
@@ -256,15 +254,14 @@ impl ProducerContext for SinkProducerContext {
 
     fn delivery(&self, result: &DeliveryResult, _: Self::DeliveryOpaque) {
         match result {
-            Ok(_) => self.retry_manager.lock().unwrap().record_success(),
+            Ok(_) => self.retry_manager.blocking_lock().record_success(),
             Err((_e, msg)) => {
                 self.metrics.message_delivery_errors_counter.inc();
                 // TODO: figure out a good way to back these retries off.  Should be okay without
                 // because we seem to very rarely end up in a constant state where rdkafka::send
                 // works but everything is immediately rejected and hits this branch.
                 self.retry_manager
-                    .lock()
-                    .unwrap()
+                    .blocking_lock()
                     .record_error(msg.detach());
             }
         }
@@ -657,7 +654,7 @@ impl KafkaSinkState {
             match self.producer.send(record) {
                 Ok(_) => {
                     self.metrics.messages_sent_counter.inc();
-                    self.retry_manager.lock().unwrap().record_send();
+                    self.retry_manager.lock().await.record_send();
                     return Ok(());
                 }
                 Err((e, rec)) => {
@@ -689,11 +686,11 @@ impl KafkaSinkState {
     async fn flush(&self) -> KafkaResult<()> {
         self.flush_inner().await?;
         while !{
-            let mut guard = self.retry_manager.lock().unwrap();
+            let mut guard = self.retry_manager.lock().await;
             guard.sends_flushed()
         } {
             while let Some(msg) = {
-                let mut guard = self.retry_manager.lock().unwrap();
+                let mut guard = self.retry_manager.lock().await;
                 guard.pop_retry()
             } {
                 let mut transformed_msg = BaseRecord::to(msg.topic());
@@ -1379,7 +1376,7 @@ where
             }
 
             debug_assert_eq!(s.producer.inner.in_flight_count(), 0);
-            debug_assert!(s.retry_manager.lock().unwrap().sends_flushed());
+            debug_assert!(s.retry_manager.lock().await.sends_flushed());
 
             if !s.pending_rows.is_empty() {
                 // We have some more rows that we need to wait for frontiers to advance before we
