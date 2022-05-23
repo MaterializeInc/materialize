@@ -98,6 +98,7 @@ pub enum Plan {
     ShowAllVariables,
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
+    ResetVariable(ResetVariablePlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction,
     AbortTransaction,
@@ -291,6 +292,11 @@ pub struct SetVariablePlan {
     pub name: String,
     pub value: SetVariableValue,
     pub local: bool,
+}
+
+#[derive(Debug)]
+pub struct ResetVariablePlan {
+    pub name: String,
 }
 
 #[derive(Debug)]

@@ -1188,7 +1188,7 @@ where
                 )
                 .await
             }
-            ExecuteResponse::SetVariable { name } => {
+            ExecuteResponse::SetVariable { name, tag } => {
                 // This code is somewhat awkwardly structured because we
                 // can't hold `var` across an await point.
                 let qn = name.to_string();
@@ -1206,7 +1206,7 @@ where
                 if let Some(msg) = msg {
                     self.send(msg).await?;
                 }
-                command_complete!("SET")
+                command_complete!("{}", tag)
             }
             ExecuteResponse::StartedTransaction { duplicated } => {
                 if duplicated {

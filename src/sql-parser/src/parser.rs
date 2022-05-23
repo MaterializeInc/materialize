@@ -244,6 +244,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(ALTER) => Ok(self.parse_alter()?),
                 Token::Keyword(COPY) => Ok(self.parse_copy()?),
                 Token::Keyword(SET) => Ok(self.parse_set()?),
+                Token::Keyword(RESET) => Ok(self.parse_reset()?),
                 Token::Keyword(SHOW) => Ok(self.parse_show()?),
                 Token::Keyword(START) => Ok(self.parse_start_transaction()?),
                 // `BEGIN` is a nonstandard but common alias for the
@@ -4069,6 +4070,13 @@ impl<'a> Parser<'a> {
         } else {
             self.expected(self.peek_pos(), "equals sign or TO", self.peek_token())
         }
+    }
+
+    fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let variable = self.parse_identifier()?;
+        Ok(Statement::ResetVariable(ResetVariableStatement {
+            variable,
+        }))
     }
 
     fn parse_show(&mut self) -> Result<Statement<Raw>, ParserError> {
