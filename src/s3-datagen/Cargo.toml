@@ -3,7 +3,7 @@ name = "mz-s3-datagen"
 description = "Generate S3 test data."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]

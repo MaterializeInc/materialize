@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// TODO(#12634): Remove override.
+#![allow(clippy::await_holding_lock)]
+
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::cmp;

@@ -798,6 +798,8 @@ impl Consensus for MemConsensus {
 
 #[cfg(test)]
 mod tests {
+    // TODO(#12633): Remove override.
+    #![allow(clippy::await_holding_lock)]
     use crate::location::tests::{
         blob_impl_test, blob_multi_impl_test, consensus_impl_test, log_impl_test,
     };
