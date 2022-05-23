@@ -97,6 +97,42 @@ wrappers = [
 [[bans.deny]]
 name = "rustls"
 
+# once_cell is going to be added to std, and doesn't use macros
+# Unfortunately, its heavily used, so we have lots of exceptions.
+[[bans.deny]]
+name = "lazy_static"
+wrappers = [
+  "aws-arn",
+  "aws-http",
+  "bindgen",
+  "bstr",
+  "clap",
+  "console",
+  "criterion",
+  "crossbeam-epoch",
+  "crossbeam-utils",
+  "fail",
+  "findshlibs",
+  "indicatif",
+  "mysql_async",
+  "mysql_common",
+  "native-tls",
+  "opentelemetry",
+  "procfs",
+  "prometheus",
+  "proptest",
+  "prost-build",
+  "rayon-core",
+  "reqwest",
+  "schannel",
+  "sharded-slab",
+  "tracing-core",
+  "tracing-log",
+  "tracing-subscriber",
+  "wasm-bindgen-backend",
+  "which",
+]
+
 # The `uncased` crate serves the same purpose as `unicase` and is more
 # actively maintained.
 [[bans.deny]]
