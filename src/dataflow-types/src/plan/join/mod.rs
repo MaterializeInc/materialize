@@ -35,13 +35,12 @@ pub mod linear_join;
 
 use std::collections::HashMap;
 
-use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
-use mz_repr::proto::TryFromProtoError;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
+use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row, RowArena};
 
 pub use delta_join::DeltaJoinPlan;
@@ -68,7 +67,7 @@ impl TryFrom<ProtoJoinPlan> for JoinPlan {
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoJoinPlan::kind"))?;
         Ok(match kind {
             Kind::Linear(inner) => JoinPlan::Linear(inner.try_into()?),
-            Kind::Delta(inner) => JoinPlan::Delta(inner.try_into()?),
+            Kind::Delta(inner) => JoinPlan::Delta(inner.into_rust()?),
         })
     }
 }
@@ -79,7 +78,7 @@ impl From<&JoinPlan> for ProtoJoinPlan {
         ProtoJoinPlan {
             kind: Some(match repr {
                 JoinPlan::Linear(inner) => Kind::Linear(inner.into()),
-                JoinPlan::Delta(inner) => Kind::Delta(inner.into()),
+                JoinPlan::Delta(inner) => Kind::Delta(inner.into_proto()),
             }),
         }
     }
