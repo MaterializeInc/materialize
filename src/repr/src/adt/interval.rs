@@ -13,8 +13,8 @@ use std::fmt::{self, Write};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use lazy_static::lazy_static;
 use num_traits::CheckedMul;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
@@ -83,21 +83,23 @@ impl num_traits::ops::checked::CheckedNeg for Interval {
     }
 }
 
-lazy_static! {
-    static ref MONTH_OVERFLOW_ERROR: String = format!(
+static MONTH_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
+    format!(
         "Overflows maximum months; cannot exceed {}/{} microseconds",
         i32::MAX,
         i32::MIN,
-    );
-    static ref DAY_OVERFLOW_ERROR: String = format!(
+    )
+});
+static DAY_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
+    format!(
         "Overflows maximum days; cannot exceed {}/{} microseconds",
         i32::MAX,
         i32::MIN,
-    );
-    static ref USECS_PER_DAY: i64 =
-        Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64)
-            .unwrap();
-}
+    )
+});
+static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
+    Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64).unwrap()
+});
 
 impl Interval {
     // Don't let our duration exceed Postgres' min/max for those same fields,

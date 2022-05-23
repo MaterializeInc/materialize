@@ -27,7 +27,6 @@ use std::io::Cursor;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use lazy_static::lazy_static;
 use mz_avro::schema::resolve_schemas;
 use mz_avro::types::AvroMap;
 use mz_avro::{
@@ -36,31 +35,67 @@ use mz_avro::{
     types::{DecimalValue, Value},
     Schema, ValidationError,
 };
+use once_cell::sync::Lazy;
 
-lazy_static! {
-    static ref SCHEMAS_TO_VALIDATE: Vec<(&'static str, Value)> = vec![
+static SCHEMAS_TO_VALIDATE: Lazy<Vec<(&'static str, Value)>> = Lazy::new(|| {
+    vec![
         (r#""null""#, Value::Null),
         (r#""boolean""#, Value::Boolean(true)),
-        (r#""string""#, Value::String("adsfasdf09809dsf-=adsf".to_string())),
-        (r#""bytes""#, Value::Bytes("12345abcd".to_string().into_bytes())),
+        (
+            r#""string""#,
+            Value::String("adsfasdf09809dsf-=adsf".to_string()),
+        ),
+        (
+            r#""bytes""#,
+            Value::Bytes("12345abcd".to_string().into_bytes()),
+        ),
         (r#""int""#, Value::Int(1234)),
         (r#""long""#, Value::Long(1234)),
         (r#""float""#, Value::Float(1234.0)),
         (r#""double""#, Value::Double(1234.0)),
-        (r#"{"type": "fixed", "name": "Test", "size": 1}"#, Value::Fixed(1, vec![b'B'])),
-        (r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"]}"#, Value::Enum(1, "B".to_string())),
-        (r#"{"type": "array", "items": "long"}"#, Value::Array(vec![Value::Long(1), Value::Long(3), Value::Long(2)])),
-        (r#"{"type": "map", "values": "long"}"#, Value::Map(AvroMap([("a".to_string(), Value::Long(1i64)), ("b".to_string(), Value::Long(3i64)), ("c".to_string(), Value::Long(2i64))].iter().cloned().collect()))),
-        (r#"["string", "null", "long"]"#, Value::Union{
-            index: 1,
-            inner: Box::new(Value::Null),
-            n_variants:3,
-            null_variant:Some(1)
-        }),
-        (r#"{"type": "record", "name": "Test", "fields": [{"name": "f", "type": "long"}]}"#, Value::Record(vec![("f".to_string(), Value::Long(1))]))
-    ];
+        (
+            r#"{"type": "fixed", "name": "Test", "size": 1}"#,
+            Value::Fixed(1, vec![b'B']),
+        ),
+        (
+            r#"{"type": "enum", "name": "Test", "symbols": ["A", "B"]}"#,
+            Value::Enum(1, "B".to_string()),
+        ),
+        (
+            r#"{"type": "array", "items": "long"}"#,
+            Value::Array(vec![Value::Long(1), Value::Long(3), Value::Long(2)]),
+        ),
+        (
+            r#"{"type": "map", "values": "long"}"#,
+            Value::Map(AvroMap(
+                [
+                    ("a".to_string(), Value::Long(1i64)),
+                    ("b".to_string(), Value::Long(3i64)),
+                    ("c".to_string(), Value::Long(2i64)),
+                ]
+                .iter()
+                .cloned()
+                .collect(),
+            )),
+        ),
+        (
+            r#"["string", "null", "long"]"#,
+            Value::Union {
+                index: 1,
+                inner: Box::new(Value::Null),
+                n_variants: 3,
+                null_variant: Some(1),
+            },
+        ),
+        (
+            r#"{"type": "record", "name": "Test", "fields": [{"name": "f", "type": "long"}]}"#,
+            Value::Record(vec![("f".to_string(), Value::Long(1))]),
+        ),
+    ]
+});
 
-    static ref BINARY_ENCODINGS: Vec<(i64, Vec<u8>)> = vec![
+static BINARY_ENCODINGS: Lazy<Vec<(i64, Vec<u8>)>> = Lazy::new(|| {
+    vec![
         (0, vec![0x00]),
         (-1, vec![0x01]),
         (1, vec![0x02]),
@@ -70,9 +105,11 @@ lazy_static! {
         (64, vec![0x80, 0x01]),
         (8192, vec![0x80, 0x80, 0x01]),
         (-8193, vec![0x81, 0x80, 0x01]),
-    ];
+    ]
+});
 
-    static ref DEFAULT_VALUE_EXAMPLES: Vec<(&'static str, &'static str, Value)> = vec![
+static DEFAULT_VALUE_EXAMPLES: Lazy<Vec<(&'static str, &'static str, Value)>> = Lazy::new(|| {
+    vec![
         (r#""null""#, "null", Value::Null),
         (r#""boolean""#, "true", Value::Boolean(true)),
         (r#""string""#, r#""foo""#, Value::String("foo".to_string())),
@@ -83,13 +120,36 @@ lazy_static! {
         (r#""double""#, "1.1", Value::Double(1.1)),
         //(r#"{"type": "fixed", "name": "F", "size": 2}"#, r#""\u00FF\u00FF""#, Value::Bytes(vec![0xff, 0xff])),
         //(r#"{"type": "enum", "name": "F", "symbols": ["FOO", "BAR"]}"#, r#""FOO""#, Value::Enum(0, "FOO".to_string())),
-        (r#"{"type": "array", "items": "int"}"#, "[1, 2, 3]", Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
-        (r#"{"type": "map", "values": "int"}"#, r#"{"a": 1, "b": 2}"#, Value::Map(AvroMap([("a".to_string(), Value::Int(1)), ("b".to_string(), Value::Int(2))].iter().cloned().collect()))),
+        (
+            r#"{"type": "array", "items": "int"}"#,
+            "[1, 2, 3]",
+            Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        ),
+        (
+            r#"{"type": "map", "values": "int"}"#,
+            r#"{"a": 1, "b": 2}"#,
+            Value::Map(AvroMap(
+                [
+                    ("a".to_string(), Value::Int(1)),
+                    ("b".to_string(), Value::Int(2)),
+                ]
+                .iter()
+                .cloned()
+                .collect(),
+            )),
+        ),
         //(r#"["int", "null"]"#, "5", Value::Union(Box::new(Value::Int(5)))),
-        (r#"{"type": "record", "name": "F", "fields": [{"name": "A", "type": "int"}]}"#, r#"{"A": 5}"#,Value::Record(vec![("A".to_string(), Value::Int(5))])),
-    ];
+        (
+            r#"{"type": "record", "name": "F", "fields": [{"name": "A", "type": "int"}]}"#,
+            r#"{"A": 5}"#,
+            Value::Record(vec![("A".to_string(), Value::Int(5))]),
+        ),
+    ]
+});
 
-    static ref LONG_RECORD_SCHEMA: Schema = Schema::from_str(r#"
+static LONG_RECORD_SCHEMA: Lazy<Schema> = Lazy::new(|| {
+    Schema::from_str(
+        r#"
     {
         "type": "record",
         "name": "Test",
@@ -103,9 +163,13 @@ lazy_static! {
             {"name": "G", "type": "int"}
         ]
     }
-    "#).unwrap();
+    "#,
+    )
+    .unwrap()
+});
 
-    static ref LONG_RECORD_DATUM: Value = Value::Record(vec![
+static LONG_RECORD_DATUM: Lazy<Value> = Lazy::new(|| {
+    Value::Record(vec![
         ("A".to_string(), Value::Int(1)),
         ("B".to_string(), Value::Int(2)),
         ("C".to_string(), Value::Int(3)),
@@ -113,8 +177,8 @@ lazy_static! {
         ("E".to_string(), Value::Int(5)),
         ("F".to_string(), Value::Int(6)),
         ("G".to_string(), Value::Int(7)),
-    ]);
-}
+    ])
+});
 
 #[test]
 fn test_validate() {

@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 use std::mem;
 
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 
 use mz_expr::func;
 use mz_repr::{ColumnType, RelationType, ScalarType};
@@ -273,13 +273,11 @@ pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
     walk_relation(expr, &[])
 }
 
-lazy_static! {
-    /// An empty parameter type map.
-    ///
-    /// These transformations are expected to run after parameters are bound, so
-    /// there is no need to provide any parameter type information.
-    static ref NO_PARAMS: BTreeMap<usize, ScalarType> = BTreeMap::new();
-}
+/// An empty parameter type map.
+///
+/// These transformations are expected to run after parameters are bound, so
+/// there is no need to provide any parameter type information.
+static NO_PARAMS: Lazy<BTreeMap<usize, ScalarType>> = Lazy::new(BTreeMap::new);
 
 fn column_type(
     outers: &[RelationType],

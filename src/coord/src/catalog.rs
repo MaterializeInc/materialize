@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use mz_stash::{Append, Postgres, Sqlite};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
@@ -1500,8 +1500,7 @@ impl<S: Append> Catalog<S> {
             migrated_builtins,
         } = catalog
             .allocate_system_ids(
-                BUILTINS
-                    .iter()
+                BUILTINS::iter()
                     .filter(|builtin| !matches!(builtin, Builtin::Type(_)))
                     .collect(),
                 |builtin| {
@@ -1621,7 +1620,7 @@ impl<S: Append> Catalog<S> {
                     new_builtins: new_indexes,
                     ..
                 } = catalog
-                    .allocate_system_ids(BUILTINS.logs().collect(), |log| {
+                    .allocate_system_ids(BUILTINS::logs().collect(), |log| {
                         introspection_source_index_gids
                             .get(log.name)
                             .cloned()
@@ -1746,7 +1745,7 @@ impl<S: Append> Catalog<S> {
             new_builtins,
             ..
         } = self
-            .allocate_system_ids(BUILTINS.types().collect(), |typ| {
+            .allocate_system_ids(BUILTINS::types().collect(), |typ| {
                 persisted_builtin_ids
                     .get(&(typ.schema.to_string(), typ.name.to_string()))
                     .cloned()
@@ -1758,8 +1757,7 @@ impl<S: Append> Catalog<S> {
             .collect();
 
         // Replace named references with id references
-        let mut builtin_types: Vec<_> = BUILTINS
-            .types()
+        let mut builtin_types: Vec<_> = BUILTINS::types()
             .map(|typ| Self::resolve_builtin_type(typ, &name_to_id_map))
             .collect();
 
@@ -1904,10 +1902,8 @@ impl<S: Append> Catalog<S> {
             // upon a non-existent logging view. This is fine for now because
             // the only goal is to produce a nicer error message; we'll bail out
             // safely even if the error message we're sniffing out changes.
-            lazy_static! {
-                static ref LOGGING_ERROR: Regex =
-                    Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
-            }
+            static LOGGING_ERROR: Lazy<Regex> =
+                Lazy::new(|| Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap());
             let item = match c.deserialize_item(def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
@@ -3130,7 +3126,7 @@ impl<S: Append> Catalog<S> {
     pub async fn allocate_introspection_source_indexes(
         &mut self,
     ) -> Vec<(&'static BuiltinLog, GlobalId)> {
-        let log_amount = BUILTINS.logs().count();
+        let log_amount = BUILTINS::logs().count();
         let system_ids = self
             .storage()
             .await
@@ -3141,7 +3137,7 @@ impl<S: Append> Catalog<S> {
             )
             .await
             .expect("cannot fail to allocate system ids");
-        BUILTINS.logs().zip(system_ids.into_iter()).collect()
+        BUILTINS::logs().zip(system_ids.into_iter()).collect()
     }
 }
 

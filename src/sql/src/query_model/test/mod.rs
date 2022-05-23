@@ -19,7 +19,7 @@ use crate::query_model::Model;
 use catalog::TestCatalog;
 
 use crate::names::resolve_names_stmt;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -39,13 +39,11 @@ enum Directive {
     RoundTrip,
 }
 
-lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = {
-        let mut rti = ReflectedTypeInfo::default();
-        Directive::add_to_reflected_type_info(&mut rti);
-        rti
-    };
-}
+pub static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
+    let mut rti = ReflectedTypeInfo::default();
+    Directive::add_to_reflected_type_info(&mut rti);
+    rti
+});
 
 /// Convert the input string to a Query Graph Model.
 fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, String> {

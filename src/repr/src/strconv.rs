@@ -33,11 +33,11 @@ use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use dec::OrderedDecimal;
 use fast_float::FastFloat;
-use lazy_static::lazy_static;
 use mz_lowertest::MzReflect;
 use mz_ore::display::DisplayExt;
 use mz_ore::result::ResultExt;
 use num_traits::Float as NumFloat;
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use regex::bytes::Regex;
 use ryu::Float as RyuFloat;
@@ -199,12 +199,10 @@ where
     // If fast_float returns zero and the input was not an explicitly-specified
     // zero, then we know underflow occurred.
 
-    lazy_static! {
-        // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, et al.
-        static ref ZERO_RE: Regex = Regex::new("(?i-u)^[-+]?0+(\\.0+)?(e|$)").unwrap();
-        // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
-        static ref INF_RE: Regex = Regex::new("(?i-u)^[-+]?inf").unwrap();
-    }
+    // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, et al.
+    static ZERO_RE: Lazy<Regex> = Lazy::new(|| Regex::new("(?i-u)^[-+]?0+(\\.0+)?(e|$)").unwrap());
+    // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
+    static INF_RE: Lazy<Regex> = Lazy::new(|| Regex::new("(?i-u)^[-+]?inf").unwrap());
 
     let buf = s.trim().as_bytes();
     let f: Fl =

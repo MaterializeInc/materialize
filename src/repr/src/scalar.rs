@@ -16,7 +16,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -2031,20 +2031,18 @@ impl Arbitrary for ScalarType {
     }
 }
 
-lazy_static! {
-    static ref EMPTY_ARRAY_ROW: Row = {
-        let mut row = Row::default();
-        row.packer()
-            .push_array(&[], iter::empty::<Datum>())
-            .expect("array known to be valid");
-        row
-    };
-    static ref EMPTY_LIST_ROW: Row = {
-        let mut row = Row::default();
-        row.packer().push_list(iter::empty::<Datum>());
-        row
-    };
-}
+static EMPTY_ARRAY_ROW: Lazy<Row> = Lazy::new(|| {
+    let mut row = Row::default();
+    row.packer()
+        .push_array(&[], iter::empty::<Datum>())
+        .expect("array known to be valid");
+    row
+});
+static EMPTY_LIST_ROW: Lazy<Row> = Lazy::new(|| {
+    let mut row = Row::default();
+    row.packer().push_list(iter::empty::<Datum>());
+    row
+});
 
 impl Datum<'_> {
     pub fn empty_array() -> Datum<'static> {

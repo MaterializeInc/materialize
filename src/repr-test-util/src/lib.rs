@@ -12,7 +12,7 @@
 //! These test utilities are relied by crates other than `repr`.
 
 use chrono::NaiveDateTime;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use proc_macro2::TokenTree;
 
 use mz_lowertest::{
@@ -22,13 +22,11 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 
-lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = {
-        let mut rti = ReflectedTypeInfo::default();
-        ColumnType::add_to_reflected_type_info(&mut rti);
-        rti
-    };
-}
+pub static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
+    let mut rti = ReflectedTypeInfo::default();
+    ColumnType::add_to_reflected_type_info(&mut rti);
+    rti
+});
 
 /* #endregion */
 

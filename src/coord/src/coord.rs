@@ -541,8 +541,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let entries: Vec<_> = self.catalog.entries().cloned().collect();
-        let logs: HashSet<_> = BUILTINS
-            .logs()
+        let logs: HashSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
@@ -658,7 +657,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
-        for log in BUILTINS.logs() {
+        for log in BUILTINS::logs() {
             let log_id = &self.catalog.resolve_builtin_log(log).to_string();
             self.send_builtin_table_updates(
                 log.variant
@@ -692,7 +691,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     .into_iter()
                     .enumerate()
                     .flat_map(|(index, (parent, pairs))| {
-                        let parent_log = BUILTINS.logs().find(|src| src.variant == parent).unwrap();
+                        let parent_log =
+                            BUILTINS::logs().find(|src| src.variant == parent).unwrap();
                         let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
                         pairs.into_iter().map(move |(c, p)| {
                             let row = Row::pack_slice(&[

@@ -18,7 +18,7 @@ use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
@@ -591,19 +591,17 @@ impl Error for CatalogError {}
 #[derive(Debug)]
 pub struct DummyCatalog;
 
-lazy_static! {
-    static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
-        start_time: MIN_DATETIME,
-        start_instant: Instant::now(),
-        nonce: 0,
-        cluster_id: Uuid::from_u128(0),
-        session_id: Uuid::from_u128(0),
-        experimental_mode: true,
-        build_info: &DUMMY_BUILD_INFO,
-        timestamp_frequency: Duration::from_secs(1),
-        now: NOW_ZERO.clone(),
-    };
-}
+static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
+    start_time: MIN_DATETIME,
+    start_instant: Instant::now(),
+    nonce: 0,
+    cluster_id: Uuid::from_u128(0),
+    session_id: Uuid::from_u128(0),
+    experimental_mode: true,
+    build_info: &DUMMY_BUILD_INFO,
+    timestamp_frequency: Duration::from_secs(1),
+    now: NOW_ZERO.clone(),
+});
 
 impl SessionCatalog for DummyCatalog {
     fn active_user(&self) -> &str {

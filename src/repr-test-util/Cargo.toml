@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
-lazy_static = "1.4.0"
+once_cell = "1.12.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }

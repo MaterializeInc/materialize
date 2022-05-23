@@ -15,8 +15,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::{pin_mut, StreamExt, TryStreamExt};
-use lazy_static::lazy_static;
 use mz_postgres_util::TableInfo;
+use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
@@ -38,10 +38,8 @@ use super::metrics::SourceBaseMetrics;
 
 mod metrics;
 
-lazy_static! {
-    /// Postgres epoch is 2000-01-01T00:00:00Z
-    static ref PG_EPOCH: SystemTime = UNIX_EPOCH + Duration::from_secs(946_684_800);
-}
+/// Postgres epoch is 2000-01-01T00:00:00Z
+static PG_EPOCH: Lazy<SystemTime> = Lazy::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
