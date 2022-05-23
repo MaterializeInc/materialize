@@ -9,6 +9,7 @@
 
 fn main() {
     prost_build::Config::new()
+        .extern_path(".mz_repr.url", "::mz_repr::url")
         .type_attribute(".", "#[allow(missing_docs)]")
         .compile_protos(&["ccsr/src/config.proto", "ccsr/src/tls.proto"], &[".."])
         .unwrap();

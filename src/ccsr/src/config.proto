@@ -9,9 +9,19 @@
 
 syntax = "proto3";
 
+import "ccsr/src/tls.proto";
+import "repr/src/url.proto";
+
 package mz_ccsr.config;
 
 message ProtoAuth {
     string username = 1;
     optional string password = 2;
+}
+
+message ProtoClientConfig {
+    mz_repr.url.ProtoUrl url = 1;
+    repeated mz_ccsr.tls.ProtoCertificate root_certs = 2;
+    mz_ccsr.tls.ProtoIdentity identity = 3;
+    ProtoAuth auth = 4;
 }
