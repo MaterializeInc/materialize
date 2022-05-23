@@ -11,6 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
+import "repr/src/global_id.proto";
 import "repr/src/proto.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
@@ -48,6 +49,17 @@ message ProtoUpsertStyle {
 message ProtoIncludedColumnPos {
     string name = 1;
     uint64 pos = 2;
+}
+
+message ProtoDebeziumTransactionMetadata {
+    mz_repr.global_id.ProtoGlobalId tx_metadata_global_id = 1;
+    uint64 tx_status_idx = 2;
+    uint64 tx_transaction_id_idx = 3;
+    uint64 tx_data_collections_idx = 4;
+    uint64 tx_data_collections_data_collection_idx = 5;
+    uint64 tx_data_collections_event_count_idx = 6;
+    string tx_data_collection_name = 7;
+    uint64 data_transaction_id_idx = 8;
 }
 
 message ProtoDebeziumSourceProjection {

@@ -1830,7 +1830,7 @@ pub mod sources {
         pub mode: DebeziumMode,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumTransactionMetadata {
         pub tx_metadata_global_id: GlobalId,
         pub tx_status_idx: usize,
@@ -1840,6 +1840,44 @@ pub mod sources {
         pub tx_data_collections_event_count_idx: usize,
         pub tx_data_collection_name: String,
         pub data_transaction_id_idx: usize,
+    }
+
+    impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata {
+        fn into_proto(self: &Self) -> ProtoDebeziumTransactionMetadata {
+            ProtoDebeziumTransactionMetadata {
+                tx_metadata_global_id: Some(self.tx_metadata_global_id.into_proto()),
+                tx_status_idx: self.tx_status_idx.into_proto(),
+                tx_transaction_id_idx: self.tx_transaction_id_idx.into_proto(),
+                tx_data_collections_idx: self.tx_data_collections_idx.into_proto(),
+                tx_data_collections_data_collection_idx: self
+                    .tx_data_collections_data_collection_idx
+                    .into_proto(),
+                tx_data_collections_event_count_idx: self
+                    .tx_data_collections_event_count_idx
+                    .into_proto(),
+                tx_data_collection_name: self.tx_data_collection_name.clone(),
+                data_transaction_id_idx: self.data_transaction_id_idx.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumTransactionMetadata) -> Result<Self, TryFromProtoError> {
+            Ok(DebeziumTransactionMetadata {
+                tx_metadata_global_id: proto
+                    .tx_metadata_global_id
+                    .into_rust_if_some("ProtoDebeziumTransactionMetadata::tx_metadata_global_id")?,
+                tx_status_idx: proto.tx_status_idx.into_rust()?,
+                tx_transaction_id_idx: proto.tx_transaction_id_idx.into_rust()?,
+                tx_data_collections_idx: proto.tx_data_collections_idx.into_rust()?,
+                tx_data_collections_data_collection_idx: proto
+                    .tx_data_collections_data_collection_idx
+                    .into_rust()?,
+                tx_data_collections_event_count_idx: proto
+                    .tx_data_collections_event_count_idx
+                    .into_rust()?,
+                tx_data_collection_name: proto.tx_data_collection_name,
+                data_transaction_id_idx: proto.data_transaction_id_idx.into_rust()?,
+            })
+        }
     }
 
     /// Ordered means we can trust Debezium high water marks
