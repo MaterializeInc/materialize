@@ -445,6 +445,26 @@ SELECT coalesce(row(4, 3), row(2, 1))
 ----
 (4,3)
 
+query T
+select coalesce(null::char(1), 'abc');
+----
+abc
+
+query T
+SELECT coalesce('abc', null::char(1));
+----
+abc
+
+query T
+SELECT coalesce(null::char(1),'abcde','abc');
+----
+abcde
+
+query T
+SELECT coalesce('abcde',null::char(1),'abc');
+----
+abcde
+
 # TODO(#11469)
 query error coalesce could not convert type record
 SELECT coalesce(row(1, 2), row(3), row(4, 5));
@@ -463,6 +483,26 @@ query T
 SELECT coalesce(1, 1 / 0, a) FROM v
 ----
 1
+
+query T
+select coalesce(null::char(1), 'abc');
+----
+abc
+
+query T
+SELECT coalesce('abc', null::char(1));
+----
+abc
+
+query T
+SELECT coalesce(null::char(1),'abcde','abc');
+----
+abcde
+
+query T
+SELECT coalesce('abcde',null::char(1),'abc');
+----
+abcde
 
 # Test greatest.
 query I
