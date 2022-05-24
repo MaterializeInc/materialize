@@ -343,6 +343,13 @@ SET a = DEFAULT
 SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Default })
 
 parse-statement
+SET a = 'default'
+----
+SET a = 'default'
+=>
+SetVariable(SetVariableStatement { local: false, variable: Ident("a"), value: Literal(String("default")) })
+
+parse-statement
 SET LOCAL a = b
 ----
 SET LOCAL a = b
@@ -404,6 +411,20 @@ SET a =
 error: Expected variable value, found EOF
 SET a =
        ^
+
+parse-statement
+RESET a
+----
+RESET a
+=>
+ResetVariable(ResetVariableStatement { variable: Ident("a") })
+
+parse-statement
+RESET
+----
+error: Expected identifier, found EOF
+RESET
+     ^
 
 parse-statement
 DISCARD ALL
