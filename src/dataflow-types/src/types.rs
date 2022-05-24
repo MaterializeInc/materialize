@@ -3380,6 +3380,7 @@ pub mod sinks {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
+    use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
     use timely::progress::frontier::Antichain;
@@ -3458,6 +3459,39 @@ pub mod sinks {
     pub struct SinkAsOf<T = mz_repr::Timestamp> {
         pub frontier: Antichain<T>,
         pub strict: bool,
+    }
+
+    impl Arbitrary for SinkAsOf<mz_repr::Timestamp> {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (proptest::collection::vec(any::<u64>(), 1..4), any::<bool>())
+                .prop_map(|(frontier, strict)| SinkAsOf {
+                    frontier: Antichain::from(frontier),
+                    strict,
+                })
+                .boxed()
+        }
+    }
+
+    impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
+        fn into_proto(&self) -> ProtoSinkAsOf {
+            ProtoSinkAsOf {
+                frontier: Some((&self.frontier).into()),
+                strict: self.strict,
+            }
+        }
+
+        fn from_proto(proto: ProtoSinkAsOf) -> Result<Self, TryFromProtoError> {
+            Ok(SinkAsOf {
+                frontier: proto
+                    .frontier
+                    .map(Into::into)
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkAsOf::frontier"))?,
+                strict: proto.strict,
+            })
+        }
     }
 
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

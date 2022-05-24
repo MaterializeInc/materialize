@@ -12,6 +12,7 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 
 import "kafka-util/src/addr.proto";
+import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 
@@ -36,6 +37,11 @@ message ProtoSinkConnector {
 message ProtoKafkaSinkConsistencyConnector {
     string topic = 1;
     int32 schema_id = 2;
+}
+
+message ProtoSinkAsOf {
+    mz_persist.gen.persist.ProtoU64Antichain frontier = 1;
+    bool strict = 2;
 }
 
 message ProtoKafkaSinkConnector {
