@@ -11,7 +11,8 @@ mod test {
     use mz_expr::canonicalize::{canonicalize_equivalences, canonicalize_predicates};
     use mz_expr::{MapFilterProject, MirScalarExpr};
     use mz_expr_test_util::*;
-    use mz_lowertest::{deserialize, deserialize_optional, tokenize, MzReflect, ReflectedTypeInfo};
+    use mz_lowertest::{deserialize, deserialize_optional, tokenize, MzReflect};
+    use mz_ore::result::ResultExt;
     use mz_ore::str::separated;
     use mz_repr::RelationType;
 
@@ -20,9 +21,8 @@ mod test {
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {
         let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
-        let mut scalar: MirScalarExpr =
-            deserialize(&mut input_stream, "MirScalarExpr", &RTI, &mut ctx)?;
-        let typ: RelationType = deserialize(&mut input_stream, "RelationType", &RTI, &mut ctx)?;
+        let mut scalar: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
+        let typ: RelationType = deserialize(&mut input_stream, "RelationType", &mut ctx)?;
         let before = scalar.typ(&typ);
         scalar.reduce(&typ);
         let after = scalar.typ(&typ);
@@ -40,8 +40,8 @@ mod test {
         let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let input_predicates: Vec<MirScalarExpr> =
-            deserialize(&mut input_stream, "Vec<MirScalarExpr>", &RTI, &mut ctx)?;
-        let typ: RelationType = deserialize(&mut input_stream, "RelationType", &RTI, &mut ctx)?;
+            deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
+        let typ: RelationType = deserialize(&mut input_stream, "RelationType", &mut ctx)?;
         // predicate canonicalization is meant to produce the same output regardless of the
         // order of the input predicates.
         let mut predicates1 = input_predicates.clone();
@@ -79,14 +79,16 @@ mod test {
     fn test_mfp(s: &str) -> Result<MapFilterProject, String> {
         let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
-        let mut rti = ReflectedTypeInfo::default();
-        let input_arity: usize = deserialize(&mut input_stream, "usize", &RTI, &mut ctx)?;
+        let input_arity = input_stream
+            .next()
+            .unwrap()
+            .to_string()
+            .parse::<usize>()
+            .map_err_to_string()?;
         let mut mfp = MapFilterProject::new(input_arity);
-        MFPTestCommand::add_to_reflected_type_info(&mut rti);
         while let Some(command) = deserialize_optional::<MFPTestCommand, _, _>(
             &mut input_stream,
             "MFPTestCommand",
-            &rti,
             &mut ctx,
         )? {
             match command {
@@ -103,9 +105,8 @@ mod test {
         let mut input_stream = tokenize(&s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut equivalences: Vec<Vec<MirScalarExpr>> =
-            deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &RTI, &mut ctx)?;
-        let input_type: RelationType =
-            deserialize(&mut input_stream, "RelationType", &RTI, &mut ctx)?;
+            deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &mut ctx)?;
+        let input_type: RelationType = deserialize(&mut input_stream, "RelationType", &mut ctx)?;
         canonicalize_equivalences(&mut equivalences, &[input_type]);
         Ok(equivalences)
     }

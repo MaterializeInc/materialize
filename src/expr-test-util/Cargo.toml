@@ -7,7 +7,6 @@ rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-once_cell = "1.12.0"
 mz-expr = { path = "../expr" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }

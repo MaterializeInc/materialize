@@ -92,12 +92,11 @@ The main object creation method is
 pub fn deserialize<D, I, C>(
     stream_iter: &mut I,
     type_name: &'static str,
-    rti: &ReflectedTypeInfo,
     ctx: &mut C,
 ) -> Result<D, String>
 where
     C: TestDeserializeContext,
-    D: DeserializeOwned,
+    D: DeserializeOwned + MzReflect,
     I: Iterator<Item = proc_macro2::TokenTree>
 ```
 
@@ -130,6 +129,13 @@ Default values are supported as long as the default fields are last. Put
 `#[serde(default)]` over any fields you want to be default and make sure those
 fields have default values.
 
+You can add the attribute `#[mzreflect(ignore)]` to a field to avoid having to
+derive `MzReflect` as long as at least one of the following conditions apply:
+* you have [overridden the syntax](#extending-the-syntax) such that you can
+construct an instance of the field without using the DSL
+* you have marked the field with the attribute `#[serde(default)]` and always
+  want the field to be initialized with the default value.
+
 [serde_json]: https://docs.serde.rs/serde_json/
 
 ### 1. Parsing the test syntax
@@ -151,42 +157,10 @@ You have to pass in a string containing the name of your type.
 Rust does not have type objects that you can manipulate. Thus, information about
 enums and structs are keyed by string.
 
-### 3. Feeding in type information
+### 3. Feeding in syntax extensions
 
-Enum/struct information must be passed into the converter via
-the struct `ReflectedTypeInfo`.
-
-To populate the `ReflectedTypeInfo` struct, add these two lines to your code:
-```
-let mut rti = ReflectedTypeInfo::default();
-<Object_type>::add_to_reflected_type_info(&mut rti);
-```
-
-Provided your object type is a [supported type](#supported-types), the
-`add_to_reflected_type_info` function will recursively add types your object
-type depends on to `ReflectedTypoInfo`.
-
-Notably, the type `Result<<ok_type>, <error_type>>` is not yet
-supported, so you may find that you need to separately add information about the
-error type to `ReflectedTypoInfo`.
-```
-<error_type>::add_to_reflected_type_info(&mut rti)
-```
-
-If it is unnecessary to add the type of a field to `ReflectedTypeInfo` because:
-* you have [overridden the syntax](#extending-the-syntax) such that you can
-construct an instance of the field without using the DSL
-* you have marked the field with the attribute `#[serde(default)]` and always
-  want the field to be initialized with the default value.
-You can add the attribute `#[mzreflect(ignore)]` to the field. If you do so,
-`add_to_reflected_type_info` will not add the type of the field to
-`ReflectedTypeInfo`, but it will add the types of other fields of the enum
-variant or struct without the attribute.
-
-### 4. Feeding in syntax extensions
-
-If you don't need to extend or override the syntax, give a
-`&mut GenericTestDeserializationContext::default()`.
+If you don't need to extend or override the syntax, call either
+`deserialize_generic` or `deserialize_optional_generic`.
 
 Otherwise, see ["Extending the syntax"](#extending-the-syntax).
 
@@ -197,9 +171,6 @@ Create an object that implements the trait `TestDeserializationContext`.
 The trait has a method `override_syntax`.
 * Its first argument is `&mut self` this way the `TestDeserializationContext`
   can store state across multiple objects being created.
-* The return value should always be `Ok(None)` except in the specific cases when
-  you are overriding or extending the syntax, in which case the return value
-  will be either `Ok(Some(JSON_string))` or `Err(err_string)`.
 * The second and third arguments of the method is the first element in the
   stream and a pointer to the rest of the stream respectively. The contract of
   `override_syntax` is that you promise not to iterate through the stream more
@@ -211,13 +182,16 @@ The trait has a method `override_syntax`.
   variant (resp. struct) you are trying to create has a field that is not a
   supported type, you should use `override_syntax` to specify how to create the
   enum variant (resp. struct).
+* The return value should always be `Ok(None)` except in the specific cases when
+  you are overriding or extending the syntax, in which case the return value
+  will be either `Ok(Some(JSON_string))` or `Err(err_string)`.
 
 Refer to the [proc_macro2] docs for information how to parse the stream.
 
 [proc_macro2]: https://docs.rs/proc-macro2/1.0.27/proc_macro2/enum.TokenTree.html
 
-If an object being created is registered as an enum or struct in
-`ReflectedTypeInfo`, what is passed to `override_syntax` changes:
+If an object being created is an enum or struct that derives `MzReflect`, what
+is passed to `override_syntax` changes:
 * If the spec is a parentheses group (<arg1> .. <argn>), `first_arg` will be
   `<arg1>` and `rest_of_stream` will be `<arg2> .. <argn>`. This saves you the
   effort of unpacking the parentheses group.
@@ -239,8 +213,8 @@ an alternate syntax and you believe:
 2. it is unnecessary for the default syntax to be supported.
 
 you can add the attribute `#[mzreflect(ignore)]` to one or more fields of the
-enum variant or struct so that their types do not have to be added to
-`ReflectedTypeInfo`. This has the side effect of disabling the ability to
+enum variant or struct so that their fields and any subtypes do not need to
+derive `MzReflect`. This has the side effect of disabling the ability to
 construct the enum variant or the struct using the default syntax.
 
 ### Supported types
@@ -264,12 +238,15 @@ types with values that `serde_json` cannot distinguish from `None` because
 * `Option<NoArgumentStruct>`. `serde_json` cannot distinguish
   `Some(NoArgumentStruct)` from `None`.
 
+The type `Result<<ok_type>, <error_type>>` is not yet supported.
+
 ## Roundtrip
 
 To convert a Rust object back into the readable syntax:
 1) Serialize the Rust object to a [serde_json::Value] object by calling
    `let json = serde_json::to_value(obj)?;`.
-2) Feed the json into the method `from_json`.
+2) Feed the json into the method `serialize::<T, _>`. `T` is the type of the
+   object that the json represents.
 
 [serde_json::Value]: https://docs.serde.rs/serde_json/enum.Value.html
 
@@ -288,9 +265,6 @@ struct FuncXParams {
     argn: ...
 }
 ```
-Also, calling `FuncXParams::add_to_reflected_type_info` would allow
-automatically and recursively populating `ReflectedTypeInfo` with all the
-information required to construct all of the arguments.
 
 Likewise, if you want to run arbitrary sequences of functions selected from a
 finite set `{Func1, ..., Funcj}`, you can define a enum where each variant

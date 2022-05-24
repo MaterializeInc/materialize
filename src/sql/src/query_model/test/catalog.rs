@@ -44,11 +44,6 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     timestamp_frequency: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
 });
-static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
-    let mut rti = ReflectedTypeInfo::default();
-    TestCatalogCommand::add_to_reflected_type_info(&mut rti);
-    rti
-});
 
 /// A dummy [`CatalogItem`] implementation.
 ///
@@ -321,11 +316,9 @@ pub enum TestCatalogCommand {
 impl TestCatalog {
     pub(crate) fn execute_commands(&mut self, spec: &str) -> Result<String, String> {
         let mut stream_iter = tokenize(spec)?.into_iter();
-        while let Some(command) = deserialize_optional::<TestCatalogCommand, _, _>(
+        while let Some(command) = deserialize_optional_generic::<TestCatalogCommand, _>(
             &mut stream_iter,
             "TestCatalogCommand",
-            &RTI,
-            &mut GenericTestDeserializeContext::default(),
         )? {
             match command {
                 TestCatalogCommand::Defsource { source_name, desc } => {

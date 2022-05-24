@@ -14,7 +14,6 @@ mod tests {
     use std::collections::HashMap;
 
     use mz_ore::result::ResultExt;
-    use once_cell::sync::Lazy;
     use proc_macro2::TokenTree;
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
@@ -79,12 +78,6 @@ mod tests {
         OptionStructNesting(SecondLayerOfOption),
     }
 
-    static RTI: Lazy<ReflectedTypeInfo> = Lazy::new(|| {
-        let mut rti = ReflectedTypeInfo::default();
-        TestEnum::add_to_reflected_type_info(&mut rti);
-        rti
-    });
-
     #[derive(Default)]
     struct TestOverrideDeserializeContext;
 
@@ -103,7 +96,6 @@ mod tests {
             first_arg: TokenTree,
             rest_of_stream: &mut I,
             type_name: &str,
-            rti: &ReflectedTypeInfo,
         ) -> Result<Option<String>, String>
         where
             I: Iterator<Item = TokenTree>,
@@ -143,7 +135,11 @@ mod tests {
             } else if type_name == "f64" {
                 if let TokenTree::Punct(punct) = first_arg.clone() {
                     if punct.as_char() == '+' {
-                        return to_json(rest_of_stream, type_name, rti, self);
+                        if let Some(token) = rest_of_stream.next() {
+                            return Ok(Some(token.to_string()));
+                        } else {
+                            return Err("+ is not an f64".to_string());
+                        }
                     }
                 }
             } else if type_name == "usize" {
@@ -156,12 +152,7 @@ mod tests {
         }
 
         /// This decrements all numbers of type "usize" by one.
-        fn reverse_syntax_override(
-            &mut self,
-            json: &Value,
-            type_name: &str,
-            _rti: &ReflectedTypeInfo,
-        ) -> Option<String> {
+        fn reverse_syntax_override(&mut self, json: &Value, type_name: &str) -> Option<String> {
             if type_name == "usize" {
                 let result: usize = json.as_u64().unwrap() as usize;
                 if result == 0 {
@@ -183,16 +174,10 @@ mod tests {
             deserialize_optional(
                 &mut stream.into_iter(),
                 "TestEnum",
-                &RTI,
                 &mut TestOverrideDeserializeContext::default(),
             )
         } else {
-            deserialize_optional(
-                &mut stream.into_iter(),
-                "TestEnum",
-                &RTI,
-                &mut GenericTestDeserializeContext::default(),
-            )
+            deserialize_optional_generic(&mut stream.into_iter(), "TestEnum")
         }
     }
 
@@ -203,19 +188,13 @@ mod tests {
         let (json, new_s) = if let Some(result) = &result {
             let json = serde_json::to_value(result).map_err_to_string()?;
             let new_s = if args.get("override").is_some() {
-                from_json(
+                serialize::<TestEnum, _>(
                     &json,
                     "TestEnum",
-                    &RTI,
                     &mut TestOverrideDeserializeContext::default(),
                 )
             } else {
-                from_json(
-                    &json,
-                    "TestEnum",
-                    &RTI,
-                    &mut GenericTestDeserializeContext::default(),
-                )
+                serialize_generic::<TestEnum>(&json, "TestEnum")
             };
             (json, new_s)
         } else {
