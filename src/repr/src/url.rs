@@ -12,8 +12,7 @@
 use proptest::prelude::Strategy;
 use url::Url;
 
-use crate::proto::newapi::RustType;
-use crate::proto::TryFromProtoError;
+use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.url.rs"));
 
@@ -43,7 +42,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]

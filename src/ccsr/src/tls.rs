@@ -16,8 +16,7 @@ use openssl::x509::X509;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::newapi::RustType;
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_ccsr.tls.rs"));
 

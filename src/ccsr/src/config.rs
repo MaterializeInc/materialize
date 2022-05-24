@@ -14,8 +14,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 
 use crate::client::Client;

@@ -474,8 +474,8 @@ pub mod aws {
     use serde::{Deserialize, Serialize};
 
     use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-    use mz_repr::GlobalId;
     use mz_repr::url::URL_PATTERN;
+    use mz_repr::GlobalId;
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
 
@@ -1112,7 +1112,7 @@ pub mod sources {
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
     use mz_repr::chrono::any_naive_datetime;
-    use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError, TryIntoIfSome};
+    use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -2720,7 +2720,7 @@ pub mod sources {
                         ts_frequency,
                         timeline,
                     } => Kind::External(ProtoExternal {
-                        connector: Some(connector.into()),
+                        connector: Some(connector.into_proto()),
                         encoding: Some(encoding.into_proto()),
                         envelope: Some(envelope.into_proto()),
                         metadata_columns: metadata_columns.into_proto(),
@@ -2749,7 +2749,7 @@ pub mod sources {
                     ts_frequency,
                     timeline,
                 }) => SourceConnector::External {
-                    connector: connector.try_into_if_some("ProtoExternal::connector")?,
+                    connector: connector.into_rust_if_some("ProtoExternal::connector")?,
                     encoding: encoding.into_rust_if_some("ProtoExternal::encoding")?,
                     envelope: envelope.into_rust_if_some("ProtoExternal::envelope")?,
                     metadata_columns: metadata_columns.into_rust()?,
@@ -3360,7 +3360,7 @@ pub mod sources {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use mz_repr::proto::newapi::protobuf_roundtrip;
+        use mz_repr::proto::protobuf_roundtrip;
         use proptest::prelude::*;
 
         proptest! {
