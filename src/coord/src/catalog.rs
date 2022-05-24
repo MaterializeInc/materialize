@@ -2397,6 +2397,7 @@ impl<S: Append> Catalog<S> {
             },
             DropComputeInstance {
                 name: String,
+                introspection_source_index_ids: Vec<GlobalId>,
             },
             DropComputeInstanceReplica {
                 name: String,
@@ -2598,10 +2599,13 @@ impl<S: Append> Catalog<S> {
                 Op::DropComputeInstance { name } => {
                     let introspection_source_index_ids = tx.remove_compute_instance(&name)?;
                     builtin_table_updates.push(self.state.pack_compute_instance_update(&name, -1));
-                    for id in introspection_source_index_ids {
-                        builtin_table_updates.extend(self.state.pack_item_update(id, -1));
+                    for id in &introspection_source_index_ids {
+                        builtin_table_updates.extend(self.state.pack_item_update(*id, -1));
                     }
-                    vec![Action::DropComputeInstance { name }]
+                    vec![Action::DropComputeInstance {
+                        name,
+                        introspection_source_index_ids,
+                    }]
                 }
                 Op::DropComputeInstanceReplica { name, compute_id } => {
                     tx.remove_compute_instance_replica(&name, compute_id)?;
@@ -2847,7 +2851,17 @@ impl<S: Append> Catalog<S> {
                     }
                 }
 
-                Action::DropComputeInstance { name } => {
+                Action::DropComputeInstance {
+                    name,
+                    introspection_source_index_ids,
+                } => {
+                    for id in introspection_source_index_ids {
+                        state
+                            .entry_by_id
+                            .remove(&id)
+                            .expect("introspection source index does not exist");
+                    }
+
                     let id = state
                         .compute_instances_by_name
                         .remove(&name)
