@@ -11,18 +11,142 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
+import "repr/src/chrono.proto";
+import "repr/src/global_id.proto";
 import "repr/src/proto.proto";
+import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
 import "dataflow-types/src/postgres_source.proto";
 import "dataflow-types/src/types/aws.proto";
+import "dataflow-types/src/types/sources/encoding.proto";
 import "kafka-util/src/addr.proto";
 
 package mz_dataflow_types.types.sources;
 
+message ProtoIncludedColumnSource {
+    oneof kind {
+        google.protobuf.Empty default_position = 1;
+        google.protobuf.Empty partition = 2;
+        google.protobuf.Empty offset = 3;
+        google.protobuf.Empty timestamp = 4;
+        google.protobuf.Empty topic = 5;
+        google.protobuf.Empty headers = 6;
+    }
+}
+
+message ProtoKeyEnvelope {
+    oneof kind {
+        google.protobuf.Empty none = 1;
+        google.protobuf.Empty flattened = 2;
+        google.protobuf.Empty legacy_upsert = 3;
+        string named = 4;
+    }
+}
+
+message ProtoTimeline {
+    oneof kind {
+        google.protobuf.Empty epoch_milliseconds = 1;
+        string external = 2;
+        string user = 3;
+    }
+}
+
+message ProtoSourceEnvelope {
+    oneof kind {
+        ProtoKeyEnvelope none = 1;
+        ProtoDebeziumEnvelope debezium = 2;
+        ProtoUpsertEnvelope upsert = 3;
+        google.protobuf.Empty cdc_v2 = 4;
+        google.protobuf.Empty differential_row = 5;
+    }
+}
+
+message ProtoUpsertEnvelope {
+    ProtoUpsertStyle style = 1;
+    repeated uint64 key_indices = 2;
+}
+
+message ProtoUpsertStyle {
+    message ProtoDebezium {
+        uint64 after_idx = 1;
+    }
+
+    oneof kind {
+        ProtoKeyEnvelope default = 1;
+        ProtoDebezium debezium = 2;
+    }
+}
+
 message ProtoIncludedColumnPos {
     string name = 1;
     uint64 pos = 2;
+}
+
+message ProtoDebeziumEnvelope {
+    uint64 before_idx = 1;
+    uint64 after_idx = 2;
+    ProtoDebeziumMode mode = 3;
+}
+
+message ProtoDebeziumTransactionMetadata {
+    mz_repr.global_id.ProtoGlobalId tx_metadata_global_id = 1;
+    uint64 tx_status_idx = 2;
+    uint64 tx_transaction_id_idx = 3;
+    uint64 tx_data_collections_idx = 4;
+    uint64 tx_data_collections_data_collection_idx = 5;
+    uint64 tx_data_collections_event_count_idx = 6;
+    string tx_data_collection_name = 7;
+    uint64 data_transaction_id_idx = 8;
+}
+
+message ProtoDebeziumMode {
+    message ProtoFullInRange {
+        ProtoDebeziumDedupProjection projection = 1;
+        mz_repr.chrono.ProtoNaiveDateTime pad_start = 2;
+        mz_repr.chrono.ProtoNaiveDateTime start = 3;
+        mz_repr.chrono.ProtoNaiveDateTime end = 4;
+    }
+
+    oneof kind {
+        google.protobuf.Empty none = 1;
+        ProtoDebeziumDedupProjection ordered = 2;
+        ProtoDebeziumDedupProjection full = 3;
+        ProtoFullInRange full_in_range = 4;
+    }
+}
+
+message ProtoDebeziumDedupProjection {
+    uint64 source_idx = 1;
+    uint64 snapshot_idx = 2;
+    ProtoDebeziumSourceProjection source_projection = 3;
+    uint64 transaction_idx = 4;
+    uint64 total_order_idx = 5;
+    ProtoDebeziumTransactionMetadata tx_metadata = 6;
+}
+
+message ProtoDebeziumSourceProjection {
+    message ProtoMySql {
+        uint64 file = 1;
+        uint64 pos = 2;
+        uint64 row = 3;
+    }
+
+    message ProtoPostgres {
+        optional uint64 sequence = 1;
+        uint64 lsn = 2;
+    }
+
+    message ProtoSqlServer {
+        uint64 change_lsn = 1;
+        uint64 event_serial_no = 2;
+    }
+
+    oneof kind {
+        ProtoMySql my_sql = 1;
+        ProtoPostgres postgres = 2;
+        ProtoSqlServer sql_server = 3;
+    }
 }
 
 message ProtoKafkaSourceConnector {
@@ -37,6 +161,27 @@ message ProtoKafkaSourceConnector {
     ProtoIncludedColumnPos include_topic = 9;
     ProtoIncludedColumnPos include_offset = 10;
     ProtoIncludedColumnPos include_headers = 11;
+}
+
+message ProtoSourceConnector {
+    message ProtoExternal {
+        ProtoExternalSourceConnector connector = 1;
+        mz_dataflow_types.types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
+        ProtoSourceEnvelope envelope = 3;
+        repeated ProtoIncludedColumnSource metadata_columns = 4;
+        mz_repr.proto.ProtoDuration ts_frequency = 5;
+        ProtoTimeline timeline = 6;
+    }
+
+    message ProtoLocal {
+        ProtoTimeline timeline = 1;
+    }
+
+    oneof kind {
+        ProtoExternal external = 1;
+        ProtoLocal local = 2;
+        google.protobuf.Empty log = 3;
+    }
 }
 
 message ProtoExternalSourceConnector {
@@ -99,4 +244,9 @@ message ProtoCompression {
         google.protobuf.Empty gzip = 1;
         google.protobuf.Empty none = 2;
     }
+}
+
+message ProtoSourceDesc {
+    ProtoSourceConnector connector = 1;
+    mz_repr.relation_and_scalar.ProtoRelationDesc desc = 2;
 }

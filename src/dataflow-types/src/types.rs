@@ -474,6 +474,7 @@ pub mod aws {
     use serde::{Deserialize, Serialize};
 
     use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+    use mz_repr::url::URL_PATTERN;
     use mz_repr::GlobalId;
 
     include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
@@ -486,8 +487,7 @@ pub mod aws {
     /// It doesn't cover the full spectrum of valid URIs, but just a wide enough sample
     /// to test our Protobuf roundtripping logic.
     fn any_serde_uri() -> impl Strategy<Value = SerdeUri> {
-        r"(http|https)://[a-z][a-z0-9]{0,10}/?([a-z0-9]{0,5}/?){0,3}"
-            .prop_map(|s| SerdeUri(s.parse().unwrap()))
+        URL_PATTERN.prop_map(|s| SerdeUri(s.parse().unwrap()))
     }
 
     impl Arbitrary for SerdeUri {
@@ -1089,7 +1089,6 @@ impl ProtoMapEntry<GlobalId, SinkDesc> for ProtoSinkExport {
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
-    use std::str::FromStr;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -1101,7 +1100,8 @@ pub mod sources {
     use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec64;
     use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
-    use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+    use proptest::prelude::{any, Arbitrary, BoxedStrategy, Just, Strategy};
+    use proptest::prop_oneof;
     use proptest_derive::Arbitrary;
     use prost::Message;
     use serde::{Deserialize, Serialize};
@@ -1110,7 +1110,8 @@ pub mod sources {
 
     use mz_kafka_util::KafkaAddrs;
     use mz_persist_types::Codec;
-    use mz_repr::proto::{any_uuid, TryFromProtoError};
+    use mz_repr::chrono::any_naive_datetime;
+    use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -1125,16 +1126,25 @@ pub mod sources {
     // Types and traits related to the *decoding* of data for sources.
     pub mod encoding {
         use anyhow::Context;
+        use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
+        use proptest_derive::Arbitrary;
         use serde::{Deserialize, Serialize};
 
         use mz_interchange::{avro, protobuf};
+        use mz_repr::adt::regex::any_regex;
+        use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
         use mz_repr::{ColumnType, RelationDesc, ScalarType};
+
+        include!(concat!(
+            env!("OUT_DIR"),
+            "/mz_dataflow_types.types.sources.encoding.rs"
+        ));
 
         /// A description of how to interpret data from various sources
         ///
         /// Almost all sources only present values as part of their records, but Kafka allows a key to be
         /// associated with each record, which has a possibly independent encoding.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum SourceDataEncoding {
             Single(DataEncoding),
             KeyValue {
@@ -1143,18 +1153,35 @@ pub mod sources {
             },
         }
 
-        /// A description of how each row should be decoded, from a string of bytes to a sequence of
-        /// Differential updates.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-        pub enum DataEncoding {
-            Avro(AvroEncoding),
-            Protobuf(ProtobufEncoding),
-            Csv(CsvEncoding),
-            Regex(RegexEncoding),
-            Postgres,
-            Bytes,
-            Text,
-            RowCodec(RelationDesc),
+        impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
+            fn into_proto(self: &Self) -> ProtoSourceDataEncoding {
+                use proto_source_data_encoding::{Kind, ProtoKeyValue};
+                ProtoSourceDataEncoding {
+                    kind: Some(match self {
+                        SourceDataEncoding::Single(s) => Kind::Single(s.into_proto()),
+                        SourceDataEncoding::KeyValue { key, value } => {
+                            Kind::KeyValue(ProtoKeyValue {
+                                key: Some(key.into_proto()),
+                                value: Some(value.into_proto()),
+                            })
+                        }
+                    }),
+                }
+            }
+
+            fn from_proto(proto: ProtoSourceDataEncoding) -> Result<Self, TryFromProtoError> {
+                use proto_source_data_encoding::{Kind, ProtoKeyValue};
+                let kind = proto.kind.ok_or_else(|| {
+                    TryFromProtoError::missing_field("ProtoSourceDataEncoding::kind")
+                })?;
+                Ok(match kind {
+                    Kind::Single(s) => SourceDataEncoding::Single(s.into_rust()?),
+                    Kind::KeyValue(ProtoKeyValue { key, value }) => SourceDataEncoding::KeyValue {
+                        key: key.into_rust_if_some("ProtoKeyValue::key")?,
+                        value: value.into_rust_if_some("ProtoKeyValue::value")?,
+                    },
+                })
+            }
         }
 
         impl SourceDataEncoding {
@@ -1186,6 +1213,55 @@ pub mod sources {
                     SourceDataEncoding::KeyValue { key, value } => {
                         (Some(key.desc()?), value.desc()?)
                     }
+                })
+            }
+        }
+
+        /// A description of how each row should be decoded, from a string of bytes to a sequence of
+        /// Differential updates.
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        pub enum DataEncoding {
+            Avro(AvroEncoding),
+            Protobuf(ProtobufEncoding),
+            Csv(CsvEncoding),
+            Regex(RegexEncoding),
+            Postgres,
+            Bytes,
+            Text,
+            RowCodec(RelationDesc),
+        }
+
+        impl RustType<ProtoDataEncoding> for DataEncoding {
+            fn into_proto(self: &Self) -> ProtoDataEncoding {
+                use proto_data_encoding::Kind;
+                ProtoDataEncoding {
+                    kind: Some(match self {
+                        DataEncoding::Avro(e) => Kind::Avro(e.into_proto()),
+                        DataEncoding::Protobuf(e) => Kind::Protobuf(e.into_proto()),
+                        DataEncoding::Csv(e) => Kind::Csv(e.into_proto()),
+                        DataEncoding::Regex(e) => Kind::Regex(e.into_proto()),
+                        DataEncoding::Postgres => Kind::Postgres(()),
+                        DataEncoding::Bytes => Kind::Bytes(()),
+                        DataEncoding::Text => Kind::Text(()),
+                        DataEncoding::RowCodec(e) => Kind::RowCodec(e.into_proto()),
+                    }),
+                }
+            }
+
+            fn from_proto(proto: ProtoDataEncoding) -> Result<Self, TryFromProtoError> {
+                use proto_data_encoding::Kind;
+                let kind = proto
+                    .kind
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoDataEncoding::kind"))?;
+                Ok(match kind {
+                    Kind::Avro(e) => DataEncoding::Avro(e.into_rust()?),
+                    Kind::Protobuf(e) => DataEncoding::Protobuf(e.into_rust()?),
+                    Kind::Csv(e) => DataEncoding::Csv(e.into_rust()?),
+                    Kind::Regex(e) => DataEncoding::Regex(e.into_rust()?),
+                    Kind::Postgres(()) => DataEncoding::Postgres,
+                    Kind::Bytes(()) => DataEncoding::Bytes,
+                    Kind::Text(()) => DataEncoding::Text,
+                    Kind::RowCodec(e) => DataEncoding::RowCodec(e.into_rust()?),
                 })
             }
         }
@@ -1291,30 +1367,84 @@ pub mod sources {
         }
 
         /// Encoding in Avro format.
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct AvroEncoding {
             pub schema: String,
             pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
             pub confluent_wire_format: bool,
         }
 
+        impl RustType<ProtoAvroEncoding> for AvroEncoding {
+            fn into_proto(self: &Self) -> ProtoAvroEncoding {
+                ProtoAvroEncoding {
+                    schema: self.schema.clone(),
+                    schema_registry_config: self.schema_registry_config.into_proto(),
+                    confluent_wire_format: self.confluent_wire_format,
+                }
+            }
+
+            fn from_proto(proto: ProtoAvroEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(AvroEncoding {
+                    schema: proto.schema,
+                    schema_registry_config: proto.schema_registry_config.into_rust()?,
+                    confluent_wire_format: proto.confluent_wire_format,
+                })
+            }
+        }
+
         /// Encoding in Protobuf format.
-        #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+        #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
         pub struct ProtobufEncoding {
             pub descriptors: Vec<u8>,
             pub message_name: String,
             pub confluent_wire_format: bool,
         }
 
+        impl RustType<ProtoProtobufEncoding> for ProtobufEncoding {
+            fn into_proto(self: &Self) -> ProtoProtobufEncoding {
+                ProtoProtobufEncoding {
+                    descriptors: self.descriptors.clone(),
+                    message_name: self.message_name.clone(),
+                    confluent_wire_format: self.confluent_wire_format,
+                }
+            }
+
+            fn from_proto(proto: ProtoProtobufEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(ProtobufEncoding {
+                    descriptors: proto.descriptors,
+                    message_name: proto.message_name,
+                    confluent_wire_format: proto.confluent_wire_format,
+                })
+            }
+        }
+
         /// Arguments necessary to define how to decode from CSV format
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct CsvEncoding {
             pub columns: ColumnSpec,
             pub delimiter: u8,
         }
 
+        impl RustType<ProtoCsvEncoding> for CsvEncoding {
+            fn into_proto(self: &Self) -> ProtoCsvEncoding {
+                ProtoCsvEncoding {
+                    columns: Some(self.columns.into_proto()),
+                    delimiter: self.delimiter.into_proto(),
+                }
+            }
+
+            fn from_proto(proto: ProtoCsvEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(CsvEncoding {
+                    columns: proto
+                        .columns
+                        .into_rust_if_some("ProtoCsvEncoding::columns")?,
+                    delimiter: proto.delimiter.into_rust()?,
+                })
+            }
+        }
+
         /// Determines the RelationDesc and decoding of CSV objects
-        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub enum ColumnSpec {
             /// The first row is not a header row, and all columns get default names like `columnN`.
             Count(usize),
@@ -1322,6 +1452,31 @@ pub mod sources {
             ///
             /// Each of the values in `names` becomes the default name of a column in the dataflow.
             Header { names: Vec<String> },
+        }
+
+        impl RustType<ProtoColumnSpec> for ColumnSpec {
+            fn into_proto(self: &Self) -> ProtoColumnSpec {
+                use proto_column_spec::{Kind, ProtoHeader};
+                ProtoColumnSpec {
+                    kind: Some(match self {
+                        ColumnSpec::Count(c) => Kind::Count(c.into_proto()),
+                        ColumnSpec::Header { names } => Kind::Header(ProtoHeader {
+                            names: names.clone(),
+                        }),
+                    }),
+                }
+            }
+
+            fn from_proto(proto: ProtoColumnSpec) -> Result<Self, TryFromProtoError> {
+                use proto_column_spec::{Kind, ProtoHeader};
+                let kind = proto
+                    .kind
+                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoColumnSpec::kind"))?;
+                Ok(match kind {
+                    Kind::Count(c) => ColumnSpec::Count(c.into_rust()?),
+                    Kind::Header(ProtoHeader { names }) => ColumnSpec::Header { names },
+                })
+            }
         }
 
         impl ColumnSpec {
@@ -1344,6 +1499,31 @@ pub mod sources {
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
         pub struct RegexEncoding {
             pub regex: mz_repr::adt::regex::Regex,
+        }
+
+        impl Arbitrary for RegexEncoding {
+            type Strategy = BoxedStrategy<Self>;
+            type Parameters = ();
+
+            fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+                any_regex()
+                    .prop_map(|regex| RegexEncoding { regex })
+                    .boxed()
+            }
+        }
+
+        impl RustType<ProtoRegexEncoding> for RegexEncoding {
+            fn into_proto(self: &Self) -> ProtoRegexEncoding {
+                ProtoRegexEncoding {
+                    regex: Some(self.regex.into_proto()),
+                }
+            }
+
+            fn from_proto(proto: ProtoRegexEncoding) -> Result<Self, TryFromProtoError> {
+                Ok(RegexEncoding {
+                    regex: proto.regex.into_rust_if_some("ProtoRegexEncoding::regex")?,
+                })
+            }
         }
     }
 
@@ -1429,7 +1609,7 @@ pub mod sources {
     }
 
     /// Which piece of metadata a column corresponds to
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum IncludedColumnSource {
         /// The materialize-specific notion of "position"
         ///
@@ -1442,8 +1622,39 @@ pub mod sources {
         Headers,
     }
 
+    impl RustType<ProtoIncludedColumnSource> for IncludedColumnSource {
+        fn into_proto(self: &Self) -> ProtoIncludedColumnSource {
+            use proto_included_column_source::Kind;
+            ProtoIncludedColumnSource {
+                kind: Some(match self {
+                    IncludedColumnSource::DefaultPosition => Kind::DefaultPosition(()),
+                    IncludedColumnSource::Partition => Kind::Partition(()),
+                    IncludedColumnSource::Offset => Kind::Offset(()),
+                    IncludedColumnSource::Timestamp => Kind::Timestamp(()),
+                    IncludedColumnSource::Topic => Kind::Topic(()),
+                    IncludedColumnSource::Headers => Kind::Headers(()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoIncludedColumnSource) -> Result<Self, TryFromProtoError> {
+            use proto_included_column_source::Kind;
+            let kind = proto.kind.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoIncludedColumnSource::kind")
+            })?;
+            Ok(match kind {
+                Kind::DefaultPosition(()) => IncludedColumnSource::DefaultPosition,
+                Kind::Partition(()) => IncludedColumnSource::Partition,
+                Kind::Offset(()) => IncludedColumnSource::Offset,
+                Kind::Timestamp(()) => IncludedColumnSource::Timestamp,
+                Kind::Topic(()) => IncludedColumnSource::Topic,
+                Kind::Headers(()) => IncludedColumnSource::Headers,
+            })
+        }
+    }
+
     /// Whether and how to include the decoded key of a stream in dataflows
-    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum KeyEnvelope {
         /// Never include the key in the output row
         None,
@@ -1457,6 +1668,33 @@ pub mod sources {
         /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
         ///   that Record will get the given name.
         Named(String),
+    }
+
+    impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
+        fn into_proto(self: &Self) -> ProtoKeyEnvelope {
+            use proto_key_envelope::Kind;
+            ProtoKeyEnvelope {
+                kind: Some(match self {
+                    KeyEnvelope::None => Kind::None(()),
+                    KeyEnvelope::Flattened => Kind::Flattened(()),
+                    KeyEnvelope::LegacyUpsert => Kind::LegacyUpsert(()),
+                    KeyEnvelope::Named(name) => Kind::Named(name.clone()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoKeyEnvelope) -> Result<Self, TryFromProtoError> {
+            use proto_key_envelope::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoKeyEnvelope::kind"))?;
+            Ok(match kind {
+                Kind::None(()) => KeyEnvelope::None,
+                Kind::Flattened(()) => KeyEnvelope::Flattened,
+                Kind::LegacyUpsert(()) => KeyEnvelope::LegacyUpsert,
+                Kind::Named(name) => KeyEnvelope::Named(name),
+            })
+        }
     }
 
     /// A column that was created via an `INCLUDE` expression
@@ -1490,7 +1728,9 @@ pub mod sources {
     /// Some variants here have attached data used to differentiate incomparable
     /// instantiations. These attached data types should be expanded in the future
     /// if we need to tell apart more kinds of sources.
-    #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+    #[derive(
+        Arbitrary, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash,
+    )]
     pub enum Timeline {
         /// EpochMilliseconds means the timestamp is the number of milliseconds since
         /// the Unix epoch.
@@ -1505,6 +1745,31 @@ pub mod sources {
         User(String),
     }
 
+    impl RustType<ProtoTimeline> for Timeline {
+        fn into_proto(self: &Self) -> ProtoTimeline {
+            use proto_timeline::Kind;
+            ProtoTimeline {
+                kind: Some(match self {
+                    Timeline::EpochMilliseconds => Kind::EpochMilliseconds(()),
+                    Timeline::External(s) => Kind::External(s.clone()),
+                    Timeline::User(s) => Kind::User(s.clone()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoTimeline) -> Result<Self, TryFromProtoError> {
+            use proto_timeline::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimeline::kind"))?;
+            Ok(match kind {
+                Kind::EpochMilliseconds(()) => Timeline::EpochMilliseconds,
+                Kind::External(s) => Timeline::External(s),
+                Kind::User(s) => Timeline::User(s),
+            })
+        }
+    }
+
     /// `SourceEnvelope`s, describe how to turn a stream of messages from `SourceConnector`s,
     /// and turn them into a _differential stream_, that is, a stream of (data, time, diff)
     /// triples.
@@ -1512,7 +1777,7 @@ pub mod sources {
     /// Some sources (namely postgres and pubnub) skip any explicit envelope handling, effectively
     /// asserting that `SourceEnvelope` is `None` with `KeyEnvelope::None`.
     // TODO(guswynn): update this ^ when SimpleSource is gone.
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceEnvelope {
         /// The most trivial version is `None`, which typically produces triples where the diff
         /// is ALWAYS `1`
@@ -1537,6 +1802,35 @@ pub mod sources {
         DifferentialRow,
     }
 
+    impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
+        fn into_proto(self: &Self) -> ProtoSourceEnvelope {
+            use proto_source_envelope::Kind;
+            ProtoSourceEnvelope {
+                kind: Some(match self {
+                    SourceEnvelope::None(e) => Kind::None(e.into_proto()),
+                    SourceEnvelope::Debezium(e) => Kind::Debezium(e.into_proto()),
+                    SourceEnvelope::Upsert(e) => Kind::Upsert(e.into_proto()),
+                    SourceEnvelope::CdcV2 => Kind::CdcV2(()),
+                    SourceEnvelope::DifferentialRow => Kind::DifferentialRow(()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoSourceEnvelope) -> Result<Self, TryFromProtoError> {
+            use proto_source_envelope::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceEnvelope::kind"))?;
+            Ok(match kind {
+                Kind::None(e) => SourceEnvelope::None(e.into_rust()?),
+                Kind::Debezium(e) => SourceEnvelope::Debezium(e.into_rust()?),
+                Kind::Upsert(e) => SourceEnvelope::Upsert(e.into_rust()?),
+                Kind::CdcV2(()) => SourceEnvelope::CdcV2,
+                Kind::DifferentialRow(()) => SourceEnvelope::DifferentialRow,
+            })
+        }
+    }
+
     /// `UnplannedSourceEnvelope` is a `SourceEnvelope` missing some information. This information
     /// is obtained in `UnplannedSourceEnvelope::desc`, where
     /// `UnplannedSourceEnvelope::into_source_envelope`
@@ -1552,7 +1846,7 @@ pub mod sources {
         DifferentialRow,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct UpsertEnvelope {
         /// What style of Upsert we are using
         pub style: UpsertStyle,
@@ -1561,7 +1855,25 @@ pub mod sources {
         pub key_indices: Vec<usize>,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
+        fn into_proto(self: &Self) -> ProtoUpsertEnvelope {
+            ProtoUpsertEnvelope {
+                style: Some(self.style.into_proto()),
+                key_indices: self.key_indices.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoUpsertEnvelope) -> Result<Self, TryFromProtoError> {
+            Ok(UpsertEnvelope {
+                style: proto
+                    .style
+                    .into_rust_if_some("ProtoUpsertEnvelope::style")?,
+                key_indices: proto.key_indices.into_rust()?,
+            })
+        }
+    }
+
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum UpsertStyle {
         /// `ENVELOPE UPSERT`, where the key shape depends on the independent
         /// `KeyEnvelope`
@@ -1570,7 +1882,34 @@ pub mod sources {
         Debezium { after_idx: usize },
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    impl RustType<ProtoUpsertStyle> for UpsertStyle {
+        fn into_proto(self: &Self) -> ProtoUpsertStyle {
+            use proto_upsert_style::{Kind, ProtoDebezium};
+            ProtoUpsertStyle {
+                kind: Some(match self {
+                    UpsertStyle::Default(e) => Kind::Default(e.into_proto()),
+                    UpsertStyle::Debezium { after_idx } => Kind::Debezium(ProtoDebezium {
+                        after_idx: after_idx.into_proto(),
+                    }),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoUpsertStyle) -> Result<Self, TryFromProtoError> {
+            use proto_upsert_style::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoUpsertStyle::kind"))?;
+            Ok(match kind {
+                Kind::Default(e) => UpsertStyle::Default(e.into_rust()?),
+                Kind::Debezium(d) => UpsertStyle::Debezium {
+                    after_idx: d.after_idx.into_rust()?,
+                },
+            })
+        }
+    }
+
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumEnvelope {
         /// The column index containing the `before` row
         pub before_idx: usize,
@@ -1579,7 +1918,27 @@ pub mod sources {
         pub mode: DebeziumMode,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
+        fn into_proto(self: &Self) -> ProtoDebeziumEnvelope {
+            ProtoDebeziumEnvelope {
+                before_idx: self.before_idx.into_proto(),
+                after_idx: self.after_idx.into_proto(),
+                mode: Some(self.mode.into_proto()),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumEnvelope) -> Result<Self, TryFromProtoError> {
+            Ok(DebeziumEnvelope {
+                before_idx: proto.before_idx.into_rust()?,
+                after_idx: proto.after_idx.into_rust()?,
+                mode: proto
+                    .mode
+                    .into_rust_if_some("ProtoDebeziumEnvelope::mode")?,
+            })
+        }
+    }
+
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumTransactionMetadata {
         pub tx_metadata_global_id: GlobalId,
         pub tx_status_idx: usize,
@@ -1589,6 +1948,44 @@ pub mod sources {
         pub tx_data_collections_event_count_idx: usize,
         pub tx_data_collection_name: String,
         pub data_transaction_id_idx: usize,
+    }
+
+    impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata {
+        fn into_proto(self: &Self) -> ProtoDebeziumTransactionMetadata {
+            ProtoDebeziumTransactionMetadata {
+                tx_metadata_global_id: Some(self.tx_metadata_global_id.into_proto()),
+                tx_status_idx: self.tx_status_idx.into_proto(),
+                tx_transaction_id_idx: self.tx_transaction_id_idx.into_proto(),
+                tx_data_collections_idx: self.tx_data_collections_idx.into_proto(),
+                tx_data_collections_data_collection_idx: self
+                    .tx_data_collections_data_collection_idx
+                    .into_proto(),
+                tx_data_collections_event_count_idx: self
+                    .tx_data_collections_event_count_idx
+                    .into_proto(),
+                tx_data_collection_name: self.tx_data_collection_name.clone(),
+                data_transaction_id_idx: self.data_transaction_id_idx.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumTransactionMetadata) -> Result<Self, TryFromProtoError> {
+            Ok(DebeziumTransactionMetadata {
+                tx_metadata_global_id: proto
+                    .tx_metadata_global_id
+                    .into_rust_if_some("ProtoDebeziumTransactionMetadata::tx_metadata_global_id")?,
+                tx_status_idx: proto.tx_status_idx.into_rust()?,
+                tx_transaction_id_idx: proto.tx_transaction_id_idx.into_rust()?,
+                tx_data_collections_idx: proto.tx_data_collections_idx.into_rust()?,
+                tx_data_collections_data_collection_idx: proto
+                    .tx_data_collections_data_collection_idx
+                    .into_rust()?,
+                tx_data_collections_event_count_idx: proto
+                    .tx_data_collections_event_count_idx
+                    .into_rust()?,
+                tx_data_collection_name: proto.tx_data_collection_name,
+                data_transaction_id_idx: proto.data_transaction_id_idx.into_rust()?,
+            })
+        }
     }
 
     /// Ordered means we can trust Debezium high water marks
@@ -1635,6 +2032,88 @@ pub mod sources {
         },
     }
 
+    impl Arbitrary for DebeziumMode {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                Just(DebeziumMode::None),
+                any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Ordered),
+                any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Full),
+                (
+                    any::<DebeziumDedupProjection>(),
+                    any::<bool>(),
+                    any_naive_datetime(),
+                    any_naive_datetime(),
+                    any_naive_datetime(),
+                )
+                    .prop_map(
+                        |(projection, pad_start_option, pad_start, start, end)| {
+                            DebeziumMode::FullInRange {
+                                projection,
+                                pad_start: if pad_start_option {
+                                    Some(pad_start)
+                                } else {
+                                    None
+                                },
+                                start,
+                                end,
+                            }
+                        }
+                    ),
+            ]
+            .boxed()
+        }
+    }
+
+    impl RustType<ProtoDebeziumMode> for DebeziumMode {
+        fn into_proto(self: &Self) -> ProtoDebeziumMode {
+            use proto_debezium_mode::{Kind, ProtoFullInRange};
+            ProtoDebeziumMode {
+                kind: Some(match self {
+                    DebeziumMode::None => Kind::None(()),
+                    DebeziumMode::Ordered(o) => Kind::Ordered(o.into_proto()),
+                    DebeziumMode::Full(f) => Kind::Full(f.into_proto()),
+                    DebeziumMode::FullInRange {
+                        projection,
+                        pad_start,
+                        start,
+                        end,
+                    } => Kind::FullInRange(ProtoFullInRange {
+                        projection: Some(projection.into_proto()),
+                        pad_start: pad_start.into_proto(),
+                        start: Some(start.into_proto()),
+                        end: Some(end.into_proto()),
+                    }),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumMode) -> Result<Self, TryFromProtoError> {
+            use proto_debezium_mode::{Kind, ProtoFullInRange};
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoDebeziumMode::kind"))?;
+            Ok(match kind {
+                Kind::None(()) => DebeziumMode::None,
+                Kind::Ordered(o) => DebeziumMode::Ordered(o.into_rust()?),
+                Kind::Full(o) => DebeziumMode::Full(o.into_rust()?),
+                Kind::FullInRange(ProtoFullInRange {
+                    projection,
+                    pad_start,
+                    start,
+                    end,
+                }) => DebeziumMode::FullInRange {
+                    projection: projection.into_rust_if_some("ProtoFullInRange::projection")?,
+                    pad_start: pad_start.into_rust()?,
+                    start: start.into_rust_if_some("ProtoFullInRange::start")?,
+                    end: end.into_rust_if_some("ProtoFullInRange::end")?,
+                },
+            })
+        }
+    }
+
     impl DebeziumMode {
         pub fn tx_metadata(&self) -> Option<&DebeziumTransactionMetadata> {
             match self {
@@ -1649,7 +2128,7 @@ pub mod sources {
         }
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct DebeziumDedupProjection {
         /// The column index containing the debezium source metadata
         pub source_idx: usize,
@@ -1664,11 +2143,37 @@ pub mod sources {
         pub tx_metadata: Option<DebeziumTransactionMetadata>,
     }
 
+    impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
+        fn into_proto(self: &Self) -> ProtoDebeziumDedupProjection {
+            ProtoDebeziumDedupProjection {
+                source_idx: self.source_idx.into_proto(),
+                snapshot_idx: self.snapshot_idx.into_proto(),
+                source_projection: Some(self.source_projection.into_proto()),
+                transaction_idx: self.transaction_idx.into_proto(),
+                total_order_idx: self.total_order_idx.into_proto(),
+                tx_metadata: self.tx_metadata.into_proto(),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumDedupProjection) -> Result<Self, TryFromProtoError> {
+            Ok(DebeziumDedupProjection {
+                source_idx: proto.source_idx.into_rust()?,
+                snapshot_idx: proto.snapshot_idx.into_rust()?,
+                source_projection: proto
+                    .source_projection
+                    .into_rust_if_some("ProtoDebeziumDedupProjection::source_projection")?,
+                transaction_idx: proto.transaction_idx.into_rust()?,
+                total_order_idx: proto.total_order_idx.into_rust()?,
+                tx_metadata: proto.tx_metadata.into_rust()?,
+            })
+        }
+    }
+
     /// Debezium generates records that contain metadata about the upstream database. The structure of
     /// this metadata depends on the type of connector used. This struct records the relevant indices
     /// in the record, calculated during planning, so that the dataflow operator can unpack the
     /// structure and extract the relevant information.
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum DebeziumSourceProjection {
         MySql {
             file: usize,
@@ -1683,6 +2188,65 @@ pub mod sources {
             change_lsn: usize,
             event_serial_no: usize,
         },
+    }
+
+    impl RustType<ProtoDebeziumSourceProjection> for DebeziumSourceProjection {
+        fn into_proto(self: &Self) -> ProtoDebeziumSourceProjection {
+            use proto_debezium_source_projection::{
+                Kind, ProtoMySql, ProtoPostgres, ProtoSqlServer,
+            };
+            ProtoDebeziumSourceProjection {
+                kind: Some(match self {
+                    DebeziumSourceProjection::MySql { file, pos, row } => Kind::MySql(ProtoMySql {
+                        file: file.into_proto(),
+                        pos: pos.into_proto(),
+                        row: row.into_proto(),
+                    }),
+                    DebeziumSourceProjection::Postgres { sequence, lsn } => {
+                        Kind::Postgres(ProtoPostgres {
+                            sequence: sequence.into_proto(),
+                            lsn: lsn.into_proto(),
+                        })
+                    }
+                    DebeziumSourceProjection::SqlServer {
+                        change_lsn,
+                        event_serial_no,
+                    } => Kind::SqlServer(ProtoSqlServer {
+                        change_lsn: change_lsn.into_proto(),
+                        event_serial_no: event_serial_no.into_proto(),
+                    }),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoDebeziumSourceProjection) -> Result<Self, TryFromProtoError> {
+            use proto_debezium_source_projection::{
+                Kind, ProtoMySql, ProtoPostgres, ProtoSqlServer,
+            };
+            let kind = proto.kind.ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoDebeziumSourceProjection::kind")
+            })?;
+            Ok(match kind {
+                Kind::MySql(ProtoMySql { file, pos, row }) => DebeziumSourceProjection::MySql {
+                    file: file.into_rust()?,
+                    pos: pos.into_rust()?,
+                    row: row.into_rust()?,
+                },
+                Kind::Postgres(ProtoPostgres { sequence, lsn }) => {
+                    DebeziumSourceProjection::Postgres {
+                        sequence: sequence.into_rust()?,
+                        lsn: lsn.into_rust()?,
+                    }
+                }
+                Kind::SqlServer(ProtoSqlServer {
+                    change_lsn,
+                    event_serial_no,
+                }) => DebeziumSourceProjection::SqlServer {
+                    change_lsn: change_lsn.into_rust()?,
+                    event_serial_no: event_serial_no.into_rust()?,
+                },
+            })
+        }
     }
 
     /// Computes the indices of the value's relation description that appear in the key.
@@ -2045,10 +2609,28 @@ pub mod sources {
     /// A source contains enough information to instantiate a stream of changes,
     /// as well as related metadata about the columns, their types, and properties
     /// of the collection.
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct SourceDesc {
         pub connector: SourceConnector,
         pub desc: RelationDesc,
+    }
+
+    impl RustType<ProtoSourceDesc> for SourceDesc {
+        fn into_proto(self: &Self) -> ProtoSourceDesc {
+            ProtoSourceDesc {
+                connector: Some(self.connector.into_proto()),
+                desc: Some(self.desc.into_proto()),
+            }
+        }
+
+        fn from_proto(proto: ProtoSourceDesc) -> Result<Self, TryFromProtoError> {
+            Ok(SourceDesc {
+                connector: proto
+                    .connector
+                    .into_rust_if_some("ProtoSourceDesc::connector")?,
+                desc: proto.desc.into_rust_if_some("ProtoSourceDesc::desc")?,
+            })
+        }
     }
 
     /// A stub for generating arbitrary [SourceDesc].
@@ -2082,6 +2664,103 @@ pub mod sources {
 
         /// A source for compute logging data.
         Log,
+    }
+
+    impl Arbitrary for SourceConnector {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            prop_oneof![
+                (
+                    any::<ExternalSourceConnector>(),
+                    any::<encoding::SourceDataEncoding>(),
+                    any::<SourceEnvelope>(),
+                    any::<Vec<IncludedColumnSource>>(),
+                    any_duration(),
+                    any::<Timeline>(),
+                )
+                    .prop_map(
+                        |(
+                            connector,
+                            encoding,
+                            envelope,
+                            metadata_columns,
+                            ts_frequency,
+                            timeline,
+                        )| {
+                            SourceConnector::External {
+                                connector,
+                                encoding,
+                                envelope,
+                                metadata_columns,
+                                ts_frequency,
+                                timeline,
+                            }
+                        }
+                    ),
+                any::<Timeline>().prop_map(|timeline| SourceConnector::Local { timeline }),
+                Just(SourceConnector::Log)
+            ]
+            .boxed()
+        }
+    }
+
+    impl RustType<ProtoSourceConnector> for SourceConnector {
+        fn into_proto(self: &Self) -> ProtoSourceConnector {
+            use proto_source_connector::{Kind, ProtoExternal, ProtoLocal};
+            ProtoSourceConnector {
+                kind: Some(match self {
+                    SourceConnector::External {
+                        connector,
+                        encoding,
+                        envelope,
+                        metadata_columns,
+                        ts_frequency,
+                        timeline,
+                    } => Kind::External(ProtoExternal {
+                        connector: Some(connector.into_proto()),
+                        encoding: Some(encoding.into_proto()),
+                        envelope: Some(envelope.into_proto()),
+                        metadata_columns: metadata_columns.into_proto(),
+                        ts_frequency: Some(ts_frequency.into_proto()),
+                        timeline: Some(timeline.into_proto()),
+                    }),
+                    SourceConnector::Local { timeline } => Kind::Local(ProtoLocal {
+                        timeline: Some(timeline.into_proto()),
+                    }),
+                    SourceConnector::Log => Kind::Log(()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoSourceConnector) -> Result<Self, TryFromProtoError> {
+            use proto_source_connector::{Kind, ProtoExternal, ProtoLocal};
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnector::kind"))?;
+            Ok(match kind {
+                Kind::External(ProtoExternal {
+                    connector,
+                    encoding,
+                    envelope,
+                    metadata_columns,
+                    ts_frequency,
+                    timeline,
+                }) => SourceConnector::External {
+                    connector: connector.into_rust_if_some("ProtoExternal::connector")?,
+                    encoding: encoding.into_rust_if_some("ProtoExternal::encoding")?,
+                    envelope: envelope.into_rust_if_some("ProtoExternal::envelope")?,
+                    metadata_columns: metadata_columns.into_rust()?,
+                    ts_frequency: ts_frequency.into_rust_if_some("ProtoExternal::ts_frequency")?,
+                    timeline: timeline.into_rust_if_some("ProtoExternal::timeline")?,
+                },
+                Kind::Local(ProtoLocal { timeline }) => SourceConnector::Local {
+                    timeline: timeline.into_rust_if_some("ProtoLocal::timeline")?,
+                },
+                Kind::Log(()) => SourceConnector::Log,
+            })
+        }
     }
 
     impl SourceConnector {
@@ -2486,7 +3165,7 @@ pub mod sources {
             ProtoPersistSourceConnector {
                 consensus_uri: self.consensus_uri.clone(),
                 blob_uri: self.blob_uri.clone(),
-                shard_id: self.shard_id.to_string(),
+                shard_id: self.shard_id.into_proto(),
             }
         }
 
@@ -2494,8 +3173,7 @@ pub mod sources {
             Ok(PersistSourceConnector {
                 consensus_uri: proto.consensus_uri,
                 blob_uri: proto.blob_uri,
-                shard_id: ShardId::from_str(&proto.shard_id)
-                    .map_err(|_| TryFromProtoError::InvalidShardId(proto.shard_id))?,
+                shard_id: proto.shard_id.into_rust()?,
             })
         }
     }
@@ -2687,8 +3365,8 @@ pub mod sources {
             #![proptest_config(ProptestConfig::with_cases(32))]
 
             #[test]
-            fn external_source_connector_protobuf_roundtrip(expect in any::<ExternalSourceConnector>()) {
-                let actual = protobuf_roundtrip::<_, ProtoExternalSourceConnector>(&expect);
+            fn source_desc_protobuf_roundtrip(expect in any::<SourceDesc>()) {
+                let actual = protobuf_roundtrip::<_, ProtoSourceDesc>(&expect);
                 assert!(actual.is_ok());
                 assert_eq!(actual.unwrap(), expect);
             }

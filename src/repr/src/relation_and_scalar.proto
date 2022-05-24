@@ -37,6 +37,11 @@ message ProtoColumnType {
     bool nullable = 2;
 }
 
+message ProtoRelationDesc {
+    ProtoRelationType typ = 1;
+    repeated ProtoColumnName names = 2;
+}
+
 message ProtoScalarType {
     message ProtoChar {
         adt.char.ProtoCharLength length = 1;

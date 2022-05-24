@@ -13,12 +13,17 @@ use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
 use openssl::stack::Stack;
 use openssl::x509::X509;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+
+use mz_repr::proto::{RustType, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_ccsr.tls.rs"));
 
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
 ///
 /// [Serde]: serde
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Identity {
     der: Vec<u8>,
     pass: String,
@@ -65,10 +70,26 @@ impl Into<reqwest::Identity> for Identity {
     }
 }
 
+impl RustType<ProtoIdentity> for Identity {
+    fn into_proto(self: &Self) -> ProtoIdentity {
+        ProtoIdentity {
+            der: self.der.clone(),
+            pass: self.pass.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoIdentity) -> Result<Self, TryFromProtoError> {
+        Ok(Identity {
+            der: proto.der,
+            pass: proto.pass,
+        })
+    }
+}
+
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Certificate`].
 ///
 /// [Serde]: serde
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Certificate {
     der: Vec<u8>,
 }
@@ -91,5 +112,17 @@ impl Certificate {
 impl Into<reqwest::Certificate> for Certificate {
     fn into(self) -> reqwest::Certificate {
         reqwest::Certificate::from_der(&self.der).expect("known to be a valid cert")
+    }
+}
+
+impl RustType<ProtoCertificate> for Certificate {
+    fn into_proto(self: &Self) -> ProtoCertificate {
+        ProtoCertificate {
+            der: self.der.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoCertificate) -> Result<Self, TryFromProtoError> {
+        Ok(Certificate { der: proto.der })
     }
 }

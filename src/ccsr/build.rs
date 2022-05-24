@@ -7,16 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-syntax = "proto3";
-
-package mz_repr.proto;
-
-message ProtoU128 {
-    uint64 hi = 1;
-    uint64 lo = 2;
-}
-
-message ProtoDuration {
-    uint64 secs = 1;
-    uint32 nanos = 2;
+fn main() {
+    prost_build::Config::new()
+        .extern_path(".mz_repr.url", "::mz_repr::url")
+        .type_attribute(".", "#[allow(missing_docs)]")
+        .compile_protos(&["ccsr/src/config.proto", "ccsr/src/tls.proto"], &[".."])
+        .unwrap();
 }

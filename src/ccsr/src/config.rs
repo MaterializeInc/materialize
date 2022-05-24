@@ -9,16 +9,39 @@
 
 use std::time::Duration;
 
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_repr::url::any_url;
 
 use crate::client::Client;
 use crate::tls::{Certificate, Identity};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+include!(concat!(env!("OUT_DIR"), "/mz_ccsr.config.rs"));
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Auth {
     pub username: String,
     pub password: Option<String>,
+}
+
+impl RustType<ProtoAuth> for Auth {
+    fn into_proto(self: &Self) -> ProtoAuth {
+        ProtoAuth {
+            username: self.username.clone(),
+            password: self.password.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoAuth) -> Result<Self, TryFromProtoError> {
+        Ok(Auth {
+            username: proto.username,
+            password: proto.password,
+        })
+    }
 }
 
 /// Configuration for a `Client`.
@@ -28,6 +51,47 @@ pub struct ClientConfig {
     root_certs: Vec<Certificate>,
     identity: Option<Identity>,
     auth: Option<Auth>,
+}
+
+impl Arbitrary for ClientConfig {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any_url(),
+            any::<Vec<Certificate>>(),
+            any::<Option<Identity>>(),
+            any::<Option<Auth>>(),
+        )
+            .prop_map(|(url, root_certs, identity, auth)| ClientConfig {
+                url,
+                root_certs,
+                identity,
+                auth,
+            })
+            .boxed()
+    }
+}
+
+impl RustType<ProtoClientConfig> for ClientConfig {
+    fn into_proto(self: &Self) -> ProtoClientConfig {
+        ProtoClientConfig {
+            url: Some(self.url.into_proto()),
+            root_certs: self.root_certs.into_proto(),
+            identity: self.identity.into_proto(),
+            auth: self.auth.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoClientConfig) -> Result<Self, TryFromProtoError> {
+        Ok(ClientConfig {
+            url: proto.url.into_rust_if_some("ProtoClientConfig::url")?,
+            root_certs: proto.root_certs.into_rust()?,
+            identity: proto.identity.into_rust()?,
+            auth: proto.auth.into_rust()?,
+        })
+    }
 }
 
 impl ClientConfig {

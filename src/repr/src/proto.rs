@@ -11,10 +11,12 @@
 
 use proptest::prelude::Strategy;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::str::FromStr;
 use std::{char::CharTryFromError, num::TryFromIntError};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
+use mz_persist_client::ShardId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.proto.rs"));
 
@@ -45,6 +47,8 @@ pub enum TryFromProtoError {
     InvalidUri(http::uri::InvalidUri),
     /// Failed to read back a serialized Glob
     GlobError(globset::Error),
+    /// Failed to parse a serialized URL
+    InvalidUrl(url::ParseError),
 }
 
 impl TryFromProtoError {
@@ -90,6 +94,12 @@ impl From<globset::Error> for TryFromProtoError {
     }
 }
 
+impl From<url::ParseError> for TryFromProtoError {
+    fn from(error: url::ParseError) -> Self {
+        TryFromProtoError::InvalidUrl(error)
+    }
+}
+
 impl std::fmt::Display for TryFromProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use TryFromProtoError::*;
@@ -104,6 +114,7 @@ impl std::fmt::Display for TryFromProtoError {
             InvalidShardId(value) => write!(f, "Invalid value of ShardId found: `{}`", value),
             InvalidUri(error) => error.fmt(f),
             GlobError(error) => error.fmt(f),
+            InvalidUrl(error) => error.fmt(f),
         }
     }
 }
@@ -130,6 +141,7 @@ impl std::error::Error for TryFromProtoError {
             InvalidShardId(_) => None,
             InvalidUri(error) => Some(error),
             GlobError(error) => Some(error),
+            InvalidUrl(error) => Some(error),
         }
     }
 }
@@ -349,6 +361,29 @@ impl RustType<u64> for std::num::NonZeroUsize {
     }
 }
 
+impl RustType<ProtoDuration> for std::time::Duration {
+    fn into_proto(self: &Self) -> ProtoDuration {
+        ProtoDuration {
+            secs: self.as_secs(),
+            nanos: self.subsec_nanos(),
+        }
+    }
+
+    fn from_proto(proto: ProtoDuration) -> Result<Self, TryFromProtoError> {
+        Ok(std::time::Duration::new(proto.secs, proto.nanos))
+    }
+}
+
+impl RustType<String> for ShardId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        ShardId::from_str(&proto).map_err(|_| TryFromProtoError::InvalidShardId(proto))
+    }
+}
+
 /// The symmetric counterpart of [`RustType`], similar to
 /// what [`Into`] is to [`From`].
 ///
@@ -380,6 +415,11 @@ where
     fn from_rust(rust: &R) -> Self {
         R::into_proto(rust)
     }
+}
+
+pub fn any_duration() -> impl Strategy<Value = std::time::Duration> {
+    (0..u64::MAX, 0..1_000_000_000u32)
+        .prop_map(|(secs, nanos)| std::time::Duration::new(secs, nanos))
 }
 
 /// Convenience syntax for trying to convert a `Self` value of type
@@ -428,4 +468,30 @@ where
     let vec = P::from_rust(&val).encode_to_vec();
     let val = P::decode(&*vec)?.into_rust()?;
     Ok(val)
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::proto::protobuf_roundtrip;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        #[test]
+        fn duration_protobuf_roundtrip(expect in any_duration() ) {
+            let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
+            let actual = protobuf_roundtrip::<_, String>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
 }

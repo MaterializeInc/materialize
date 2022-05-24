@@ -9,14 +9,13 @@
 
 syntax = "proto3";
 
-package mz_repr.proto;
+package mz_ccsr.tls;
 
-message ProtoU128 {
-    uint64 hi = 1;
-    uint64 lo = 2;
+message ProtoIdentity {
+    bytes der = 1;
+    string pass = 2;
 }
 
-message ProtoDuration {
-    uint64 secs = 1;
-    uint32 nanos = 2;
+message ProtoCertificate {
+    bytes der = 1;
 }

@@ -3073,13 +3073,19 @@ dependencies = [
  "anyhow",
  "hyper",
  "mz-ore",
+ "mz-repr",
  "native-tls",
  "once_cell",
  "openssl",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "prost-build",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -3747,6 +3753,7 @@ dependencies = [
  "itertools",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist-client",
  "mz-persist-types",
  "num-traits",
  "num_enum",
@@ -3763,6 +3770,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "smallvec",
+ "url",
  "uuid 1.0.0",
 ]
 

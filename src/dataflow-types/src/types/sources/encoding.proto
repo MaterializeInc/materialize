@@ -1,0 +1,74 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+import "ccsr/src/config.proto";
+import "repr/src/adt/regex.proto";
+import "repr/src/relation_and_scalar.proto";
+
+package mz_dataflow_types.types.sources.encoding;
+
+message ProtoSourceDataEncoding {
+    message ProtoKeyValue {
+        ProtoDataEncoding key = 1;
+        ProtoDataEncoding value = 2;
+    }
+
+    oneof kind {
+        ProtoDataEncoding single = 1;
+        ProtoKeyValue key_value = 2;
+    }
+}
+
+message ProtoDataEncoding {
+    oneof kind {
+        ProtoAvroEncoding avro = 1;
+        ProtoProtobufEncoding protobuf = 2;
+        ProtoCsvEncoding csv = 3;
+        ProtoRegexEncoding regex = 4;
+        google.protobuf.Empty postgres = 5;
+        google.protobuf.Empty bytes = 6;
+        google.protobuf.Empty text = 7;
+        mz_repr.relation_and_scalar.ProtoRelationDesc row_codec = 8;
+    }
+}
+
+message ProtoAvroEncoding {
+    string schema = 1;
+    mz_ccsr.config.ProtoClientConfig schema_registry_config = 2;
+    bool confluent_wire_format = 3;
+}
+
+message ProtoProtobufEncoding {
+    bytes descriptors = 1;
+    string message_name = 2;
+    bool confluent_wire_format = 3;
+}
+
+message ProtoCsvEncoding {
+    ProtoColumnSpec columns = 1;
+    uint32 delimiter = 2;
+}
+
+message ProtoColumnSpec {
+    message ProtoHeader {
+        repeated string names = 1;
+    }
+    oneof kind {
+        uint64 count = 1;
+        ProtoHeader header = 2;
+    }
+}
+
+message ProtoRegexEncoding {
+    mz_repr.adt.regex.ProtoRegex regex = 1;
+}
