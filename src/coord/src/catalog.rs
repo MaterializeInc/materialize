@@ -1352,6 +1352,15 @@ impl CatalogEntry {
     pub fn conn_id(&self) -> Option<u32> {
         self.item.conn_id()
     }
+
+    /// TODO(jkosh44)
+    pub fn timeline(&self) -> Option<Timeline> {
+        match self.item() {
+            CatalogItem::Source(source) => Some(source.connector.timeline()),
+            CatalogItem::Table(table) => Some(table.timeline()),
+            _ => None,
+        }
+    }
 }
 
 struct AllocatedBuiltinSystemIds<T> {

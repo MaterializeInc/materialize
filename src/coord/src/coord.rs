@@ -325,7 +325,13 @@ pub struct Coordinator<S> {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timeline: timeline::TimestampOracle<Timestamp>,
+    global_timeline: HashMap<
+        Timeline,
+        (
+            timeline::TimestampOracle<Timestamp>,
+            read_holds::ReadHolds<mz_repr::Timestamp>,
+        ),
+    >,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -345,9 +351,6 @@ pub struct Coordinator<S> {
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
     txn_reads: HashMap<u32, TxnReads>,
-
-    //TODO(jkosh44)
-    global_timeline_hold: Option<read_holds::ReadHolds<mz_repr::Timestamp>>,
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
@@ -436,25 +439,35 @@ macro_rules! guard_write_critical_section {
 }
 
 impl<S: Append + 'static> Coordinator<S> {
+    /// TODO(jkosh44)
+    fn get_local_timestamp_oracle(&mut self) -> &mut timeline::TimestampOracle<Timestamp> {
+        &mut self
+            .global_timeline
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("missing local timeline")
+            .0
+    }
+
     /// Assign a timestamp for a read from a local input. Reads following writes
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
     fn get_local_read_ts(&mut self) -> Timestamp {
-        self.global_timeline.read_ts()
+        self.get_local_timestamp_oracle().read_ts()
     }
 
     /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
     fn get_local_write_ts(&mut self) -> Timestamp {
-        self.global_timeline.write_ts()
+        self.get_local_timestamp_oracle().write_ts()
     }
 
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
     fn get_and_step_local_write_ts(&mut self) -> (Timestamp, Timestamp) {
-        let ts = self.global_timeline.write_ts();
+        let local_timestamp_oracle = self.get_local_timestamp_oracle();
+        let ts = local_timestamp_oracle.write_ts();
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
          * timestamp will go up for the next write.
@@ -463,7 +476,7 @@ impl<S: Append + 'static> Coordinator<S> {
          * If we add an ADAPTER side durable WAL, then consecutive writes could all happen at the
          * same timestamp as long as they're written to the WAL first.
          */
-        let _ = self.global_timeline.read_ts();
+        let _ = local_timestamp_oracle.read_ts();
         let advance_to = ts.step_forward();
         (ts, advance_to)
     }
@@ -637,18 +650,19 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         // if self.strict_serializability {
-        if true {
-            let global_timeline_hold = ReadHolds {
-                time: self.get_local_read_ts(),
-                id_bundle: CollectionIdBundle {
-                    storage_ids: source_ids,
-                    compute_ids: BTreeSet::new(),
-                },
-                compute_instance: None,
-            };
-            self.acquire_read_holds(&global_timeline_hold).await;
-            self.global_timeline_hold = Some(global_timeline_hold);
-        }
+        // TODO(jkosh44)
+        // if true {
+        //     let global_timeline_hold = ReadHolds {
+        //         time: self.get_local_read_ts(),
+        //         id_bundle: CollectionIdBundle {
+        //             storage_ids: source_ids,
+        //             compute_ids: BTreeSet::new(),
+        //         },
+        //         compute_instance: None,
+        //     };
+        //     self.acquire_read_holds(&global_timeline_hold).await;
+        //     self.global_timeline_hold = Some(global_timeline_hold);
+        // }
 
         for entry in entries {
             match entry.item() {
@@ -816,87 +830,127 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
                 Message::AdvanceLocalInputs => {
-                    let now = self.now();
-                    // if self.strict_serializability {
-                    if true {
+                    let realtime_now = self.now();
+                    let mut nows = HashMap::new();
+
+                    // Gather now for all timelines
+                    for (timeline, (timestamp_oracle, _read_holds)) in &mut self.global_timeline {
                         let source_ids = self
                             .catalog
                             .entries()
-                            .filter(|entry| matches!(entry.item().typ(), CatalogItemType::Source))
+                            .filter(|entry| {
+                                matches!(
+                                    entry.item().typ(),
+                                    CatalogItemType::Source | CatalogItemType::Table
+                                )
+                            })
+                            .filter(|entry| matches!(entry.timeline(), Some(entry_timeline) if timeline == &entry_timeline))
                             .map(|entry| entry.id())
                             .collect();
-                        let mut read_holds = Some(ReadHolds {
-                            time: now,
-                            id_bundle: CollectionIdBundle {
-                                storage_ids: source_ids,
-                                compute_ids: BTreeSet::new(),
-                            },
-                            compute_instance: None,
-                        });
-                        self.acquire_read_holds(&read_holds.as_ref().unwrap()).await;
-                        std::mem::swap(&mut read_holds, &mut self.global_timeline_hold);
-                        self.release_read_hold(read_holds.unwrap()).await;
+                        // TODO this needs compute_ids too AHHHHH
+                        let id_bundle = CollectionIdBundle {
+                            storage_ids: source_ids,
+                            compute_ids: BTreeSet::new(),
+                        };
+                        let now = if timeline == &Timeline::EpochMilliseconds {
+                            realtime_now
+                        } else {
+                            // TODO(jkosh44)
+                            timestamp_oracle.read_ts()
+                        };
 
-                        if !self.pending_writes.is_empty() {
-                            for (tx, mut session) in self
-                                .pending_writes
-                                .drain(..)
-                                .collect::<Vec<_>>()
-                                .into_iter()
-                            {
-                                let mut action = EndTransactionAction::Commit;
-                                // If the transaction has failed, we can only rollback.
-                                if let (
-                                    EndTransactionAction::Commit,
-                                    TransactionStatus::Failed(_),
-                                ) = (&action, session.transaction())
-                                {
-                                    action = EndTransactionAction::Rollback;
-                                }
-                                let response = ExecuteResponse::TransactionExited {
-                                    tag: action.tag(),
-                                    was_implicit: session.transaction().is_implicit(),
-                                };
+                        nows.insert(timeline.clone(), (id_bundle, now));
+                    }
 
-                                // Immediately do tasks that must be serialized in the coordinator.
-                                let rx = self
-                                    .sequence_end_transaction_inner(&mut session, action)
-                                    .await;
+                    for (timeline, (id_bundle, now)) in &mut nows {
+                        // Advance non-realtime timelines to least valid write
+                        if timeline != &Timeline::EpochMilliseconds {
+                            now.advance_by(self.least_valid_write(id_bundle, 666).borrow());
+                        }
 
-                                // We can now wait for responses or errors and do any session/transaction
-                                // finalization in a separate task.
-                                let conn_id = session.conn_id();
-                                task::spawn(
-                                    || format!("sequence_end_transaction:{conn_id}"),
-                                    async move {
-                                        let result = match rx {
-                                            // If we have more work to do, do it
-                                            Ok(fut) => fut.await,
-                                            Err(e) => Err(e),
-                                        };
-
-                                        if result.is_err() {
-                                            action = EndTransactionAction::Rollback;
-                                        }
-                                        session.vars_mut().end_transaction(action);
-
-                                        match result {
-                                            Ok(()) => tx.send(Ok(response), session),
-                                            Err(err) => tx.send(Err(err), session),
-                                        }
-                                    },
-                                );
-                            }
+                        // Update read holds
+                        if true {
+                            // if self.strict_serializability {
+                            let mut new_read_holds = ReadHolds {
+                                time: *now,
+                                id_bundle: std::mem::take(id_bundle),
+                                compute_instance: None,
+                            };
+                            self.acquire_read_holds(&new_read_holds).await;
+                            std::mem::swap(
+                                &mut new_read_holds,
+                                &mut self
+                                    .global_timeline
+                                    .get_mut(timeline)
+                                    .expect("timeline doesn't exist")
+                                    .1,
+                            );
+                            self.release_read_hold(new_read_holds).await;
                         }
                     }
 
-                    // Convince the coordinator it needs to open a new timestamp
-                    // and advance inputs.
-                    self.global_timeline.fast_forward(now);
+                    // Group commit
+                    if true && !self.pending_writes.is_empty() {
+                        // if self.strict_serializability && !self.pending_writes.is_empty() {
+                        for (tx, mut session) in self
+                            .pending_writes
+                            .drain(..)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                        {
+                            let mut action = EndTransactionAction::Commit;
+                            // If the transaction has failed, we can only rollback.
+                            if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
+                                (&action, session.transaction())
+                            {
+                                action = EndTransactionAction::Rollback;
+                            }
+                            let response = ExecuteResponse::TransactionExited {
+                                tag: action.tag(),
+                                was_implicit: session.transaction().is_implicit(),
+                            };
+
+                            // Immediately do tasks that must be serialized in the coordinator.
+                            let rx = self
+                                .sequence_end_transaction_inner(&mut session, action)
+                                .await;
+
+                            // We can now wait for responses or errors and do any session/transaction
+                            // finalization in a separate task.
+                            let conn_id = session.conn_id();
+                            task::spawn(
+                                || format!("sequence_end_transaction:{conn_id}"),
+                                async move {
+                                    let result = match rx {
+                                        // If we have more work to do, do it
+                                        Ok(fut) => fut.await,
+                                        Err(e) => Err(e),
+                                    };
+
+                                    if result.is_err() {
+                                        action = EndTransactionAction::Rollback;
+                                    }
+                                    session.vars_mut().end_transaction(action);
+
+                                    match result {
+                                        Ok(()) => tx.send(Ok(response), session),
+                                        Err(err) => tx.send(Err(err), session),
+                                    }
+                                },
+                            );
+                        }
+                    }
+
+                    // Advance timestamp oracles
+                    for (timeline, (timestamp_oracle, _)) in &mut self.global_timeline {
+                        // Convince the coordinator it needs to open a new timestamp
+                        // and advance inputs.
+                        timestamp_oracle.fast_forward(nows[timeline].1);
+                    }
                 }
             }
 
-            if let Some(timestamp) = self.global_timeline.should_advance_to() {
+            if let Some(timestamp) = self.get_local_timestamp_oracle().should_advance_to() {
                 self.advance_local_inputs(timestamp).await;
             }
         }
@@ -5014,7 +5068,22 @@ pub async fn serve<S: Append + 'static>(
                 logical_compaction_window_ms: logical_compaction_window
                     .map(duration_to_timestamp_millis),
                 internal_cmd_tx,
-                global_timeline: timeline::TimestampOracle::new(now_ts, move || (&*now)()),
+                global_timeline: vec![(
+                    Timeline::EpochMilliseconds,
+                    (
+                        timeline::TimestampOracle::new(now_ts, move || (&*now)()),
+                        ReadHolds {
+                            time: now_ts,
+                            compute_instance: None,
+                            id_bundle: CollectionIdBundle {
+                                storage_ids: BTreeSet::new(),
+                                compute_ids: BTreeSet::new(),
+                            },
+                        },
+                    ),
+                )]
+                .into_iter()
+                .collect(),
                 transient_id_counter: 1,
                 active_conns: HashMap::new(),
                 read_capability: Default::default(),
@@ -5031,7 +5100,6 @@ pub async fn serve<S: Append + 'static>(
                 availability_zones,
                 connector_context,
                 strict_serializability,
-                global_timeline_hold: None,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
@@ -5514,6 +5582,7 @@ pub mod read_holds {
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
         pub(super) id_bundle: CollectionIdBundle,
+        // TODO(jkosh44) remore None
         pub(super) compute_instance: Option<ComputeInstanceId>,
     }
 
