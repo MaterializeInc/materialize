@@ -258,14 +258,20 @@ class Composition:
 
             ports = config.setdefault("ports", [])
             for i, port in enumerate(ports):
-                if ":" in str(port):
-                    raise UIError(
-                        "programming error: disallowed host port in service {name!r}"
-                    )
-                if self.preserve_ports:
+                if self.preserve_ports and not ":" in str(port):
                     # If preserving ports, bind the container port to the same
-                    # host port.
+                    # host port, assuming the host port is available.
                     ports[i] = f"{port}:{port}"
+                elif ":" in str(port) and not config.get("allow_host_ports", False):
+                    # Raise an error for host-bound ports, unless
+                    # `allow_host_ports` is `True`
+                    raise UIError(
+                        "programming error: disallowed host port in service {name!r}",
+                        hint=f'Add `"allow_host_ports": True` to the service config to disable this check.',
+                    )
+
+            if "allow_host_ports" in config:
+                config.pop("allow_host_ports")
 
             if self.repo.rd.coverage:
                 # Emit coverage information to a file in a directory that is
@@ -878,6 +884,19 @@ class ServiceConfig(TypedDict, total=False):
 
     This is an mzcompose extension to Docker Compose. It is equivalent to
     passing `--user $(id -u):$(id -g)` to `docker run`. The defualt is `False`.
+    """
+
+    allow_host_ports: bool
+    """Allow the service to map host ports in its `ports` configuration.
+
+    This option is intended only for compositions that are meant to be run as
+    background services in developer environments. Compositions that are
+    isolated tests of Materialize should *not* enable this option, as it leads
+    to unnecessary conflicts between compositions. Compositions that publish the
+    same host port cannot be run concurrently. Instead, users should use the
+    `mzcompose port` command to discover the ephemeral host port mapped to the
+    desired container port, or to use `mzcompose up --preserve-ports`, which
+    publishes all container ports as host ports on a per-invocation basis.
     """
 
     image: str

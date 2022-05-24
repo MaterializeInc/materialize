@@ -15,10 +15,11 @@ from materialize.mzcompose.services import Service
 
 SERVICES = [
     Service(
-        "jaeger-all-in-one",
+        "jaeger",
         {
             "image": "jaegertracing/all-in-one:latest",
-            "ports": [16686, 14268, 14250],
+            "ports": ["16686:16686", 14268, 14250],
+            "allow_host_ports": True,
         },
     ),
     Service(
@@ -29,12 +30,13 @@ SERVICES = [
             "ports": [
                 1888,  # pprof
                 13133,  # health_check
-                4317,  # otlp grpc
-                4318,  # otlp http
+                "4317:4317",  # otlp grpc
+                "4318:4318",  # otlp http
                 55670,  # zpages
             ],
+            "allow_host_ports": True,
             "volumes": ["./otel-collector-config.yaml:/etc/otel-collector-config.yaml"],
-            "depends_on": ["jaeger-all-in-one"],
+            "depends_on": ["jaeger"],
         },
     ),
 ]
