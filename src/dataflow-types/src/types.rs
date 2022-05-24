@@ -299,14 +299,17 @@ impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
+            any::<SourceDesc>(),
             any::<SourceInstanceArguments>(),
             any::<CollectionMetadata>(),
         )
-            .prop_map(|(arguments, storage_metadata)| SourceInstanceDesc {
-                description: crate::sources::any_source_desc_stub(),
-                arguments,
-                storage_metadata,
-            })
+            .prop_map(
+                |(description, arguments, storage_metadata)| SourceInstanceDesc {
+                    description,
+                    arguments,
+                    storage_metadata,
+                },
+            )
             .boxed()
     }
 }
@@ -314,7 +317,7 @@ impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
 impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
     fn into_proto(&self) -> ProtoSourceInstanceDesc {
         ProtoSourceInstanceDesc {
-            description: serde_json::to_string(&self.description).unwrap(),
+            description: Some(self.description.into_proto()),
             arguments: Some(self.arguments.into_proto()),
             storage_metadata: Some(self.storage_metadata.into_proto()),
         }
@@ -322,7 +325,9 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
 
     fn from_proto(proto: ProtoSourceInstanceDesc) -> Result<Self, TryFromProtoError> {
         Ok(SourceInstanceDesc {
-            description: serde_json::from_str(&proto.description)?,
+            description: proto
+                .description
+                .into_rust_if_some("ProtoSourceInstanceDesc::description")?,
             arguments: proto
                 .arguments
                 .into_rust_if_some("ProtoSourceInstanceDesc::arguments")?,
@@ -2632,17 +2637,6 @@ pub mod sources {
         }
     }
 
-    /// A stub for generating arbitrary [SourceDesc].
-    /// Currently only produces the simplest instance of one.
-    pub(super) fn any_source_desc_stub() -> SourceDesc {
-        SourceDesc {
-            connector: SourceConnector::Local {
-                timeline: Timeline::EpochMilliseconds,
-            },
-            desc: RelationDesc::empty(),
-        }
-    }
-
     /// A `SourceConnector` describes how data is produced for a source, be
     /// it from a local table, or some upstream service. It is the first
     /// step of _rendering_ of a source, and describes only how to produce
@@ -3351,24 +3345,6 @@ pub mod sources {
         fn decode(buf: &[u8]) -> Result<Self, String> {
             let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
             proto.into_rust().map_err(|err| err.to_string())
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use mz_repr::proto::protobuf_roundtrip;
-        use proptest::prelude::*;
-
-        proptest! {
-            #![proptest_config(ProptestConfig::with_cases(32))]
-
-            #[test]
-            fn source_desc_protobuf_roundtrip(expect in any::<SourceDesc>()) {
-                let actual = protobuf_roundtrip::<_, ProtoSourceDesc>(&expect);
-                assert!(actual.is_ok());
-                assert_eq!(actual.unwrap(), expect);
-            }
         }
     }
 }
