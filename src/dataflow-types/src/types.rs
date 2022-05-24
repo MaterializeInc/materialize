@@ -1612,6 +1612,16 @@ pub mod sources {
         }
     }
 
+    /// Convert from `PgLsn` to MzOffset
+    impl From<tokio_postgres::types::PgLsn> for MzOffset {
+        fn from(lsn: tokio_postgres::types::PgLsn) -> Self {
+            let lsn_as_u64: u64 = lsn.into();
+            MzOffset {
+                offset: lsn_as_u64.try_into().unwrap(),
+            }
+        }
+    }
+
     /// Which piece of metadata a column corresponds to
     #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum IncludedColumnSource {

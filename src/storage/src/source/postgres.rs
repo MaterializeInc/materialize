@@ -219,14 +219,11 @@ impl SourceReader for PostgresSourceReader {
                 lsn,
                 end,
             })) => {
-                let offset: u64 = lsn.into();
                 if end {
                     Ok(NextMessage::Ready(SourceMessageType::Finalized(
                         SourceMessage {
                             partition: PartitionId::None,
-                            offset: MzOffset {
-                                offset: offset.try_into().unwrap(),
-                            },
+                            offset: lsn.into(),
                             upstream_time_millis: None,
                             key: (),
                             value,
@@ -238,9 +235,7 @@ impl SourceReader for PostgresSourceReader {
                     Ok(NextMessage::Ready(SourceMessageType::InProgress(
                         SourceMessage {
                             partition: PartitionId::None,
-                            offset: MzOffset {
-                                offset: offset.try_into().unwrap(),
-                            },
+                            offset: lsn.into(),
                             upstream_time_millis: None,
                             key: (),
                             value,
