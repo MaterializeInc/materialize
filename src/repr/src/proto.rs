@@ -196,6 +196,27 @@ where
     }
 }
 
+macro_rules! rust_type_id(
+    ($($t:ty),*) => (
+        $(
+            /// Identity type for $t.
+            impl RustType<$t> for $t {
+                #[inline]
+                fn into_proto(&self) -> $t {
+                    self.clone()
+                }
+
+                #[inline]
+                fn from_proto(proto: $t) -> Result<Self, TryFromProtoError> {
+                    Ok(proto)
+                }
+            }
+        )+
+    );
+);
+
+rust_type_id![bool, f32, f64, i32, i64, String, u32, u64, Vec<u8>];
+
 /// Blanket implementation for `BTreeMap<K, V>` where there exists `T` such
 /// that `T` implements `ProtoMapEntry<K, V>`.
 impl<K, V, T> RustType<Vec<T>> for BTreeMap<K, V>
