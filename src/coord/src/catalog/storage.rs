@@ -351,10 +351,8 @@ impl<S: Append> Connection<S> {
         }
     }
 
-    pub async fn get_catalog_content_version(&mut self) -> Result<String, Error> {
-        self.get_setting("catalog_content_version")
-            .await
-            .map(|v| v.unwrap_or_else(|| "new".to_string()))
+    pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
+        self.get_setting("catalog_content_version").await
     }
 
     pub async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {

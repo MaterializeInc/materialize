@@ -47,11 +47,9 @@ where
 pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), anyhow::Error> {
     let mut storage = catalog.storage().await;
     let catalog_version = storage.get_catalog_content_version().await?;
-    let _catalog_version = match Version::parse(&catalog_version) {
-        Ok(v) => v,
-        // Catalog content versions changed to semver after 0.8.3, so all
-        // non-semver versions are less than that.
-        Err(_) => Version::new(0, 0, 0),
+    let _catalog_version = match catalog_version {
+        Some(v) => Version::parse(&v)?,
+        None => Version::new(0, 0, 0),
     };
     let mut tx = storage.transaction().await?;
     // First, do basic AST -> AST transformations.

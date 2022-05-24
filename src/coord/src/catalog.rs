@@ -1666,16 +1666,17 @@ impl<S: Append> Catalog<S> {
                 .storage()
                 .await
                 .get_catalog_content_version()
-                .await?;
-            crate::catalog::migrate::migrate(&mut catalog)
-                .await
-                .map_err(|e| {
-                    Error::new(ErrorKind::FailedMigration {
-                        last_seen_version,
-                        this_version: catalog.config().build_info.version,
-                        cause: e.to_string(),
-                    })
-                })?;
+                .await?
+                // `new` means that it hasn't been initialized
+                .unwrap_or_else(|| "new".to_string());
+
+            migrate::migrate(&mut catalog).await.map_err(|e| {
+                Error::new(ErrorKind::FailedMigration {
+                    last_seen_version,
+                    this_version: catalog.config().build_info.version,
+                    cause: e.to_string(),
+                })
+            })?;
             catalog
                 .storage()
                 .await
