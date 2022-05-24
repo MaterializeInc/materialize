@@ -240,11 +240,6 @@ impl BlobMulti for S3BlobMulti {
             return Err(anyhow!("unexpected number of s3 object parts: {}", num_parts).into());
         }
 
-        // TODO: Plumb an Arc<AsyncRuntime> on S3BlobCore instead. I tried but
-        // was getting a "Cannot drop a runtime in a context where blocking is
-        // not allowed" error that I didn't want to get distracted with. All the
-        // calls into the s3 library require that this context is set anyway, so
-        // I suppose this is no worse than where we started.
         let async_runtime = AsyncHandle::try_current().map_err(anyhow::Error::msg)?;
 
         // Continue to fetch the first part's body while we fetch the other
@@ -517,11 +512,6 @@ impl S3BlobMulti {
             start_overall.elapsed()
         );
 
-        // TODO: Plumb an Arc<AsyncRuntime> on S3BlobCore instead. I tried but
-        // was getting a "Cannot drop a runtime in a context where blocking is
-        // not allowed" error that I didn't want to get distracted with. All the
-        // calls into the s3 library require that this context is set anyway, so
-        // I suppose this is no worse than where we started.
         let async_runtime = AsyncHandle::try_current().map_err(anyhow::Error::new)?;
 
         // Fire off all the individual parts.

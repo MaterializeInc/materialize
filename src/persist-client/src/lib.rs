@@ -44,8 +44,6 @@ pub mod write;
 pub use crate::r#impl::state::{Since, Upper};
 
 /// An implementation of the public crate interface.
-///
-/// TODO: Move this to another crate.
 pub(crate) mod r#impl {
     pub mod machine;
     pub mod state;
@@ -1067,10 +1065,6 @@ mod tests {
         write.expect_compare_and_append(&data[2..], 3, 4).await;
 
         // Read the snapshot and check that it got all the appropriate data.
-        //
-        // TODO: If we made the SeqNo of the snap and the writes available, we
-        // could assert on the ordering of them to provide additional confidence
-        // that the test hasn't rotted as things change.
         let mut snap = snap.await;
         assert_eq!(snap.read_all().await, all_ok(&data[..], 3));
     }

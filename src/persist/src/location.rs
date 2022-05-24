@@ -290,8 +290,6 @@ impl<T: Codec> TryFrom<&VersionedData> for (SeqNo, T) {
 /// of the evolution of the data. To make roundtripping through various forms of durable
 /// storage easier, sequence numbers used with [Consensus] need to be restricted to the
 /// range [0, i64::MAX].
-///
-/// TODO: Do we need to expose the evolution of this data across a series of versions?
 #[async_trait]
 pub trait Consensus: std::fmt::Debug {
     /// Returns a recent version of `data`, and the corresponding sequence number, if

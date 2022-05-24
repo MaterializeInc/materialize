@@ -130,8 +130,6 @@ where
                     // might get a key reference that that blob isn't returning yet.
                     // Keep trying, it'll show up. The deadline will eventually bail
                     // us out of this loop if something has gone wrong internally.
-                    //
-                    // TODO: This should increment a counter.
                     None => {
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
@@ -302,8 +300,6 @@ where
                     // might get a key reference that that blob isn't returning yet.
                     // Keep trying, it'll show up. The deadline will eventually bail
                     // us out of this loop if something has gone wrong internally.
-                    //
-                    // TODO: This should increment a counter.
                     None => {
                         info!(
                             "unexpected missing blob, trying again in {:?}: {}",
@@ -428,10 +424,6 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
     pub async fn listen(&self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
         trace!("ReadHandle::listen as_of={:?}", as_of);
         if PartialOrder::less_than(&as_of, &self.since) {
@@ -461,10 +453,6 @@ where
     /// immediately consuming it from a single place. If you need to parallelize
     /// snapshot iteration (potentially from multiple machines), see
     /// [Self::snapshot_splits] and [Self::snapshot_iter].
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
     pub async fn snapshot(
         &self,
         as_of: Antichain<T>,
@@ -504,10 +492,6 @@ where
     /// This method exists to allow users to parallelize snapshot iteration. If
     /// you want to immediately consume the snapshot from a single place, you
     /// likely want the [Self::snapshot] helper.
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
     pub async fn snapshot_splits(
         &self,
         as_of: Antichain<T>,

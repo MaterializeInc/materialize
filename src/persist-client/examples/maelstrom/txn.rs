@@ -154,8 +154,6 @@ impl Transactor {
                 .map(|(k, v, diff)| ((k, v), write_ts, diff));
             let expected_upper = Antichain::from_elem(write_ts);
             let new_upper = Antichain::from_elem(write_ts + 1);
-            // TODO: Wrap the compare_and_append in a retry_timeouts call, too.
-            // I tried but got tripped up trying to make an async FnMut work.
             let cas_res = self
                 .write
                 .compare_and_append(updates, expected_upper.clone(), new_upper)

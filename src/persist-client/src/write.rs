@@ -20,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
+use mz_persist::location::{Atomicity, BlobMulti, ExternalError, Indeterminate};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -112,11 +112,6 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    ///
-    /// TODO: Introduce an AsyncIterator (futures::Stream) variant of this. Or,
-    /// given that the AsyncIterator version would be strictly more general,
-    /// alter this one if it turns out that the compiler can optimize out the
-    /// overhead.
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -138,7 +133,9 @@ where
             Err(invalid_usage) => return Ok(Err(invalid_usage)),
         };
 
-        self.append_batch(batch, lower, upper).await
+        self.append_batch(batch, lower, upper)
+            .await
+            .map_err(ExternalError::from)
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -211,6 +208,7 @@ where
         match self
             .compare_and_append_batch(&mut batch, expected_upper, new_upper)
             .await
+            .map_err(ExternalError::from)
         {
             ok @ Ok(Ok(Ok(()))) => ok,
             err @ _ => {
@@ -218,7 +216,7 @@ where
                 // because the caller owns the batch and might want to retry
                 // with a different `expected_upper`. In this function, we
                 // control the batch, so we have to delete it.
-                batch.delete().await?;
+                batch.delete().await;
                 err
             }
         }
@@ -254,7 +252,7 @@ where
         mut batch: Batch<K, V, T, D>,
         mut lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError> {
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate> {
         trace!("Batch::append lower={:?} upper={:?}", lower, upper);
 
         loop {
@@ -273,7 +271,7 @@ where
                     if PartialOrder::less_than(&current_upper, &lower) {
                         self.upper = current_upper.clone();
 
-                        batch.delete().await?;
+                        batch.delete().await;
 
                         return Ok(Ok(Err(Upper(current_upper))));
                     } else if PartialOrder::less_than(&current_upper, &upper) {
@@ -291,13 +289,13 @@ where
                         // Because we return a success result, the caller will
                         // think that the batch was consumed or otherwise used,
                         // so we have to delete it here.
-                        batch.delete().await?;
+                        batch.delete().await;
 
                         return Ok(Ok(Ok(())));
                     }
                 }
                 Err(err) => {
-                    batch.delete().await?;
+                    batch.delete().await;
 
                     return Ok(Err(err));
                 }
@@ -345,7 +343,7 @@ where
         batch: &mut Batch<K, V, T, D>,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError> {
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate> {
         trace!(
             "Batch::compare_and_append expected_upper={:?} new_upper={:?}",
             expected_upper,
@@ -499,10 +497,6 @@ where
 ///
 /// A [Batch] needs to be marked as consumed or it needs to be deleted via [Self::delete].
 /// Otherwise, a dangling batch will leak and backing blobs will remain in blob storage.
-// TODO(aljoscha): Right now, we require batches to be manually marked as
-// consumed (when they're appended to a batch) or deleted. This is clunky and
-// prone to errors so we should replace it with lazy cleanup once we can use
-// async drop.
 #[derive(Debug)]
 pub struct Batch<K, V, T, D>
 where
@@ -582,13 +576,15 @@ where
 
     /// Deletes the blobs that make up this batch from the given blob store and
     /// marks them as deleted.
-    pub async fn delete(mut self) -> Result<(), ExternalError> {
+    pub async fn delete(mut self) {
         let deadline = Instant::now() + FOREVER;
         for key in self.blob_keys.iter() {
-            self.blob.delete(deadline, key).await?;
+            retry_external("batch::delete", || async {
+                self.blob.delete(deadline, key).await
+            })
+            .await;
         }
         self.blob_keys.clear();
-        Ok(())
     }
 }
 

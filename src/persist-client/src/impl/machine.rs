@@ -104,10 +104,6 @@ where
                 Ok(()) => {
                     return Ok(Ok(Ok(seqno)));
                 }
-                // TODO(aljoscha): This upper seems useless because we have to
-                // read from consensus to get an up-to-date version of the
-                // upper. Might as well change the signature of
-                // `State::compare_and_append`.
                 Err(Ok(_current_upper)) => {
                     // If the state machine thinks that the shard upper is not
                     // far enough along, it could be because the caller of this
@@ -301,19 +297,14 @@ where
                     );
                     self.update_state(current).await;
 
-                    // TODO: Some sort of exponential backoff here? We have
-                    // Retry for this but using it here seems to hang our unit
-                    // tests. We should look into that, but also maybe it
-                    // doesn't make sense here anyway because it would just make
-                    // starvation worse.
+                    // Intentionally don't backoff here. It would only make
+                    // starvation issues even worse.
                     continue;
                 }
             }
         }
     }
 
-    // TODO: This is fairly duplicative of apply_unbatched_cmd. Unclear if
-    // there's anything to do here...
     async fn maybe_init_state(
         consensus: &(dyn Consensus + Send + Sync),
         shard_id: ShardId,
@@ -462,6 +453,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use mz_ore::cast::CastFrom;
+
     use crate::tests::new_test_client;
     use crate::ShardId;
 
@@ -494,9 +487,9 @@ mod tests {
         assert!(consensus_entries.len() > 0);
         // Make sure the number of entries is bounded.
         //
-        // TODO: When we implement incremental state, this will be something
-        // like log(NUM_BATCHES).
-        let max_entries = 1;
+        // In practice, this is always 1 right now, but when we implement
+        // incremental state, it will be something like log(NUM_BATCHES).
+        let max_entries = usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
         assert!(
             consensus_entries.len() <= max_entries,
             "expected at most {} entries got {}",
