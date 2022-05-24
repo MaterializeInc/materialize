@@ -45,7 +45,7 @@ def main() -> int:
     parser.add_argument(
         "--postgres",
         help="PostgreSQL connection string",
-        default=DEFAULT_POSTGRES,
+        default=os.getenv("MZDEV_POSTGRES", DEFAULT_POSTGRES),
     )
     parser.add_argument(
         "--release",
