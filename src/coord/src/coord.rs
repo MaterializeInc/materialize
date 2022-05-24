@@ -829,16 +829,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     conn_id,
                 }) = self.pending_peeks.remove(&uuid)
                 {
-                    rows_tx
-                        .send(response)
-                        .expect("Peek endpoint terminated prematurely");
-                    let uuids = self
-                        .client_pending_peeks
-                        .get_mut(&conn_id)
-                        .unwrap_or_else(|| panic!("no client state for connection {conn_id}"));
-                    uuids.remove(&uuid);
-                    if uuids.is_empty() {
-                        self.client_pending_peeks.remove(&conn_id);
+                    // Peek cancellations are best effort, so we might still
+                    // receive a response, even though the recipient is gone.
+                    let _ = rows_tx.send(response);
+                    if let Some(uuids) = self.client_pending_peeks.get_mut(&conn_id) {
+                        uuids.remove(&uuid);
+                        if uuids.is_empty() {
+                            self.client_pending_peeks.remove(&conn_id);
+                        }
                     }
                 }
                 // Cancellation may cause us to receive responses for peeks no
@@ -1138,6 +1136,32 @@ impl<S: Append + 'static> Coordinator<S> {
             } => {
                 let result = self.verify_prepared_statement(&mut session, &name);
                 let _ = tx.send(Response { result, session });
+            }
+
+            // Processing this command DOES NOT send a response to the client;
+            // in any situation where you use it, you must also have a code
+            // path that responds to the client (e.g. reporting an error).
+            Command::RemovePendingPeeks { conn_id } => {
+                // The peek is present on some specific compute instance.
+                // Allow dataflow to cancel any pending peeks.
+                if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
+                    let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> =
+                        Default::default();
+                    for (uuid, compute_instance) in &uuids {
+                        inverse.entry(*compute_instance).or_default().insert(*uuid);
+                    }
+                    for (compute_instance, uuids) in inverse {
+                        self.dataflow_client
+                            .compute_mut(compute_instance)
+                            .unwrap()
+                            .cancel_peeks(&uuids)
+                            .await
+                            .unwrap();
+                    }
+                    for (uuid, _) in uuids {
+                        self.pending_peeks.remove(&uuid);
+                    }
+                }
             }
         }
     }
@@ -4179,58 +4203,83 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
+        let timeout_dur = *session.vars().statement_timeout();
+
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| format!("sequence_read_then_write:{id}"), async move {
             let arena = RowArena::new();
             let diffs = match peek_response {
-                ExecuteResponse::SendingRows(batch) => match batch.await {
-                    PeekResponseUnary::Rows(rows) => {
-                        |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
-                            // Use 2x row len incase there's some assignments.
-                            let mut diffs = Vec::with_capacity(rows.len() * 2);
-                            let mut datum_vec = mz_repr::DatumVec::new();
-                            for row in rows {
-                                if !assignments.is_empty() {
-                                    assert!(
-                                        matches!(kind, MutationKind::Update),
-                                        "only updates support assignments"
-                                    );
-                                    let mut datums = datum_vec.borrow_with(&row);
-                                    let mut updates = vec![];
-                                    for (idx, expr) in &assignments {
-                                        let updated = match expr.eval(&datums, &arena) {
-                                            Ok(updated) => updated,
-                                            Err(e) => {
-                                                return Err(CoordError::Unstructured(anyhow!(e)))
+                ExecuteResponse::SendingRows(batch) => {
+                    // TODO: This timeout should be removed once #11782 lands;
+                    // we should instead periodically ensure clusters are
+                    // healthy and actively cancel any work waiting on unhealthy
+                    // clusters.
+                    match tokio::time::timeout(timeout_dur, batch).await {
+                        Ok(res) => match res {
+                            PeekResponseUnary::Rows(rows) => {
+                                |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
+                                    // Use 2x row len incase there's some assignments.
+                                    let mut diffs = Vec::with_capacity(rows.len() * 2);
+                                    let mut datum_vec = mz_repr::DatumVec::new();
+                                    for row in rows {
+                                        if !assignments.is_empty() {
+                                            assert!(
+                                                matches!(kind, MutationKind::Update),
+                                                "only updates support assignments"
+                                            );
+                                            let mut datums = datum_vec.borrow_with(&row);
+                                            let mut updates = vec![];
+                                            for (idx, expr) in &assignments {
+                                                let updated = match expr.eval(&datums, &arena) {
+                                                    Ok(updated) => updated,
+                                                    Err(e) => {
+                                                        return Err(CoordError::Unstructured(
+                                                            anyhow!(e),
+                                                        ))
+                                                    }
+                                                };
+                                                desc.constraints_met(*idx, &updated)?;
+                                                updates.push((*idx, updated));
                                             }
-                                        };
-                                        desc.constraints_met(*idx, &updated)?;
-                                        updates.push((*idx, updated));
+                                            for (idx, new_value) in updates {
+                                                datums[idx] = new_value;
+                                            }
+                                            let updated = Row::pack_slice(&datums);
+                                            diffs.push((updated, 1));
+                                        }
+                                        match kind {
+                                            // Updates and deletes always remove the
+                                            // current row. Updates will also add an
+                                            // updated value.
+                                            MutationKind::Update | MutationKind::Delete => {
+                                                diffs.push((row, -1))
+                                            }
+                                            MutationKind::Insert => diffs.push((row, 1)),
+                                        }
                                     }
-                                    for (idx, new_value) in updates {
-                                        datums[idx] = new_value;
-                                    }
-                                    let updated = Row::pack_slice(&datums);
-                                    diffs.push((updated, 1));
-                                }
-                                match kind {
-                                    // Updates and deletes always remove the
-                                    // current row. Updates will also add an
-                                    // updated value.
-                                    MutationKind::Update | MutationKind::Delete => {
-                                        diffs.push((row, -1))
-                                    }
-                                    MutationKind::Insert => diffs.push((row, 1)),
-                                }
+                                    Ok(diffs)
+                                }(rows)
                             }
-                            Ok(diffs)
-                        }(rows)
+                            PeekResponseUnary::Canceled => {
+                                Err(CoordError::Unstructured(anyhow!("execution canceled")))
+                            }
+                            PeekResponseUnary::Error(e) => {
+                                Err(CoordError::Unstructured(anyhow!(e)))
+                            }
+                        },
+                        Err(_) => {
+                            // We timed out, so remove the pending peek. This is
+                            // best-effort and doesn't guarantee we won't
+                            // receive a response.
+                            internal_cmd_tx
+                                .send(Message::Command(Command::RemovePendingPeeks {
+                                    conn_id: session.conn_id(),
+                                }))
+                                .expect("sending to internal_cmd_tx cannot fail");
+                            Err(CoordError::StatementTimeout)
+                        }
                     }
-                    PeekResponseUnary::Canceled => {
-                        Err(CoordError::Unstructured(anyhow!("execution canceled")))
-                    }
-                    PeekResponseUnary::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
-                },
+                }
                 _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
             };
             internal_cmd_tx
@@ -5269,6 +5318,7 @@ pub mod fast_path_peek {
                 .or_default()
                 .insert(uuid, compute_instance);
             let (id, key, timestamp, _finishing, map_filter_project) = peek_command;
+
             self.dataflow_client
                 .compute_mut(compute_instance)
                 .unwrap()
