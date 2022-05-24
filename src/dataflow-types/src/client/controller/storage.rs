@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 use mz_persist_client::{read::ReadHandle, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
-use mz_repr::proto::TryFromProtoError;
+use mz_repr::proto::{RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_stash::{self, StashError, TypedCollection};
 
@@ -134,18 +134,14 @@ pub struct CollectionMetadata {
     pub timestamp_shard_id: ShardId,
 }
 
-impl From<&CollectionMetadata> for ProtoCollectionMetadata {
+impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
     // TODO: This is just a stub.
-    fn from(_: &CollectionMetadata) -> Self {
+    fn into_proto(&self) -> ProtoCollectionMetadata {
         ProtoCollectionMetadata {}
     }
-}
 
-impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
     // TODO: This is just a stub.
-    type Error = TryFromProtoError;
-
-    fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
+    fn from_proto(_proto: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
         let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
         Ok(CollectionMetadata {
             persist_location: PersistLocation {

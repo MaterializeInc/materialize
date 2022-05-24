@@ -13,7 +13,7 @@ use std::iter::once;
 
 use bytes::BufMut;
 use futures::future::BoxFuture;
-use mz_repr::proto::newapi::{IntoRustIfSome, RustType};
+use mz_repr::proto::{IntoRustIfSome, RustType};
 use prost::{self, Message};
 use uuid::Uuid;
 

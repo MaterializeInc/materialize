@@ -19,9 +19,7 @@ use mz_expr::MapFilterProject;
 use mz_expr::join_permutations;
 use mz_expr::permutation_for_arrangement;
 use mz_expr::MirScalarExpr;
-use mz_repr::proto::ProtoRepr;
-use mz_repr::proto::TryFromProtoError;
-use mz_repr::proto::TryIntoIfSome;
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::result::Probability;
 use proptest_derive::Arbitrary;
@@ -80,49 +78,37 @@ impl Arbitrary for LinearJoinPlan {
     }
 }
 
-impl TryFrom<ProtoLinearJoinPlan> for LinearJoinPlan {
-    type Error = TryFromProtoError;
+impl RustType<ProtoLinearJoinPlan> for LinearJoinPlan {
+    fn into_proto(&self) -> ProtoLinearJoinPlan {
+        ProtoLinearJoinPlan {
+            source_relation: self.source_relation.into_proto(),
+            source_key: self.source_key.into_proto(),
+            initial_closure: self.initial_closure.into_proto(),
+            stage_plans: self.stage_plans.into_proto(),
+            final_closure: self.final_closure.into_proto(),
+        }
+    }
 
-    fn try_from(x: ProtoLinearJoinPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoLinearJoinPlan) -> Result<Self, TryFromProtoError> {
         Ok(LinearJoinPlan {
-            source_relation: ProtoRepr::from_proto(x.source_relation)?,
-            source_key: x.source_key.map(TryInto::try_into).transpose()?,
-            initial_closure: x.initial_closure.map(|x| x.try_into()).transpose()?,
-            stage_plans: x
-                .stage_plans
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
-            final_closure: x.final_closure.map(|x| x.try_into()).transpose()?,
+            source_relation: proto.source_relation.into_rust()?,
+            source_key: proto.source_key.into_rust()?,
+            initial_closure: proto.initial_closure.into_rust()?,
+            stage_plans: proto.stage_plans.into_rust()?,
+            final_closure: proto.final_closure.into_rust()?,
         })
     }
 }
 
-impl From<&Vec<MirScalarExpr>> for ProtoMirScalarVec {
-    fn from(x: &Vec<MirScalarExpr>) -> Self {
-        Self {
-            values: x.iter().map(Into::into).collect(),
+impl RustType<ProtoMirScalarVec> for Vec<MirScalarExpr> {
+    fn into_proto(&self) -> ProtoMirScalarVec {
+        ProtoMirScalarVec {
+            values: self.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoMirScalarVec> for Vec<MirScalarExpr> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMirScalarVec) -> Result<Self, Self::Error> {
-        x.values.into_iter().map(TryInto::try_into).collect()
-    }
-}
-
-impl From<&LinearJoinPlan> for ProtoLinearJoinPlan {
-    fn from(x: &LinearJoinPlan) -> Self {
-        ProtoLinearJoinPlan {
-            source_relation: x.source_relation.into_proto(),
-            source_key: x.source_key.as_ref().map(Into::into),
-            initial_closure: x.initial_closure.as_ref().map(Into::into),
-            stage_plans: x.stage_plans.iter().map(Into::into).collect(),
-            final_closure: x.final_closure.as_ref().map(Into::into),
-        }
+    fn from_proto(proto: ProtoMirScalarVec) -> Result<Self, TryFromProtoError> {
+        proto.values.into_rust()
     }
 }
 
@@ -152,44 +138,26 @@ pub struct LinearStagePlan {
     pub closure: JoinClosure,
 }
 
-impl From<&LinearStagePlan> for ProtoLinearStagePlan {
-    fn from(x: &LinearStagePlan) -> Self {
-        Self {
-            lookup_relation: x.lookup_relation.into_proto(),
-            stream_key: x.stream_key.iter().map(Into::into).collect(),
-            stream_thinning: x.stream_thinning.iter().map(|x| x.into_proto()).collect(),
-            lookup_key: x.lookup_key.iter().map(Into::into).collect(),
-            closure: Some(Into::into(&x.closure)),
+impl RustType<ProtoLinearStagePlan> for LinearStagePlan {
+    fn into_proto(&self) -> ProtoLinearStagePlan {
+        ProtoLinearStagePlan {
+            lookup_relation: self.lookup_relation.into_proto(),
+            stream_key: self.stream_key.into_proto(),
+            stream_thinning: self.stream_thinning.into_proto(),
+            lookup_key: self.lookup_key.into_proto(),
+            closure: Some(self.closure.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoLinearStagePlan> for LinearStagePlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoLinearStagePlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoLinearStagePlan) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            lookup_relation: ProtoRepr::from_proto(x.lookup_relation)?,
-            stream_key: x
-                .stream_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            stream_thinning: x
-                .stream_thinning
-                .into_iter()
-                .map(ProtoRepr::from_proto)
-                .collect::<Result<_, _>>()?,
-
-            lookup_key: x
-                .lookup_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-
-            closure: x
+            lookup_relation: proto.lookup_relation.into_rust()?,
+            stream_key: proto.stream_key.into_rust()?,
+            stream_thinning: proto.stream_thinning.into_rust()?,
+            lookup_key: proto.lookup_key.into_rust()?,
+            closure: proto
                 .closure
-                .try_into_if_some("ProtoLinearStagePlan::closure")?,
+                .into_rust_if_some("ProtoLinearStagePlan::closure")?,
         })
     }
 }

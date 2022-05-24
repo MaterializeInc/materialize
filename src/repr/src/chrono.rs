@@ -22,7 +22,7 @@ use chrono::{
 use chrono_tz::{Tz, TZ_VARIANTS};
 use proptest::prelude::Strategy;
 
-use crate::proto::newapi::{RustType, TryFromProtoError};
+use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.chrono.rs"));
 
@@ -160,7 +160,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]

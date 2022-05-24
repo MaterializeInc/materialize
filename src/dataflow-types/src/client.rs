@@ -29,8 +29,8 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::any_uuid;
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -84,22 +84,18 @@ pub struct InstanceConfig {
     pub logging: Option<LoggingConfig>,
 }
 
-impl From<&InstanceConfig> for ProtoInstanceConfig {
-    fn from(x: &InstanceConfig) -> Self {
+impl RustType<ProtoInstanceConfig> for InstanceConfig {
+    fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
-            replica_id: x.replica_id,
-            logging: x.logging.as_ref().map(Into::into),
+            replica_id: self.replica_id,
+            logging: self.logging.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoInstanceConfig> for InstanceConfig {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoInstanceConfig) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            replica_id: x.replica_id,
-            logging: x.logging.map(TryInto::try_into).transpose()?,
+            replica_id: proto.replica_id,
+            logging: proto.logging.into_rust()?,
         })
     }
 }
@@ -140,36 +136,29 @@ pub struct Peek<T = mz_repr::Timestamp> {
     pub target_replica: Option<ReplicaId>,
 }
 
-impl From<&Peek> for ProtoPeek {
-    fn from(x: &Peek) -> Self {
+impl RustType<ProtoPeek> for Peek {
+    fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
-            id: Some(x.id.into_proto()),
-            key: x.key.into_proto(),
-            uuid: Some(x.uuid.into_proto()),
-            timestamp: x.timestamp,
-            finishing: Some((&x.finishing).into()),
-            map_filter_project: Some((&x.map_filter_project).into()),
-            target_replica: x.target_replica,
+            id: Some(self.id.into_proto()),
+            key: self.key.into_proto(),
+            uuid: Some(self.uuid.into_proto()),
+            timestamp: self.timestamp,
+            finishing: Some(self.finishing.into_proto()),
+            map_filter_project: Some(self.map_filter_project.into_proto()),
+            target_replica: self.target_replica,
         }
     }
-}
 
-impl TryFrom<ProtoPeek> for Peek {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoPeek) -> Result<Self, Self::Error> {
+    fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             id: x.id.into_rust_if_some("ProtoPeek::id")?,
             key: x.key.into_rust()?,
-            uuid: Uuid::from_proto(
-                x.uuid
-                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoPeek::uuid"))?,
-            )?,
+            uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
             timestamp: x.timestamp,
-            finishing: x.finishing.try_into_if_some("ProtoPeek::finishing")?,
+            finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
             map_filter_project: x
                 .map_filter_project
-                .try_into_if_some("ProtoPeek::map_filter_project")?,
+                .into_rust_if_some("ProtoPeek::map_filter_project")?,
             target_replica: x.target_replica,
         })
     }
@@ -208,82 +197,73 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
 }
 
-impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
-    fn from(x: &ComputeCommand<mz_repr::Timestamp>) -> Self {
+impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoComputeCommand {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         ProtoComputeCommand {
-            kind: Some(match x {
-                ComputeCommand::CreateInstance(config) => CreateInstance(config.into()),
+            kind: Some(match self {
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
-                        dataflows: dataflows.iter().map(Into::into).collect(),
+                        dataflows: dataflows.into_proto(),
                     })
                 }
                 ComputeCommand::AllowCompaction(collections) => {
                     AllowCompaction(ProtoAllowCompaction {
-                        collections: collections
-                            .iter()
-                            .map(|(id, frontier)| ProtoCompaction {
-                                id: Some(id.into_proto()),
-                                frontier: Some(frontier.into()),
-                            })
-                            .collect(),
+                        collections: collections.into_proto(),
                     })
                 }
-                ComputeCommand::Peek(peek) => Peek(peek.into()),
+                ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
-                    uuids: uuids.into_iter().map(|id| id.into_proto()).collect(),
+                    uuids: uuids.into_proto(),
                 }),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoComputeCommand) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoComputeCommand) -> Result<Self, TryFromProtoError> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
-        match x.kind {
-            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.try_into()?)),
+        match proto.kind {
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
-                Ok(ComputeCommand::CreateDataflows(
-                    dataflows
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<_>, _>>()?,
-                ))
+                Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
-                Ok(ComputeCommand::AllowCompaction(
-                    collections
-                        .into_iter()
-                        .map(|collection| {
-                            Ok((
-                                collection.id.into_rust_if_some("ProtoCompaction::id")?,
-                                collection.frontier.map(Into::into).ok_or_else(|| {
-                                    TryFromProtoError::missing_field("ProtoCompaction::frontier")
-                                })?,
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-                ))
+                Ok(ComputeCommand::AllowCompaction(collections.into_rust()?))
             }
-            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.try_into()?)),
+            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
-                uuids: uuids
-                    .into_iter()
-                    .map(Uuid::from_proto)
-                    .collect::<Result<BTreeSet<_>, _>>()?,
+                uuids: uuids.into_rust()?,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
             )),
         }
+    }
+}
+
+impl RustType<proto_compute_command::ProtoCompaction> for (GlobalId, Antichain<u64>) {
+    fn into_proto(self: &Self) -> proto_compute_command::ProtoCompaction {
+        proto_compute_command::ProtoCompaction {
+            id: Some(self.0.into_proto()),
+            frontier: Some((&self.1).into()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_compute_command::ProtoCompaction,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.id.into_rust_if_some("ProtoCompaction::id")?,
+            proto
+                .frontier
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoCompaction::frontier"))?,
+        ))
     }
 }
 
@@ -591,12 +571,12 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     TailResponse(GlobalId, TailResponse<T>),
 }
 
-impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
-    fn from(x: &ComputeResponse<mz_repr::Timestamp>) -> Self {
+impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoComputeResponse {
         use proto_compute_response::Kind::*;
         use proto_compute_response::*;
         ProtoComputeResponse {
-            kind: Some(match x {
+            kind: Some(match self {
                 ComputeResponse::FrontierUppers(traces) => {
                     FrontierUppers(ProtoFrontierUppersKind {
                         traces: traces
@@ -619,23 +599,19 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
                 }
                 ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseKind {
                     id: Some(id.into_proto()),
-                    resp: Some(resp.into()),
+                    resp: Some(resp.into_proto()),
                 }),
                 ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
                     id: Some(id.into_proto()),
-                    resp: Some(resp.into()),
+                    resp: Some(resp.into_proto()),
                 }),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoComputeResponse) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
-        match x.kind {
+        match proto.kind {
             Some(FrontierUppers(traces)) => Ok(ComputeResponse::FrontierUppers(
                 traces
                     .traces
@@ -653,12 +629,12 @@ impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
-                resp.id.from_proto_if_some("ProtoPeekResponseKind::id")?,
-                resp.resp.try_into_if_some("ProtoPeekResponseKind::resp")?,
+                resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
+                resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
             )),
             Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
                 resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
-                resp.resp.try_into_if_some("ProtoTailResponseKind::resp")?,
+                resp.resp.into_rust_if_some("ProtoTailResponseKind::resp")?,
             )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",

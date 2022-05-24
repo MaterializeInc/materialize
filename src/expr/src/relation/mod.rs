@@ -23,7 +23,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, RelationType, Row, ScalarType};
 
 use self::func::{AggregateFunc, LagLeadType, TableFunc};
@@ -1454,22 +1454,18 @@ pub struct ColumnOrder {
     pub desc: bool,
 }
 
-impl From<&ColumnOrder> for ProtoColumnOrder {
-    fn from(x: &ColumnOrder) -> Self {
+impl RustType<ProtoColumnOrder> for ColumnOrder {
+    fn into_proto(&self) -> ProtoColumnOrder {
         ProtoColumnOrder {
-            column: x.column.into_proto(),
-            desc: x.desc,
+            column: self.column.into_proto(),
+            desc: self.desc,
         }
     }
-}
 
-impl TryFrom<ProtoColumnOrder> for ColumnOrder {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoColumnOrder) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoColumnOrder) -> Result<Self, TryFromProtoError> {
         Ok(ColumnOrder {
-            column: usize::from_proto(x.column)?,
-            desc: x.desc,
+            column: proto.column.into_rust()?,
+            desc: proto.desc,
         })
     }
 }
@@ -1497,24 +1493,20 @@ pub struct AggregateExpr {
     pub distinct: bool,
 }
 
-impl From<&AggregateExpr> for ProtoAggregateExpr {
-    fn from(x: &AggregateExpr) -> Self {
+impl RustType<ProtoAggregateExpr> for AggregateExpr {
+    fn into_proto(&self) -> ProtoAggregateExpr {
         ProtoAggregateExpr {
-            func: Some((&x.func).into()),
-            expr: Some((&x.expr).into()),
-            distinct: x.distinct,
+            func: Some(self.func.into_proto()),
+            expr: Some(self.expr.into_proto()),
+            distinct: self.distinct,
         }
     }
-}
 
-impl TryFrom<ProtoAggregateExpr> for AggregateExpr {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoAggregateExpr) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoAggregateExpr) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            func: x.func.try_into_if_some("ProtoAggregateExpr::func")?,
-            expr: x.expr.try_into_if_some("ProtoAggregateExpr::expr")?,
-            distinct: x.distinct,
+            func: proto.func.into_rust_if_some("ProtoAggregateExpr::func")?,
+            expr: proto.expr.into_rust_if_some("ProtoAggregateExpr::expr")?,
+            distinct: proto.distinct,
         })
     }
 }
@@ -1960,34 +1952,22 @@ pub struct RowSetFinishing {
     pub project: Vec<usize>,
 }
 
-impl From<&RowSetFinishing> for ProtoRowSetFinishing {
-    fn from(x: &RowSetFinishing) -> Self {
+impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
+    fn into_proto(&self) -> ProtoRowSetFinishing {
         ProtoRowSetFinishing {
-            order_by: x.order_by.iter().map(Into::into).collect(),
-            limit: x.limit.as_ref().map(|x| usize::into_proto(*x)),
-            offset: x.offset.into_proto(),
-            project: x.project.iter().map(|x| usize::into_proto(*x)).collect(),
+            order_by: self.order_by.into_proto(),
+            limit: self.limit.into_proto(),
+            offset: self.offset.into_proto(),
+            project: self.project.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoRowSetFinishing> for RowSetFinishing {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoRowSetFinishing) -> Result<Self, Self::Error> {
+    fn from_proto(x: ProtoRowSetFinishing) -> Result<Self, TryFromProtoError> {
         Ok(RowSetFinishing {
-            order_by: x
-                .order_by
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
-            limit: x.limit.map(usize::from_proto).transpose()?,
-            offset: usize::from_proto(x.offset)?,
-            project: x
-                .project
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
+            order_by: x.order_by.into_rust()?,
+            limit: x.limit.into_rust()?,
+            offset: x.offset.into_rust()?,
+            project: x.project.into_rust()?,
         })
     }
 }
@@ -2194,28 +2174,24 @@ impl WindowFrame {
     }
 }
 
-impl From<&WindowFrame> for ProtoWindowFrame {
-    fn from(x: &WindowFrame) -> Self {
+impl RustType<ProtoWindowFrame> for WindowFrame {
+    fn into_proto(&self) -> ProtoWindowFrame {
         ProtoWindowFrame {
-            units: Some((&x.units).into()),
-            start_bound: Some((&x.start_bound).into()),
-            end_bound: Some((&x.end_bound).into()),
+            units: Some(self.units.into_proto()),
+            start_bound: Some(self.start_bound.into_proto()),
+            end_bound: Some(self.end_bound.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoWindowFrame> for WindowFrame {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoWindowFrame) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoWindowFrame) -> Result<Self, TryFromProtoError> {
         Ok(WindowFrame {
-            units: x.units.try_into_if_some("ProtoWindowFrame::units")?,
-            start_bound: x
+            units: proto.units.into_rust_if_some("ProtoWindowFrame::units")?,
+            start_bound: proto
                 .start_bound
-                .try_into_if_some("ProtoWindowFrame::start_bound")?,
-            end_bound: x
+                .into_rust_if_some("ProtoWindowFrame::start_bound")?,
+            end_bound: proto
                 .end_bound
-                .try_into_if_some("ProtoWindowFrame::end_bound")?,
+                .into_rust_if_some("ProtoWindowFrame::end_bound")?,
         })
     }
 }
@@ -2233,41 +2209,29 @@ pub enum WindowFrameUnits {
     Groups,
 }
 
-impl From<&WindowFrameUnits> for proto_window_frame::ProtoWindowFrameUnits {
-    fn from(x: &WindowFrameUnits) -> Self {
+impl RustType<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
+    fn into_proto(&self) -> proto_window_frame::ProtoWindowFrameUnits {
+        use proto_window_frame::proto_window_frame_units::Kind::*;
         proto_window_frame::ProtoWindowFrameUnits {
-            kind: Some(match x {
-                WindowFrameUnits::Rows => {
-                    proto_window_frame::proto_window_frame_units::Kind::Rows(())
-                }
-                WindowFrameUnits::Range => {
-                    proto_window_frame::proto_window_frame_units::Kind::Range(())
-                }
-                WindowFrameUnits::Groups => {
-                    proto_window_frame::proto_window_frame_units::Kind::Groups(())
-                }
+            kind: Some(match self {
+                WindowFrameUnits::Rows => Rows(()),
+                WindowFrameUnits::Range => Range(()),
+                WindowFrameUnits::Groups => Groups(()),
             }),
         }
     }
-}
 
-impl TryFrom<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_window_frame::ProtoWindowFrameUnits) -> Result<Self, Self::Error> {
-        Ok(match x.kind {
-            Some(proto_window_frame::proto_window_frame_units::Kind::Rows(())) => {
-                WindowFrameUnits::Rows
-            }
-            Some(proto_window_frame::proto_window_frame_units::Kind::Range(())) => {
-                WindowFrameUnits::Range
-            }
-            Some(proto_window_frame::proto_window_frame_units::Kind::Groups(())) => {
-                WindowFrameUnits::Groups
-            }
+    fn from_proto(
+        proto: proto_window_frame::ProtoWindowFrameUnits,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto_window_frame::proto_window_frame_units::Kind::*;
+        Ok(match proto.kind {
+            Some(Rows(())) => WindowFrameUnits::Rows,
+            Some(Range(())) => WindowFrameUnits::Range,
+            Some(Groups(())) => WindowFrameUnits::Groups,
             None => {
-                return Err(TryFromProtoError::MissingField(
-                    "ProtoWindowFrameUnits::kind".into(),
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoWindowFrameUnits::kind",
                 ))
             }
         })
@@ -2294,53 +2258,31 @@ pub enum WindowFrameBound {
     UnboundedFollowing,
 }
 
-impl From<&WindowFrameBound> for proto_window_frame::ProtoWindowFrameBound {
-    fn from(x: &WindowFrameBound) -> Self {
+impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
+    fn into_proto(&self) -> proto_window_frame::ProtoWindowFrameBound {
+        use proto_window_frame::proto_window_frame_bound::Kind::*;
         proto_window_frame::ProtoWindowFrameBound {
-            kind: Some(match x {
-                WindowFrameBound::UnboundedPreceding => {
-                    proto_window_frame::proto_window_frame_bound::Kind::UnboundedPreceding(())
-                }
-                WindowFrameBound::OffsetPreceding(offset) => {
-                    proto_window_frame::proto_window_frame_bound::Kind::OffsetPreceding(*offset)
-                }
-                WindowFrameBound::CurrentRow => {
-                    proto_window_frame::proto_window_frame_bound::Kind::CurrentRow(())
-                }
-                WindowFrameBound::OffsetFollowing(offset) => {
-                    proto_window_frame::proto_window_frame_bound::Kind::OffsetFollowing(*offset)
-                }
-                WindowFrameBound::UnboundedFollowing => {
-                    proto_window_frame::proto_window_frame_bound::Kind::UnboundedFollowing(())
-                }
+            kind: Some(match self {
+                WindowFrameBound::UnboundedPreceding => UnboundedPreceding(()),
+                WindowFrameBound::OffsetPreceding(offset) => OffsetPreceding(*offset),
+                WindowFrameBound::CurrentRow => CurrentRow(()),
+                WindowFrameBound::OffsetFollowing(offset) => OffsetFollowing(*offset),
+                WindowFrameBound::UnboundedFollowing => UnboundedFollowing(()),
             }),
         }
     }
-}
 
-impl TryFrom<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_window_frame::ProtoWindowFrameBound) -> Result<Self, Self::Error> {
+    fn from_proto(x: proto_window_frame::ProtoWindowFrameBound) -> Result<Self, TryFromProtoError> {
+        use proto_window_frame::proto_window_frame_bound::Kind::*;
         Ok(match x.kind {
-            Some(proto_window_frame::proto_window_frame_bound::Kind::UnboundedPreceding(())) => {
-                WindowFrameBound::UnboundedPreceding
-            }
-            Some(proto_window_frame::proto_window_frame_bound::Kind::OffsetPreceding(offset)) => {
-                WindowFrameBound::OffsetPreceding(offset)
-            }
-            Some(proto_window_frame::proto_window_frame_bound::Kind::CurrentRow(())) => {
-                WindowFrameBound::CurrentRow
-            }
-            Some(proto_window_frame::proto_window_frame_bound::Kind::OffsetFollowing(offset)) => {
-                WindowFrameBound::OffsetFollowing(offset)
-            }
-            Some(proto_window_frame::proto_window_frame_bound::Kind::UnboundedFollowing(())) => {
-                WindowFrameBound::UnboundedFollowing
-            }
+            Some(UnboundedPreceding(())) => WindowFrameBound::UnboundedPreceding,
+            Some(OffsetPreceding(offset)) => WindowFrameBound::OffsetPreceding(offset),
+            Some(CurrentRow(())) => WindowFrameBound::CurrentRow,
+            Some(OffsetFollowing(offset)) => WindowFrameBound::OffsetFollowing(offset),
+            Some(UnboundedFollowing(())) => WindowFrameBound::UnboundedFollowing,
             None => {
-                return Err(TryFromProtoError::MissingField(
-                    "ProtoWindowFrameBound::kind".into(),
+                return Err(TryFromProtoError::missing_field(
+                    "ProtoWindowFrameBound::kind",
                 ))
             }
         })

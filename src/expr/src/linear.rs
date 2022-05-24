@@ -11,9 +11,10 @@ use std::collections::{HashMap, HashSet};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row};
 
+use self::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -85,51 +86,41 @@ impl Arbitrary for MapFilterProject {
     }
 }
 
-impl TryFrom<ProtoMapFilterProject> for MapFilterProject {
-    type Error = TryFromProtoError;
+impl RustType<ProtoMapFilterProject> for MapFilterProject {
+    fn into_proto(&self) -> ProtoMapFilterProject {
+        ProtoMapFilterProject {
+            expressions: self.expressions.into_proto(),
+            predicates: self.predicates.into_proto(),
+            projection: self.projection.into_proto(),
+            input_arity: self.input_arity.into_proto(),
+        }
+    }
 
-    fn try_from(value: ProtoMapFilterProject) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoMapFilterProject) -> Result<Self, TryFromProtoError> {
         Ok(MapFilterProject {
-            expressions: value
-                .expressions
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
-            predicates: value
-                .predicates
-                .into_iter()
-                .map::<Result<(usize, MirScalarExpr), Self::Error>, _>(|x| {
-                    Ok((
-                        usize::from_proto(x.column_to_apply)?,
-                        x.predicate.try_into_if_some("ProtoPredicate::predicate")?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            projection: value
-                .projection
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
-            input_arity: usize::from_proto(value.input_arity)?,
+            expressions: proto.expressions.into_rust()?,
+            predicates: proto.predicates.into_rust()?,
+            projection: proto.projection.into_rust()?,
+            input_arity: proto.input_arity.into_rust()?,
         })
     }
 }
 
-impl From<&MapFilterProject> for ProtoMapFilterProject {
-    fn from(value: &MapFilterProject) -> Self {
-        ProtoMapFilterProject {
-            expressions: value.expressions.iter().map(Into::into).collect(),
-            predicates: value
-                .predicates
-                .iter()
-                .map(|(col, pred)| proto_map_filter_project::ProtoPredicate {
-                    column_to_apply: col.into_proto(),
-                    predicate: Some(pred.into()),
-                })
-                .collect(),
-            projection: value.projection.iter().map(|i| i.into_proto()).collect(),
-            input_arity: value.input_arity.into_proto(),
+impl RustType<ProtoPredicate> for (usize, MirScalarExpr) {
+    fn into_proto(&self) -> ProtoPredicate {
+        ProtoPredicate {
+            column_to_apply: self.0.into_proto(),
+            predicate: Some(self.1.into_proto()),
         }
+    }
+
+    fn from_proto(proto: ProtoPredicate) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.column_to_apply.into_rust()?,
+            proto
+                .predicate
+                .into_rust_if_some("ProtoPredicate::predicate")?,
+        ))
     }
 }
 
@@ -1320,13 +1311,14 @@ pub mod plan {
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
+    use mz_repr::adt::numeric::Numeric;
+    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+    use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
+
     use crate::{
         func, BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan,
         ProtoSafeMfpPlan, UnaryFunc, UnmaterializableFunc,
     };
-    use mz_repr::adt::numeric::Numeric;
-    use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
-    use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -1334,21 +1326,17 @@ pub mod plan {
         mfp: MapFilterProject,
     }
 
-    impl TryFrom<ProtoSafeMfpPlan> for SafeMfpPlan {
-        type Error = TryFromProtoError;
-
-        fn try_from(value: ProtoSafeMfpPlan) -> Result<Self, Self::Error> {
-            Ok(SafeMfpPlan {
-                mfp: value.mfp.try_into_if_some("ProtoSafeMfpPlan::mfp")?,
-            })
-        }
-    }
-
-    impl From<&SafeMfpPlan> for ProtoSafeMfpPlan {
-        fn from(value: &SafeMfpPlan) -> Self {
+    impl RustType<ProtoSafeMfpPlan> for SafeMfpPlan {
+        fn into_proto(&self) -> ProtoSafeMfpPlan {
             ProtoSafeMfpPlan {
-                mfp: Some((&value.mfp).into()),
+                mfp: Some(self.mfp.into_proto()),
             }
+        }
+
+        fn from_proto(proto: ProtoSafeMfpPlan) -> Result<Self, TryFromProtoError> {
+            Ok(SafeMfpPlan {
+                mfp: proto.mfp.into_rust_if_some("ProtoSafeMfpPlan::mfp")?,
+            })
         }
     }
 
@@ -1462,33 +1450,21 @@ pub mod plan {
         upper_bounds: Vec<MirScalarExpr>,
     }
 
-    impl TryFrom<ProtoMfpPlan> for MfpPlan {
-        type Error = TryFromProtoError;
-
-        fn try_from(value: ProtoMfpPlan) -> Result<Self, Self::Error> {
-            Ok(MfpPlan {
-                mfp: value.mfp.try_into_if_some("ProtoMfpPlan::mfp")?,
-                lower_bounds: value
-                    .lower_bounds
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-                upper_bounds: value
-                    .upper_bounds
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-            })
-        }
-    }
-
-    impl From<&MfpPlan> for ProtoMfpPlan {
-        fn from(value: &MfpPlan) -> Self {
+    impl RustType<ProtoMfpPlan> for MfpPlan {
+        fn into_proto(&self) -> ProtoMfpPlan {
             ProtoMfpPlan {
-                mfp: Some((&value.mfp).into()),
-                lower_bounds: value.lower_bounds.iter().map(Into::into).collect(),
-                upper_bounds: value.upper_bounds.iter().map(Into::into).collect(),
+                mfp: Some(self.mfp.into_proto()),
+                lower_bounds: self.lower_bounds.into_proto(),
+                upper_bounds: self.upper_bounds.into_proto(),
             }
+        }
+
+        fn from_proto(proto: ProtoMfpPlan) -> Result<Self, TryFromProtoError> {
+            Ok(MfpPlan {
+                mfp: proto.mfp.into_rust_if_some("ProtoMfpPlan::mfp")?,
+                lower_bounds: proto.lower_bounds.into_rust()?,
+                upper_bounds: proto.upper_bounds.into_rust()?,
+            })
         }
     }
 

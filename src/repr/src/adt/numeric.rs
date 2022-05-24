@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 
-use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use crate::proto::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
 
@@ -743,7 +743,7 @@ impl DecimalLike for Numeric {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

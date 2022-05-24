@@ -17,12 +17,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use mz_ore::soft_panic_or_log;
-use mz_repr::proto::newapi::IntoRustIfSome;
-use mz_repr::proto::newapi::ProtoType;
-use mz_repr::proto::newapi::RustType;
-use mz_repr::proto::TryFromProtoError;
-use mz_repr::proto::TryIntoIfSome;
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
@@ -33,6 +27,8 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, EvalError, Id, JoinInputMapper, LocalId,
     MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, TableFunc,
 };
+use mz_ore::soft_panic_or_log;
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -121,27 +117,19 @@ pub(crate) fn any_arranged_thin(
     )
 }
 
-impl From<&AvailableCollections> for ProtoAvailableCollections {
-    fn from(x: &AvailableCollections) -> Self {
-        Self {
-            raw: x.raw,
-            arranged: x.arranged.iter().map(Into::into).collect(),
+impl RustType<ProtoAvailableCollections> for AvailableCollections {
+    fn into_proto(&self) -> ProtoAvailableCollections {
+        ProtoAvailableCollections {
+            raw: self.raw,
+            arranged: self.arranged.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoAvailableCollections> for AvailableCollections {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoAvailableCollections) -> Result<Self, Self::Error> {
+    fn from_proto(x: ProtoAvailableCollections) -> Result<Self, TryFromProtoError> {
         Ok({
             Self {
                 raw: x.raw,
-                arranged: x
-                    .arranged
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
+                arranged: x.arranged.into_rust()?,
             }
         })
     }
@@ -480,45 +468,34 @@ impl Arbitrary for Plan {
         .boxed()
     }
 }
-impl From<&(Row, u64, i64)> for proto_plan::ProtoRowDiff {
-    fn from(x: &(Row, u64, i64)) -> Self {
-        proto_plan::ProtoRowDiff {
-            row: Some(x.0.into_proto()),
-            timestamp: x.1,
-            diff: x.2,
-        }
-    }
-}
 
-impl From<&Vec<(Row, u64, i64)>> for proto_plan::ProtoRowDiffVec {
-    fn from(x: &Vec<(Row, u64, i64)>) -> Self {
-        Self {
-            rows: x.iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<&Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>>
-    for proto_plan::ProtoPlanConstant
+impl RustType<proto_plan::ProtoPlanConstant>
+    for Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>
 {
-    fn from(x: &Result<Vec<(Row, mz_repr::Timestamp, i64)>, EvalError>) -> Self {
+    fn into_proto(&self) -> proto_plan::ProtoPlanConstant {
+        use proto_plan::proto_plan_constant::Result;
         proto_plan::ProtoPlanConstant {
-            result: Some(match x {
-                Ok(rows) => proto_plan::proto_plan_constant::Result::Rows(rows.into()),
-                Err(err) => proto_plan::proto_plan_constant::Result::Err(err.into()),
+            result: Some(match self {
+                Ok(rows) => Result::Rows(rows.into_proto()),
+                Err(err) => Result::Err(err.into_proto()),
             }),
         }
     }
-}
 
-impl From<&Box<Plan>> for Option<Box<ProtoPlan>> {
-    fn from(x: &Box<Plan>) -> Self {
-        Some(Into::<ProtoPlan>::into(&**x).into())
+    fn from_proto(proto: proto_plan::ProtoPlanConstant) -> Result<Self, TryFromProtoError> {
+        use proto_plan::proto_plan_constant::Result;
+        match proto.result {
+            Some(Result::Rows(rows)) => Ok(Ok(rows.into_rust()?)),
+            Some(Result::Err(err)) => Ok(Err(err.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoPlanConstant::result",
+            )),
+        }
     }
 }
 
-impl From<&Plan> for ProtoPlan {
-    fn from(x: &Plan) -> Self {
+impl RustType<ProtoPlan> for Plan {
+    fn into_proto(&self) -> ProtoPlan {
         use proto_plan::Kind::*;
         use proto_plan::*;
 
@@ -526,7 +503,7 @@ impl From<&Plan> for ProtoPlan {
             x: &Option<(Vec<MirScalarExpr>, Option<Row>)>,
         ) -> Option<ProtoPlanInputKeyVal> {
             x.as_ref().map(|(key, val)| ProtoPlanInputKeyVal {
-                key: key.iter().map(Into::into).collect(),
+                key: key.into_proto(),
                 val: val.into_proto(),
             })
         }
@@ -535,23 +512,22 @@ impl From<&Plan> for ProtoPlan {
             input_key: Option<&Vec<MirScalarExpr>>,
         ) -> Option<proto_plan::ProtoPlanInputKey> {
             input_key.map(|vec| ProtoPlanInputKey {
-                key: vec.iter().map(Into::into).collect(),
+                key: vec.into_proto(),
             })
-            // input_key.map(|x| x.iter().map(Into::into).collect())
         }
 
-        Self {
-            kind: Some(match x {
-                Plan::Constant { rows } => Constant(rows.into()),
+        ProtoPlan {
+            kind: Some(match self {
+                Plan::Constant { rows } => Constant(rows.into_proto()),
                 Plan::Get { id, keys, plan } => Get(ProtoPlanGet {
-                    id: Some(id.into()),
-                    keys: Some(keys.into()),
-                    plan: Some(plan.into()),
+                    id: Some(id.into_proto()),
+                    keys: Some(keys.into_proto()),
+                    plan: Some(plan.into_proto()),
                 }),
                 Plan::Let { id, value, body } => Let(ProtoPlanLet {
-                    id: Some(id.into()),
-                    value: value.into(),
-                    body: body.into(),
+                    id: Some(id.into_proto()),
+                    value: Some(value.into_proto()),
+                    body: Some(body.into_proto()),
                 }
                 .into()),
                 Plan::Mfp {
@@ -559,8 +535,8 @@ impl From<&Plan> for ProtoPlan {
                     mfp,
                     input_key_val,
                 } => Mfp(ProtoPlanMfp {
-                    input: input.into(),
-                    mfp: Some(mfp.into()),
+                    input: Some(input.into_proto()),
+                    mfp: Some(mfp.into_proto()),
                     input_key_val: input_kv_into(input_key_val),
                 }
                 .into()),
@@ -572,17 +548,17 @@ impl From<&Plan> for ProtoPlan {
                     input_key,
                 } => FlatMap(
                     ProtoPlanFlatMap {
-                        input: input.into(),
-                        func: Some(func.into()),
-                        exprs: exprs.iter().map(Into::into).collect(),
-                        mfp: Some(mfp.into()),
+                        input: Some(input.into_proto()),
+                        func: Some(func.into_proto()),
+                        exprs: exprs.into_proto(),
+                        mfp: Some(mfp.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
                     }
                     .into(),
                 ),
                 Plan::Join { inputs, plan } => Join(ProtoPlanJoin {
-                    inputs: inputs.iter().map(Into::into).collect(),
-                    plan: Some(plan.into()),
+                    inputs: inputs.into_proto(),
+                    plan: Some(plan.into_proto()),
                 }),
                 Plan::Reduce {
                     input,
@@ -591,33 +567,33 @@ impl From<&Plan> for ProtoPlan {
                     input_key,
                 } => Reduce(
                     ProtoPlanReduce {
-                        input: input.into(),
-                        key_val_plan: Some(key_val_plan.into()),
-                        plan: Some(plan.into()),
+                        input: Some(input.into_proto()),
+                        key_val_plan: Some(key_val_plan.into_proto()),
+                        plan: Some(plan.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
                     }
                     .into(),
                 ),
                 Plan::TopK { input, top_k_plan } => TopK(
                     ProtoPlanTopK {
-                        input: input.into(),
-                        top_k_plan: Some(top_k_plan.into()),
+                        input: Some(input.into_proto()),
+                        top_k_plan: Some(top_k_plan.into_proto()),
                     }
                     .into(),
                 ),
-                Plan::Negate { input } => Negate(Into::<ProtoPlan>::into(&**input).into()),
+                Plan::Negate { input } => Negate(input.into_proto()),
                 Plan::Threshold {
                     input,
                     threshold_plan,
                 } => Threshold(
                     ProtoPlanThreshold {
-                        input: input.into(),
-                        threshold_plan: Some(threshold_plan.into()),
+                        input: Some(input.into_proto()),
+                        threshold_plan: Some(threshold_plan.into_proto()),
                     }
                     .into(),
                 ),
                 Plan::Union { inputs } => Union(ProtoPlanUnion {
-                    inputs: inputs.iter().map(Into::into).collect(),
+                    inputs: inputs.into_proto(),
                 }),
                 Plan::ArrangeBy {
                     input,
@@ -626,53 +602,18 @@ impl From<&Plan> for ProtoPlan {
                     input_mfp,
                 } => ArrangeBy(
                     ProtoPlanArrangeBy {
-                        input: input.into(),
-                        forms: Some(forms.into()),
+                        input: Some(input.into_proto()),
+                        forms: Some(forms.into_proto()),
                         input_key: input_k_into(input_key.as_ref()),
-                        input_mfp: Some(input_mfp.into()),
+                        input_mfp: Some(input_mfp.into_proto()),
                     }
                     .into(),
                 ),
             }),
         }
     }
-}
 
-impl TryFrom<proto_plan::ProtoRowDiff> for (Row, u64, i64) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_plan::ProtoRowDiff) -> Result<Self, Self::Error> {
-        Ok((
-            x.row.into_rust_if_some("ProtoRowDiff::row")?,
-            x.timestamp,
-            x.diff,
-        ))
-    }
-}
-
-impl TryFrom<proto_plan::ProtoRowDiffVec> for Vec<(Row, u64, i64)> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: proto_plan::ProtoRowDiffVec) -> Result<Self, Self::Error> {
-        Ok(x.rows
-            .into_iter()
-            .map(TryFrom::try_from)
-            .collect::<Result<_, _>>()?)
-    }
-}
-
-impl TryFrom<Box<ProtoPlan>> for Box<Plan> {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: Box<ProtoPlan>) -> Result<Self, Self::Error> {
-        Ok(Box::new((*value).try_into()?))
-    }
-}
-
-impl TryFrom<ProtoPlan> for Plan {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: ProtoPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoPlan) -> Result<Self, TryFromProtoError> {
         use proto_plan::Kind::*;
         use proto_plan::*;
 
@@ -680,11 +621,7 @@ impl TryFrom<ProtoPlan> for Plan {
             input_key: Option<ProtoPlanInputKey>,
         ) -> Result<Option<Vec<MirScalarExpr>>, TryFromProtoError> {
             Ok(match input_key {
-                Some(proto_plan::ProtoPlanInputKey { key }) => Some(
-                    key.into_iter()
-                        .map(TryFrom::try_from)
-                        .collect::<Result<_, _>>()?,
-                ),
+                Some(proto_plan::ProtoPlanInputKey { key }) => Some(key.into_rust()?),
                 None => None,
             })
         }
@@ -693,19 +630,12 @@ impl TryFrom<ProtoPlan> for Plan {
             input_key_val: Option<ProtoPlanInputKeyVal>,
         ) -> Result<Option<(Vec<MirScalarExpr>, Option<Row>)>, TryFromProtoError> {
             Ok(match input_key_val {
-                Some(inner) => Some((
-                    inner
-                        .key
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<_, _>>()?,
-                    inner.val.into_rust()?,
-                )),
+                Some(inner) => Some((inner.key.into_rust()?, inner.val.into_rust()?)),
                 None => None,
             })
         }
 
-        let kind = value
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoPlan::kind"))?;
 
@@ -716,82 +646,102 @@ impl TryFrom<ProtoPlan> for Plan {
 
                 Plan::Constant {
                     rows: match result {
-                        proto_plan_constant::Result::Rows(rows) => Ok(rows.try_into()?),
-                        proto_plan_constant::Result::Err(eval_err) => Err(eval_err.try_into()?),
+                        proto_plan_constant::Result::Rows(rows) => Ok(rows.into_rust()?),
+                        proto_plan_constant::Result::Err(eval_err) => Err(eval_err.into_rust()?),
                     },
                 }
             }
             Get(proto) => Plan::Get {
-                id: proto.id.try_into_if_some("ProtoPlanGet::id")?,
-                keys: proto.keys.try_into_if_some("ProtoPlanGet::keys")?,
-                plan: proto.plan.try_into_if_some("ProtoPlanGet::plan")?,
+                id: proto.id.into_rust_if_some("ProtoPlanGet::id")?,
+                keys: proto.keys.into_rust_if_some("ProtoPlanGet::keys")?,
+                plan: proto.plan.into_rust_if_some("ProtoPlanGet::plan")?,
             },
             Let(proto) => Plan::Let {
-                id: proto.id.try_into_if_some("ProtoPlanLet::id")?,
-                value: proto.value.try_into_if_some("ProtoPlanLet::value")?,
-                body: proto.body.try_into_if_some("ProtoPlanLet::body")?,
+                id: proto.id.into_rust_if_some("ProtoPlanLet::id")?,
+                value: proto.value.into_rust_if_some("ProtoPlanLet::value")?,
+                body: proto.body.into_rust_if_some("ProtoPlanLet::body")?,
             },
             Mfp(proto) => Plan::Mfp {
-                input: proto.input.try_into_if_some("ProtoPlanMfp::input")?,
+                input: proto.input.into_rust_if_some("ProtoPlanMfp::input")?,
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
-                mfp: proto.mfp.try_into_if_some("ProtoPlanMfp::mfp")?,
+                mfp: proto.mfp.into_rust_if_some("ProtoPlanMfp::mfp")?,
             },
             FlatMap(proto) => Plan::FlatMap {
-                input: proto.input.try_into_if_some("")?,
-                func: proto.func.try_into_if_some("")?,
-                exprs: proto
-                    .exprs
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
-                mfp: proto.mfp.try_into_if_some("")?,
+                input: proto.input.into_rust_if_some("ProtoPlanFlatMap::input")?,
+                func: proto.func.into_rust_if_some("ProtoPlanFlatMap::func")?,
+                exprs: proto.exprs.into_rust()?,
+                mfp: proto.mfp.into_rust_if_some("ProtoPlanFlatMap::mfp")?,
                 input_key: input_k_try_into(proto.input_key)?,
             },
             Join(proto) => Plan::Join {
-                inputs: proto
-                    .inputs
-                    .into_iter()
-                    .map(TryFrom::try_from)
-                    .collect::<Result<_, _>>()?,
-                plan: proto.plan.try_into_if_some("")?,
+                inputs: proto.inputs.into_rust()?,
+                plan: proto.plan.into_rust_if_some("")?,
             },
             Reduce(proto) => Plan::Reduce {
-                input: proto.input.try_into_if_some("ProtoPlanReduce::input")?,
+                input: proto.input.into_rust_if_some("ProtoPlanReduce::input")?,
                 key_val_plan: proto
                     .key_val_plan
-                    .try_into_if_some("ProtoPlanReduce::key_val_plan")?,
-                plan: proto.plan.try_into_if_some("ProtoPlanReduce::plan")?,
+                    .into_rust_if_some("ProtoPlanReduce::key_val_plan")?,
+                plan: proto.plan.into_rust_if_some("ProtoPlanReduce::plan")?,
                 input_key: input_k_try_into(proto.input_key)?,
             },
             TopK(proto) => Plan::TopK {
-                input: proto.input.try_into_if_some("ProtoPlanTopK::input")?,
+                input: proto.input.into_rust_if_some("ProtoPlanTopK::input")?,
                 top_k_plan: proto
                     .top_k_plan
-                    .try_into_if_some("ProtoPlanTopK::top_k_plan")?,
+                    .into_rust_if_some("ProtoPlanTopK::top_k_plan")?,
             },
             Negate(proto) => Plan::Negate {
-                input: proto.try_into()?,
+                input: proto.into_rust()?,
             },
             Threshold(proto) => Plan::Threshold {
-                input: proto.input.try_into_if_some("")?,
-                threshold_plan: proto.threshold_plan.try_into_if_some("")?,
+                input: proto.input.into_rust_if_some("ProtoPlanThreshold::input")?,
+                threshold_plan: proto
+                    .threshold_plan
+                    .into_rust_if_some("ProtoPlanThreshold::threshold_plan")?,
             },
             Union(proto) => Plan::Union {
-                inputs: proto
-                    .inputs
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<_, _>>()?,
+                inputs: proto.inputs.into_rust()?,
             },
             ArrangeBy(proto) => Plan::ArrangeBy {
-                input: proto.input.try_into_if_some("ProtoPlanArrangeBy::input")?,
-                forms: proto.forms.try_into_if_some("ProtoPlanArrangeBy::forms")?,
+                input: proto.input.into_rust_if_some("ProtoPlanArrangeBy::input")?,
+                forms: proto.forms.into_rust_if_some("ProtoPlanArrangeBy::forms")?,
                 input_key: input_k_try_into(proto.input_key)?,
                 input_mfp: proto
                     .input_mfp
-                    .try_into_if_some("ProtoPlanArrangeBy::input_mfp")?,
+                    .into_rust_if_some("ProtoPlanArrangeBy::input_mfp")?,
             },
         })
+    }
+}
+
+impl RustType<proto_plan::ProtoRowDiff> for (Row, u64, i64) {
+    fn into_proto(self: &Self) -> proto_plan::ProtoRowDiff {
+        proto_plan::ProtoRowDiff {
+            row: Some(self.0.into_proto()),
+            timestamp: self.1.clone(),
+            diff: self.2.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto_plan::ProtoRowDiff) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.row.into_rust_if_some("ProtoRowDiff::row")?,
+            proto.timestamp,
+            proto.diff,
+        ))
+    }
+}
+
+impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, u64, i64)> {
+    fn into_proto(self: &Self) -> proto_plan::ProtoRowDiffVec {
+        proto_plan::ProtoRowDiffVec {
+            rows: self.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto_plan::ProtoRowDiffVec) -> Result<Self, TryFromProtoError> {
+        Ok(proto.rows.into_rust()?)
     }
 }
 
@@ -811,49 +761,40 @@ pub enum GetPlan {
     Collection(MapFilterProject),
 }
 
-impl From<&GetPlan> for ProtoGetPlan {
-    fn from(x: &GetPlan) -> Self {
+impl RustType<ProtoGetPlan> for GetPlan {
+    fn into_proto(&self) -> ProtoGetPlan {
         use proto_get_plan::Kind::*;
 
         ProtoGetPlan {
-            kind: Some(match x {
+            kind: Some(match self {
                 GetPlan::PassArrangements => PassArrangements(()),
                 GetPlan::Arrangement(k, s, m) => {
                     Arrangement(proto_get_plan::ProtoGetPlanArrangement {
-                        key: k.iter().map(Into::into).collect(),
+                        key: k.into_proto(),
                         seek: s.into_proto(),
-                        mfp: Some(m.into()),
+                        mfp: Some(m.into_proto()),
                     })
                 }
-                GetPlan::Collection(mfp) => Collection(mfp.into()),
+                GetPlan::Collection(mfp) => Collection(mfp.into_proto()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoGetPlan> for GetPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoGetPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoGetPlan) -> Result<Self, TryFromProtoError> {
         use proto_get_plan::Kind::*;
-
-        let kind = x
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoGetPlan::kind"))?;
-
-        Ok(match kind {
-            PassArrangements(()) => GetPlan::PassArrangements,
-            Arrangement(proto_get_plan::ProtoGetPlanArrangement { key, seek, mfp }) => {
-                GetPlan::Arrangement(
-                    key.into_iter()
-                        .map(TryFrom::try_from)
-                        .collect::<Result<_, _>>()?,
+        use proto_get_plan::ProtoGetPlanArrangement;
+        match proto.kind {
+            Some(PassArrangements(())) => Ok(GetPlan::PassArrangements),
+            Some(Arrangement(ProtoGetPlanArrangement { key, seek, mfp })) => {
+                Ok(GetPlan::Arrangement(
+                    key.into_rust()?,
                     seek.into_rust()?,
-                    mfp.try_into_if_some("ProtoGetPlanArrangement::mfp")?,
-                )
+                    mfp.into_rust_if_some("ProtoGetPlanArrangement::mfp")?,
+                ))
             }
-            Collection(mfp) => GetPlan::Collection(mfp.try_into()?),
-        })
+            Some(Collection(mfp)) => Ok(GetPlan::Collection(mfp.into_rust()?)),
+            None => Err(TryFromProtoError::missing_field("ProtoGetPlan::kind")),
+        }
     }
 }
 
@@ -1806,9 +1747,9 @@ mod tests {
     use mz_repr::proto::protobuf_roundtrip;
 
     proptest! {
-       #![proptest_config(ProptestConfig::with_cases(10))]
-       #[test]
-       fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
+        #![proptest_config(ProptestConfig::with_cases(10))]
+        #[test]
+        fn available_collections_protobuf_roundtrip(expect in any::<AvailableCollections>() ) {
             let actual = protobuf_roundtrip::<_, ProtoAvailableCollections>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
@@ -1816,20 +1757,19 @@ mod tests {
     }
 
     proptest! {
-       #![proptest_config(ProptestConfig::with_cases(10))]
-       #[test]
-       fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
+        #![proptest_config(ProptestConfig::with_cases(10))]
+        #[test]
+        fn get_plan_protobuf_roundtrip(expect in any::<GetPlan>()) {
             let actual = protobuf_roundtrip::<_, ProtoGetPlan>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
-
     }
 
     proptest! {
-       #![proptest_config(ProptestConfig::with_cases(32))]
-       #[test]
-       fn plan_protobuf_roundtrip(expect in any::<Plan>()) {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+        #[test]
+        fn plan_protobuf_roundtrip(expect in any::<Plan>()) {
             let actual = protobuf_roundtrip::<_, ProtoPlan>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
