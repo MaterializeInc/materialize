@@ -1600,10 +1600,10 @@ pub mod sources {
 
     /// Convert from MzOffset to Kafka::Offset as long as
     /// the offset is not negative
-    impl Into<KafkaOffset> for MzOffset {
-        fn into(self) -> KafkaOffset {
+    impl From<MzOffset> for KafkaOffset {
+        fn from(offset: MzOffset) -> Self {
             KafkaOffset {
-                offset: self.offset - 1,
+                offset: offset.offset - 1,
             }
         }
     }
