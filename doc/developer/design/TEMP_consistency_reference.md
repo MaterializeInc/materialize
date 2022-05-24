@@ -216,14 +216,14 @@ later timestamp.
 See [https://jepsen.io/consistency/models/serializable](https://jepsen.io/consistency/models/serializable) for an in
 depth formal discussion of Serializable. Serializability prevents Phantom Reads, which means that once a transaction
 reads some value that satisfy some predicate, it will always read the same values, regardless if some other transaction
-has made a write that affects the predicate. Informally this means that you can apply some total order to all
+has made a write that affects the predicate. Additionally, this means that you can apply some total order to all
 transactions.
 
 This property holds from how Materialize satisfies [Repeatable Read](#Repeatable Read). All reads in a read only
 transaction happen at the same timestamp. All writes that happen after the first read of a read-only transaction will
 happen at a later timestamp, and therefore will not affect any reads of the read-only transaction.
 
-Informally we can use the transaction timestamps to provide a total ordering over all transactions.
+We can use the transaction timestamps to provide a total ordering over all transactions.
 
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 < the timestamp of T2.
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is write-only, and
