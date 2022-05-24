@@ -63,10 +63,9 @@ impl Identity {
     }
 }
 
-impl Into<reqwest::Identity> for Identity {
-    fn into(self) -> reqwest::Identity {
-        reqwest::Identity::from_pkcs12_der(&self.der, &self.pass)
-            .expect("known to be a valid identity")
+impl From<Identity> for reqwest::Identity {
+    fn from(id: Identity) -> Self {
+        reqwest::Identity::from_pkcs12_der(&id.der, &id.pass).expect("known to be a valid identity")
     }
 }
 
@@ -109,9 +108,9 @@ impl Certificate {
     }
 }
 
-impl Into<reqwest::Certificate> for Certificate {
-    fn into(self) -> reqwest::Certificate {
-        reqwest::Certificate::from_der(&self.der).expect("known to be a valid cert")
+impl From<Certificate> for reqwest::Certificate {
+    fn from(cert: Certificate) -> Self {
+        reqwest::Certificate::from_der(&cert.der).expect("known to be a valid cert")
     }
 }
 

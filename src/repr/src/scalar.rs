@@ -2221,10 +2221,10 @@ fn arb_numeric() -> BoxedStrategy<Numeric> {
         .boxed()
 }
 
-impl<'a> Into<Datum<'a>> for &'a PropDatum {
-    fn into(self) -> Datum<'a> {
+impl<'a> From<&'a PropDatum> for Datum<'a> {
+    fn from(pd: &'a PropDatum) -> Self {
         use PropDatum::*;
-        match self {
+        match pd {
             Null => Datum::Null,
             Bool(b) => Datum::from(*b),
             Int16(i) => Datum::from(*i),
