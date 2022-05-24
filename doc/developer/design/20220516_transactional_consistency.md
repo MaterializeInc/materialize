@@ -69,6 +69,14 @@ The logic for determining what timestamp to return must satisfy:
     - If the query is a write and the most recently completed query was a read, then the timestamp returned must be
       strictly larger than the previous timestamp.
 
+We can accomplish this by using a single global timestamp per timeline. We do not allow reads across timelines and
+therefore provide no consistency guarantees across timelines. For the `EpochMilliseconds` timeline, which is used for
+user tables and most sources, the global timestamp will be initialized to the current system time and be advanced
+periodically to the current value of a monotonically increasing system clock. All other global timestamps will be
+initialized to the timeline's minimum value and be periodically advanced in the following
+way: `global_timestamp = max(min(uppers) - 1, global_timestamp)`, where `uppers` is the list of all `upper`s in the
+timeline.
+
 If some operation is given timestamp `ts`, then once that operation completes the global timestamp must be larger than
 or equal to `ts`. How this specific property is achieved for reads is described
 in [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp) and how it's achieved for writes is
@@ -102,6 +110,9 @@ The properties described in this section and the [Global Timestamp](#Global Time
 Strict Serializability across restarts.
 
 ### Group Commit/Write Coalesce
+
+NOTE: This section refers only to user tables and the `EpochMillis` timeline. We do not provide any consistency
+guarantees with respect to writes from upstream sources.
 
 Write read cycles (write followed by read followed by write followed by read etc) and consecutive writes can cause the
 global timestamp to increase in an unbounded fashion.
@@ -230,5 +241,4 @@ This is fine and STORAGE can just ignore the ACK OK response.
   All read and write operations are atomic and idempotent so crashing/restarting will not leave the system in an
   intermediate or invalid state due to read/writes. However, DDLs are not idempotent or atomic. What happens if the
   system crashes in the middle of DDL? Some of this is being thought about by the command reconciliation work.
-- How does any of this work for non-realtime timelines?
 - Is it possible to mix non-strict serializable writes with strict serializable writes? I don't think so.
