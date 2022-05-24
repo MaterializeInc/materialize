@@ -21,7 +21,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::indexed::columnar::ColumnarRecords;
 use mz_persist::s3::{S3Blob, S3BlobConfig};
-use mz_persist_types::Codec;
 use rand::prelude::{SliceRandom, SmallRng};
 use rand::{Rng, SeedableRng};
 use timely::progress::Antichain;
@@ -360,39 +359,6 @@ pub fn bench_indexed_drain(data: &DataGenerator, g: &mut BenchmarkGroup<'_, Wall
     let file_indexed =
         Indexed::new(log, blob_cache, metrics).expect("failed to create file indexed");
     bench_writes_indexed_inner(data, g, "file", file_indexed).expect("running benchmark failed");
-}
-
-pub fn bench_encode_batch(data: &DataGenerator, g: &mut BenchmarkGroup<'_, WallTime>) {
-    g.throughput(Throughput::Bytes(data.goodput_bytes()));
-    let unsealed = BlobUnsealedBatch {
-        desc: SeqNo(0)..SeqNo(1),
-        updates: data.batches().collect::<Vec<_>>(),
-    };
-    let trace = BlobTraceBatchPart {
-        desc: Description::new(
-            Antichain::from_elem(0),
-            Antichain::from_elem(1),
-            Antichain::from_elem(0),
-        ),
-        index: 0,
-        updates: data.batches().collect::<Vec<_>>(),
-    };
-
-    g.bench_function(BenchmarkId::new("unsealed", data.goodput_pretty()), |b| {
-        b.iter(|| {
-            // Intentionally alloc a new buf each iter.
-            let mut buf = Vec::new();
-            unsealed.encode(&mut buf);
-        })
-    });
-
-    g.bench_function(BenchmarkId::new("trace", data.goodput_pretty()), |b| {
-        b.iter(|| {
-            // Intentionally alloc a new buf each iter.
-            let mut buf = Vec::new();
-            trace.encode(&mut buf);
-        })
-    });
 }
 
 pub fn bench_blob_cache_set_unsealed_batch(

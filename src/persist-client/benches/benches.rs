@@ -9,17 +9,32 @@
 
 use std::sync::Arc;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::measurement::WallTime;
+use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion};
+use tempfile::TempDir;
+use timely::progress::{Antichain, Timestamp};
+use tokio::runtime::Runtime;
+
 use mz_persist::file::{FileBlobConfig, FileBlobMulti};
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
 use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3BlobConfig, S3BlobMulti};
+use mz_persist::sqlite::SqliteConsensus;
 use mz_persist::workload::DataGenerator;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
-use tempfile::TempDir;
 
-mod min_latency;
+// The "plumbing" and "porcelain" names are from git [1]. Our "plumbing"
+// benchmarks are ones that are low-level, fundamental pieces of code like
+// writing to a BlobMulti/Consensus impl or encoding a batch of updates into our
+// columnar format. One way to look at this is as the fastest we could possibly
+// go in theory. The "porcelain" ones are measured at the level of the public
+// API. One way to think of this is how fast we actually are in practice.
+//
+// [1]: https://git-scm.com/book/en/v2/Git-Internals-Plumbing-and-Porcelain
+mod plumbing;
+mod porcelain;
 
 pub fn bench_persist(c: &mut Criterion) {
     // Override the default of "info" here because the s3 library is chatty on
@@ -36,23 +51,48 @@ pub fn bench_persist(c: &mut Criterion) {
         .expect("Failed building the Runtime");
     let runtime = Arc::new(runtime);
 
-    // Intentionally use the small generator for min_latency benches, because
-    // y'know... min latencies. :)
-    let data_small = DataGenerator::small();
+    // Default to latency. First, because it's usually more interesting for
+    // these micro-benchmarks (throughput is more the domain of the open-loop
+    // benchmark). Second, because this allows `cargo test --all-targets` to
+    // finish in a reasonable time for this crate, even without --release.
+    //
+    // However, also allow an easy toggle for a quick, rough estimate of
+    // throughput without going through the involvement of the open-loop
+    // benchmark.
+    let throughput = mz_ore::env::is_var_truthy("MZ_PERSIST_BENCH_THROUGHPUT");
+    let data = if throughput {
+        eprint!("MZ_PERSIST_BENCH_THROUGHPUT=1 ");
+        DataGenerator::default()
+    } else {
+        DataGenerator::small()
+    };
 
-    min_latency::bench_writes(
-        &mut c.benchmark_group("min_latency/writes"),
-        Arc::clone(&runtime),
-        &data_small,
-    )
-    .expect("failed to bench writes");
+    porcelain::bench_writes("porcelain/writes", throughput, c, &runtime, &data);
+    porcelain::bench_write_to_listen("porcelain/write_to_listen", throughput, c, &runtime, &data);
+    porcelain::bench_snapshot("porcelain/snapshot", throughput, c, &runtime, &data);
 
-    min_latency::bench_write_to_listen(
-        &mut c.benchmark_group("min_latency/write_to_listen"),
-        runtime,
-        &data_small,
-    )
-    .expect("failed to bench write_to_listen");
+    plumbing::bench_blob_get("plumbing/blob_get", throughput, c, &runtime, &data);
+    plumbing::bench_blob_set("plumbing/blob_set", throughput, c, &runtime, &data);
+    if !throughput {
+        plumbing::bench_consensus_compare_and_set(
+            "plumbing/concurrency=1/consensus_compare_and_set",
+            c,
+            &runtime,
+            &data,
+            1,
+        );
+        plumbing::bench_consensus_compare_and_set(
+            &format!(
+                "plumbing/concurrency={}/consensus_compare_and_set",
+                ncpus_useful
+            ),
+            c,
+            &runtime,
+            &data,
+            ncpus_useful,
+        );
+    }
+    plumbing::bench_encode_batch("plumbing/encode_batch", throughput, c, &data);
 }
 
 async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
@@ -91,6 +131,171 @@ async fn create_s3_pg_client() -> Result<Option<PersistClient>, ExternalError> {
         Arc::new(PostgresConsensus::open(pg).await?) as Arc<dyn Consensus + Send + Sync>;
     let client = PersistClient::new(blob, consensus).await?;
     Ok(Some(client))
+}
+
+fn bench_all_clients<BenchClientFn>(
+    g: &mut BenchmarkGroup<'_, WallTime>,
+    runtime: &Runtime,
+    data: &DataGenerator,
+    bench_client_fn: BenchClientFn,
+) where
+    BenchClientFn: Fn(&mut Bencher, &PersistClient),
+{
+    // Unlike the other ones, create a new mem blob before each call to
+    // bench_client_fn and drop it after to keep mem usage down.
+    {
+        g.bench_function(BenchmarkId::new("mem_mem", data.goodput_pretty()), |b| {
+            let client = runtime
+                .block_on(create_mem_mem_client())
+                .expect("failed to create mem_mem client");
+            bench_client_fn(b, &client);
+        });
+    }
+
+    // Create a directory that will automatically be dropped after the test
+    // finishes.
+    if let Some((client, tempdir)) = runtime
+        .block_on(create_file_pg_client())
+        .expect("failed to create file_pg client")
+    {
+        g.bench_function(BenchmarkId::new("file_pg", data.goodput_pretty()), |b| {
+            bench_client_fn(b, &client);
+        });
+        drop(tempdir);
+    }
+
+    // Only run S3+Postgres benchmarks if the magic env vars are set.
+    if let Some(client) = runtime
+        .block_on(create_s3_pg_client())
+        .expect("failed to create s3_pg client")
+    {
+        g.bench_function(BenchmarkId::new("s3_pg", data.goodput_pretty()), |b| {
+            bench_client_fn(b, &client);
+        });
+    }
+}
+
+fn bench_all_blob<BenchBlobFn>(
+    g: &mut BenchmarkGroup<'_, WallTime>,
+    runtime: &Runtime,
+    data: &DataGenerator,
+    bench_blob_fn: BenchBlobFn,
+) where
+    BenchBlobFn: Fn(&mut Bencher, &Arc<dyn BlobMulti + Send + Sync>),
+{
+    // Unlike the other ones, create a new mem blob before each call to
+    // bench_blob_fn and drop it after to keep mem usage down.
+    {
+        g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
+            let mem_blob = MemBlobMulti::open(MemBlobMultiConfig::default());
+            let mem_blob = Arc::new(mem_blob) as Arc<dyn BlobMulti + Send + Sync>;
+            bench_blob_fn(b, &mem_blob);
+        });
+    }
+
+    // Create a directory that will automatically be dropped after the test
+    // finishes.
+    {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let file_blob = runtime
+            .block_on(FileBlobMulti::open(FileBlobConfig::from(temp_dir.path())))
+            .expect("failed to create file blob");
+        let file_blob = Arc::new(file_blob) as Arc<dyn BlobMulti + Send + Sync>;
+        g.bench_function(BenchmarkId::new("file", data.goodput_pretty()), |b| {
+            bench_blob_fn(b, &file_blob);
+        });
+        drop(temp_dir);
+    }
+
+    // Only run S3 benchmarks if the magic env vars are set.
+    if let Some(config) = runtime
+        .block_on(S3BlobConfig::new_for_test())
+        .expect("failed to load s3 config")
+    {
+        let s3_blob = runtime
+            .block_on(S3BlobMulti::open(config))
+            .expect("failed to create s3 blob");
+        let s3_blob = Arc::new(s3_blob) as Arc<dyn BlobMulti + Send + Sync>;
+        g.bench_function(BenchmarkId::new("s3", data.goodput_pretty()), |b| {
+            bench_blob_fn(b, &s3_blob);
+        });
+    }
+}
+
+fn bench_all_consensus<BenchConsensusFn>(
+    g: &mut BenchmarkGroup<'_, WallTime>,
+    runtime: &Runtime,
+    data: &DataGenerator,
+    bench_consensus_fn: BenchConsensusFn,
+) where
+    BenchConsensusFn: Fn(&mut Bencher, &Arc<dyn Consensus + Send + Sync>),
+{
+    // Unlike the other ones, create a new mem blob before each call to
+    // bench_consensus_fn and drop it after to keep mem usage down.
+    {
+        g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
+            let mem_consensus =
+                Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>;
+            bench_consensus_fn(b, &mem_consensus);
+        });
+    }
+
+    // Create a directory that will automatically be dropped after the test
+    // finishes.
+    {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let sqlite_consensus = runtime
+            .block_on(SqliteConsensus::open(temp_dir.path().join("db")))
+            .expect("failed to create sqlite consensus");
+        let sqlite_consensus = Arc::new(sqlite_consensus) as Arc<dyn Consensus + Send + Sync>;
+        g.bench_function(BenchmarkId::new("sqlite", data.goodput_pretty()), |b| {
+            bench_consensus_fn(b, &sqlite_consensus);
+        });
+        drop(temp_dir);
+    }
+
+    // Only run Postgres benchmarks if the magic env vars are set.
+    if let Some(config) = runtime
+        .block_on(PostgresConsensusConfig::new_for_test())
+        .expect("failed to load postgres config")
+    {
+        let postgres_consensus = runtime
+            .block_on(PostgresConsensus::open(config))
+            .expect("failed to create postgres consensus");
+        let postgres_consensus = Arc::new(postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
+        g.bench_function(BenchmarkId::new("postgres", data.goodput_pretty()), |b| {
+            bench_consensus_fn(b, &postgres_consensus);
+        });
+    }
+}
+
+async fn load(
+    write: &mut WriteHandle<Vec<u8>, Vec<u8>, u64, i64>,
+    data: &DataGenerator,
+) -> (usize, Antichain<u64>) {
+    let mut batch_count = 0;
+    let mut max_ts = u64::minimum();
+    for batch in data.batches() {
+        batch_count += 1;
+        max_ts = match batch.get(batch.len() - 1) {
+            Some((_, max_ts, _)) => max_ts,
+            None => continue,
+        };
+        let updates = batch
+            .iter()
+            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d));
+        write
+            .compare_and_append(
+                updates,
+                write.upper().clone(),
+                Antichain::from_elem(max_ts + 1),
+            )
+            .await
+            .expect("external durability failure")
+            .expect("invalid usage")
+            .expect("unexpected upper");
+    }
+    (batch_count, Antichain::from_elem(max_ts))
 }
 
 // The grouping here is an artifact of criterion's interaction with the
