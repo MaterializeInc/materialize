@@ -13,6 +13,7 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use futures_util::Stream as FuturesStream;
 use timely::dataflow::operators::OkErr;
@@ -27,7 +28,7 @@ use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
 use mz_repr::{Diff, Row, Timestamp};
 
-use crate::source::SourceStatus;
+use crate::source::{SourceStatus, YIELD_INTERVAL};
 
 /// Creates a new source that reads from a persist shard.
 // TODO(aljoscha): We need to change the `shard_id` parameter to be a `Vec<ShardId>` and teach the
@@ -68,7 +69,7 @@ where
         }
 
         let mut read =
-            crate::persist_cache::open_reader::<(), SourceData, mz_repr::Timestamp, mz_repr::Diff>(
+            crate::persist_cache::open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
                 storage_metadata.persist_location,
                 storage_metadata.persist_shard,
             )
@@ -111,8 +112,9 @@ where
 
     let (timely_stream, token) =
         crate::source::util::source(scope, "persist_source".to_string(), move |info| {
-            let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-            let waker = futures_util::task::waker(activator);
+            let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+            let waker = futures_util::task::waker(waker_activator);
+            let activator = scope.activator_for(&info.address[..]);
 
             // There is a bit of a mismatch: listening on a ReadHandle will give us an Antichain<T>
             // as a frontier in `Progress` messages while a timely source usually only has a single
@@ -125,6 +127,10 @@ where
 
             move |cap, output| {
                 let mut context = Context::from_waker(&waker);
+                // Bound execution of operator to prevent a single operator from hogging
+                // the CPU if there are many messages to process
+                let timer = Instant::now();
+
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
                         Some(Ok(ListenEvent::Progress(upper))) => match upper.into_option() {
@@ -145,6 +151,10 @@ where
                         }
                         None => return SourceStatus::Done,
                     }
+                    if timer.elapsed() > YIELD_INTERVAL {
+                        activator.activate();
+                        break;
+                    }
                 }
 
                 SourceStatus::Alive
@@ -152,8 +162,8 @@ where
         });
 
     let (ok_stream, err_stream) = timely_stream.ok_err(|x| match x {
-        ((Ok(()), Ok(SourceData(Ok(row)))), ts, diff) => Ok((row, ts, diff)),
-        ((Ok(()), Ok(SourceData(Err(err)))), ts, diff) => Err((err, ts, diff)),
+        ((Ok(SourceData(Ok(row))), Ok(())), ts, diff) => Ok((row, ts, diff)),
+        ((Ok(SourceData(Err(err))), Ok(())), ts, diff) => Err((err, ts, diff)),
         // TODO(petrosagg): error handling
         _ => panic!("decoding failed"),
     });

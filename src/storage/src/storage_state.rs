@@ -62,7 +62,6 @@ pub struct StorageState {
     pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
     /// Handles to external sources, keyed by ID.
     // TODO(guswynn): determine if this field is needed
-    /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
@@ -165,8 +164,7 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                             crate::render::build_storage_dataflow(
                                 self.timely_worker,
                                 self.storage_state,
-                                "foobar", //TODO(petrosagg): fix this
-                                Antichain::from_elem(0),
+                                &source.id.to_string(),
                                 source.clone(),
                             );
                         }

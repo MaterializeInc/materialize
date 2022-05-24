@@ -100,25 +100,18 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::Hashable;
 use timely::communication::Allocate;
-use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
-use timely::PartialOrder;
 
-use mz_dataflow_types::{client::CreateSourceCommand, sources::SourceData};
-use mz_timely_util::operators_async_ext::OperatorBuilderExt;
+use mz_dataflow_types::client::CreateSourceCommand;
 
 use crate::storage_state::StorageState;
 
 mod debezium;
+mod persist_sink;
 pub mod sources;
 mod upsert;
 
@@ -130,7 +123,6 @@ pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     debug_name: &str,
-    as_of: Antichain<mz_repr::Timestamp>,
     source: CreateSourceCommand<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
@@ -146,108 +138,27 @@ pub fn build_storage_dataflow<A: Allocate>(
             let ((ok, err), token) = crate::render::sources::render_source(
                 region,
                 &debug_name,
-                &as_of,
+                &source.since,
                 source.id,
                 source.desc.clone(),
                 source.storage_metadata.clone(),
+                // NOTE: For now sources never have LinearOperators but might have in the future
+                None,
                 storage_state,
             );
-            storage_state
-                .source_tokens
-                .insert(source.id, Arc::clone(&token));
 
-            let operator_name = format!("persist_sink({})", source.storage_metadata.persist_shard);
-            let mut persist_op = OperatorBuilder::new(operator_name, region.clone());
+            let source_data = ok.map(Ok).concat(&err.map(Err));
 
-            // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
-            // if other workers from replicated clusters write the same data, though. In the real
-            // implementation, we would use a storage client that transparently handles writing to
-            // multiple shards. One shard would then only be written to by one worker but we get
-            // parallelism from the sharding.
-            // TODO(aljoscha): Storage must learn to keep track of collections, which consist of
-            // multiple persist shards. Then we should set it up such that each worker can write to one
-            // shard.
-            let hashed_id = source.id.hashed();
-            let active_write_worker = (hashed_id as usize) % scope.peers() == scope.index();
+            crate::render::persist_sink::render(
+                region,
+                source.id,
+                source.storage_metadata,
+                source_data,
+                storage_state,
+                Arc::clone(&token),
+            );
 
-            let source_data = ok.map(Ok).concat(&err.map(Err)).inner;
-            let mut input = persist_op.new_input(&source_data, Exchange::new(move |_| hashed_id));
-
-            let shared_frontier = Rc::clone(&storage_state.source_uppers[&source.id]);
-
-            let weak_token = Arc::downgrade(&token);
-
-            persist_op.build_async(
-                region.clone(),
-                move |mut capabilities, frontiers, scheduler| async move {
-                    capabilities.clear();
-                    let mut buffer = Vec::new();
-                    let mut stash: HashMap<_, Vec<_>> = HashMap::new();
-
-                    let mut write = crate::persist_cache::open_writer::<
-                        (),
-                        SourceData,
-                        mz_repr::Timestamp,
-                        mz_repr::Diff,
-                    >(
-                        source.storage_metadata.persist_location,
-                        source.storage_metadata.persist_shard,
-                    )
-                    .await
-                    .expect("could not open persist shard");
-
-                    while scheduler.notified().await {
-                        let input_frontier = frontiers.borrow()[0].clone();
-
-                        if !active_write_worker
-                            || weak_token.upgrade().is_none()
-                            || shared_frontier.borrow().is_empty()
-                        {
-                            return;
-                        }
-
-                        while let Some((_cap, data)) = input.next() {
-                            data.swap(&mut buffer);
-
-                            for (row, ts, diff) in buffer.drain(..) {
-                                stash
-                                    .entry(ts)
-                                    .or_default()
-                                    .push((SourceData(row), ts, diff));
-                            }
-                        }
-
-                        let empty = Vec::new();
-                        let updates = stash
-                            .iter()
-                            .flat_map(|(ts, updates)| {
-                                if !input_frontier.less_equal(ts) {
-                                    updates.iter()
-                                } else {
-                                    empty.iter()
-                                }
-                            })
-                            .map(|&(ref row, ref ts, ref diff)| ((&(), row), ts, diff));
-
-                        if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
-                            // We always append, even in case we don't have any updates, because appending
-                            // also advances the frontier.
-                            // TODO(aljoscha): Figure out how errors from this should be reported.
-                            let expected_upper = shared_frontier.borrow().clone();
-                            write
-                                .append(updates, expected_upper, input_frontier.clone())
-                                .await
-                                .expect("cannot append updates")
-                                .expect("cannot append updates")
-                                .expect("invalid/outdated upper");
-
-                            *shared_frontier.borrow_mut() = input_frontier.clone();
-                        }
-
-                        stash.retain(|ts, _updates| input_frontier.less_equal(ts));
-                    }
-                },
-            )
+            storage_state.source_tokens.insert(source.id, token);
         })
     });
 }
