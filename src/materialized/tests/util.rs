@@ -155,6 +155,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 suppress_output: true,
                 process_listen_host: None,
                 data_dir: data_directory,
+                command_wrapper: vec![],
             }),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),

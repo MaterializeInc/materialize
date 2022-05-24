@@ -10,6 +10,7 @@
 pub mod port_metadata_file;
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,8 @@ pub struct ProcessOrchestratorConfig {
     /// The directory in which the orchestrator should look for process
     /// lock files.
     pub data_dir: PathBuf,
+    /// A command to wrap the child command invocation
+    pub command_wrapper: Vec<String>,
 }
 
 /// An orchestrator backed by processes on the local machine.
@@ -61,6 +64,7 @@ pub struct ProcessOrchestrator {
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
     process_listen_host: String,
     data_dir: PathBuf,
+    command_wrapper: Vec<String>,
 }
 
 impl ProcessOrchestrator {
@@ -73,6 +77,7 @@ impl ProcessOrchestrator {
             suppress_output,
             process_listen_host,
             data_dir,
+            command_wrapper,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         Ok(ProcessOrchestrator {
@@ -83,6 +88,7 @@ impl ProcessOrchestrator {
             process_listen_host: process_listen_host
                 .unwrap_or_else(|| ProcessOrchestrator::DEFAULT_LISTEN_HOST.to_string()),
             data_dir: fs::canonicalize(data_dir)?,
+            command_wrapper,
         })
     }
 }
@@ -101,6 +107,7 @@ impl Orchestrator for ProcessOrchestrator {
                 suppress_output: self.suppress_output,
                 supervisors: Mutex::new(HashMap::new()),
                 data_dir: self.data_dir.clone(),
+                command_wrapper: self.command_wrapper.clone(),
             })
         }))
     }
@@ -114,6 +121,7 @@ struct NamespacedProcessOrchestrator {
     suppress_output: bool,
     supervisors: Mutex<HashMap<String, Vec<AbortOnDrop>>>,
     data_dir: PathBuf,
+    command_wrapper: Vec<String>,
 }
 
 #[async_trait]
@@ -214,12 +222,14 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     pid_file_locations[i].as_ref().unwrap().display()
                 ));
 
+                let command_wrapper = self.command_wrapper.clone();
                 handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
                     || format!("service-supervisor: {full_id}"),
                     supervise(
                         full_id.clone(),
                         path.clone(),
                         args.clone(),
+                        command_wrapper,
                         Arc::clone(&self.port_allocator),
                         processes[i].clone(),
                         self.suppress_output,
@@ -246,13 +256,26 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
 
 async fn supervise(
     full_id: String,
-    path: PathBuf,
-    args: Vec<String>,
+    path: impl AsRef<OsStr>,
+    args: Vec<impl AsRef<OsStr>>,
+    command_wrapper: Vec<String>,
     port_allocator: Arc<PortAllocator>,
     ports: HashMap<String, u16>,
     suppress_output: bool,
     port_metadata_file_location: PathBuf,
 ) {
+    fn interpolate_command(
+        command_part: &str,
+        full_id: &str,
+        ports: &HashMap<String, u16>,
+    ) -> String {
+        let mut command_part = command_part.replace("%N", full_id);
+        for (endpoint, port) in ports {
+            command_part = command_part.replace(&format!("%P:{endpoint}"), &format!("{port}"));
+        }
+        command_part
+    }
+
     defer! {
         for port in ports.values() {
             port_allocator.free(*port);
@@ -266,14 +289,30 @@ async fn supervise(
             )
         });
     loop {
+        let mut cmd = if command_wrapper.is_empty() {
+            let mut cmd = Command::new(&path);
+            cmd.args(&args);
+            cmd
+        } else {
+            let mut cmd = Command::new(&command_wrapper[0]);
+            let path = path.as_ref();
+            cmd.args(
+                command_wrapper[1..]
+                    .iter()
+                    .map(|part| interpolate_command(part, &full_id, &ports)),
+            );
+            cmd.arg(path);
+            cmd.args(args.iter().map(AsRef::as_ref));
+            cmd
+        };
         info!(
-            "Launching {}: {} {}...",
+            "Launching {}: {}...",
             full_id,
-            path.display(),
-            args.iter().join(" ")
+            cmd.as_std()
+                .get_args()
+                .map(|arg| arg.to_string_lossy())
+                .join(" ")
         );
-        let mut cmd = Command::new(&path);
-        cmd.args(&args);
         if suppress_output {
             cmd.stdout(Stdio::null());
             cmd.stderr(Stdio::null());

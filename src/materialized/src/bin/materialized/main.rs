@@ -399,6 +399,10 @@ pub struct Args {
     /// Turn on the console-subscriber to use materialize with `tokio-console`
     #[clap(long, hide = true)]
     tokio_console: bool,
+
+    /// Prefix commands issued by the process orchestrator with the supplied value.
+    #[clap(long, env = "MZ_PROCESS_ORCHESTRATOR_WRAPPER")]
+    process_orchestrator_wrapper: Option<String>,
 }
 
 #[derive(ArgEnum, Debug, Clone)]
@@ -588,6 +592,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     suppress_output: false,
                     process_listen_host: args.process_listen_host,
                     data_dir: args.data_directory.clone(),
+                    command_wrapper: args
+                        .process_orchestrator_wrapper
+                        .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
                 })
             }
         },
