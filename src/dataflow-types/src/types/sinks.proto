@@ -17,6 +17,14 @@ import "repr/src/relation_and_scalar.proto";
 
 package mz_dataflow_types.types.sinks;
 
+message ProtoSinkConnector {
+    oneof kind {
+        ProtoKafkaSinkConnector kafka = 1;
+        google.protobuf.Empty tail = 2;
+        ProtoPersistSinkConnector persist = 3;
+    }
+}
+
 message ProtoKafkaSinkConsistencyConnector {
     string topic = 1;
     int32 schema_id = 2;

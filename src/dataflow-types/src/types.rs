@@ -3435,11 +3435,36 @@ pub mod sinks {
         pub strict: bool,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SinkConnector {
         Kafka(KafkaSinkConnector),
         Tail(TailSinkConnector),
         Persist(PersistSinkConnector),
+    }
+
+    impl RustType<ProtoSinkConnector> for SinkConnector {
+        fn into_proto(&self) -> ProtoSinkConnector {
+            use proto_sink_connector::Kind;
+            ProtoSinkConnector {
+                kind: Some(match self {
+                    SinkConnector::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
+                    SinkConnector::Tail(_) => Kind::Tail(()),
+                    SinkConnector::Persist(persist) => Kind::Persist(persist.into_proto()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoSinkConnector) -> Result<Self, TryFromProtoError> {
+            use proto_sink_connector::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkConnector::kind"))?;
+            Ok(match kind {
+                Kind::Kafka(kafka) => SinkConnector::Kafka(kafka.into_rust()?),
+                Kind::Tail(()) => SinkConnector::Tail(TailSinkConnector {}),
+                Kind::Persist(persist) => SinkConnector::Persist(persist.into_rust()?),
+            })
+        }
     }
 
     #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -3696,7 +3721,7 @@ pub mod sinks {
         }
     }
 
-    #[derive(Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub struct TailSinkConnector {}
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
