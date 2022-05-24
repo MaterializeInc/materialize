@@ -913,8 +913,13 @@ mod tests {
         let mut handles = Vec::<JoinHandle<()>>::new();
         for idx in 0..NUM_WRITERS {
             let (data, client) = (data.clone(), client.clone());
+
+            let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(1);
+
+            let client1 = client.clone();
             let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let (mut write, _) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let (mut write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let mut current_upper = 0;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
                         Some((_, max_ts, _)) => max_ts + 1,
@@ -937,13 +942,44 @@ mod tests {
                     if PartialOrder::less_equal(&Antichain::from_elem(new_upper), write.upper()) {
                         continue;
                     }
-                    let updates = batch
-                        .iter()
-                        .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-                        .collect::<Vec<_>>();
+
+                    let current_upper_chain = Antichain::from_elem(current_upper);
+                    current_upper = new_upper;
+                    let new_upper_chain = Antichain::from_elem(new_upper);
+                    let mut builder = write.builder(batch.len(), current_upper_chain);
+
+                    for ((k, v), t, d) in batch.iter() {
+                        builder
+                            .add(&k.to_vec(), &v.to_vec(), &t, &d)
+                            .await
+                            .expect("invalid usage");
+                    }
+
+                    let batch = builder
+                        .finish(new_upper_chain)
+                        .await
+                        .expect("invalid usage");
+
+                    match batch_tx.send(batch).await {
+                        Ok(_) => (),
+                        Err(e) => panic!("send error: {}", e),
+                    }
+                }
+            });
+            handles.push(handle);
+
+            let handle = mz_ore::task::spawn(|| format!("appender-{}", idx), async move {
+                let (mut write, _) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+
+                while let Some(batch) = batch_rx.recv().await {
+                    let lower = batch.lower().clone();
+                    let upper = batch.upper().clone();
                     write
-                        .expect_append(&updates, write.upper().clone(), vec![new_upper])
-                        .await;
+                        .append_batch(batch, lower, upper)
+                        .await
+                        .expect("external durability failed")
+                        .expect("invalid usage")
+                        .expect("unexpected upper");
                 }
             });
             handles.push(handle);

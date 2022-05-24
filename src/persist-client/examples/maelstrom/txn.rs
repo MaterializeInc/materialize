@@ -149,7 +149,9 @@ impl Transactor {
             // NB: We do the CaS even if writes is empty, so that read-only txns
             // are also linearizable.
             let write_ts = self.read_ts + 1;
-            let updates = writes.iter().map(|(k, v, diff)| ((k, v), &write_ts, diff));
+            let updates = writes
+                .into_iter()
+                .map(|(k, v, diff)| ((k, v), write_ts, diff));
             let expected_upper = Antichain::from_elem(write_ts);
             let new_upper = Antichain::from_elem(write_ts + 1);
             // TODO: Wrap the compare_and_append in a retry_timeouts call, too.

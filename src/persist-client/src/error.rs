@@ -67,20 +67,44 @@ pub enum InvalidUsage<T> {
         /// Set of keys containing updates.
         keys: Vec<String>,
     },
-    /// An update was not within valid bounds
-    UpdateNotWithinBounds {
+    /// Bounds of a [crate::write::Batch] are not valid for the attempted append call
+    InvalidBatchBounds {
+        /// The lower of the batch
+        batch_lower: Antichain<T>,
+        /// The upper of the batch
+        batch_upper: Antichain<T>,
+        /// The lower bound given to the append call
+        append_lower: Antichain<T>,
+        /// The upper bound given to the append call
+        append_upper: Antichain<T>,
+    },
+    /// An update was not beyond the expected lower of the batch
+    UpdateNotBeyondLower {
         /// Timestamp of the update
         ts: T,
         /// The given lower bound
         lower: Antichain<T>,
-        /// The given upper bound
-        upper: Antichain<T>,
+    },
+    /// An update in the batch was beyond the expected upper
+    UpdateBeyondUpper {
+        /// The maximum timestamp of updates added to the batch.
+        max_ts: T,
+        /// The expected upper of the batch
+        expected_upper: Antichain<T>,
     },
     /// A [crate::read::SnapshotSplit] was given to
     /// [crate::read::ReadHandle::snapshot_iter] from a different shard
     SnapshotNotFromThisShard {
         /// The shard of the snapshot
         snapshot_shard: ShardId,
+        /// The shard of the handle
+        handle_shard: ShardId,
+    },
+    /// A [crate::write::Batch] was given to a [crate::write::WriteHandle] from
+    /// a different shard
+    BatchNotFromThisShard {
+        /// The shard of the batch
+        batch_shard: ShardId,
         /// The shard of the handle
         handle_shard: ShardId,
     },
@@ -106,10 +130,28 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                     lower, upper, keys
                 )
             }
-            InvalidUsage::UpdateNotWithinBounds { ts, lower, upper } => write!(
+            InvalidUsage::InvalidBatchBounds {
+                batch_lower,
+                batch_upper,
+                append_lower,
+                append_upper,
+            } => {
+                write!(
+                    f,
+                    "invalid batch bounds [{:?}, {:?}) for append call with [{:?}, {:?})",
+                    batch_lower, batch_upper, append_lower, append_upper
+                )
+            }
+            InvalidUsage::UpdateNotBeyondLower { ts, lower } => {
+                write!(f, "timestamp {:?} not beyond batch lower {:?}", ts, lower)
+            }
+            InvalidUsage::UpdateBeyondUpper {
+                max_ts,
+                expected_upper,
+            } => write!(
                 f,
-                "timestamp {:?} not with bounds [{:?}, {:?})",
-                ts, lower, upper
+                "maximum timestamp {:?} is beyond the expected batch upper: {:?}",
+                max_ts, expected_upper
             ),
             InvalidUsage::SnapshotNotFromThisShard {
                 snapshot_shard,
@@ -119,6 +161,10 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
                 "snapshot was from {} not {}",
                 snapshot_shard, handle_shard
             ),
+            InvalidUsage::BatchNotFromThisShard {
+                batch_shard,
+                handle_shard,
+            } => write!(f, "batch was from {} not {}", batch_shard, handle_shard),
             InvalidUsage::CodecMismatch { requested, actual } => write!(
                 f,
                 "requested codecs {:?} did not match ones in durable storage {:?}",

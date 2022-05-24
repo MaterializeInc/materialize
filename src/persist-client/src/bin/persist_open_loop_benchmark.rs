@@ -118,14 +118,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let persist = location.open().await?;
 
-    let num_records_total = args.records_per_second * args.runtime_seconds;
-    let data_generator =
-        DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
-    let shard_id = match args.shard_id {
+    let shard_id = match args.shard_id.clone() {
         Some(shard_id) => ShardId::from_str(&shard_id).map_err(anyhow::Error::msg)?,
         None => ShardId::new(),
     };
-    let (writers, readers) = match args.benchmark_type {
+
+    let (writers, readers) = match args.benchmark_type.clone() {
         BenchmarkType::RawWriter => {
             raw_persist_benchmark::setup_raw_persist(
                 persist,
@@ -138,18 +136,30 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         BenchmarkType::MzSourceModel => panic!("source model"),
     };
 
+    run_benchmark(args, writers, readers).await
+}
+
+async fn run_benchmark<W, R>(
+    args: Args,
+    writers: Vec<W>,
+    readers: Vec<R>,
+) -> Result<(), anyhow::Error>
+where
+    W: BenchmarkWriter + Send + Sync + 'static,
+    R: BenchmarkReader + Send + Sync + 'static,
+{
+    let num_records_total = args.records_per_second * args.runtime_seconds;
+    let data_generator =
+        DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
+
     let benchmark_description = format!("num-readers={} num-writers={} runtime-seconds={} records-per-second={} record-size-bytes={} batch-size={}",
                                         args.num_readers, args.num_writers, args.runtime_seconds, args.records_per_second,
                                         args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
     let mut generator_handles: Vec<JoinHandle<Result<String, anyhow::Error>>> = vec![];
-    let mut write_handles: Vec<
-        JoinHandle<Result<(String, Box<dyn BenchmarkWriter + Send + Sync>), anyhow::Error>>,
-    > = vec![];
-    let mut read_handles: Vec<
-        JoinHandle<Result<(String, Box<dyn BenchmarkReader + Send + Sync>), anyhow::Error>>,
-    > = vec![];
+    let mut write_handles: Vec<JoinHandle<Result<String, anyhow::Error>>> = vec![];
+    let mut read_handles: Vec<JoinHandle<Result<(String, R), anyhow::Error>>> = vec![];
 
     // All workers should have the starting time (so they can consistently track progress
     // and reason about lag independently).
@@ -271,7 +281,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
                 trace!("writer {} received a batch. writing", idx);
                 let write_start = Instant::now();
-                writer.write(&batch).await?;
+                writer.write(batch).await?;
+
                 records_written += args.batch_size;
                 let write_latency = write_start.elapsed();
                 if write_latency > max_write_latency {
@@ -298,7 +309,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 records_written,
                 max_write_latency.as_millis()
             );
-            Ok((finished, writer))
+
+            writer.finish().await.unwrap();
+
+            Ok(finished)
         });
 
         write_handles.push(writer_handle);
@@ -371,7 +385,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     }
     for handle in write_handles {
         match handle.await? {
-            Ok((finished, _)) => info!("{}", finished),
+            Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
     }
@@ -392,7 +406,13 @@ mod api {
     /// An interface to write a batch of data into a persistent system.
     #[async_trait]
     pub trait BenchmarkWriter {
-        async fn write(&mut self, batch: &ColumnarRecords) -> Result<(), anyhow::Error>;
+        /// Writes the given batch to this writer.
+        async fn write(&mut self, batch: ColumnarRecords) -> Result<(), anyhow::Error>;
+
+        /// Signals that we are finished writing to this [BenchmarkWriter]. This
+        /// will join any async tasks that might have been spawned for this
+        /// [BenchmarkWriter].
+        async fn finish(self) -> Result<(), anyhow::Error>;
     }
 
     /// An abstraction over a reader of data, which can report the number
@@ -405,11 +425,13 @@ mod api {
 
 mod raw_persist_benchmark {
     use async_trait::async_trait;
+    use timely::progress::Antichain;
+    use tokio::sync::mpsc::Sender;
+
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
-    use mz_persist_client::write::WriteHandle;
     use mz_persist_client::{PersistClient, ShardId};
-    use timely::progress::Antichain;
+    use tokio::task::JoinHandle;
 
     use crate::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -420,17 +442,16 @@ mod raw_persist_benchmark {
         num_readers: usize,
     ) -> Result<
         (
-            Vec<Box<dyn BenchmarkWriter + Send + Sync>>,
-            Vec<Box<dyn BenchmarkReader + Send + Sync>>,
+            Vec<RawBenchmarkWriter>,
+            Vec<Listen<Vec<u8>, Vec<u8>, u64, i64>>,
         ),
         anyhow::Error,
     > {
         let mut writers = vec![];
-        for _ in 0..num_writers {
-            let (writer, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
-            reader.expire().await;
+        for idx in 0..num_writers {
+            let writer = RawBenchmarkWriter::new(&persist, id, idx).await?;
 
-            writers.push(Box::new(writer) as Box<dyn BenchmarkWriter + Send + Sync>);
+            writers.push(writer);
         }
 
         let mut readers = vec![];
@@ -441,28 +462,111 @@ mod raw_persist_benchmark {
                 .listen(Antichain::from_elem(0))
                 .await
                 .expect("cannot serve requested as_of");
-            readers.push(Box::new(listen) as Box<dyn BenchmarkReader + Send + Sync>);
+            readers.push(listen);
         }
 
         Ok((writers, readers))
     }
 
-    #[async_trait]
-    impl BenchmarkWriter for WriteHandle<Vec<u8>, Vec<u8>, u64, i64> {
-        async fn write(&mut self, batch: &ColumnarRecords) -> Result<(), anyhow::Error> {
-            let max_ts = match batch.iter().last() {
-                Some((_, t, _)) => t,
-                None => return Ok(()),
-            };
-            let new_upper = Antichain::from_elem(max_ts + 1);
+    pub struct RawBenchmarkWriter {
+        tx: Option<Sender<ColumnarRecords>>,
+        #[allow(dead_code)]
+        handles: Vec<JoinHandle<()>>,
+    }
 
-            // TODO: figure out the right way to do this without the extra allocations.
-            let batch = batch
-                .iter()
-                .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d));
-            self.append(batch, self.upper().clone(), new_upper)
-                .await??
-                .expect("invalid current upper");
+    impl RawBenchmarkWriter {
+        async fn new(
+            persist: &PersistClient,
+            id: ShardId,
+            idx: usize,
+        ) -> Result<Self, anyhow::Error> {
+            let mut handles = Vec::<JoinHandle<()>>::new();
+            let (records_tx, mut records_rx) = tokio::sync::mpsc::channel::<ColumnarRecords>(2);
+            let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(10);
+
+            let mut write = persist
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id)
+                .await?;
+
+            let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
+                let mut current_upper = timely::progress::Timestamp::minimum();
+                while let Some(records) = records_rx.recv().await {
+                    let mut max_ts = 0;
+                    let current_upper_chain = Antichain::from_elem(current_upper);
+
+                    let mut builder = write.builder(records.len(), current_upper_chain);
+
+                    for ((k, v), t, d) in records.iter() {
+                        builder
+                            .add(&k.to_vec(), &v.to_vec(), &t, &d)
+                            .await
+                            .expect("invalid usage");
+
+                        max_ts = std::cmp::max(max_ts, t);
+                    }
+
+                    max_ts = max_ts + 1;
+                    let new_upper_chain = Antichain::from_elem(max_ts);
+                    current_upper = max_ts;
+
+                    let batch = builder
+                        .finish(new_upper_chain)
+                        .await
+                        .expect("invalid usage");
+
+                    match batch_tx.send(batch).await {
+                        Ok(_) => (),
+                        Err(e) => panic!("send error: {}", e),
+                    }
+                }
+            });
+            handles.push(handle);
+
+            let mut write = persist
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id)
+                .await?;
+
+            let handle = mz_ore::task::spawn(|| format!("appender-{}", idx), async move {
+                while let Some(batch) = batch_rx.recv().await {
+                    let lower = batch.lower().clone();
+                    let upper = batch.upper().clone();
+                    write
+                        .append_batch(batch, lower, upper)
+                        .await
+                        .expect("external durability failed")
+                        .expect("invalid usage")
+                        .expect("unexpected upper");
+                }
+            });
+            handles.push(handle);
+
+            let writer = RawBenchmarkWriter {
+                tx: Some(records_tx),
+                handles,
+            };
+
+            Ok(writer)
+        }
+    }
+
+    #[async_trait]
+    impl BenchmarkWriter for RawBenchmarkWriter {
+        async fn write(&mut self, batch: ColumnarRecords) -> Result<(), anyhow::Error> {
+            self.tx
+                .as_mut()
+                .expect("writer was already finished")
+                .send(batch)
+                .await
+                .expect("writer send error");
+            Ok(())
+        }
+
+        async fn finish(mut self) -> Result<(), anyhow::Error> {
+            self.tx.take().expect("already finished");
+
+            for handle in self.handles.drain(..) {
+                let () = handle.await?;
+            }
 
             Ok(())
         }
