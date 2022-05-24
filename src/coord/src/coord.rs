@@ -95,7 +95,7 @@ use mz_dataflow_types::client::controller::{
 };
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
-    LinearizedTimestampBindingFeedback,
+    LinearizedTimestampBindingFeedback, ReplicaId,
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
@@ -147,8 +147,8 @@ use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
-    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, Connector,
-    SinkConnectorState,
+    self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
+    Connector, SinkConnectorState,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -3042,6 +3042,43 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        fn check_no_invalid_log_reads<S: Append>(
+            catalog: &Catalog<S>,
+            compute_instance: &ComputeInstance,
+            source_ids: &BTreeSet<GlobalId>,
+            target_replica: &mut Option<ReplicaId>,
+        ) -> Result<(), CoordError> {
+            let log_names = source_ids
+                .iter()
+                .flat_map(|id| catalog.log_dependencies(*id))
+                .map(|id| catalog.get_entry(&id).name().item.clone())
+                .collect::<Vec<_>>();
+
+            if log_names.is_empty() {
+                return Ok(());
+            }
+
+            // If logging is not initialized for the cluster, no indexes are set
+            // up for log sources. This check ensures that we don't try to read
+            // from the raw sources, which is not supported.
+            if compute_instance.logging.is_none() {
+                return Err(CoordError::IntrospectionDisabled { log_names });
+            }
+
+            // Reading from log sources on replicated compute instances is only
+            // allowed if a target replica is selected. Otherwise, we have no
+            // way of knowing which replica we read the introspection data from.
+            let num_replicas = compute_instance.replicas_by_id.len();
+            if target_replica.is_none() {
+                if num_replicas == 1 {
+                    *target_replica = compute_instance.replicas_by_id.keys().next().copied();
+                } else {
+                    return Err(CoordError::UntargetedLogRead { log_names });
+                }
+            }
+            Ok(())
+        }
+
         let PeekPlan {
             mut source,
             when,
@@ -3067,32 +3104,19 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .transpose()?;
 
-        let source_ids = source.depends_on();
-
-        let num_replicas = compute_instance.replicas_by_id.len();
-        if num_replicas == 0 {
+        if compute_instance.replicas_by_id.is_empty() {
             return Err(CoordError::NoClusterReplicasAvailable(
                 compute_instance.name.clone(),
             ));
         }
 
-        // Reading from log sources on replicated compute instances is only
-        // allowed if a target replica is selected. Otherwise, we have no way
-        // of knowing which replica we read the introspection data from.
-        let log_reads = source_ids
-            .iter()
-            .flat_map(|id| self.catalog.log_dependencies(*id))
-            .map(|id| self.catalog.get_entry(&id).name().item.clone())
-            .collect::<Vec<_>>();
-        if !log_reads.is_empty() && target_replica.is_none() {
-            if num_replicas == 1 {
-                target_replica = compute_instance.replicas_by_id.keys().next().copied();
-            } else {
-                return Err(CoordError::UntargetedLogRead {
-                    log_names: log_reads,
-                });
-            }
-        }
+        let source_ids = source.depends_on();
+        check_no_invalid_log_reads(
+            &self.catalog,
+            compute_instance,
+            &source_ids,
+            &mut target_replica,
+        )?;
 
         let compute_instance = compute_instance.id;
 

@@ -52,6 +52,10 @@ pub enum CoordError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
+    /// Attempted to read from log sources on a cluster with disabled introspection.
+    IntrospectionDisabled {
+        log_names: Vec<String>,
+    },
     /// Attempted to build a materialization on a source that does not allow multiple materializations
     InvalidRematerialization {
         base_source: String,
@@ -135,6 +139,7 @@ pub enum CoordError {
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
     UnmaterializableFunction(UnmaterializableFunc),
+    /// Attempted to read from log sources without selecting a target replica.
     UntargetedLogRead {
         log_names: Vec<String>,
     },
@@ -198,7 +203,8 @@ impl CoordError {
                     source_name,
                     existing_indexes.join("\n    ")))
             }
-            CoordError::UntargetedLogRead { log_names } => Some(format!(
+            CoordError::IntrospectionDisabled { log_names }
+            | CoordError::UntargetedLogRead { log_names } => Some(format!(
                 "The query references the following log sources:\n    {}",
                 log_names.join("\n    "),
             )),
@@ -291,6 +297,10 @@ impl fmt::Display for CoordError {
             ),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             CoordError::Internal(e) => write!(f, "internal error: {}", e),
+            CoordError::IntrospectionDisabled { .. } => write!(
+                f,
+                "cannot read log sources on cluster with disabled introspection"
+            ),
             CoordError::InvalidRematerialization {
                 base_source,
                 existing_indexes: _,
