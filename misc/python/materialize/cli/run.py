@@ -12,6 +12,7 @@
 import argparse
 import getpass
 import os
+import shutil
 import sys
 
 from materialize import ROOT, spawn, ui
@@ -41,6 +42,11 @@ def main() -> int:
         "args",
         help="Arguments to pass to the program",
         nargs="*",
+    )
+    parser.add_argument(
+        "--reset",
+        help="Delete data from prior runs of the program",
+        action="store_true",
     )
     parser.add_argument(
         "--postgres",
@@ -85,8 +91,13 @@ def main() -> int:
         if args.tokio_console:
             command += ["--tokio-console"]
         if args.program == "materialized":
-            _run_sql(args.postgres, "CREATE SCHEMA IF NOT EXISTS consensus")
-            _run_sql(args.postgres, "CREATE SCHEMA IF NOT EXISTS catalog")
+            if args.reset:
+                print("Removing mzdata directory...")
+                shutil.rmtree("mzdata", ignore_errors=True)
+            for schema in ["consensus", "catalog"]:
+                if args.reset:
+                    _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             command += [
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--catalog-postgres-stash={args.postgres}?options=--search_path=catalog",
@@ -132,7 +143,7 @@ def _run_sql(url: str, sql: str) -> None:
         spawn.runv(["psql", "-At", url, "-c", sql])
     except Exception as e:
         raise UIError(
-            f"unable to connect to postgres:{e}",
+            f"unable to execute postgres statement: {e}",
             hint="Have you installed and configured PostgreSQL for passwordless authentication?",
         )
 
