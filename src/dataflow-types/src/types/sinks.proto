@@ -17,6 +17,14 @@ import "repr/src/relation_and_scalar.proto";
 
 package mz_dataflow_types.types.sinks;
 
+message ProtoSinkEnvelope {
+    oneof kind {
+        google.protobuf.Empty debezium = 1;
+        google.protobuf.Empty upsert = 2;
+        google.protobuf.Empty differential_row = 3;
+    }
+}
+
 message ProtoSinkConnector {
     oneof kind {
         ProtoKafkaSinkConnector kafka = 1;

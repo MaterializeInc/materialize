@@ -3420,13 +3420,38 @@ pub mod sinks {
         }
     }
 
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum SinkEnvelope {
         Debezium,
         Upsert,
         /// An envelope for sinks that directly write differential Rows. This is internal and
         /// cannot be requested via SQL.
         DifferentialRow,
+    }
+
+    impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
+        fn into_proto(&self) -> ProtoSinkEnvelope {
+            use proto_sink_envelope::Kind;
+            ProtoSinkEnvelope {
+                kind: Some(match self {
+                    SinkEnvelope::Debezium => Kind::Debezium(()),
+                    SinkEnvelope::Upsert => Kind::Upsert(()),
+                    SinkEnvelope::DifferentialRow => Kind::DifferentialRow(()),
+                }),
+            }
+        }
+
+        fn from_proto(proto: ProtoSinkEnvelope) -> Result<Self, TryFromProtoError> {
+            use proto_sink_envelope::Kind;
+            let kind = proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkEnvelope::kind"))?;
+            Ok(match kind {
+                Kind::Debezium(()) => SinkEnvelope::Debezium,
+                Kind::Upsert(()) => SinkEnvelope::Upsert,
+                Kind::DifferentialRow(()) => SinkEnvelope::DifferentialRow,
+            })
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
