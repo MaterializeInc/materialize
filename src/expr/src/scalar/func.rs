@@ -30,7 +30,6 @@ use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
-use mz_ore::collections::CollectionExt;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
 use mz_pgrepr::Type;
@@ -5565,18 +5564,10 @@ impl VariadicFunc {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
-            Coalesce | Greatest | Least => {
-                assert!(input_types.len() > 0);
-                debug_assert!(
-                    input_types
-                        .windows(2)
-                        .all(|w| w[0].scalar_type.base_eq(&w[1].scalar_type)),
-                    "coalesce/greatest/least inputs did not have uniform type: {:?}",
-                    input_types
-                );
-                let nullable = input_types.iter().all(|ty| ty.nullable);
-                input_types.into_first().nullable(nullable)
-            }
+            Coalesce | Greatest | Least => input_types
+                .into_iter()
+                .reduce(|l, r| l.union(&r).unwrap())
+                .unwrap(),
             Concat => ScalarType::String.nullable(true),
             MakeTimestamp => ScalarType::Timestamp.nullable(true),
             PadLeading => ScalarType::String.nullable(true),

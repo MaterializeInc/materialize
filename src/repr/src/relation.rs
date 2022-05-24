@@ -57,9 +57,15 @@ fn return_true() -> bool {
 impl ColumnType {
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (self.scalar_type.clone(), other.scalar_type.clone()) {
-            (scalar_type, other_scalar_type) if scalar_type.base_eq(&other_scalar_type) => {
+            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
                 Ok(ColumnType {
                     scalar_type,
+                    nullable: self.nullable || other.nullable,
+                })
+            }
+            (scalar_type, other_scalar_type) if scalar_type.base_eq(&other_scalar_type) => {
+                Ok(ColumnType {
+                    scalar_type: scalar_type.without_modifiers(),
                     nullable: self.nullable || other.nullable,
                 })
             }

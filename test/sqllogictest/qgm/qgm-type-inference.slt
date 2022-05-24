@@ -332,7 +332,7 @@ digraph G {
     node [ shape = box ]
     subgraph cluster2 {
         label = "Box2:Select"
-        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer)| 3: Q1.C5 (integer?) }" ]
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer?)| 3: Q1.C5 (integer?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -341,7 +341,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: greatest(Q0.C1) (integer)| 3: greatest(Q0.C1, Q0.C1) (integer)| 4: greatest(Q0.C1, Q0.C0) (integer)| 5: greatest(Q0.C0, Q0.C0) (integer?) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: greatest(Q0.C1) (integer)| 3: greatest(Q0.C1, Q0.C1) (integer)| 4: greatest(Q0.C1, Q0.C0) (integer?)| 5: greatest(Q0.C0, Q0.C0) (integer?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -372,7 +372,7 @@ digraph G {
     node [ shape = box ]
     subgraph cluster2 {
         label = "Box2:Select"
-        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer)| 3: Q1.C5 (integer?) }" ]
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer?)| 3: Q1.C5 (integer?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -381,7 +381,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: least(Q0.C1) (integer)| 3: least(Q0.C1, Q0.C1) (integer)| 4: least(Q0.C1, Q0.C0) (integer)| 5: least(Q0.C0, Q0.C0) (integer?) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: least(Q0.C1) (integer)| 3: least(Q0.C1, Q0.C1) (integer)| 4: least(Q0.C1, Q0.C0) (integer?)| 5: least(Q0.C0, Q0.C0) (integer?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -412,7 +412,7 @@ digraph G {
     node [ shape = box ]
     subgraph cluster2 {
         label = "Box2:Select"
-        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer)| 3: Q1.C5 (integer?) }" ]
+        boxhead2 [ shape = record, label = "{ Distinct: Preserve| 0: Q1.C2 (integer)| 1: Q1.C3 (integer)| 2: Q1.C4 (integer?)| 3: Q1.C5 (integer?) }" ]
         {
             rank = same
             node [ shape = circle ]
@@ -421,7 +421,7 @@ digraph G {
     }
     subgraph cluster1 {
         label = "Box1:Select"
-        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: coalesce(Q0.C1) (integer)| 3: coalesce(Q0.C1, Q0.C1) (integer)| 4: coalesce(Q0.C1, Q0.C0) (integer)| 5: coalesce(Q0.C0, Q0.C0) (integer?) }" ]
+        boxhead1 [ shape = record, label = "{ Distinct: Preserve| 0: Q0.C0 (integer?)| 1: Q0.C1 (integer)| 2: coalesce(Q0.C1) (integer)| 3: coalesce(Q0.C1, Q0.C1) (integer)| 4: coalesce(Q0.C1, Q0.C0) (integer?)| 5: coalesce(Q0.C0, Q0.C0) (integer?) }" ]
         {
             rank = same
             node [ shape = circle ]
