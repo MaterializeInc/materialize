@@ -20,6 +20,7 @@ LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 DEFAULT_MZ_VOLUMES = [
     "mzdata:/mzdata",
     "pgdata:/var/lib/postgresql",
+    "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
 ]
 
@@ -337,13 +338,22 @@ class MySql(Service):
         mysql_root_password: str,
         name: str = "mysql",
         image: str = "mysql:8.0.27",
-        command: str = "--default-authentication-plugin=mysql_native_password",
+        command: Optional[str] = None,
         port: int = 3306,
         environment: Optional[List[str]] = None,
+        volumes: list[str] = ["mydata:/var/lib/mysql-files"],
     ) -> None:
         if environment is None:
             environment = []
         environment.append(f"MYSQL_ROOT_PASSWORD={mysql_root_password}")
+
+        if not command:
+            command = "\n".join(
+                [
+                    "--default-authentication-plugin=mysql_native_password",
+                    "--secure-file-priv=/var/lib/mysql-files",
+                ]
+            )
 
         super().__init__(
             name=name,
@@ -352,6 +362,7 @@ class MySql(Service):
                 "ports": [port],
                 "environment": environment,
                 "command": command,
+                "volumes": volumes,
             },
         )
 
@@ -662,5 +673,16 @@ class Kgen(Service):
                 "mzbuild": mzbuild,
                 "depends_on": depends_on,
                 "entrypoint": entrypoint,
+            },
+        )
+
+
+class Metabase(Service):
+    def __init__(self, name: str = "metabase") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "metabase/metabase:v0.41.4",
+                "ports": ["3000"],
             },
         )

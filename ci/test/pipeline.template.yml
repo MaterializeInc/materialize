@@ -282,7 +282,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: metabase
-          run: smoketest
     agents:
       queue: linux-x86_64
 
@@ -405,7 +404,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: csharp
-          run: csharp
     agents:
       queue: linux-x86_64
 
@@ -418,7 +416,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: js
-          run: js
     agents:
       queue: linux-x86_64
 
@@ -443,7 +440,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: python
-          run: python
     agents:
       queue: linux-x86_64
 
