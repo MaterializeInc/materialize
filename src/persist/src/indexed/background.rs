@@ -14,22 +14,21 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use mz_ore::task::RuntimeExt;
 use timely::progress::Antichain;
 use timely::PartialOrder;
-use tokio::runtime::Runtime as AsyncRuntime;
 
 use mz_ore::cast::CastFrom;
-use mz_ore::task::RuntimeExt;
+use tokio::runtime::Handle;
+use uuid::Uuid;
 
 use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
-use crate::indexed::arrangement::Arrangement;
 use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
-use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta, UnsealedSnapshotMeta};
+use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta};
 use crate::indexed::metrics::Metrics;
-use crate::location::{Blob, BlobRead};
-use crate::pfuture::PFuture;
+use crate::location::BlobMulti;
 
 /// A request to merge two trace batches and write the results to blob storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,25 +51,6 @@ pub struct CompactTraceRes {
     pub merged: TraceBatchMeta,
 }
 
-/// A request to copy part of unsealed into a trace batch and write the results
-/// to blob storage.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrainUnsealedReq {
-    /// The description of the trace batch to create.
-    pub desc: Description<u64>,
-    /// A consistent view of data in sealed as of some time.
-    pub snap: UnsealedSnapshotMeta,
-}
-
-/// A successful drain.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DrainUnsealedRes {
-    /// The original request, so the caller doesn't have to do this matching.
-    pub req: DrainUnsealedReq,
-    /// The compacted batch.
-    pub drained: Option<TraceBatchMeta>,
-}
-
 /// A runtime for background asynchronous maintenance of stored data.
 //
 // TODO: Add migrating records from unsealed to trace as well as deletion of
@@ -82,22 +62,16 @@ pub struct Maintainer<B> {
     // only exception is prev_meta_len, which really is only used from a single
     // thread. Perhaps we should split the Meta parts out of BlobCache.
     blob: Arc<BlobCache<B>>,
-    async_runtime: Arc<AsyncRuntime>,
     metrics: Arc<Metrics>,
     // Bound the maximum size of any [ColumnarRecordsVec], only used in testing.
     key_val_data_max_len: Option<usize>,
 }
 
-impl<B: BlobRead> Maintainer<B> {
+impl<B: BlobMulti> Maintainer<B> {
     /// Returns a new [Maintainer].
-    pub fn new(
-        blob: BlobCache<B>,
-        async_runtime: Arc<AsyncRuntime>,
-        metrics: Arc<Metrics>,
-    ) -> Self {
+    pub fn new(blob: BlobCache<B>, metrics: Arc<Metrics>) -> Self {
         Maintainer {
             blob: Arc::new(blob),
-            async_runtime,
             metrics,
             key_val_data_max_len: None,
         }
@@ -107,46 +81,34 @@ impl<B: BlobRead> Maintainer<B> {
     #[cfg(test)]
     fn new_for_testing(
         blob: BlobCache<B>,
-        async_runtime: Arc<AsyncRuntime>,
         metrics: Arc<Metrics>,
         key_val_data_max_len: usize,
     ) -> Self {
         Maintainer {
             blob: Arc::new(blob),
-            async_runtime,
             metrics,
             key_val_data_max_len: Some(key_val_data_max_len),
         }
     }
 }
 
-impl<B: Blob> Maintainer<B> {
-    /// Asynchronously runs the requested compaction on the work pool provided
-    /// at construction time.
-    pub fn compact_trace(&self, req: CompactTraceReq) -> PFuture<CompactTraceRes> {
-        let (tx, rx) = PFuture::new();
+impl<B: BlobMulti + Send + Sync + 'static> Maintainer<B> {
+    /// Asynchronously runs the requested compaction on the tokio blocking work
+    /// pool.
+    pub async fn compact_trace(&self, req: CompactTraceReq) -> Result<CompactTraceRes, Error> {
         let blob = Arc::clone(&self.blob);
         let metrics = Arc::clone(&self.metrics);
         let key_val_data_max_len = self.key_val_data_max_len.clone();
-        // Ignore the spawn_blocking response since we communicate
-        // success/failure through the returned future.
-        //
-        // TODO: Push the spawn_blocking down into the cpu-intensive bits and
-        // use spawn here once the storage traits are made async.
-        //
-        // TODO(guswynn): consider adding more info to the task name here
-        let _ = self.async_runtime.spawn_blocking_named(
-            || "persist_trace_compaction",
-            move || {
-                tx.fill(Self::compact_trace_blocking(
-                    blob,
-                    metrics,
-                    req,
-                    key_val_data_max_len,
-                ))
-            },
-        );
-        rx
+        Handle::current()
+            .spawn_blocking_named(
+                || "persist_trace_compaction",
+                move || {
+                    let handle = Handle::current();
+                    Self::compact_trace_blocking(&handle, blob, metrics, req, key_val_data_max_len)
+                },
+            )
+            .await
+            .map_err(|err| Error::from(err.to_string()))?
     }
 
     /// Physically and logically compact two trace batches together
@@ -179,6 +141,7 @@ impl<B: Blob> Maintainer<B> {
     /// doing so in a single pass was complicated enough that it is left for
     /// future work.
     fn compact_trace_blocking(
+        handle: &Handle,
         blob: Arc<BlobCache<B>>,
         metrics: Arc<Metrics>,
         req: CompactTraceReq,
@@ -212,8 +175,8 @@ impl<B: Blob> Maintainer<B> {
         // levels.
         debug_assert_eq!(first.level, second.level);
 
-        debug_assert_eq!(first.validate_data(&blob), Ok(()));
-        debug_assert_eq!(second.validate_data(&blob), Ok(()));
+        debug_assert_eq!(handle.block_on(first.validate_data(&blob)), Ok(()));
+        debug_assert_eq!(handle.block_on(second.validate_data(&blob)), Ok(()));
 
         let desc = Description::new(
             first.desc.lower().clone(),
@@ -253,14 +216,22 @@ impl<B: Blob> Maintainer<B> {
             // TODO: we can simplify this logic once empty trace batch parts are disallowed.
             while first_updates.is_empty() {
                 match first_batch_iter.next() {
-                    Some(key) => Self::load_trace_batch_part(&blob, key, &mut first_updates)?,
+                    Some(key) => handle.block_on(Self::load_trace_batch_part(
+                        &blob,
+                        key,
+                        &mut first_updates,
+                    ))?,
                     None => break,
                 }
             }
 
             while second_updates.is_empty() {
                 match second_batch_iter.next() {
-                    Some(key) => Self::load_trace_batch_part(&blob, key, &mut second_updates)?,
+                    Some(key) => handle.block_on(Self::load_trace_batch_part(
+                        &blob,
+                        key,
+                        &mut second_updates,
+                    ))?,
                     None => break,
                 }
             }
@@ -308,12 +279,13 @@ impl<B: Blob> Maintainer<B> {
                 if let Some(filled) = builder.take_filled() {
                     for part in filled {
                         debug_assert!(part.len() > 0);
-                        let (key, part_size_bytes) = Self::write_trace_batch_part(
-                            &blob,
-                            desc.clone(),
-                            part,
-                            u64::cast_from(keys.len()),
-                        )?;
+                        let (key, part_size_bytes) =
+                            handle.block_on(Self::write_trace_batch_part(
+                                &blob,
+                                desc.clone(),
+                                part,
+                                u64::cast_from(keys.len()),
+                            ))?;
                         keys.push(key);
                         new_size_bytes += part_size_bytes;
                     }
@@ -327,12 +299,12 @@ impl<B: Blob> Maintainer<B> {
         let finished = builder.finish();
         for part in finished {
             if part.len() > 0 {
-                let (key, part_size_bytes) = Self::write_trace_batch_part(
+                let (key, part_size_bytes) = handle.block_on(Self::write_trace_batch_part(
                     &blob,
                     desc.clone(),
                     part,
                     u64::cast_from(keys.len()),
-                )?;
+                ))?;
                 keys.push(key);
                 new_size_bytes += part_size_bytes;
             }
@@ -357,7 +329,7 @@ impl<B: Blob> Maintainer<B> {
             size_bytes: new_size_bytes,
         };
 
-        debug_assert_eq!(merged.validate_data(&blob), Ok(()));
+        debug_assert_eq!(handle.block_on(merged.validate_data(&blob)), Ok(()));
         metrics
             .compaction_seconds
             .inc_by(start.elapsed().as_secs_f64());
@@ -365,14 +337,12 @@ impl<B: Blob> Maintainer<B> {
     }
 
     /// Read the data from the trace batch part at `key` into `updates`.
-    fn load_trace_batch_part(
+    async fn load_trace_batch_part(
         blob: &BlobCache<B>,
         key: &str,
         updates: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
     ) -> Result<(), Error> {
-        let batch_part = blob
-            .get_trace_batch_async(key, CacheHint::NeverAdd)
-            .recv()?;
+        let batch_part = blob.get_trace_batch_async(key, CacheHint::NeverAdd).await?;
         updates.extend(batch_part.updates.iter().flat_map(|u| {
             u.iter()
                 .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
@@ -409,10 +379,10 @@ impl<B: Blob> Maintainer<B> {
         }
     }
 
-    /// Write a [BlobTraceBatchPart] containing `updates` into [Blob].
+    /// Write a [BlobTraceBatchPart] containing `updates` into [BlobMulti].
     ///
     /// Returns the key and size in bytes for the trace batch part.
-    fn write_trace_batch_part(
+    async fn write_trace_batch_part(
         blob: &BlobCache<B>,
         desc: Description<u64>,
         updates: ColumnarRecords,
@@ -423,9 +393,10 @@ impl<B: Blob> Maintainer<B> {
             updates: vec![updates],
             index,
         };
-        let key = Arrangement::new_blob_key();
-        let size_bytes =
-            blob.set_trace_batch(key.clone(), batch_part, ProtoBatchFormat::ParquetKvtd)?;
+        let key = Uuid::new_v4().to_string();
+        let size_bytes = blob
+            .set_trace_batch(key.clone(), batch_part, ProtoBatchFormat::ParquetKvtd)
+            .await?;
         Ok((key, size_bytes))
     }
 }
@@ -433,12 +404,12 @@ impl<B: Blob> Maintainer<B> {
 #[cfg(test)]
 mod tests {
     use differential_dataflow::trace::Description;
-    use tokio::runtime::Runtime as AsyncRuntime;
 
     use crate::gen::persist::ProtoBatchFormat;
+    use crate::indexed::cache::CacheHint;
     use crate::indexed::columnar::ColumnarRecordsVec;
     use crate::indexed::metrics::Metrics;
-    use crate::mem::MemRegistry;
+    use crate::mem::{MemBlobMulti, MemBlobMultiConfig};
 
     use super::*;
 
@@ -461,18 +432,15 @@ mod tests {
         expected_updates: Vec<((&'a [u8], &'a [u8]), u64, i64)>,
     }
 
-    #[test]
-    fn compact_trace_errors() -> Result<(), Error> {
-        let async_runtime = Arc::new(AsyncRuntime::new()?);
+    #[tokio::test]
+    async fn compact_trace_errors() -> Result<(), Error> {
         let metrics = Arc::new(Metrics::default());
         let blob = BlobCache::new(
-            mz_build_info::DUMMY_BUILD_INFO,
             Arc::new(Metrics::default()),
-            Arc::clone(&async_runtime),
-            MemRegistry::new().blob_no_reentrance()?,
+            MemBlobMulti::open(MemBlobMultiConfig::default()),
             None,
         );
-        let maintainer = Maintainer::new(blob, async_runtime, metrics);
+        let maintainer = Maintainer::new(blob, metrics);
 
         // Non-contiguous batch descs
         let req = CompactTraceReq {
@@ -492,7 +460,7 @@ mod tests {
             },
             since: Antichain::from_elem(0),
         };
-        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [3] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
+        assert_eq!(maintainer.compact_trace(req).await, Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [3] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
 
         // Overlapping batch descs
         let req = CompactTraceReq {
@@ -512,7 +480,7 @@ mod tests {
             },
             since: Antichain::from_elem(0),
         };
-        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
+        assert_eq!(maintainer.compact_trace(req).await, Err(Error::from("invalid merge of non-consecutive batches TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [0] }, upper: Antichain { elements: [2] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 } and TraceBatchMeta { keys: [], format: Unknown, desc: Description { lower: Antichain { elements: [1] }, upper: Antichain { elements: [4] }, since: Antichain { elements: [0] } }, level: 0, size_bytes: 0 }")));
 
         // Since not at or in advance of b0's since
         let req = CompactTraceReq {
@@ -532,7 +500,7 @@ mod tests {
             },
             since: Antichain::from_elem(0),
         };
-        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
+        assert_eq!(maintainer.compact_trace(req).await, Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
 
         // Since not at or in advance of b1's since
         let req = CompactTraceReq {
@@ -552,14 +520,14 @@ mod tests {
             },
             since: Antichain::from_elem(0),
         };
-        assert_eq!(maintainer.compact_trace(req).recv(), Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
+        assert_eq!(maintainer.compact_trace(req).await, Err(Error::from("output since Antichain { elements: [0] } must be at or in advance of input since Antichain { elements: [1] }")));
 
         Ok(())
     }
 
-    fn compact_trace_test_case<
+    async fn compact_trace_test_case<
         'a,
-        B: Blob,
+        B: BlobMulti + Send + Sync + 'static,
         F: FnMut() -> Result<(Maintainer<B>, BlobCache<B>), Error>,
     >(
         test: &CompactionTestCase<'a>,
@@ -582,7 +550,7 @@ mod tests {
                     .into_inner(),
             };
             let key = format!("b0-{}", idx);
-            b0_size_bytes += blob.set_trace_batch(key.clone(), b.clone(), format)?;
+            b0_size_bytes += blob.set_trace_batch(key.clone(), b.clone(), format).await?;
             b0_keys.push(key)
         }
 
@@ -600,7 +568,7 @@ mod tests {
                     .into_inner(),
             };
             let key = format!("b1-{}", idx);
-            b1_size_bytes += blob.set_trace_batch(key.clone(), b.clone(), format)?;
+            b1_size_bytes += blob.set_trace_batch(key.clone(), b.clone(), format).await?;
             b1_keys.push(key)
         }
 
@@ -626,7 +594,7 @@ mod tests {
             req: req.clone(),
             merged: merged.clone(),
         };
-        let mut res = maintainer.compact_trace(req).recv()?;
+        let mut res = maintainer.compact_trace(req).await?;
 
         // Grab the list of newly created trace batch keys so we can check the
         // contents of the merged batch.
@@ -645,8 +613,8 @@ mod tests {
         let mut batch_parts = vec![];
         for key in merged_keys {
             let batch_part = blob
-                .get_trace_batch_async(&key, CacheHint::MaybeAdd)
-                .recv()?;
+                .get_trace_batch_async(&key, CacheHint::NeverAdd)
+                .await?;
             assert_eq!(&batch_part.desc, &expected_res.merged.desc);
             batch_parts.push(batch_part);
         }
@@ -659,19 +627,16 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn compact_trace() -> Result<(), Error> {
+    #[tokio::test]
+    async fn compact_trace() -> Result<(), Error> {
         let new_fn = || {
-            let async_runtime = Arc::new(AsyncRuntime::new()?);
             let metrics = Arc::new(Metrics::default());
             let blob = BlobCache::new(
-                mz_build_info::DUMMY_BUILD_INFO,
                 Arc::new(Metrics::default()),
-                Arc::clone(&async_runtime),
-                MemRegistry::new().blob_no_reentrance()?,
+                MemBlobMulti::open(MemBlobMultiConfig::default()),
                 None,
             );
-            let maintainer = Maintainer::new(blob.clone(), async_runtime, metrics);
+            let maintainer = Maintainer::new(blob.clone(), metrics);
             Ok((maintainer, blob))
         };
 
@@ -894,25 +859,23 @@ mod tests {
         ];
 
         for test_case in test_cases.iter() {
-            compact_trace_test_case(test_case, &test_case.merged_normal, new_fn.clone())?;
+            compact_trace_test_case(test_case, &test_case.merged_normal, new_fn.clone()).await?;
         }
 
         let new_fn = || {
-            let async_runtime = Arc::new(AsyncRuntime::new()?);
             let metrics = Arc::new(Metrics::default());
             let blob = BlobCache::new(
-                mz_build_info::DUMMY_BUILD_INFO,
                 Arc::new(Metrics::default()),
-                Arc::clone(&async_runtime),
-                MemRegistry::new().blob_no_reentrance()?,
+                MemBlobMulti::open(MemBlobMultiConfig::default()),
                 None,
             );
-            let maintainer = Maintainer::new_for_testing(blob.clone(), async_runtime, metrics, 10);
+            let maintainer = Maintainer::new_for_testing(blob.clone(), metrics, 10);
             Ok((maintainer, blob))
         };
 
         for test_case in test_cases.iter() {
-            compact_trace_test_case(test_case, &test_case.merged_small_batches, new_fn.clone())?;
+            compact_trace_test_case(test_case, &test_case.merged_small_batches, new_fn.clone())
+                .await?;
         }
 
         Ok(())

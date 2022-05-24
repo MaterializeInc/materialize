@@ -9,13 +9,12 @@
 
 //! Persistence related errors.
 
-use std::ops::Range;
 use std::sync::Arc;
 use std::{error, fmt, io, sync};
 
 use arrow2::error::ArrowError;
 
-use crate::location::{Log, SeqNo};
+use crate::location::{ExternalError, SeqNo};
 
 /// A persistence related error.
 #[derive(Debug, Clone)]
@@ -67,6 +66,12 @@ impl PartialEq for Error {
     }
 }
 
+impl From<ExternalError> for Error {
+    fn from(e: ExternalError) -> Self {
+        Error::String(e.to_string())
+    }
+}
+
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         // This only works on unix/macos, but I don't see a great alternative.
@@ -104,42 +109,5 @@ impl<T> From<sync::PoisonError<T>> for Error {
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Self {
         Error::String(format!("sqlite: {}", e))
-    }
-}
-
-/// A stub implementation of [Log] that always returns errors.
-///
-/// This exists to let us keep the (surprisingly non-trivial) Log plumbing while
-/// we don't actually use it, but without the risk of accidentally using it.
-#[derive(Debug)]
-pub struct ErrorLog;
-
-impl Log for ErrorLog {
-    fn write_sync(&mut self, _buf: Vec<u8>) -> Result<SeqNo, Error> {
-        Err(Error::from(
-            "ErrorLog method unexpectedly called, please report a bug: write_sync",
-        ))
-    }
-
-    fn snapshot<F>(&self, _logic: F) -> Result<Range<SeqNo>, Error>
-    where
-        F: FnMut(SeqNo, &[u8]) -> Result<(), Error>,
-    {
-        Err(Error::from(
-            "ErrorLog method unexpectedly called, please report a bug: snapshot",
-        ))
-    }
-
-    fn truncate(&mut self, _upper: SeqNo) -> Result<(), Error> {
-        Err(Error::from(
-            "ErrorLog method unexpectedly called, please report a bug: snapshot",
-        ))
-    }
-
-    fn close(&mut self) -> Result<bool, Error> {
-        // This one should actually be used, so implement it. The bool result is
-        // only used for logging when a Log impl was dropped without being
-        // closed, so it's safe to always return false.
-        Ok(false)
     }
 }

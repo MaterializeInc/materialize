@@ -26,10 +26,8 @@ use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
-    encode_unsealed_inline_meta, BlobTraceBatchPart, BlobUnsealedBatch,
+    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart,
 };
-use crate::location::SeqNo;
 
 /// The Arrow schema we use to encode ((K, V), T, D) tuples.
 pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
@@ -63,26 +61,6 @@ pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
 
 const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 
-/// Encodes an BlobUnsealedBatch into the Arrow file format.
-///
-/// NB: This is currently unused, but it's here because we may want to use it
-/// for the local cache and so we can easily compare arrow vs parquet.
-pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> Result<(), Error> {
-    let mut metadata = BTreeMap::new();
-    metadata.insert(
-        INLINE_METADATA_KEY.into(),
-        encode_unsealed_inline_meta(batch, ProtoBatchFormat::ArrowKvtd),
-    );
-    let schema = Schema::from(SCHEMA_ARROW_KVTD.fields.clone()).with_metadata(metadata);
-    let options = WriteOptions { compression: None };
-    let mut writer = FileWriter::try_new(w, &schema, None, options)?;
-    for records in batch.updates.iter() {
-        writer.write(&encode_arrow_batch_kvtd(records), None)?;
-    }
-    writer.finish()?;
-    Ok(())
-}
-
 /// Encodes an BlobTraceBatchPart into the Arrow file format.
 ///
 /// NB: This is currently unused, but it's here because we may want to use it
@@ -101,31 +79,6 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Re
     }
     writer.finish()?;
     Ok(())
-}
-
-/// Decodes a BlobUnsealedBatch from the Arrow file format.
-///
-/// NB: This is currently unused, but it's here because we may want to use it
-/// for the local cache and so we can easily compare arrow vs parquet.
-pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBatch, Error> {
-    let file_meta = read_file_metadata(r)?;
-    let (format, meta) =
-        decode_unsealed_inline_meta(file_meta.schema.metadata.get(INLINE_METADATA_KEY))?;
-
-    let updates = match format {
-        ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKvtd => decode_arrow_file_kvtd(r, file_meta)?,
-        ProtoBatchFormat::ParquetKvtd => {
-            return Err("ParquetKvtd format not supported in arrow".into())
-        }
-    };
-
-    let ret = BlobUnsealedBatch {
-        desc: SeqNo(meta.seqno_lower)..SeqNo(meta.seqno_upper),
-        updates,
-    };
-    ret.validate()?;
-    Ok(ret)
 }
 
 /// Decodes a BlobTraceBatchPart from the Arrow file format.
