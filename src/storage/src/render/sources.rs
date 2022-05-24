@@ -72,6 +72,7 @@ pub fn render_source<G>(
     src_id: GlobalId,
     source_desc: SourceDesc,
     storage_metadata: CollectionMetadata,
+    mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
@@ -80,7 +81,6 @@ pub fn render_source<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut linear_operators: Option<LinearOperator> = None;
     // Blank out trivial linear operators.
     if let Some(operator) = &linear_operators {
         if operator.is_trivial(source_desc.desc.arity()) {
@@ -311,6 +311,7 @@ where
                         needed_tokens.push(Arc::new(tok));
                     }
 
+<<<<<<< HEAD
                     // render envelopes
                     match &envelope {
                         SourceEnvelope::Debezium(dbz_envelope) => {
@@ -338,6 +339,9 @@ where
                                             tx_metadata.tx_metadata_global_id,
                                             tx_src_desc,
                                             tx_collection_metadata,
+                                            // NOTE: For now sources never have LinearOperators
+                                            // but might have in the future
+                                            None,
                                             storage_state,
                                         );
                                     needed_tokens.push(tx_token);

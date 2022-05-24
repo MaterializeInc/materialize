@@ -420,7 +420,7 @@ where
 
             let updates = updates
                 .into_iter()
-                .map(|u| (((), SourceData(Ok(u.row))), u.timestamp, u.diff));
+                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
 
             handles
                 .write
@@ -641,8 +641,8 @@ pub struct CollectionState<T> {
 pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
     /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
     /// since frontier and we need to downgrade that when the read capabilities change.
-    read: ReadHandle<(), SourceData, T, Diff>,
-    write: WriteHandle<(), SourceData, T, Diff>,
+    read: ReadHandle<SourceData, (), T, Diff>,
+    write: WriteHandle<SourceData, (), T, Diff>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
