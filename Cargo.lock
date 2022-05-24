@@ -3229,6 +3229,7 @@ dependencies = [
  "serde_json",
  "timely",
  "tokio",
+ "tokio-postgres",
  "tokio-serde",
  "tokio-stream",
  "tokio-util 0.7.2",
