@@ -26,13 +26,12 @@ operations mentioned in correctness property 1.
 
 ## Non-Goals
 
-Sinks are left out of this document and not considered for consistency.
+The following items' impact on consistency is not considered:
 
-`TAIL` is left out of this document and not considered for consistency.
-
-`AS OF` allows clients to specify the timestamp of a query. Queries with `AS OF` do not constrain the timestamp
-selection of other queries. These properties allow clients to circumvent our consistency guarantees, so `AS OF` is left
-out of this document.
+- `TAIL`
+- Sinks.
+- `AS OF`, which allows clients to specify the timestamp of a query and do not constrain the timestamp selection of
+  other queries. These properties allow clients to circumvent our consistency guarantees.
 
 ## Description
 
