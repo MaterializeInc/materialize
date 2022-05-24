@@ -3755,6 +3755,7 @@ dependencies = [
  "itertools",
  "mz-lowertest",
  "mz-ore",
+ "mz-persist-client",
  "mz-persist-types",
  "num-traits",
  "num_enum",

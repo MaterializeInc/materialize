@@ -11,10 +11,12 @@
 
 use proptest::prelude::Strategy;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::str::FromStr;
 use std::{char::CharTryFromError, num::TryFromIntError};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
+use mz_persist_client::ShardId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.proto.rs"));
 
@@ -372,6 +374,16 @@ impl RustType<ProtoDuration> for std::time::Duration {
     }
 }
 
+impl RustType<String> for ShardId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        ShardId::from_str(&proto).map_err(|_| TryFromProtoError::InvalidShardId(proto))
+    }
+}
+
 /// The symmetric counterpart of [`RustType`], similar to
 /// what [`Into`] is to [`From`].
 ///
@@ -471,6 +483,13 @@ mod tests {
         #[test]
         fn duration_protobuf_roundtrip(expect in any_duration() ) {
             let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
+            let actual = protobuf_roundtrip::<_, String>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }

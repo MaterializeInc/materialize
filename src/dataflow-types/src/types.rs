@@ -1089,7 +1089,6 @@ impl ProtoMapEntry<GlobalId, SinkDesc> for ProtoSinkExport {
 pub mod sources {
     use std::collections::{BTreeMap, HashMap};
     use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
-    use std::str::FromStr;
     use std::time::Duration;
 
     use anyhow::{anyhow, bail};
@@ -3166,7 +3165,7 @@ pub mod sources {
             ProtoPersistSourceConnector {
                 consensus_uri: self.consensus_uri.clone(),
                 blob_uri: self.blob_uri.clone(),
-                shard_id: self.shard_id.to_string(),
+                shard_id: self.shard_id.into_proto(),
             }
         }
 
@@ -3174,8 +3173,7 @@ pub mod sources {
             Ok(PersistSourceConnector {
                 consensus_uri: proto.consensus_uri,
                 blob_uri: proto.blob_uri,
-                shard_id: ShardId::from_str(&proto.shard_id)
-                    .map_err(|_| TryFromProtoError::InvalidShardId(proto.shard_id))?,
+                shard_id: proto.shard_id.into_rust()?,
             })
         }
     }
