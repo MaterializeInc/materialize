@@ -24,23 +24,40 @@
 // TODO(aljoscha): Figure out which of the Send + Sync shenanigans are needed and/or if the
 // situation can be improved.
 
-use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use tracing::error;
+use tracing::{error, trace};
 
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::location::ExternalError;
-use tracing::trace;
-
-use crate::PersistClient;
-use crate::PersistLocation;
+use mz_persist::location::{BlobMulti, Consensus, ExternalError};
+use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
+use mz_persist_client::{PersistClient, PersistLocation};
 
 use self::impls::ConsensusTimestamper;
 use self::impls::PersistConsensus;
 use self::impls::SequentialSource;
 use self::types::Timestamp;
+
+/// Simplified model of the mz source pipeline and its usage of persist.
+#[derive(Debug, Clone, clap::Parser)]
+pub struct Args {
+    /// Blob to use
+    #[clap(long)]
+    blob_uri: String,
+
+    /// Consensus to use
+    #[clap(long)]
+    consensus_uri: String,
+
+    /// How much unreliability to inject into Blob and Consensus usage
+    ///
+    /// This value must be in [0, 1]. 0 means no-op, 1 means complete
+    /// unreliability.
+    #[clap(long, default_value_t = 0.0)]
+    unreliability: f64,
+}
 
 async fn retry_mut<F, I, T>(name: &str, input: &mut I, mut action: F) -> T
 where
@@ -62,16 +79,7 @@ where
     }
 }
 
-/// Run this example via:
-///
-/// ```bash
-/// $ cargo test [--release] -p mz-persist-client -- persistent_source_example --nocapture --ignored
-/// ```
-#[tokio::test(flavor = "multi_thread")]
-#[ignore]
-async fn run() -> Result<(), Box<dyn Error>> {
-    mz_ore::test::init_logging_default("info");
-
+pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let batch_size = 2;
     let timestamp_interval = Duration::from_secs(1);
     let num_readers = 1;
@@ -82,16 +90,14 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let source = SequentialSource::new(2, source_wait_time);
 
-    // TODO: Move this to be a subcommand of persistcli, with arguments that
-    // specify a persist location.
-    let persist = persist_client(
-        "file:///tmp/persistent_source_example/blob",
-        "sqlite:///tmp/persistent_source_example/sqlite-consensus",
-    )
-    .await?;
+    let persist = persist_client(args).await?;
 
-    let bindings_id = "sa3150c18-f7a0-4062-b189-463531b9f36a".parse()?;
-    let data_id = "s1ba38f23-e28f-41fc-a92b-cddef58c48ce".parse()?;
+    let bindings_id = "sa3150c18-f7a0-4062-b189-463531b9f36a"
+        .parse()
+        .map_err(anyhow::Error::msg)?;
+    let data_id = "s1ba38f23-e28f-41fc-a92b-cddef58c48ce"
+        .parse()
+        .map_err(anyhow::Error::msg)?;
 
     let (bindings_write, bindings_read) = persist.open(bindings_id).await?;
 
@@ -146,9 +152,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let timestamper =
         ConsensusTimestamper::new(now_fn.clone(), timestamp_interval.clone(), consensus).await;
 
-    let (data_write, data_read) = persist.open(data_id).await?;
-    // Make it explicit that we will never read from this.
-    drop(data_read);
+    let data_write = persist.open_writer(data_id).await?;
 
     let source2 = source.clone();
     let source_pipeline2 = mz_ore::task::spawn(|| "source-2", async move {
@@ -175,16 +179,20 @@ async fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn persist_client(
-    blob_uri: &str,
-    consensus_uri: &str,
-) -> Result<PersistClient, ExternalError> {
+async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
     let location = PersistLocation {
-        blob_uri: blob_uri.to_string(),
-        consensus_uri: consensus_uri.to_string(),
+        blob_uri: args.blob_uri,
+        consensus_uri: args.consensus_uri,
     };
     let (blob, consensus) = location.open_locations().await?;
-    // TODO(aljoscha): Add the option to create unreliable wrappers of blob and persist.
+    let unreliable = UnreliableHandle::default();
+    let should_happen = 1.0 - args.unreliability;
+    let should_timeout = args.unreliability;
+    unreliable.partially_available(should_happen, should_timeout);
+    let blob = Arc::new(UnreliableBlobMulti::new(blob, unreliable.clone()))
+        as Arc<dyn BlobMulti + Send + Sync>;
+    let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
+        as Arc<dyn Consensus + Send + Sync>;
     PersistClient::new(blob, consensus).await
 }
 
@@ -556,11 +564,10 @@ mod impls {
 
     use mz_ore::cast::CastFrom;
     use mz_ore::now::NowFn;
+    use mz_persist_client::read::ReadHandle;
+    use mz_persist_client::write::WriteHandle;
+    use mz_persist_client::Upper;
     use mz_persist_types::{Codec, Codec64};
-
-    use crate::r#impl::state::Upper;
-    use crate::read::ReadHandle;
-    use crate::write::WriteHandle;
 
     use super::api::{Batch, IteratedConsensus, Source, TimestampBindings, Timestamper};
     use super::retry_mut;
@@ -953,11 +960,11 @@ mod render {
     use tokio::sync::{mpsc, Mutex};
     use tracing::{error, trace};
 
+    use mz_persist_client::write::WriteHandle;
+    use mz_persist_client::Upper;
     use mz_persist_types::{Codec, Codec64};
 
-    use crate::examples::persistent_source_example::retry_mut;
-    use crate::r#impl::state::Upper;
-    use crate::write::WriteHandle;
+    use crate::source_example::retry_mut;
 
     use super::api::{Batch, Message, Source, TimestampedBatch, Timestamper};
 
@@ -1309,15 +1316,12 @@ mod render {
                     // All good!
                 }
                 Ok(Err(Upper(current_upper))) => {
-                    // This can happen when our append call manages to write the data but then
-                    // times out for some reason. I don't think we can differentiate between these
-                    // two cases:
-                    //  1) We messed up, and this is an actual usage error.
-                    //  2) We appended successfully, then timed out. When we retry, we get the
-                    //     usage error. We need to update this write handle's view of what the
-                    //     writers upper should be.
-
-                    write.upper = current_upper;
+                    // We messed up, and somehow constructed a batch that would
+                    // have left a hole in the shard.
+                    panic!(
+                        "emit.append: unrecoverable usage error: {:?}",
+                        current_upper
+                    );
                 }
                 Err(e) => {
                     panic!("emit.append: unrecoverable usage error: {:?}", e);
@@ -1339,9 +1343,8 @@ mod reader {
     use timely::progress::Antichain;
     use timely::PartialOrder;
 
+    use mz_persist_client::read::{ListenEvent, ReadHandle};
     use mz_persist_types::{Codec, Codec64};
-
-    use crate::read::{ListenEvent, ReadHandle};
 
     /// Spawns a persist consumer that reads from the given `ReadHandle`.
     pub async fn spawn_reader_pipeline<K, V, T>(

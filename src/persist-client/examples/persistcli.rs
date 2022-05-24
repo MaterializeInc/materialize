@@ -22,6 +22,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod maelstrom;
 pub mod open_loop;
+pub mod source_example;
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Persist command-line utilities", long_about = None)]
@@ -34,6 +35,7 @@ struct Args {
 enum Command {
     Maelstrom(crate::maelstrom::Args),
     OpenLoop(crate::open_loop::Args),
+    SourceExample(crate::source_example::Args),
 }
 
 fn main() {
@@ -54,6 +56,7 @@ fn main() {
     let res = match args.command {
         Command::Maelstrom(args) => crate::maelstrom::txn::run(args),
         Command::OpenLoop(args) => runtime.block_on(crate::open_loop::run(args)),
+        Command::SourceExample(args) => runtime.block_on(crate::source_example::run(args)),
     };
     if let Err(err) = res {
         eprintln!("error: {:#}", err);
