@@ -135,6 +135,10 @@ goes down, and vice versa.
 This approach guarantees that when a read completes, the global timestamp is equal to or larger than the timestamp of
 that read.
 
+We can still allow non-strict serializable reads to exist at the same time. The timestamps of these reads will not be
+constrained to the global timestamp and will be selected using the old method of timestamp selection. This will allow
+clients to trade off consistency for recency and performance on a per-query basis.
+
 ### Upstream Source Acknowledgements
 
 To achieve strict serializability of acknowledgements of upstream sources, acknowledgements should behave the same as a
@@ -226,3 +230,5 @@ This is fine and STORAGE can just ignore the ACK OK response.
   All read and write operations are atomic and idempotent so crashing/restarting will not leave the system in an
   intermediate or invalid state due to read/writes. However, DDLs are not idempotent or atomic. What happens if the
   system crashes in the middle of DDL? Some of this is being thought about by the command reconciliation work.
+- How does any of this work for non-realtime timelines?
+- Is it possible to mix non-strict serializable writes with strict serializable writes? I don't think so.
