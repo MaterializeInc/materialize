@@ -2698,22 +2698,6 @@ impl<S: Append> Catalog<S> {
                     });
                     actions
                 }
-                Op::UpdateItem { id, to_item } => {
-                    let entry = self.get_entry(&id);
-
-                    if !to_item.is_temporary() {
-                        let serialized_item = self.serialize_item(&to_item);
-                        tx.update_item(id, &entry.name().item, &serialized_item)?;
-                    }
-
-                    builtin_table_updates.extend(self.state.pack_item_update(id, -1));
-
-                    vec![Action::UpdateItem {
-                        id,
-                        to_name: entry.name().clone(),
-                        to_item,
-                    }]
-                }
             });
         }
 
@@ -3203,10 +3187,6 @@ pub enum Op {
         id: GlobalId,
         current_full_name: FullObjectName,
         to_name: String,
-    },
-    UpdateItem {
-        id: GlobalId,
-        to_item: CatalogItem,
     },
 }
 
