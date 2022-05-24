@@ -3887,6 +3887,24 @@ pub mod sinks {
         },
         Json,
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use mz_repr::proto::protobuf_roundtrip;
+        use proptest::prelude::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(32))]
+
+            #[test]
+            fn sink_desc_protobuf_roundtrip(expect in any::<SinkDesc<mz_repr::Timestamp>>()) {
+                let actual = protobuf_roundtrip::<_, ProtoSinkDesc>(&expect);
+                assert!(actual.is_ok());
+                assert_eq!(actual.unwrap(), expect);
+            }
+        }
+    }
 }
 
 /// An index storing processed updates so they can be queried
