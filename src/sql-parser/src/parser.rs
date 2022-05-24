@@ -2564,12 +2564,6 @@ impl<'a> Parser<'a> {
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
 
-        let replicas = if self.peek_keyword(REPLICA) {
-            self.parse_comma_separated(Parser::parse_inline_replica)?
-        } else {
-            vec![]
-        };
-
         let _ = self.parse_keyword(WITH);
         let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
             vec![]
@@ -2578,18 +2572,8 @@ impl<'a> Parser<'a> {
         };
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
-            replicas,
             options,
         }))
-    }
-
-    fn parse_inline_replica(&mut self) -> Result<ReplicaDefinition<Raw>, ParserError> {
-        self.expect_keyword(REPLICA)?;
-        let name = self.parse_identifier()?;
-        self.expect_token(&Token::LParen)?;
-        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
-        self.expect_token(&Token::RParen)?;
-        Ok(ReplicaDefinition { name, options })
     }
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
@@ -2616,20 +2600,29 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        self.expect_keyword(INTROSPECTION)?;
-        match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
-            DEBUGGING => {
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ClusterOption::IntrospectionDebugging(
-                    self.parse_with_option_value()?,
-                ))
+        match self.expect_one_of_keywords(&[REPLICA, INTROSPECTION])? {
+            REPLICA => {
+                let name = self.parse_identifier()?;
+                self.expect_token(&Token::LParen)?;
+                let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+                self.expect_token(&Token::RParen)?;
+                Ok(ClusterOption::Replica(ReplicaDefinition { name, options }))
             }
-            GRANULARITY => {
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ClusterOption::IntrospectionGranularity(
-                    self.parse_with_option_value()?,
-                ))
-            }
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+                DEBUGGING => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionDebugging(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                GRANULARITY => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionGranularity(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         }
     }

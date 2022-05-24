@@ -884,27 +884,12 @@ pub struct CreateClusterStatement<T: AstInfo> {
     pub name: Ident,
     /// The comma-separated options.
     pub options: Vec<ClusterOption<T>>,
-    /// Replicas to create alongside the cluster.
-    pub replicas: Vec<ReplicaDefinition<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER ");
         f.write_node(&self.name);
-        if !self.replicas.is_empty() {
-            f.write_str(" ");
-            let replica_defs = self
-                .replicas
-                .iter()
-                .map(|ReplicaDefinition { name, options }| {
-                    let options =
-                        itertools::join(options.iter().map(|o| o.to_ast_string_stable()), ", ");
-                    format!("REPLICA {name} ({options})")
-                })
-                .collect::<Vec<_>>();
-            f.write_str(itertools::join(replica_defs, ", "));
-        }
         if !self.options.is_empty() {
             f.write_str(" ");
             f.write_node(&display::comma_separated(&self.options));
@@ -920,6 +905,8 @@ pub enum ClusterOption<T: AstInfo> {
     IntrospectionGranularity(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
     IntrospectionDebugging(WithOptionValue<T>),
+    /// The `REPLICA` option.
+    Replica(ReplicaDefinition<T>),
 }
 
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
@@ -932,6 +919,13 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
             ClusterOption::IntrospectionDebugging(debugging) => {
                 f.write_str("INTROSPECTION DEBUGGING ");
                 f.write_node(debugging);
+            }
+            ClusterOption::Replica(replica) => {
+                f.write_str("REPLICA ");
+                f.write_node(&replica.name);
+                f.write_str(" (");
+                f.write_node(&display::comma_separated(&replica.options));
+                f.write_str(")");
             }
         }
     }
@@ -960,10 +954,8 @@ impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
         f.write_node(&self.of_cluster);
         f.write_str(".");
         f.write_node(&self.definition.name);
-        if !self.definition.options.is_empty() {
-            f.write_str(" ");
-            f.write_node(&display::comma_separated(&self.definition.options));
-        }
+        f.write_str(" ");
+        f.write_node(&display::comma_separated(&self.definition.options));
     }
 }
 impl_display_t!(CreateClusterReplicaStatement);

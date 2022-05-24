@@ -18,8 +18,8 @@ INSERT INTO test VALUES('a', 'b')
 statement ok
 CREATE CLUSTER test
   REPLICA replica_a (SIZE '1'),
-  REPLICA replica_b (SIZE '2')
-  WITH INTROSPECTION GRANULARITY '50 milliseconds'
+  REPLICA replica_b (SIZE '2'),
+  INTROSPECTION GRANULARITY '50 milliseconds'
 
 statement ok
 SET cluster = test
@@ -120,8 +120,8 @@ DROP CLUSTER test CASCADE
 
 statement ok
 CREATE CLUSTER test
-  REPLICA replica_a (SIZE '1')
-  WITH INTROSPECTION GRANULARITY 'off'
+  REPLICA replica_a (SIZE '1'),
+  INTROSPECTION GRANULARITY 'off'
 
 query error cannot read log sources on cluster with disabled introspection
 SELECT * FROM mz_materializations
