@@ -3406,6 +3406,55 @@ pub mod sinks {
         pub as_of: SinkAsOf<T>,
     }
 
+    impl Arbitrary for SinkDesc<mz_repr::Timestamp> {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (
+                any::<GlobalId>(),
+                any::<RelationDesc>(),
+                any::<SinkConnector>(),
+                any::<Option<SinkEnvelope>>(),
+                any::<SinkAsOf<mz_repr::Timestamp>>(),
+            )
+                .prop_map(|(from, from_desc, connector, envelope, as_of)| SinkDesc {
+                    from,
+                    from_desc,
+                    connector,
+                    envelope,
+                    as_of,
+                })
+                .boxed()
+        }
+    }
+
+    impl RustType<ProtoSinkDesc> for SinkDesc<mz_repr::Timestamp> {
+        fn into_proto(&self) -> ProtoSinkDesc {
+            ProtoSinkDesc {
+                from: Some(self.from.into_proto()),
+                from_desc: Some(self.from_desc.into_proto()),
+                connector: Some(self.connector.into_proto()),
+                envelope: self.envelope.into_proto(),
+                as_of: Some(self.as_of.into_proto()),
+            }
+        }
+
+        fn from_proto(proto: ProtoSinkDesc) -> Result<Self, TryFromProtoError> {
+            Ok(SinkDesc {
+                from: proto.from.into_rust_if_some("ProtoSinkDesc::from")?,
+                from_desc: proto
+                    .from_desc
+                    .into_rust_if_some("ProtoSinkDesc::from_desc")?,
+                connector: proto
+                    .connector
+                    .into_rust_if_some("ProtoSinkDesc::connector")?,
+                envelope: proto.envelope.into_rust()?,
+                as_of: proto.as_of.into_rust_if_some("ProtoSinkDesc::as_of")?,
+            })
+        }
+    }
+
     /// A stub for generating arbitrary [SinkDesc].
     /// Currently only produces the simplest instance of one.
     pub(super) fn any_sink_desc_stub() -> SinkDesc<mz_repr::Timestamp> {

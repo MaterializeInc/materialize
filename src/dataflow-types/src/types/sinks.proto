@@ -18,6 +18,14 @@ import "repr/src/relation_and_scalar.proto";
 
 package mz_dataflow_types.types.sinks;
 
+message ProtoSinkDesc {
+    mz_repr.global_id.ProtoGlobalId from = 1;
+    mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
+    ProtoSinkConnector connector = 3;
+    ProtoSinkEnvelope envelope = 4;
+    ProtoSinkAsOf as_of = 5;
+}
+
 message ProtoSinkEnvelope {
     oneof kind {
         google.protobuf.Empty debezium = 1;
