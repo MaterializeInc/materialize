@@ -20,8 +20,8 @@ use std::net::Shutdown;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant};
-use std::{env, thread};
 
 use chrono::{DateTime, Utc};
 use mz_ore::now::NowFn;
