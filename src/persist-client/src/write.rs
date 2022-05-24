@@ -13,7 +13,7 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -21,10 +21,11 @@ use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, BlobMulti, ExternalError, Indeterminate};
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
@@ -117,7 +118,7 @@ where
         updates: I,
         lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -127,15 +128,8 @@ where
         I: IntoIterator<Item = SB>,
     {
         trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
-
-        let batch = match self.batch(updates, lower.clone(), upper.clone()).await {
-            Ok(batch) => batch,
-            Err(invalid_usage) => return Ok(Err(invalid_usage)),
-        };
-
-        self.append_batch(batch, lower, upper)
-            .await
-            .map_err(ExternalError::from)
+        let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
+        self.append_batch(batch, lower, upper).await
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -252,17 +246,37 @@ where
         mut batch: Batch<K, V, T, D>,
         mut lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate> {
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>> {
         trace!("Batch::append lower={:?} upper={:?}", lower, upper);
 
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
             let res = self
                 .compare_and_append_batch(&mut batch, lower.clone(), upper.clone())
-                .await?;
+                .await;
+            // Unlike compare_and_append, the contract of append is constructed
+            // such that it's correct to retry Indeterminate errors.
+            // Specifically, compare_and_append can hit an Indeterminate error
+            // (but actually succeed). If we retried, then it would get a upper
+            // mismatch, which could lead to e.g. a txn double apply. Append, on
+            // the other hand, simply guarantees that the requested frontier
+            // bounds have been written.
+            let res = match res {
+                Ok(x) => x,
+                Err(err) => {
+                    info!(
+                        "external operation append::caa failed, retrying in {:?}: {}",
+                        retry.next_sleep(),
+                        err
+                    );
+                    retry = retry.sleep().await;
+                    continue;
+                }
+            };
             match res {
                 Ok(Ok(())) => {
                     self.upper = upper;
-                    return Ok(Ok(Ok(())));
+                    return Ok(Ok(()));
                 }
                 Ok(Err(current_upper)) => {
                     let Upper(current_upper) = current_upper;
@@ -273,7 +287,7 @@ where
 
                         batch.delete().await;
 
-                        return Ok(Ok(Err(Upper(current_upper))));
+                        return Ok(Err(Upper(current_upper)));
                     } else if PartialOrder::less_than(&current_upper, &upper) {
                         // Cut down the Description by advancing its lower to the current shard
                         // upper and try again. IMPORTANT: We can only advance the lower, meaning
@@ -291,13 +305,13 @@ where
                         // so we have to delete it here.
                         batch.delete().await;
 
-                        return Ok(Ok(Ok(())));
+                        return Ok(Ok(()));
                     }
                 }
                 Err(err) => {
                     batch.delete().await;
 
-                    return Ok(Err(err));
+                    return Err(err);
                 }
             }
         }
@@ -465,7 +479,6 @@ where
     {
         self.append(updates.iter(), lower.into(), new_upper.into())
             .await
-            .expect("external durability failed")
             .expect("invalid usage")
             .expect("unexpected upper");
     }

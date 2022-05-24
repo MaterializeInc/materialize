@@ -551,7 +551,7 @@ mod tests {
                 Antichain::from_elem(7),
             )
             .await;
-        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
+        assert_eq!(res, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
         assert_eq!(write.upper(), &Antichain::from_elem(3));
@@ -716,8 +716,7 @@ mod tests {
                 Antichain::from_elem(5),
                 Antichain::from_elem(6),
             )
-            .await
-            .expect("external error");
+            .await;
         assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Fixing the lower to make the write contiguous should make the append succeed.
@@ -974,7 +973,6 @@ mod tests {
                     write
                         .append_batch(batch, lower, upper)
                         .await
-                        .expect("external durability failed")
                         .expect("invalid usage")
                         .expect("unexpected upper");
                 }

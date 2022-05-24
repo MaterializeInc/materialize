@@ -509,7 +509,6 @@ mod raw_persist_benchmark {
                     write
                         .append_batch(batch, lower, upper)
                         .await
-                        .expect("external durability failed")
                         .expect("invalid usage")
                         .expect("unexpected upper");
                 }

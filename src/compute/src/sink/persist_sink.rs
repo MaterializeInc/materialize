@@ -153,7 +153,6 @@ where
                         .append(updates, write.upper().clone(), frontier.clone())
                         .await
                         .expect("cannot append updates")
-                        .expect("cannot append updates")
                         .expect("invalid/outdated upper");
 
                     stash.retain(|ts, _updates| frontier.less_equal(ts));

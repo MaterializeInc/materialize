@@ -957,14 +957,13 @@ mod render {
     use differential_dataflow::lattice::Lattice;
     use timely::progress::frontier::MutableAntichain;
     use timely::progress::{Antichain, ChangeBatch};
+    use timely::PartialOrder;
     use tokio::sync::{mpsc, Mutex};
     use tracing::{error, trace};
 
     use mz_persist_client::write::WriteHandle;
     use mz_persist_client::Upper;
     use mz_persist_types::{Codec, Codec64};
-
-    use crate::source_example::retry_mut;
 
     use super::api::{Batch, Message, Source, TimestampedBatch, Timestamper};
 
@@ -1287,10 +1286,8 @@ mod render {
             let target_upper = &mut target_upper;
             let initial_upper = &mut initial_upper;
 
-            let mut input = (&mut write, &stashed_batches);
-
-            println!("instance {}: initial_upper: {:?}", name, initial_upper);
-            let result = retry_mut("writer_append", &mut input, |(write, stashed_batches)| {
+            if PartialOrder::less_than(write.upper(), target_upper) {
+                println!("instance {}: initial_upper: {:?}", name, initial_upper);
                 let target_upper1 = target_upper.clone();
                 let updates = stashed_batches
                     .iter()
@@ -1305,26 +1302,38 @@ mod render {
                     .filter(move |(_update, ts)| initial_upper1.less_equal(ts))
                     .map(|(update, ts)| ((update, ()), ts, 1));
 
-                let fut = write.append(updates, write.upper().clone(), target_upper.clone());
-
-                Box::pin(fut)
-            })
-            .await;
-
-            match result {
-                Ok(Ok(_)) => {
-                    // All good!
+                let (size_hint, _) = updates.size_hint();
+                let mut builder = write.builder(size_hint, write.upper().clone());
+                for ((key, val), ts, diff) in updates {
+                    builder
+                        .add(key, &val, ts, &diff)
+                        .await
+                        .expect("invalid usage");
                 }
-                Ok(Err(Upper(current_upper))) => {
-                    // We messed up, and somehow constructed a batch that would
-                    // have left a hole in the shard.
-                    panic!(
-                        "emit.append: unrecoverable usage error: {:?}",
-                        current_upper
-                    );
-                }
-                Err(e) => {
-                    panic!("emit.append: unrecoverable usage error: {:?}", e);
+                let batch = builder
+                    .finish(target_upper.clone())
+                    .await
+                    .expect("invalid usage");
+
+                let result = write
+                    .append_batch(batch, write.upper().clone(), target_upper.clone())
+                    .await;
+
+                match result {
+                    Ok(Ok(_)) => {
+                        // All good!
+                    }
+                    Ok(Err(Upper(current_upper))) => {
+                        // We messed up, and somehow constructed a batch that would
+                        // have left a hole in the shard.
+                        panic!(
+                            "emit.append: unrecoverable usage error: {:?}",
+                            current_upper
+                        );
+                    }
+                    Err(e) => {
+                        panic!("emit.append: unrecoverable usage error: {:?}", e);
+                    }
                 }
             }
 
