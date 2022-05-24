@@ -983,9 +983,9 @@ fn test_github_12546() -> Result<(), Box<dyn Error>> {
         let (client, _conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
         assert_eq!(
             client
-                .query_one("SELECT 1::int4", &[])
+                .query_one("SELECT count(*) FROM test", &[])
                 .await?
-                .get::<_, i32>(0),
+                .get::<_, i64>(0),
             1,
         );
 
