@@ -221,6 +221,7 @@ class Composition:
             {
                 "mzdata": None,
                 "pgdata": None,
+                "mydata": None,
                 "tmp": None,
                 "secrets": None,
             }
