@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::process;
+#![allow(clippy::cast_precision_loss)]
+
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,7 +23,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::{PersistLocation, ShardId};
 
-use crate::api::{BenchmarkReader, BenchmarkWriter};
+use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
 /// Different benchmark configurations.
 #[derive(clap::ArgEnum, Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
@@ -35,12 +36,8 @@ enum BenchmarkType {
 }
 
 /// Open-loop benchmark for persistence.
-#[derive(clap::Parser)]
-struct Args {
-    /// Number of tokio worker threads.
-    #[clap(short, long, value_name = "T")]
-    tokio_worker_threads: Option<usize>,
-
+#[derive(Debug, clap::Parser)]
+pub struct Args {
     /// Number of writer instances.
     #[clap(long, value_name = "W", default_value_t = 1)]
     num_writers: usize,
@@ -58,7 +55,7 @@ struct Args {
     blob_uri: String,
 
     /// The type of benchmark to run
-    #[clap(arg_enum, long, required = true)]
+    #[clap(arg_enum, long, default_value_t = BenchmarkType::RawWriter)]
     benchmark_type: BenchmarkType,
 
     /// Runtime in seconds
@@ -88,30 +85,7 @@ struct Args {
 
 const MIB: u64 = 1024 * 1024;
 
-// TODO: Move this to be a subcommand of persistcli.
-fn main() {
-    mz_ore::test::init_logging();
-
-    let args: Args = mz_ore::cli::parse_args();
-
-    let mut tokio_builder = tokio::runtime::Builder::new_multi_thread();
-
-    tokio_builder.enable_all();
-
-    if let Some(tokio_worker_threads) = args.tokio_worker_threads {
-        info!("Tokio worker threads: {tokio_worker_threads}");
-        tokio_builder.worker_threads(tokio_worker_threads);
-    }
-
-    tokio_builder.build().unwrap().block_on(async {
-        if let Err(err) = run(mz_ore::cli::parse_args()).await {
-            eprintln!("persist_open_loop_benchmark: {:#}", err);
-            process::exit(1);
-        }
-    });
-}
-
-async fn run(args: Args) -> Result<(), anyhow::Error> {
+pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let location = PersistLocation {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
@@ -428,12 +402,13 @@ mod raw_persist_benchmark {
     use timely::progress::Antichain;
     use tokio::sync::mpsc::Sender;
 
+    use mz_ore::cast::CastFrom;
     use mz_persist::indexed::columnar::ColumnarRecords;
     use mz_persist_client::read::{Listen, ListenEvent};
     use mz_persist_client::{PersistClient, ShardId};
     use tokio::task::JoinHandle;
 
-    use crate::api::{BenchmarkReader, BenchmarkWriter};
+    use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
     pub async fn setup_raw_persist(
         persist: PersistClient,
@@ -583,7 +558,7 @@ mod raw_persist_benchmark {
 
             for event in events {
                 if let ListenEvent::Progress(t) = event {
-                    count = t.elements()[0] as usize;
+                    count = usize::cast_from(t.elements()[0]);
                 }
             }
 

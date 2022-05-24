@@ -34,7 +34,7 @@ use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{CachingBlobMulti, MaelstromBlobMulti, MaelstromConsensus};
 use crate::maelstrom::Args;
 
-pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(args: Args) -> Result<(), anyhow::Error> {
     let read = std::io::stdin();
     let write = std::io::stdout();
 
