@@ -2802,35 +2802,9 @@ pub fn describe_create_cluster(
 
 pub fn plan_create_cluster(
     _: &StatementContext,
-    CreateClusterStatement {
-        name,
-        options,
-        replicas,
-    }: CreateClusterStatement<Aug>,
+    CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let mut replicas_out = Vec::with_capacity(replicas.len());
-    for definition in replicas {
-        replicas_out.push((
-            normalize::ident(definition.name),
-            plan_replica_config(definition.options)?,
-        ));
-    }
-    Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
-        name: normalize::ident(name),
-        config: plan_cluster_options(options)?,
-        replicas: replicas_out,
-    }))
-}
-
-const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
-    micros: 1_000_000,
-    months: 0,
-    days: 0,
-};
-
-fn plan_cluster_options(
-    options: Vec<ClusterOption<Aug>>,
-) -> Result<Option<ComputeInstanceIntrospectionConfig>, anyhow::Error> {
+    let mut replicas = vec![];
     let mut introspection_debugging = None;
     let mut introspection_granularity = None;
 
@@ -2849,13 +2823,19 @@ fn plan_cluster_options(
                 introspection_granularity =
                     Some(with_option_type!(Some(interval), OptionalInterval));
             }
+            ClusterOption::Replica(replica) => {
+                replicas.push((
+                    normalize::ident(replica.name),
+                    plan_replica_config(replica.options)?,
+                ));
+            }
         }
     }
 
     let introspection_granularity =
         introspection_granularity.unwrap_or(Some(DEFAULT_INTROSPECTION_GRANULARITY));
 
-    Ok(match (introspection_debugging, introspection_granularity) {
+    let config = match (introspection_debugging, introspection_granularity) {
         (None | Some(false), None) => None,
         (debugging, Some(granularity)) => Some(ComputeInstanceIntrospectionConfig {
             debugging: debugging.unwrap_or(false),
@@ -2864,8 +2844,19 @@ fn plan_cluster_options(
         (Some(true), None) => {
             bail!("INTROSPECTION DEBUGGING cannot be specified without INTROSPECTION GRANULARITY")
         }
-    })
+    };
+    Ok(Plan::CreateComputeInstance(CreateComputeInstancePlan {
+        name: normalize::ident(name),
+        config,
+        replicas,
+    }))
 }
+
+const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
+    micros: 1_000_000,
+    months: 0,
+    days: 0,
+};
 
 fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig, anyhow::Error> {
     let mut remote_replicas = BTreeSet::new();

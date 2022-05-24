@@ -52,7 +52,7 @@ default
 
 # Test invalid option combinations.
 
-statement error Expected INTROSPECTION, found SIZE
+statement error Expected one of REPLICA or INTROSPECTION, found SIZE
 CREATE CLUSTER baz SIZE 'small'
 
 statement error only one of REMOTE or SIZE may be specified
@@ -189,13 +189,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234')) INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234')), INTROSPECTION GRANULARITY '1s'
 
 statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234')) INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICA r1 (REMOTE ('localhost:1234')), INTROSPECTION GRANULARITY '1s'
 
 statement ok
 DROP CLUSTER foo

@@ -1102,49 +1102,52 @@ CREATE CLUSTER cluster
 ----
 CREATE CLUSTER cluster
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [] })
 
 parse-statement
-CREATE CLUSTER cluster VIRTUAL
+CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s'
 ----
-error: Expected INTROSPECTION, found identifier "virtual"
-CREATE CLUSTER cluster VIRTUAL
-                       ^
+CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionGranularity(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster SIZE 'small'
+CREATE CLUSTER cluster INTROSPECTION GRANULARITY = '1s'
 ----
-error: Expected INTROSPECTION, found SIZE
-CREATE CLUSTER cluster SIZE 'small'
-                       ^
+CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s'
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionGranularity(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster SIZE = 'small'
+CREATE CLUSTER cluster WITH INTROSPECTION GRANULARITY = '1s'
+
+parse-statement
+CREATE CLUSTER cluster BADOPT
 ----
-error: Expected INTROSPECTION, found SIZE
-CREATE CLUSTER cluster SIZE = 'small'
-                       ^
+error: Expected end of statement, found identifier "parse"
+parse-statement
+^
 
 parse-statement
 CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
 ----
 CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replica(ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] })] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICA a SIZE '1'
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1')), INTROSPECTION GRANULARITY '1s', REPLICA b (SIZE '1')
 ----
-error: Expected left parenthesis, found SIZE
-CREATE CLUSTER cluster REPLICA a SIZE '1'
-                                 ^
+CREATE CLUSTER cluster REPLICA a (REMOTE ('host1')), INTROSPECTION GRANULARITY '1s', REPLICA b (SIZE '1')
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replica(ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }), IntrospectionGranularity(Value(String("1s"))), Replica(ReplicaDefinition { name: Ident("b"), options: [Size(Value(String("1")))] })] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
 ----
 CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [], replicas: [ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }, Size(Value(String("1")))] }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replica(ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }, Size(Value(String("1")))] })] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ('host1')
