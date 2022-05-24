@@ -177,6 +177,7 @@ allow-git = [
     # care about.
     "https://github.com/frankmcsherry/columnation",
     "https://github.com/TimelyDataflow/timely-dataflow",
+    "https://github.com/antiguru/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
     "https://github.com/fede1024/rust-rdkafka.git",
 ]
