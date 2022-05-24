@@ -56,7 +56,7 @@ pub(super) struct ComputeControllerState<T> {
 /// An immutable controller for a compute instance.
 #[derive(Debug, Copy, Clone)]
 pub struct ComputeController<'a, T> {
-    pub(super) _instance: ComputeInstanceId, // likely to be needed soon
+    pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a ComputeControllerState<T>,
     pub(super) storage_controller: &'a dyn StorageController<Timestamp = T>,
 }
@@ -180,6 +180,11 @@ impl<'a, T> ComputeController<'a, T>
 where
     T: Timestamp + Lattice,
 {
+    /// Returns this controller's compute instance ID.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance
+    }
+
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
     pub fn storage(&self) -> &dyn crate::client::controller::StorageController<Timestamp = T> {
@@ -202,7 +207,7 @@ where
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
         ComputeController {
-            _instance: self.instance,
+            instance: self.instance,
             storage_controller: self.storage_controller,
             compute: &self.compute,
         }

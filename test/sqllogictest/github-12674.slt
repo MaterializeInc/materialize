@@ -1,0 +1,33 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for https://github.com/MaterializeInc/materialize/issues/12674
+
+statement ok
+CREATE SOURCE test_source FROM PUBNUB
+  SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+  CHANNEL 'pubnub-market-orders'
+
+statement ok
+CREATE CLUSTER with_index REPLICA r (SIZE '1')
+
+statement ok
+CREATE CLUSTER without_index REPLICA r (SIZE '1')
+
+statement ok
+SET CLUSTER = with_index
+
+statement ok
+CREATE DEFAULT INDEX ON test_source
+
+statement ok
+SET cluster = without_index
+
+query error unable to automatically determine a query timestamp
+SELECT * FROM test_source

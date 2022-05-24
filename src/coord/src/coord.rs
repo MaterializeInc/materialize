@@ -3017,6 +3017,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // See: #11048.
         fn check_no_unmaterialized_sources<S: Append>(
             catalog: &Catalog<S>,
+            compute_instance: ComputeInstanceId,
             id_bundle: &CollectionIdBundle,
             session: &Session,
         ) -> Result<(), CoordError> {
@@ -3026,8 +3027,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 if entry.is_table() {
                     continue;
                 }
-                let mut indexes = catalog.state().get_indexes_on(*id).peekable();
-                if indexes.peek().is_none() {
+                let has_indexes = catalog
+                    .state()
+                    .get_indexes_on(*id, compute_instance)
+                    .any(|_| true);
+                if !has_indexes {
                     unmaterialized.push(
                         catalog
                             .resolve_full_name(entry.name(), Some(session.conn_id()))
@@ -3182,7 +3186,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = self
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
-            check_no_unmaterialized_sources(&self.catalog, &id_bundle, session)?;
+            check_no_unmaterialized_sources(&self.catalog, compute_instance, &id_bundle, session)?;
             let allowed_id_bundle = &self.txn_reads.get(&conn_id).unwrap().read_holds.id_bundle;
             // Find the first reference or index (if any) that is not in the transaction. A
             // reference could be caused by a user specifying an object in a different
@@ -3227,7 +3231,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 .index_oracle(compute_instance)
                 .sufficient_collections(&source_ids);
             if when == QueryWhen::Immediately {
-                check_no_unmaterialized_sources(&self.catalog, &id_bundle, session)?;
+                check_no_unmaterialized_sources(
+                    &self.catalog,
+                    compute_instance,
+                    &id_bundle,
+                    session,
+                )?;
             }
             self.determine_timestamp(session, &id_bundle, when, compute_instance)?
         };
