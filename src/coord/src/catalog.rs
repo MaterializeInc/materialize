@@ -340,13 +340,21 @@ impl CatalogState {
         self.entry_by_id.get(id)
     }
 
-    /// Returns all indexes on this object known in the catalog.
-    pub fn get_indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
+    /// Returns all indexes on the given object and compute instance known in
+    /// the catalog.
+    pub fn get_indexes_on(
+        &self,
+        id: GlobalId,
+        compute_instance: ComputeInstanceId,
+    ) -> impl Iterator<Item = (GlobalId, &Index)> {
+        let index_matches =
+            move |idx: &Index| idx.on == id && idx.compute_instance == compute_instance;
+
         self.get_entry(&id)
             .used_by()
             .iter()
             .filter_map(move |uses_id| match self.get_entry(uses_id).item() {
-                CatalogItem::Index(index) if index.on == id => Some((*uses_id, index)),
+                CatalogItem::Index(index) if index_matches(index) => Some((*uses_id, index)),
                 _ => None,
             })
     }

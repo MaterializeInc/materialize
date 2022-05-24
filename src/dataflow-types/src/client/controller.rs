@@ -347,7 +347,7 @@ impl<T> Controller<T> {
     pub fn compute(&self, instance: ComputeInstanceId) -> Option<ComputeController<T>> {
         let compute = self.compute.get(&instance)?;
         Some(ComputeController {
-            _instance: instance,
+            instance,
             compute,
             storage_controller: self.storage(),
         })
