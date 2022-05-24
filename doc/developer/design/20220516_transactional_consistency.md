@@ -66,7 +66,6 @@ The logic for determining what timestamp to return must satisfy:
 
 - If it's a read, then it is larger than or equal to the `since` of all objects involved in the query.
 - If it's a write, then it is larger than or equal to the `upper` of the table.
-- It is larger than or equal to the global timestamp
 - It is larger than or equal to the timestamp of the most recently completed query.
     - If the query is a write and the most recently completed query was a read, then the timestamp returned must be
       strictly larger than the previous timestamp.
@@ -143,10 +142,10 @@ To achieve strict serializability of acknowledgements of upstream sources, ackno
 write transaction. The data being acknowledged is the write of the transaction and the acknowledgement is the commit.
 Materialize therefore must satisfy the following properties:
 
-1. If data with a timestamp `ts` has been acknowledged, then all reads must have a timestamp greater than or equal
-   to `ts`.
-2. If data with a timestamp `ts` has not been acknowledged, then no read can have a timestamp greater than or equal
-   to `ts`.
+1. If data with a timestamp `ts` has been acknowledged by Materialize, then all reads must have a timestamp greater than
+   or equal to `ts`.
+2. If data with a timestamp `ts` has not been acknowledged by Materialize, then no read can have a timestamp greater
+   than or equal to `ts`.
 
 Property 1 prevents the following scenario: a client goes to an upstream source and sees that some data has been
 acknowledged by Materialize but then can't see that data in Materialize.
