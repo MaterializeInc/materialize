@@ -40,15 +40,19 @@ Here are the two definitions from `expr/src/foo/bar/mod.rs` to be used as a runn
 
 ```rust
 use chrono::NaiveDate;
+
 use mz_repr::adt::char::CharLength;
 
 // `$T` is a struct
-#[derive(Debug)]
 pub struct MyStruct {
     pub field_1: u64,
     pub field_2: usize,
     pub field_3: CharLength,
     pub field_4: NaiveDate,
+    pub field_5: Vec<CharLength>,
+    pub field_6: Vec<Vec<CharLength>>,
+    pub field_7: HashMap<GlobalId, NaiveDate>,
+    pub field_8: Vec<u64>,
 }
 
 // `$T` is an enum
@@ -70,14 +74,15 @@ The above examples also illustrate of the <a name="type-classes"></a>**classes o
   <li>Complex types that are not defined by us (such as <code>DateTime</code>).</li>
 </ol>
 
+In addition `MyStruct` has a number of fields whose types are containers of primitive or complex types (`Vec<_>`, `Vec<Vec<_>>`, `HashMap<_, _>`).
+
 The problem of encoding `$T` in a Protobuf-based binary format thereby decomposes into the problem of encoding instance of each of the above four classes.
 The following rules apply in general:
 
 - Types from [class (a)](#type-classes) are trivially represented by their existing Protobuf counterpart.
+- Types from [class (b)](#type-classes) only care about [implementation step (3)](#implementation-steps).
 - Types from [class (c)](#type-classes) are the primary focus of this guide.
-- Types from [class (b)](#type-classes) only care about [implementation step (3)](#implementation-steps), and types from [class (d)](#implementation-steps) don't care about [step (1)](#implementation-steps).
-- Types from [classes (b) or (d)](#type-classes) require a slightly different implementation mechanism for [step (3)](#implementation-steps) compared to types from [class (c)](#type-classes).
-  The [`chrono` types PR](https://github.com/MaterializeInc/materialize/pull/11801) is a good example of the latter.
+- Types from [class (d)](#type-classes) are handled exactly as types from [class (c)](#type-classes), except for [step (1)](#implementation-steps) which is not needed since the type is already externally defined.
 
 ## Defining a `Protobuf` message for `Proto$T`
 
@@ -95,10 +100,18 @@ package mz_expr.foo.bar;
 
 // `$T` is a struct
 message ProtoMyStruct {
+    message ProtoField7Entry {
+        mz_repr.global_id.ProtoGlobalId key = 1;
+        mz_repr.chrono.ProtoNaiveDate value = 2;
+    }
     uint64 field_1 = 1;
     uint64 field_2 = 2;
     mz_repr.adt.char.ProtoCharLength field_3 = 3;
     mz_repr.chrono.ProtoNaiveDate field_4 = 4;
+    repeated mz_repr.adt.char.ProtoCharLength field_5 = 5;
+    repeated mz_repr.adt.char.VecProtoCharLength field_6 = 6;
+    repeated ProtoField7Entry field_7 = 7;
+    repeated uint64 field_8 = 8;
 }
 
 // `$T` is an enum
@@ -147,48 +160,51 @@ include!(concat!(env!("OUT_DIR"), "/mz_expr.foo.bar.rs"));
 
 ## Implementing `$T ⇔ Proto$T` mappings
 
-For types from [class (b)](#type-classes), we need to implement [the `ProtoRepr` trait](https://dev.materialize.com/api/rust/mz_repr/proto/trait.ProtoRepr.html).
+For types from [classes (b), (c), and (d)](#type-classes), we need to implement [the `RustType` trait](https://dev.materialize.com/api/rust/mz_repr/proto/trait.RustType.html).
 Here is the implementation for `usize` for example.
-
-```rust
-impl ProtoRepr for usize {
-    type Repr = u64;
-
-    fn into_proto(self: Self) -> Self::Repr {
-        u64::cast_from(self)
-    }
-
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        usize::try_from(repr).map_err(|err| err.into())
-    }
-}
-```
-
-For types from [class (c)](#type-classes), we need to implement the `From<&$T> for Proto$T` and `TryFrom<Proto$T> for $T` traits.
 For example, here are the implementations for `MyStruct`
 
 ```rust
-impl From<&MyStruct> for ProtoMyStruct {
-    fn from(x: &MyStruct) -> Self {
+impl RustType<ProtoMyStruct> for MyStruct {
+    fn into_proto(&self) -> ProtoMyStruct {
         ProtoMyStruct {
-            field_1: x.field_1,
-            field_2: x.field_2.into_proto(),
-            field_3: Some((&x.field_3).into()),
-            field_4: Some((&x.field_4).into_proto()),
+            field_1: self.field_1,
+            field_2: self.field_2.into_proto(),
+            field_3: Some(self.field_3.into_proto()),
+            field_4: Some(self.field_4.into_proto()),
+            field_5: self.field_5.into_proto(),
+            field_6: self.field_6.into_proto(),
+            field_7: self.field_7.into_proto(),
+            field_8: self.field_8.into_proto(),
         }
+    }
+
+    fn from_proto(proto: ProtoMyStruct) -> Result<Self, TryFromProtoError> {
+        Ok(MyStruct {
+            field_1: proto.field_1,
+            field_2: proto.field_2.into_rust()?,
+            field_3: proto.field_3.into_rust_if_some("ProtoMyStruct::field_3")?,
+            field_4: proto.field_4.into_rust_if_some("ProtoMyStruct::field_4")?,
+            field_5: proto.field_5.into_rust()?,
+            field_6: proto.field_6.into_rust()?,
+            field_7: proto.field_7.into_rust()?,
+            field_8: proto.field_8.into_rust()?,
+        })
     }
 }
 
-impl TryFrom<ProtoMyStruct> for MyStruct {
-    type Error = TryFromProtoError;
+impl ProtoMapEntry<GlobalId, NaiveDate> for proto_my_struct::ProtoField7Entry {
+    fn from_rust<'a>(entry: (&'a GlobalId, &'a NaiveDate)) -> Self {
+        Self {
+            key: Some(entry.0.into_proto()),
+            value: Some(entry.1.into_proto()),
+        }
+    }
 
-    fn try_from(x: ProtoMyStruct) -> Result<Self, Self::Error> {
-        Ok(MyStruct {
-            field_1: x.field_1,
-            field_2: ProtoRepr::from_proto(x.field_2)?,
-            field_3: x.field_3.try_into_if_some("ProtoMyStruct::field_3")?,
-            field_4: x.field_4.from_proto_if_some("ProtoMyStruct::field_3")?,
-        })
+    fn into_rust(self) -> Result<(GlobalId, NaiveDate), TryFromProtoError> {
+        let key = self.key.into_rust_if_some("ProtoField7Entry::key")?;
+        let value = self.value.into_rust_if_some("ProtoField7Entry::value")?;
+        Ok((key, value))
     }
 }
 ```
@@ -196,69 +212,41 @@ impl TryFrom<ProtoMyStruct> for MyStruct {
 and `MyEnum`.
 
 ```rust
-impl From<&MyEnum> for ProtoMyEnum {
-    fn from(x: &MyEnum) -> Self {
+impl RustType<ProtoMyEnum> for MyEnum {
+    fn into_proto(&self) -> ProtoMyEnum {
         use proto_my_enum::Kind::*;
-        use proto_my_enum::*;
 
         ProtoMyEnum {
-            kind: Some(match x {
+            kind: Some(match self {
                 MyEnum::Var1(x) => Var1(x.clone()),
                 MyEnum::Var2(x) => Var2(x.into_proto()),
-                MyEnum::Var3(x) => Var3(x.into()),
+                MyEnum::Var3(x) => Var3(x.into_proto()),
                 MyEnum::Var4(x) => Var4(x.into_proto()),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoMyEnum> for MyEnum {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMyEnum) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoMyEnum) -> Result<Self, TryFromProtoError> {
         use proto_my_enum::Kind::*;
-        use proto_my_enum::*;
 
-        let kind = x
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoMyEnum::kind"))?;
 
         Ok(match kind {
             Var1(x) => MyEnum::Var1(x),
-            Var2(x) => MyEnum::Var2(ProtoRepr::from_proto(x)?),
-            Var3(x) => MyEnum::Var3(x.try_into()?),
-            Var4(x) => MyEnum::Var4(ProtoRepr::from_proto(x)?),
+            Var2(x) => MyEnum::Var2(x.into_rust()?),
+            Var3(x) => MyEnum::Var3(x.into_rust()?),
+            Var4(x) => MyEnum::Var4(x.into_rust()?),
         })
     }
 }
 ```
 
-For types from [class (d)](#type-classes), we need to implement [the `ProtoRepr` trait](https://dev.materialize.com/api/rust/mz_repr/proto/trait.ProtoRepr.html) as well.
-Here is the implementation for `NaiveDate` for example.
+Note that the trait needs to be implemented for all nested types as well, and [the `ProtoMapEntry` trait](https://dev.materialize.com/api/rust/mz_repr/proto/trait.ProtoMapEntry.html) needs to be implemented for types that represent encoded `~Map` entries (such as `proto_my_struct::ProtoField7Entry`).
 
-```rust
-impl ProtoRepr for NaiveDate {
-    type Repr = ProtoNaiveDate;
-
-    fn into_proto(self: Self) -> Self::Repr {
-        ProtoNaiveDate {
-            year: self.year(),
-            ordinal: self.ordinal(),
-        }
-    }
-
-    fn from_proto(repr: Self::Repr) -> Result<Self, TryFromProtoError> {
-        NaiveDate::from_yo_opt(repr.year, repr.ordinal).ok_or_else(|| {
-            TryFromProtoError::DateConversionError(format!(
-                "NaiveDate::from_yo_opt({},{}) failed",
-                repr.year, repr.ordinal
-            ))
-        })
-    }
-}
-```
-
-See also [Appendix B](#appendix-b-common-patterns-in-conversion-traits) for commonly used implementation patterns for various container types.
+Note the pre-existing implementations for [`RustType`](https://dev.materialize.com/api/rust/mz_repr/proto/trait.RustType.html).
+The blanket implementations allow seamless use of `into_proto()` and `into_rust()?` syntax for (possibly nested) container types as long as the element type implements `RustType`.
 
 ## Adding unit tests for `$T`
 
@@ -278,19 +266,36 @@ Here are the derive-based `Arbitrary` implementations for `MyStruct` and `MyEnum
 
 ```rust
 use chrono::NaiveDate;
+use proptest_derive::Arbitrary;
+
 use mz_repr::adt::char::CharLength;
 use mz_repr::chrono::any_naive_date;
 use mz_repr::proto::*;
-use proptest_derive::Arbitrary;
 
 // `$T` is a struct
-#[derive(Arbitrary, Debug, PartialEq, Eq, Hash)]
+#[derive(Arbitrary, Debug, PartialEq, Eq)]
 pub struct MyStruct {
     pub field_1: u64,
     pub field_2: usize,
     pub field_3: CharLength,
     #[proptest(strategy = "any_naive_date()")]
     pub field_4: NaiveDate,
+    #[proptest(strategy = "tiny_char_length_vec()")]
+    pub field_5: Vec<CharLength>,
+    #[proptest(strategy = "prop::collection::vec(tiny_char_length_vec(), 0..3)")]
+    pub field_6: Vec<Vec<CharLength>>,
+    #[proptest(strategy = "tiny_id_to_naive_date_map()")]
+    pub field_7: HashMap<GlobalId, NaiveDate>,
+    #[proptest(strategy = "prop::collection::vec(any::<u64>(), 0..20).boxed()")]
+    pub field_8: Vec<u64>,
+}
+
+fn tiny_char_length_vec() -> prop::strategy::BoxedStrategy<Vec<CharLength>> {
+    prop::collection::vec(any::<CharLength>(), 0..3).boxed()
+}
+
+fn tiny_id_to_naive_date_map() -> prop::strategy::BoxedStrategy<HashMap<GlobalId, NaiveDate>> {
+    prop::collection::hash_map(any::<GlobalId>(), any_naive_date(), 0..3).boxed()
 }
 
 // `$T` is an enum
@@ -323,8 +328,9 @@ Here are the tests for `MyStruct` and `MyEnum`.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
     use proptest::prelude::*;
+
+    use mz_repr::proto::protobuf_roundtrip;
 
     // snip
 
@@ -563,25 +569,3 @@ message Proto$T {
    <td valign=top></td>
   </tr>
 </table>
-
-## Appendix B: Common patterns in conversion traits
-
-To convert `x: Vec<&T>`:
-```rust
-x.vector.iter().map(Into::into).collect()
-```
-
-To convert from a `x: Vec<Proto$T>`:
-```rust
-x.vector.into_iter().map(TryFrom::try_from).collect::<Result<_,_>>()?
-```
-
-To convert an `x: Option<&T>`:
-```rust
-x.opt.as_ref().map(Into::into)
-```
-
-To convert from an `x: Option<&T>`:
-```rust
-x.opt.map(|x| x.try_into()).transpose()?
-```
