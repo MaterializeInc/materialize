@@ -3485,6 +3485,121 @@ pub mod sinks {
         pub config_options: BTreeMap<String, String>,
     }
 
+    proptest::prop_compose! {
+        fn any_kafka_sink_connector()(
+            addrs in any::<KafkaAddrs>(),
+            topic in any::<String>(),
+            topic_prefix in any::<String>(),
+            key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
+            relation_key_indices in any::<Option<Vec<usize>>>(),
+            value_desc in any::<RelationDesc>(),
+            published_schema_info in any::<Option<PublishedSchemaInfo>>(),
+            consistency in any::<Option<KafkaSinkConsistencyConnector>>(),
+            exactly_once in any::<bool>(),
+            transitive_source_dependencies in any::<Vec<GlobalId>>(),
+            fuel in any::<usize>(),
+            config_options in any::<BTreeMap<String, String>>(),
+        ) -> KafkaSinkConnector {
+            KafkaSinkConnector {
+                addrs,
+                topic,
+                topic_prefix,
+                key_desc_and_indices,
+                relation_key_indices,
+                value_desc,
+                published_schema_info,
+                consistency,
+                exactly_once,
+                transitive_source_dependencies,
+                fuel,
+                config_options,
+            }
+        }
+    }
+
+    impl Arbitrary for KafkaSinkConnector {
+        type Strategy = BoxedStrategy<Self>;
+        type Parameters = ();
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            any_kafka_sink_connector().boxed()
+        }
+    }
+
+    impl RustType<proto_kafka_sink_connector::ProtoKeyDescAndIndices> for (RelationDesc, Vec<usize>) {
+        fn into_proto(&self) -> proto_kafka_sink_connector::ProtoKeyDescAndIndices {
+            proto_kafka_sink_connector::ProtoKeyDescAndIndices {
+                desc: Some(self.0.into_proto()),
+                indices: self.1.into_proto(),
+            }
+        }
+
+        fn from_proto(
+            proto: proto_kafka_sink_connector::ProtoKeyDescAndIndices,
+        ) -> Result<Self, TryFromProtoError> {
+            Ok((
+                proto
+                    .desc
+                    .into_rust_if_some("ProtoKeyDescAndIndices::desc")?,
+                proto.indices.into_rust()?,
+            ))
+        }
+    }
+
+    impl RustType<proto_kafka_sink_connector::ProtoRelationKeyIndicesVec> for Vec<usize> {
+        fn into_proto(&self) -> proto_kafka_sink_connector::ProtoRelationKeyIndicesVec {
+            proto_kafka_sink_connector::ProtoRelationKeyIndicesVec {
+                relation_key_indices: self.into_proto(),
+            }
+        }
+
+        fn from_proto(
+            proto: proto_kafka_sink_connector::ProtoRelationKeyIndicesVec,
+        ) -> Result<Self, TryFromProtoError> {
+            proto.relation_key_indices.into_rust()
+        }
+    }
+
+    impl RustType<ProtoKafkaSinkConnector> for KafkaSinkConnector {
+        fn into_proto(&self) -> ProtoKafkaSinkConnector {
+            ProtoKafkaSinkConnector {
+                addrs: Some(self.addrs.into_proto()),
+                topic: self.topic.clone(),
+                topic_prefix: self.topic_prefix.clone(),
+                key_desc_and_indices: self.key_desc_and_indices.into_proto(),
+                relation_key_indices: self.relation_key_indices.into_proto(),
+                value_desc: Some(self.value_desc.into_proto()),
+                published_schema_info: self.published_schema_info.into_proto(),
+                consistency: self.consistency.into_proto(),
+                exactly_once: self.exactly_once,
+                transitive_source_dependencies: self.transitive_source_dependencies.into_proto(),
+                fuel: self.fuel.into_proto(),
+                config_options: self.config_options.clone().into_iter().collect(),
+            }
+        }
+
+        fn from_proto(proto: ProtoKafkaSinkConnector) -> Result<Self, TryFromProtoError> {
+            Ok(KafkaSinkConnector {
+                addrs: proto
+                    .addrs
+                    .into_rust_if_some("ProtoKafkaSinkConnector::addrs")?,
+                topic: proto.topic,
+                topic_prefix: proto.topic_prefix,
+                key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
+                relation_key_indices: proto.relation_key_indices.into_rust()?,
+                value_desc: proto
+                    .value_desc
+                    .into_rust_if_some("ProtoKafkaSinkConnector::addrs")?,
+                published_schema_info: proto.published_schema_info.into_rust()?,
+                consistency: proto.consistency.into_rust()?,
+                exactly_once: proto.exactly_once,
+                transitive_source_dependencies: proto.transitive_source_dependencies.into_rust()?,
+                fuel: proto.fuel.into_rust()?,
+                config_options: proto.config_options.into_iter().collect(),
+            })
+        }
+    }
+
     /// TODO(JLDLaughlin): Documentation.
     #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub struct PublishedSchemaInfo {

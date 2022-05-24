@@ -9,6 +9,10 @@
 
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
+import "kafka-util/src/addr.proto";
+import "repr/src/global_id.proto";
 import "repr/src/relation_and_scalar.proto";
 
 package mz_dataflow_types.types.sinks;
@@ -16,6 +20,30 @@ package mz_dataflow_types.types.sinks;
 message ProtoKafkaSinkConsistencyConnector {
     string topic = 1;
     int32 schema_id = 2;
+}
+
+message ProtoKafkaSinkConnector {
+    message ProtoKeyDescAndIndices {
+        mz_repr.relation_and_scalar.ProtoRelationDesc desc = 1;
+        repeated uint64 indices = 2;
+    }
+
+    message ProtoRelationKeyIndicesVec {
+        repeated uint64 relation_key_indices = 1;
+    }
+
+    mz_kafka_util.addr.ProtoKafkaAddrs addrs = 1;
+    string topic = 2;
+    string topic_prefix = 3;
+    ProtoKeyDescAndIndices key_desc_and_indices = 4;
+    ProtoRelationKeyIndicesVec relation_key_indices = 5;
+    mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
+    ProtoPublishedSchemaInfo published_schema_info = 7;
+    ProtoKafkaSinkConsistencyConnector consistency = 8;
+    bool exactly_once = 9;
+    repeated mz_repr.global_id.ProtoGlobalId transitive_source_dependencies = 10;
+    uint64 fuel = 11;
+    map<string, string> config_options = 12;
 }
 
 message ProtoPublishedSchemaInfo {
