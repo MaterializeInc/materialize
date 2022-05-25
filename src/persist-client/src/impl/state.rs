@@ -198,7 +198,14 @@ pub struct State<K, V, T, D> {
     seqno: SeqNo,
     collections: StateCollections<T>,
 
-    _phantom: PhantomData<(K, V, D)>,
+    // According to the docs, PhantomData is to "mark things that act like they
+    // own a T". State doesn't actually own K, V, or D, just the ability to
+    // produce them. Using the `fn() -> T` pattern gets us the same variance as
+    // T [1], but also allows State to correctly derive Send+Sync.
+    //
+    // [1]:
+    //     https://doc.rust-lang.org/nomicon/phantom-data.html#table-of-phantomdata-patterns
+    _phantom: PhantomData<fn() -> (K, V, D)>,
 }
 
 // Impl Clone regardless of the type params.
