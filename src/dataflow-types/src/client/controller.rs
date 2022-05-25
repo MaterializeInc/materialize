@@ -194,7 +194,7 @@ where
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
                 let client = RemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                compute_instance.add_replica(replica_id, client).await;
+                compute_instance.add_replica(replica_id, client);
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config,
@@ -272,8 +272,7 @@ where
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
                     .unwrap()
-                    .add_replica(replica_id, client)
-                    .await;
+                    .add_replica(replica_id, client);
             }
         }
 
