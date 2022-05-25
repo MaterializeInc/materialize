@@ -999,6 +999,7 @@ fn test_github_12546() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_linearizability() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 

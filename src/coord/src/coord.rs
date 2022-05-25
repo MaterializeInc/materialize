@@ -901,52 +901,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     // Group commit
                     if true && !self.pending_writes.is_empty() {
                         // if self.strict_serializability && !self.pending_writes.is_empty() {
-                        for (tx, mut session) in self
+                        for (tx, session) in self
                             .pending_writes
                             .drain(..)
                             .collect::<Vec<_>>()
                             .into_iter()
                         {
-                            let mut action = EndTransactionAction::Commit;
-                            // If the transaction has failed, we can only rollback.
-                            if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
-                                (&action, session.transaction())
-                            {
-                                action = EndTransactionAction::Rollback;
-                            }
-                            let response = ExecuteResponse::TransactionExited {
-                                tag: action.tag(),
-                                was_implicit: session.transaction().is_implicit(),
-                            };
-
-                            // Immediately do tasks that must be serialized in the coordinator.
-                            let rx = self
-                                .sequence_end_transaction_inner(&mut session, action)
-                                .await;
-
-                            // We can now wait for responses or errors and do any session/transaction
-                            // finalization in a separate task.
-                            let conn_id = session.conn_id();
-                            task::spawn(
-                                || format!("sequence_end_transaction:{conn_id}"),
-                                async move {
-                                    let result = match rx {
-                                        // If we have more work to do, do it
-                                        Ok(fut) => fut.await,
-                                        Err(e) => Err(e),
-                                    };
-
-                                    if result.is_err() {
-                                        action = EndTransactionAction::Rollback;
-                                    }
-                                    session.vars_mut().end_transaction(action);
-
-                                    match result {
-                                        Ok(()) => tx.send(Ok(response), session),
-                                        Err(err) => tx.send(Err(err), session),
-                                    }
-                                },
-                            );
+                            self.sequence_end_transaction_inner(
+                                tx,
+                                session,
+                                EndTransactionAction::Commit,
+                            )
+                            .await;
                         }
                     }
 
@@ -1658,7 +1624,7 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Some(idx) = self
                 .pending_writes
                 .iter()
-                .position(|(_tx, session)| session.conn_id() == conn_id)
+                .position(|(_, session)| session.conn_id() == conn_id)
             {
                 let (tx, session) = self.pending_writes.remove(idx);
                 tx.send(Ok(ExecuteResponse::Canceled), session);
@@ -3022,6 +2988,13 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         mut action: EndTransactionAction,
     ) {
+        // If the transaction has failed, we can only rollback.
+        if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
+            (&action, session.transaction())
+        {
+            action = EndTransactionAction::Rollback;
+        }
+
         if EndTransactionAction::Commit == action {
             let txn = session
                 .transaction()
@@ -3032,30 +3005,28 @@ impl<S: Append + 'static> Coordinator<S> {
                 ..
             } = txn
             {
+                guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
                 // if self.strict_serializability {
                 if true {
                     self.pending_writes.push((tx, session));
                     return;
                 }
-                guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
             }
         }
 
-        // If the transaction has failed, we can only rollback.
-        if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
-            (&action, session.transaction())
-        {
-            action = EndTransactionAction::Rollback;
-        }
-        let response = ExecuteResponse::TransactionExited {
-            tag: action.tag(),
-            was_implicit: session.transaction().is_implicit(),
-        };
-
-        // Immediately do tasks that must be serialized in the coordinator.
-        let rx = self
-            .sequence_end_transaction_inner(&mut session, action)
+        // Immediately do tasks that must be serialized in the coordinator and send
+        // response back to client.
+        self.sequence_end_transaction_inner(tx, session, action)
             .await;
+    }
+
+    async fn sequence_end_transaction_inner(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
+        mut action: EndTransactionAction,
+    ) {
+        let rx = self.end_transaction(&mut session, action).await;
 
         // We can now wait for responses or errors and do any session/transaction
         // finalization in a separate task.
@@ -3063,6 +3034,11 @@ impl<S: Append + 'static> Coordinator<S> {
         task::spawn(
             || format!("sequence_end_transaction:{conn_id}"),
             async move {
+                let response = ExecuteResponse::TransactionExited {
+                    tag: action.tag(),
+                    was_implicit: session.transaction().is_implicit(),
+                };
+
                 let result = match rx {
                     // If we have more work to do, do it
                     Ok(fut) => fut.await,
@@ -3082,7 +3058,7 @@ impl<S: Append + 'static> Coordinator<S> {
         );
     }
 
-    async fn sequence_end_transaction_inner(
+    async fn end_transaction(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
