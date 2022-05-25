@@ -108,7 +108,6 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -181,6 +180,7 @@ pub enum Message {
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
+    GroupCommit,
 }
 
 #[derive(Derivative)]
@@ -248,6 +248,12 @@ struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
     otel_ctx: OpenTelemetryContext,
+}
+
+struct PendingWriteTxn {
+    writes: Vec<WriteOp>,
+    sender: oneshot::Sender<Option<ExecuteResponse>>,
+    conn_id: u32,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -359,6 +365,8 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
+    /// Pending writes waiting for a group commit
+    pending_writes: Vec<PendingWriteTxn>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -736,17 +744,16 @@ impl<S: Append + 'static> Coordinator<S> {
             // tables). To address these, spawn a task that forces table timestamps to
             // close on a regular interval. This roughly tracks the behavior of realtime
             // sources that close off timestamps on an interval.
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "coordinator_advance_local_inputs", async move {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
-                loop {
-                    interval.tick().await;
-                    // If sending fails, the main thread has shutdown.
-                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
-                        break;
-                    }
-                }
-            });
+            self.spawn_periodic_msg(
+                "coordinator_advance_local_inputs",
+                tokio::time::Duration::from_millis(1_000),
+                || Message::AdvanceLocalInputs,
+            );
+            self.spawn_periodic_msg(
+                "group_commit",
+                tokio::time::Duration::from_millis(1),
+                || Message::GroupCommit,
+            );
         }
 
         loop {
@@ -796,12 +803,32 @@ impl<S: Append + 'static> Coordinator<S> {
                     // and advance inputs.
                     self.global_timeline.fast_forward(self.now());
                 }
+                Message::GroupCommit => {
+                    self.group_commit().await;
+                }
             }
 
             if let Some(timestamp) = self.global_timeline.should_advance_to() {
                 self.advance_local_inputs(timestamp).await;
             }
         }
+    }
+
+    fn spawn_periodic_msg<F>(&self, name: &str, duration: Duration, message: F)
+    where
+        F: Fn() -> Message + Send + 'static,
+    {
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| name, async move {
+            let mut interval = tokio::time::interval(duration);
+            loop {
+                interval.tick().await;
+                // If sending fails, the main thread has shutdown.
+                if internal_cmd_tx.send(message()).is_err() {
+                    break;
+                }
+            }
+        });
     }
 
     // Advance all local inputs (tables) to the current wall clock or at least
@@ -820,6 +847,42 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
+    }
+
+    async fn group_commit(&mut self) {
+        if !self.pending_writes.is_empty() {
+            let (timestamp, advance_to) = self.get_and_step_local_write_ts();
+            let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
+            for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
+                let writes = std::mem::take(writes);
+                for WriteOp { id, rows } in writes {
+                    // object may have been deleted while write was waiting
+                    if self.catalog.try_get_entry(&id).is_some() {
+                        let updates = rows
+                            .into_iter()
+                            .map(|(row, diff)| Update {
+                                row,
+                                diff,
+                                timestamp,
+                            })
+                            .collect::<Vec<_>>();
+                        appends.entry(id).or_default().extend(updates);
+                    }
+                }
+            }
+            let appends = appends
+                .into_iter()
+                .map(|(id, updates)| (id, updates, advance_to))
+                .collect();
+            self.dataflow_client
+                .storage_mut()
+                .append(appends)
+                .await
+                .unwrap();
+            for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
+                let _ = tx.send(None);
+            }
+        }
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1502,7 +1565,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 return;
             }
 
-            // Cancel deferred writes. There is at most one pending write per session.
+            // Cancel pending writes. There is at most one pending write per session.
+            if let Some(idx) = self.pending_writes.iter().position(
+                |PendingWriteTxn {
+                     conn_id: txn_conn_id,
+                     ..
+                 }| *txn_conn_id == conn_id,
+            ) {
+                let PendingWriteTxn { sender, .. } = self.pending_writes.remove(idx);
+                let _ = sender.send(Some(ExecuteResponse::Canceled));
+            }
+
+            // Cancel deferred writes. There is at most one deferred write per session.
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
@@ -2921,7 +2995,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 session.vars_mut().end_transaction(action);
 
                 match result {
-                    Ok(()) => tx.send(Ok(response), session),
+                    Ok(None) => tx.send(Ok(response), session),
+                    Ok(Some(response)) => tx.send(Ok(response), session),
                     Err(err) => tx.send(Err(err), session),
                 }
             },
@@ -2932,55 +3007,34 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<impl Future<Output = Result<(), CoordError>>, CoordError> {
+    ) -> Result<impl Future<Output = Result<Option<ExecuteResponse>, CoordError>>, CoordError> {
         let txn = self.clear_transaction(session).await;
 
-        // Although the compaction frontier may have advanced, we do not need to
-        // call `maintenance` here because it will soon be called after the next
-        // `update_upper`.
+        let mut write_rx = None;
 
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 match ops {
-                    TransactionOps::Writes(inserts) => {
-                        // Although the transaction has a wall_time in its pcx, we use a new
-                        // coordinator timestamp here to provide linearizability. The wall_time does
-                        // not have to relate to the write time.
-                        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
-                        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-
-                        for WriteOp { id, rows } in inserts {
+                    TransactionOps::Writes(writes) => {
+                        for WriteOp { id, .. } in &writes {
                             // Re-verify this id exists.
                             let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
                                 CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
                             })?;
-                            // This can be empty if, say, a DELETE's WHERE clause had 0 results.
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            let updates = rows
-                                .into_iter()
-                                .map(|(row, diff)| Update {
-                                    row,
-                                    diff,
-                                    timestamp,
-                                })
-                                .collect::<Vec<_>>();
-                            appends.entry(id).or_default().extend(updates);
                         }
 
-                        match appends.len() {
-                            1 => {
-                                let (id, updates) = appends.into_element();
-                                self.dataflow_client
-                                    .storage_mut()
-                                    .append(vec![(id, updates, advance_to)])
-                                    .await
-                                    .unwrap();
-                            },
-                            0 => {},
-                            _ => unreachable!("multi-table write transaction should fail immediately when the second table is added to the transaction"),
-                        }
+                        // This can be empty if, say, a DELETE's WHERE clause had 0 results.
+                        let writes = writes
+                            .into_iter()
+                            .filter(|WriteOp { rows, .. }| !rows.is_empty())
+                            .collect();
+                        let (tx, rx) = oneshot::channel();
+                        write_rx = Some(rx);
+                        self.pending_writes.push(PendingWriteTxn {
+                            writes,
+                            sender: tx,
+                            conn_id: session.conn_id(),
+                        });
                     }
                     TransactionOps::Secrets(secrets) => {
                         self.secrets_controller.apply(secrets).await?
@@ -2989,7 +3043,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
         }
-        Ok(async move { Ok(()) })
+        Ok(async move {
+            if let Some(rx) = write_rx {
+                Ok(rx.await?)
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
@@ -4949,6 +5009,7 @@ pub async fn serve<S: Append + 'static>(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
+                pending_writes: Vec::new(),
                 secrets_controller,
                 secrets_reader,
                 replica_sizes,
