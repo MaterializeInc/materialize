@@ -563,7 +563,7 @@ fn thin(key_indices: &BTreeMap<usize, usize>, value: &Row, row_buf: &mut Row) ->
     row_buf.clone()
 }
 
-/// `rehydrate` uses information from the source description to find which indexes in the row
+/// `rehydrate` uses information from the source description to find which indices in the row
 /// are keys and add them back in in the right places.
 fn rehydrate(
     key_indices: &BTreeMap<usize, usize>,
