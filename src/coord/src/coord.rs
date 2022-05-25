@@ -3606,7 +3606,8 @@ impl<S: Append + 'static> Coordinator<S> {
         if when.advance_to_since() {
             candidate.advance_by(since.borrow());
         }
-        let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
+        // let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
+        let uses_tables = false;
         if when.advance_to_table_ts(uses_tables) {
             candidate.join_assign(&self.get_local_read_ts());
         }
