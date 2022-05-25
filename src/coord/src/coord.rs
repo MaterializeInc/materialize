@@ -658,6 +658,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        // TODO(jkosh44) Take a read holds at the start
         // if self.strict_serializability {
         // TODO(jkosh44)
         // if true {
@@ -864,7 +865,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         let now = if timeline == &Timeline::EpochMilliseconds {
                             realtime_now
                         } else {
-                            // TODO(jkosh44)
                             timestamp_oracle.read_ts()
                         };
 
@@ -2460,6 +2460,24 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
                 if let Some((df, compute_instance)) = df {
                     self.ship_dataflow(df, compute_instance).await;
+                }
+
+                // TODO this should just add to existing timeline if it's already there
+                if !self
+                    .global_timeline
+                    .contains_key(&source.connector.timeline())
+                {
+                    //TODO(jkosh44) Can we get a better value for
+                    let oracle = timeline::TimestampOracle::new(Timestamp::minimum(), || {
+                        Timestamp::minimum()
+                    });
+                    let read_holds = ReadHolds {
+                        time: Timestamp::minimum(),
+                        id_bundle: Default::default(),
+                        compute_instance: None,
+                    };
+                    self.global_timeline
+                        .insert(source.connector.timeline(), (oracle, read_holds));
                 }
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
@@ -5602,7 +5620,7 @@ pub mod read_holds {
     pub(super) struct ReadHolds<T> {
         pub(super) time: T,
         pub(super) id_bundle: CollectionIdBundle,
-        // TODO(jkosh44) remore None
+        // TODO(jkosh44) remove None
         pub(super) compute_instance: Option<ComputeInstanceId>,
     }
 
