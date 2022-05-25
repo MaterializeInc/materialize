@@ -20,10 +20,12 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
+use mz_ore::task::RuntimeExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info, trace, warn};
+use tokio::runtime::Handle;
+use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -373,6 +375,10 @@ where
 pub struct ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
+    // These are only here so we can use them in the auto-expiring `Drop` impl.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
 {
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
@@ -588,6 +594,13 @@ where
     }
 
     /// Politely expires this reader, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop to expire a reader that wasn't
+    /// explictly expired with this method. When possible, explicit expiry is
+    /// still preferred because the Drop one is best effort and is dependant on
+    /// a tokio [Handle] being available in the TLC at the time of drop (which
+    /// is a bit subtle). Also, explicit expiry allows for control over when it
+    /// happens.
     pub async fn expire(mut self) {
         trace!("ReadHandle::expire");
         self.machine.expire_reader(&self.reader_id).await;
@@ -616,20 +629,33 @@ where
 impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
+    // These are only here so we can use them in this auto-expiring `Drop` impl.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {
             return;
         }
-        // Adding explicit expiration everywhere in tests would either make the
-        // code noisy or the logs spammy, so downgrade this message.
-        if cfg!(test) {
-            debug!(
-                "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
-                self.reader_id
-            );
-        } else {
-            warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
-        }
+        let handle = match Handle::try_current() {
+            Ok(x) => x,
+            Err(_) => {
+                warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+                return;
+            }
+        };
+        let mut machine = self.machine.clone();
+        let reader_id = self.reader_id.clone();
+        // Spawn a best-effort task to expire this read handle. It's fine if
+        // this doesn't run to completion, we'd just have to wait out the lease
+        // before the shard-global since is unblocked.
+        let _ = handle.spawn_named(
+            || format!("ReadHandle::expire ({})", self.reader_id),
+            async move {
+                trace!("ReadHandle::expire");
+                machine.expire_reader(&reader_id).await;
+            },
+        );
     }
 }
