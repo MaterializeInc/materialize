@@ -1781,6 +1781,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
+name = "force-send-sync"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d9188d4e883c054455b2c7950be30c54b11d7400f0a8562b74a4acd79c495b6"
+
+[[package]]
 name = "foreign-types"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3592,7 +3598,9 @@ dependencies = [
  "bytes",
  "clap",
  "criterion",
+ "derivative",
  "differential-dataflow",
+ "force-send-sync",
  "futures",
  "futures-task",
  "futures-util",

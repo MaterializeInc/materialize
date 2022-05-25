@@ -12,8 +12,10 @@ use std::convert::Infallible;
 use std::marker::PhantomData;
 use std::ops::{ControlFlow, ControlFlow::Break, ControlFlow::Continue};
 
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use force_send_sync::SendSync;
 use mz_persist::location::SeqNo;
 use mz_persist_types::{Codec, Codec64};
 use serde::{Deserialize, Serialize};
@@ -191,14 +193,16 @@ where
 }
 
 // TODO: Document invariants.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct State<K, V, T, D> {
     shard_id: ShardId,
 
     seqno: SeqNo,
     collections: StateCollections<T>,
 
-    _phantom: PhantomData<(K, V, D)>,
+    #[derivative(Debug = "ignore")]
+    _phantom: SendSync<PhantomData<(K, V, D)>>,
 }
 
 // Impl Clone regardless of the type params.
@@ -208,7 +212,9 @@ impl<K, V, T: Clone, D> Clone for State<K, V, T, D> {
             shard_id: self.shard_id.clone(),
             seqno: self.seqno.clone(),
             collections: self.collections.clone(),
-            _phantom: self._phantom.clone(),
+            // SAFATΥ: These phantom types are only held to validate the metadata during
+            // serialization and values of those types are never produced
+            _phantom: unsafe { SendSync::new(PhantomData) },
         }
     }
 }
@@ -229,7 +235,9 @@ where
                 since: Antichain::from_elem(T::minimum()),
                 trace: Vec::new(),
             },
-            _phantom: PhantomData,
+            // SAFATΥ: These phantom types are only held to validate the metadata during
+            // serialization and values of those types are never produced
+            _phantom: unsafe { SendSync::new(PhantomData) },
         }
     }
 
@@ -264,7 +272,9 @@ where
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
             collections: self.collections.clone(),
-            _phantom: PhantomData,
+            // SAFATΥ: These phantom types are only held to validate the metadata during
+            // serialization and values of those types are never produced
+            _phantom: unsafe { SendSync::new(PhantomData) },
         };
         let work_ret = work_fn(new_state.seqno, &mut new_state.collections)?;
         Continue((work_ret, new_state))
@@ -359,6 +369,7 @@ mod codec_impls {
 
     use differential_dataflow::lattice::Lattice;
     use differential_dataflow::trace::Description;
+    use force_send_sync::SendSync;
     use mz_persist_types::{Codec, Codec64};
     use timely::progress::{Antichain, Timestamp};
 
@@ -484,7 +495,9 @@ mod codec_impls {
                 shard_id: x.shard_id,
                 seqno: x.seqno,
                 collections,
-                _phantom: PhantomData,
+                // SAFATΥ: These phantom types are only held to validate the metadata during
+                // serialization and values of those types are never produced
+                _phantom: unsafe { SendSync::new(PhantomData) },
             })
         }
     }

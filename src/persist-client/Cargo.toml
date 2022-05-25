@@ -33,9 +33,11 @@ async-trait = "0.1.0"
 bincode = "1.3.3"
 bytes = "1.1.0"
 clap = { version = "3.1.18", features = ["derive", "env"] }
+derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
 futures-util = "0.3"
+force-send-sync = "1"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist = { path = "../persist" }

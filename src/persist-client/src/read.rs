@@ -26,6 +26,7 @@ use timely::PartialOrder;
 use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
+use mz_ore::task::RuntimeExt;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::BlobMulti;
 use mz_persist::retry::Retry;
@@ -372,7 +373,10 @@ where
 #[derive(Debug)]
 pub struct ReadHandle<K, V, T, D>
 where
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
 {
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
@@ -615,21 +619,36 @@ where
 
 impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
 where
+    K: Debug + Codec,
+    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {
             return;
         }
-        // Adding explicit expiration everywhere in tests would either make the
-        // code noisy or the logs spammy, so downgrade this message.
-        if cfg!(test) {
-            debug!(
-                "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
-                self.reader_id
-            );
-        } else {
-            warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let mut machine = self.machine.clone();
+                let reader_id = self.reader_id.clone();
+                handle.spawn_named(|| "ReadHandle::expire ({reader_id})", async move {
+                    trace!("ReadHandle::expire");
+                    machine.expire_reader(&reader_id).await;
+                });
+            }
+            Err(_) => {
+                // Adding explicit expiration everywhere in tests would either make the
+                // code noisy or the logs spammy, so downgrade this message.
+                if cfg!(test) {
+                    debug!(
+                        "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
+                        self.reader_id
+                    );
+                } else {
+                    warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+                }
+            }
         }
     }
 }
