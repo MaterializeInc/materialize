@@ -19,6 +19,7 @@ use mz_ore::task;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_types::Codec64;
 
 use crate::{bench_all_clients, load};
 
@@ -138,12 +139,12 @@ async fn bench_write_to_listen_one_iter(
     for batch in data.batches() {
         batch_count += 1;
         let max_ts = match batch.get(batch.len() - 1) {
-            Some((_, max_ts, _)) => max_ts,
+            Some((_, max_ts, _)) => u64::decode(max_ts),
             None => continue,
         };
         let updates = batch
             .iter()
-            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d));
+            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), u64::decode(t), i64::decode(d)));
         write
             .compare_and_append(
                 updates,

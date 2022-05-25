@@ -30,6 +30,20 @@ use crate::indexed::encoding::{
 };
 
 /// The Arrow schema we use to encode ((K, V), T, D) tuples.
+///
+/// Both Time and Diff are presented externally to persist users as a type
+/// parameter that implements [mz_persist_types::Codec64]. Our columnar format
+/// intentionally stores them both as i64 columns (as opposed to something like
+/// a fixed width binary column) because this allows us additional compression
+/// options.
+///
+/// Also note that we intentionally use an i64 over a u64 for Time. Over the
+/// range `[0, i64::MAX]`, the bytes are the same and we've talked at various
+/// times about changing Time in mz to an i64. Both millis since unix epoch and
+/// nanos since unix epoch easily fit into this range (the latter until some
+/// time after year 2200). Using a i64 might be a pessimization for a
+/// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
+/// u64::MAX]`, but realtime sources are overwhelmingly the common case.
 pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
     Arc::new(Schema::from(vec![
         Field {
@@ -46,7 +60,7 @@ pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
         },
         Field {
             name: "t".into(),
-            data_type: DataType::UInt64,
+            data_type: DataType::Int64,
             is_nullable: false,
             metadata: BTreeMap::new(),
         },
@@ -156,7 +170,7 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Arc<dyn Array>> {
             None,
         )),
         Arc::new(PrimitiveArray::from_data(
-            DataType::UInt64,
+            DataType::Int64,
             x.timestamps.clone(),
             None,
         )),
@@ -196,7 +210,7 @@ pub fn decode_arrow_batch_kvtd(x: &Chunk<Arc<dyn Array>>) -> Result<ColumnarReco
     let val_data = val_array.values().clone();
     let timestamps = ts_col
         .as_any()
-        .downcast_ref::<PrimitiveArray<u64>>()
+        .downcast_ref::<PrimitiveArray<i64>>()
         .ok_or(format!("column 2 doesn't match schema"))?
         .values()
         .clone();

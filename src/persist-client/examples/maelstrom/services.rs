@@ -91,7 +91,6 @@ impl Consensus for MaelstromConsensus {
         _deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        // TODO: Use the deadline.
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("consensus/{}", key)))
@@ -127,7 +126,6 @@ impl Consensus for MaelstromConsensus {
         };
         let new = MaelstromVersionedData::from(new);
         let to = Value::from(&new);
-        // TODO: Use the deadline.
         let cas_res = self
             .handle
             .lin_kv_compare_and_set(
@@ -193,7 +191,6 @@ impl MaelstromBlobMulti {
 #[async_trait]
 impl BlobMulti for MaelstromBlobMulti {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        // TODO: Use the deadline.
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("blob/{}", key)))
@@ -225,7 +222,6 @@ impl BlobMulti for MaelstromBlobMulti {
         // lin_kv_write is always atomic, so we're free to ignore the atomic
         // param.
         let value = serde_json::to_string(&value).expect("failed to serialize value");
-        // TODO: Use the deadline.
         self.handle
             .lin_kv_write(Value::from(format!("blob/{}", key)), Value::from(value))
             .await

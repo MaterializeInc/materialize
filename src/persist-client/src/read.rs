@@ -111,84 +111,27 @@ where
     /// An None value is returned if this iterator is exhausted.
     pub async fn next(&mut self) -> Option<Vec<((Result<K, String>, Result<V, String>), T, D)>> {
         trace!("SnapshotIter::next");
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
-            let (key, desc) = match self.batches.last() {
-                Some(x) => x.clone(),
+            let (key, desc) = match self.batches.pop() {
+                Some(x) => x,
                 // All done!
                 None => return None,
             };
-            let value = loop {
-                // TODO: Deduplicate this with the logic in Listen.
-                let value = retry_external("snap_next::get", || async {
-                    self.blob.get(Instant::now() + FOREVER, &key).await
-                })
-                .await;
-                match value {
-                    Some(x) => break x,
-                    // If the underlying impl of blob isn't linearizable, then we
-                    // might get a key reference that that blob isn't returning yet.
-                    // Keep trying, it'll show up. The deadline will eventually bail
-                    // us out of this loop if something has gone wrong internally.
-                    //
-                    // TODO: This should increment a counter.
-                    None => {
-                        info!(
-                            "unexpected missing blob, trying again in {:?}: {}",
-                            retry.next_sleep(),
-                            key
-                        );
-                        retry = retry.sleep().await;
-                        continue;
-                    }
-                };
-            };
 
-            // Now that we've successfully gotten the batch, we can remove it
-            // from the list. We wait until now to keep this method idempotent
-            // for retries.
-            //
-            // TODO: Restructure this loop so this is more obviously correct.
-            let (key1, desc1) = self.batches.pop().expect("known to exist");
-            assert_eq!(key1, key);
-            assert_eq!(desc1, desc);
-
-            let batch_part = BlobTraceBatchPart::decode(&value)
-                .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
-                // We received a State that we couldn't decode. This could
-                // happen if persist messes up backward/forward compatibility,
-                // if the durable data was corrupted, or if operations messes up
-                // deployment. In any case, fail loudly.
-                .expect("internal error: invalid encoded state");
-            let mut ret = Vec::new();
-            for chunk in batch_part.updates {
-                for ((k, v), t, d) in chunk.iter() {
-                    // TODO: Get rid of the to_le_bytes.
-                    let mut t = T::decode(t.to_le_bytes());
-                    if self.as_of.less_than(&t) {
-                        // This happens to be in the batch, but it would get
-                        // covered by a listen started at the same as_of.
-                        continue;
-                    }
-                    if !desc.lower().less_equal(&t) {
-                        continue;
-                    }
-                    if desc.upper().less_equal(&t) {
-                        continue;
-                    }
+            let updates = fetch_batch_part(self.blob.as_ref(), &key, &desc, |t| {
+                // This would get covered by a listen started at the same as_of.
+                let keep = !self.as_of.less_than(&t);
+                if keep {
                     t.advance_by(self.as_of.borrow());
-                    let k = K::decode(k);
-                    let v = V::decode(v);
-                    // TODO: Get rid of the to_le_bytes.
-                    let d = D::decode(d.to_le_bytes());
-                    ret.push(((k, v), t, d));
                 }
-            }
-            if ret.is_empty() {
+                keep
+            })
+            .await;
+            if updates.is_empty() {
                 // We might have filtered everything.
                 continue;
             }
-            return Some(ret);
+            return Some(updates);
         }
     }
 }
@@ -261,7 +204,15 @@ where
         trace!("Listen::next");
 
         let (batch_keys, desc) = self.machine.next_listen_batch(&self.frontier).await;
-        let updates = self.fetch_batch(&batch_keys, &desc).await;
+        let mut updates = Vec::new();
+        for key in batch_keys.iter() {
+            let mut updates_part = fetch_batch_part(self.blob.as_ref(), key, &desc, |t| {
+                // This would get covered by a snapshot started at the same as_of.
+                self.as_of.less_than(&t)
+            })
+            .await;
+            updates.append(&mut updates_part);
+        }
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
@@ -280,72 +231,6 @@ where
         while self.frontier.less_than(ts) {
             let mut next = self.next().await;
             ret.append(&mut next);
-        }
-        ret
-    }
-
-    async fn fetch_batch(
-        &self,
-        keys: &[String],
-        desc: &Description<T>,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
-        let mut ret = Vec::new();
-        for key in keys {
-            // TODO: Deduplicate this with the logic in SnapshotIter.
-            let value = loop {
-                let value = retry_external("listen_fetch::get", || async {
-                    self.blob.get(Instant::now() + FOREVER, &key).await
-                })
-                .await;
-                match value {
-                    Some(x) => break x,
-                    // If the underlying impl of blob isn't linearizable, then we
-                    // might get a key reference that that blob isn't returning yet.
-                    // Keep trying, it'll show up. The deadline will eventually bail
-                    // us out of this loop if something has gone wrong internally.
-                    //
-                    // TODO: This should increment a counter.
-                    None => {
-                        info!(
-                            "unexpected missing blob, trying again in {:?}: {}",
-                            retry.next_sleep(),
-                            key
-                        );
-                        retry = retry.sleep().await;
-                    }
-                };
-            };
-            let batch = BlobTraceBatchPart::decode(&value)
-                .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
-                // We received a State that we couldn't decode. This could
-                // happen if persist messes up backward/forward compatibility,
-                // if the durable data was corrupted, or if operations messes up
-                // deployment. In any case, fail loudly.
-                .expect("internal error: invalid encoded state");
-            for chunk in batch.updates {
-                for ((k, v), t, d) in chunk.iter() {
-                    // TODO: Get rid of the to_le_bytes.
-                    let t = T::decode(t.to_le_bytes());
-                    if !self.as_of.less_than(&t) {
-                        // This happens to be in the batch, but it
-                        // would get covered by a snapshot started
-                        // at the same as_of.
-                        continue;
-                    }
-                    if !desc.lower().less_equal(&t) {
-                        continue;
-                    }
-                    if desc.upper().less_equal(&t) {
-                        continue;
-                    }
-                    let k = K::decode(k);
-                    let v = V::decode(v);
-                    // TODO: Get rid of the to_le_bytes.
-                    let d = D::decode(d.to_le_bytes());
-                    ret.push(((k, v), t, d));
-                }
-            }
         }
         ret
     }
@@ -432,10 +317,6 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
     pub async fn listen(&self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
         trace!("ReadHandle::listen as_of={:?}", as_of);
         if PartialOrder::less_than(&as_of, &self.since) {
@@ -465,10 +346,6 @@ where
     /// immediately consuming it from a single place. If you need to parallelize
     /// snapshot iteration (potentially from multiple machines), see
     /// [Self::snapshot_splits] and [Self::snapshot_iter].
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
     pub async fn snapshot(
         &self,
         as_of: Antichain<T>,
@@ -508,10 +385,6 @@ where
     /// This method exists to allow users to parallelize snapshot iteration. If
     /// you want to immediately consume the snapshot from a single place, you
     /// likely want the [Self::snapshot] helper.
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
     pub async fn snapshot_splits(
         &self,
         as_of: Antichain<T>,
@@ -658,4 +531,73 @@ where
             },
         );
     }
+}
+
+async fn fetch_batch_part<K, V, T, D, TFn>(
+    blob: &(dyn BlobMulti + Send + Sync),
+    key: &str,
+    desc: &Description<T>,
+    mut t_fn: TFn,
+) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+    TFn: FnMut(&mut T) -> bool,
+{
+    let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+    let value = loop {
+        let value = retry_external("fetch_batch::get", || async {
+            blob.get(Instant::now() + FOREVER, key).await
+        })
+        .await;
+        match value {
+            Some(x) => break x,
+            // If the underlying impl of blob isn't linearizable, then we
+            // might get a key reference that that blob isn't returning yet.
+            // Keep trying, it'll show up. The deadline will eventually bail
+            // us out of this loop if something has gone wrong internally.
+            None => {
+                info!(
+                    "unexpected missing blob, trying again in {:?}: {}",
+                    retry.next_sleep(),
+                    key
+                );
+                retry = retry.sleep().await;
+            }
+        };
+    };
+
+    let batch = BlobTraceBatchPart::decode(&value)
+        .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
+        // We received a State that we couldn't decode. This could
+        // happen if persist messes up backward/forward compatibility,
+        // if the durable data was corrupted, or if operations messes up
+        // deployment. In any case, fail loudly.
+        .expect("internal error: invalid encoded state");
+    let mut ret = Vec::new();
+    for chunk in batch.updates {
+        for ((k, v), t, d) in chunk.iter() {
+            let mut t = T::decode(t);
+            if !desc.lower().less_equal(&t) {
+                continue;
+            }
+            if desc.upper().less_equal(&t) {
+                continue;
+            }
+            // NB: t_fn might mutate t (i.e. a snapshots will forward it to the
+            // as_of), but the desc checks above only make sense if it hasn't be
+            // mutated yet.
+            let keep = t_fn(&mut t);
+            if !keep {
+                continue;
+            }
+            let k = K::decode(k);
+            let v = V::decode(v);
+            let d = D::decode(d);
+            ret.push(((k, v), t, d));
+        }
+    }
+    ret
 }

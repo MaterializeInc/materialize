@@ -38,15 +38,12 @@ use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
 
 pub mod error;
-mod examples;
 pub mod read;
 pub mod write;
 
 pub use crate::r#impl::state::{Since, Upper};
 
 /// An implementation of the public crate interface.
-///
-/// TODO: Move this to another crate.
 pub(crate) mod r#impl {
     pub mod machine;
     pub mod state;
@@ -554,7 +551,7 @@ mod tests {
                 Antichain::from_elem(7),
             )
             .await;
-        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
+        assert_eq!(res, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
         assert_eq!(write.upper(), &Antichain::from_elem(3));
@@ -719,8 +716,7 @@ mod tests {
                 Antichain::from_elem(5),
                 Antichain::from_elem(6),
             )
-            .await
-            .expect("external error");
+            .await;
         assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Fixing the lower to make the write contiguous should make the append succeed.
@@ -922,7 +918,7 @@ mod tests {
                 let mut current_upper = 0;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
-                        Some((_, max_ts, _)) => max_ts + 1,
+                        Some((_, max_ts, _)) => u64::decode(max_ts) + 1,
                         None => continue,
                     };
                     // Because we (intentionally) call open inside the task,
@@ -950,7 +946,7 @@ mod tests {
 
                     for ((k, v), t, d) in batch.iter() {
                         builder
-                            .add(&k.to_vec(), &v.to_vec(), &t, &d)
+                            .add(&k.to_vec(), &v.to_vec(), &u64::decode(t), &i64::decode(d))
                             .await
                             .expect("invalid usage");
                     }
@@ -977,7 +973,6 @@ mod tests {
                     write
                         .append_batch(batch, lower, upper)
                         .await
-                        .expect("external durability failed")
                         .expect("invalid usage")
                         .expect("unexpected upper");
                 }
@@ -1068,10 +1063,6 @@ mod tests {
         write.expect_compare_and_append(&data[2..], 3, 4).await;
 
         // Read the snapshot and check that it got all the appropriate data.
-        //
-        // TODO: If we made the SeqNo of the snap and the writes available, we
-        // could assert on the ordering of them to provide additional confidence
-        // that the test hasn't rotted as things change.
         let mut snap = snap.await;
         assert_eq!(snap.read_all().await, all_ok(&data[..], 3));
     }

@@ -13,18 +13,19 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
+use mz_persist::location::{Atomicity, BlobMulti, ExternalError, Indeterminate};
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
@@ -112,17 +113,12 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    ///
-    /// TODO: Introduce an AsyncIterator (futures::Stream) variant of this. Or,
-    /// given that the AsyncIterator version would be strictly more general,
-    /// alter this one if it turns out that the compiler can optimize out the
-    /// overhead.
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
         lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -132,12 +128,7 @@ where
         I: IntoIterator<Item = SB>,
     {
         trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
-
-        let batch = match self.batch(updates, lower.clone(), upper.clone()).await {
-            Ok(batch) => batch,
-            Err(invalid_usage) => return Ok(Err(invalid_usage)),
-        };
-
+        let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
         self.append_batch(batch, lower, upper).await
     }
 
@@ -211,6 +202,7 @@ where
         match self
             .compare_and_append_batch(&mut batch, expected_upper, new_upper)
             .await
+            .map_err(ExternalError::from)
         {
             ok @ Ok(Ok(Ok(()))) => ok,
             err @ _ => {
@@ -218,7 +210,7 @@ where
                 // because the caller owns the batch and might want to retry
                 // with a different `expected_upper`. In this function, we
                 // control the batch, so we have to delete it.
-                batch.delete().await?;
+                batch.delete().await;
                 err
             }
         }
@@ -254,17 +246,37 @@ where
         mut batch: Batch<K, V, T, D>,
         mut lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError> {
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>> {
         trace!("Batch::append lower={:?} upper={:?}", lower, upper);
 
+        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
             let res = self
                 .compare_and_append_batch(&mut batch, lower.clone(), upper.clone())
-                .await?;
+                .await;
+            // Unlike compare_and_append, the contract of append is constructed
+            // such that it's correct to retry Indeterminate errors.
+            // Specifically, compare_and_append can hit an Indeterminate error
+            // (but actually succeed). If we retried, then it would get a upper
+            // mismatch, which could lead to e.g. a txn double apply. Append, on
+            // the other hand, simply guarantees that the requested frontier
+            // bounds have been written.
+            let res = match res {
+                Ok(x) => x,
+                Err(err) => {
+                    info!(
+                        "external operation append::caa failed, retrying in {:?}: {}",
+                        retry.next_sleep(),
+                        err
+                    );
+                    retry = retry.sleep().await;
+                    continue;
+                }
+            };
             match res {
                 Ok(Ok(())) => {
                     self.upper = upper;
-                    return Ok(Ok(Ok(())));
+                    return Ok(Ok(()));
                 }
                 Ok(Err(current_upper)) => {
                     let Upper(current_upper) = current_upper;
@@ -273,9 +285,9 @@ where
                     if PartialOrder::less_than(&current_upper, &lower) {
                         self.upper = current_upper.clone();
 
-                        batch.delete().await?;
+                        batch.delete().await;
 
-                        return Ok(Ok(Err(Upper(current_upper))));
+                        return Ok(Err(Upper(current_upper)));
                     } else if PartialOrder::less_than(&current_upper, &upper) {
                         // Cut down the Description by advancing its lower to the current shard
                         // upper and try again. IMPORTANT: We can only advance the lower, meaning
@@ -291,15 +303,15 @@ where
                         // Because we return a success result, the caller will
                         // think that the batch was consumed or otherwise used,
                         // so we have to delete it here.
-                        batch.delete().await?;
+                        batch.delete().await;
 
-                        return Ok(Ok(Ok(())));
+                        return Ok(Ok(()));
                     }
                 }
                 Err(err) => {
-                    batch.delete().await?;
+                    batch.delete().await;
 
-                    return Ok(Err(err));
+                    return Err(err);
                 }
             }
         }
@@ -345,7 +357,7 @@ where
         batch: &mut Batch<K, V, T, D>,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError> {
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate> {
         trace!(
             "Batch::compare_and_append expected_upper={:?} new_upper={:?}",
             expected_upper,
@@ -467,7 +479,6 @@ where
     {
         self.append(updates.iter(), lower.into(), new_upper.into())
             .await
-            .expect("external durability failed")
             .expect("invalid usage")
             .expect("unexpected upper");
     }
@@ -499,10 +510,6 @@ where
 ///
 /// A [Batch] needs to be marked as consumed or it needs to be deleted via [Self::delete].
 /// Otherwise, a dangling batch will leak and backing blobs will remain in blob storage.
-// TODO(aljoscha): Right now, we require batches to be manually marked as
-// consumed (when they're appended to a batch) or deleted. This is clunky and
-// prone to errors so we should replace it with lazy cleanup once we can use
-// async drop.
 #[derive(Debug)]
 pub struct Batch<K, V, T, D>
 where
@@ -582,13 +589,15 @@ where
 
     /// Deletes the blobs that make up this batch from the given blob store and
     /// marks them as deleted.
-    pub async fn delete(mut self) -> Result<(), ExternalError> {
+    pub async fn delete(mut self) {
         let deadline = Instant::now() + FOREVER;
         for key in self.blob_keys.iter() {
-            self.blob.delete(deadline, key).await?;
+            retry_external("batch::delete", || async {
+                self.blob.delete(deadline, key).await
+            })
+            .await;
         }
         self.blob_keys.clear();
-        Ok(())
     }
 }
 
@@ -748,9 +757,8 @@ where
         self.val_buf.clear();
         K::encode(key, &mut self.key_buf);
         V::encode(val, &mut self.val_buf);
-        // TODO: Get rid of the from_le_bytes.
-        let t = u64::from_le_bytes(T::encode(ts));
-        let d = i64::from_le_bytes(D::encode(diff));
+        let t = T::encode(ts);
+        let d = D::encode(diff);
 
         if self.records.len() == 0 {
             // Use the first record to attempt to pre-size the builder

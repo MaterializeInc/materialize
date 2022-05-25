@@ -15,6 +15,7 @@ use std::{cmp, fmt};
 
 use arrow2::buffer::Buffer;
 use arrow2::types::Index;
+use mz_persist_types::Codec64;
 
 pub mod arrow;
 pub mod parquet;
@@ -38,12 +39,26 @@ pub const KEY_VAL_DATA_MAX_LEN: usize = i32::MAX as usize;
 
 const BYTES_PER_KEY_VAL_OFFSET: usize = 4;
 
-/// A set of ((Key, Val), Time, i64) records stored in a columnar
+/// A set of ((Key, Val), Time, Diff) records stored in a columnar
 /// representation.
 ///
 /// Note that the data are unsorted, and unconsolidated (so there may be
-/// multiple instances of the same ((Key, Val), Time), and some i64s might be
+/// multiple instances of the same ((Key, Val), Time), and some Diffs might be
 /// zero, or add up to zero).
+///
+/// Both Time and Diff are presented externally to persist users as a type
+/// parameter that implements [mz_persist_types::Codec64]. Our columnar format
+/// intentionally stores them both as i64 columns (as opposed to something like
+/// a fixed width binary column) because this allows us additional compression
+/// options.
+///
+/// Also note that we intentionally use an i64 over a u64 for Time. Over the
+/// range `[0, i64::MAX]`, the bytes are the same and we've talked at various
+/// times about changing Time in mz to an i64. Both millis since unix epoch and
+/// nanos since unix epoch easily fit into this range (the latter until some
+/// time after year 2200). Using a i64 might be a pessimization for a
+/// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
+/// u64::MAX]`, but realtime sources are overwhelmingly the common case.
 ///
 /// The i'th key's data is stored in
 /// `key_data[key_offsets[i]..key_offsets[i+1]]`. Similarly for val.
@@ -71,7 +86,7 @@ pub struct ColumnarRecords {
     key_offsets: Buffer<i32>,
     val_data: Buffer<u8>,
     val_offsets: Buffer<i32>,
-    timestamps: Buffer<u64>,
+    timestamps: Buffer<i64>,
     diffs: Buffer<i64>,
 }
 
@@ -91,7 +106,7 @@ impl ColumnarRecords {
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
-    pub fn get<'a>(&'a self, idx: usize) -> Option<((&'a [u8], &'a [u8]), u64, i64)> {
+    pub fn get<'a>(&'a self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
         self.borrow().get(idx)
     }
 
@@ -136,7 +151,7 @@ where
                 let additional = usize::saturating_add(lower, 1);
                 builder.reserve(additional, key.len(), val.len());
             }
-            builder.push(((key, val), *ts, *diff))
+            builder.push(((key, val), Codec64::encode(ts), Codec64::encode(diff)))
         }
         ColumnarRecordsVec(builder.finish())
     }
@@ -163,7 +178,7 @@ where
                 let additional = usize::saturating_add(lower, 1);
                 builder.reserve(additional, key.len(), val.len());
             }
-            builder.push(((key, val), ts, diff));
+            builder.push(((key, val), Codec64::encode(&ts), Codec64::encode(&diff)));
         }
         ColumnarRecordsVec(builder.finish())
     }
@@ -177,7 +192,7 @@ struct ColumnarRecordsRef<'a> {
     key_offsets: &'a [i32],
     val_data: &'a [u8],
     val_offsets: &'a [i32],
-    timestamps: &'a [u64],
+    timestamps: &'a [i64],
     diffs: &'a [i64],
 }
 
@@ -297,7 +312,7 @@ impl<'a> ColumnarRecordsRef<'a> {
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
-    fn get(&self, idx: usize) -> Option<((&'a [u8], &'a [u8]), u64, i64)> {
+    fn get(&self, idx: usize) -> Option<((&'a [u8], &'a [u8]), [u8; 8], [u8; 8])> {
         if idx >= self.len {
             return None;
         }
@@ -306,8 +321,8 @@ impl<'a> ColumnarRecordsRef<'a> {
         let val_range = self.val_offsets[idx].to_usize()..self.val_offsets[idx + 1].to_usize();
         let key = &self.key_data[key_range];
         let val = &self.val_data[val_range];
-        let ts = self.timestamps[idx];
-        let diff = self.diffs[idx];
+        let ts = i64::to_le_bytes(self.timestamps[idx]);
+        let diff = i64::to_le_bytes(self.diffs[idx]);
         Some(((key, val), ts, diff))
     }
 
@@ -328,7 +343,7 @@ pub struct ColumnarRecordsIter<'a> {
 }
 
 impl<'a> Iterator for ColumnarRecordsIter<'a> {
-    type Item = ((&'a [u8], &'a [u8]), u64, i64);
+    type Item = ((&'a [u8], &'a [u8]), [u8; 8], [u8; 8]);
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.records.len, Some(self.records.len))
@@ -351,7 +366,7 @@ pub struct ColumnarRecordsBuilder {
     key_offsets: Vec<i32>,
     val_data: Vec<u8>,
     val_offsets: Vec<i32>,
-    timestamps: Vec<u64>,
+    timestamps: Vec<i64>,
     diffs: Vec<i64>,
 }
 
@@ -438,7 +453,7 @@ impl ColumnarRecordsBuilder {
     /// added if it exceeds the size limitations of ColumnarBatch. This method
     /// is atomic, if it fails, no partial data will have been added.
     #[must_use]
-    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, i64)) -> bool {
+    pub fn push(&mut self, record: ((&[u8], &[u8]), [u8; 8], [u8; 8])) -> bool {
         let ((key, val), ts, diff) = record;
 
         // Check size invariants ahead of time so we stay atomic when we can't
@@ -455,8 +470,8 @@ impl ColumnarRecordsBuilder {
         self.val_data.extend_from_slice(val);
         self.val_offsets
             .push(i32::try_from(self.val_data.len()).expect("val_data is smaller than 2GB"));
-        self.timestamps.push(ts);
-        self.diffs.push(diff);
+        self.timestamps.push(i64::from_le_bytes(ts));
+        self.diffs.push(i64::from_le_bytes(diff));
         self.len += 1;
         debug_assert_eq!(self.borrow().validate(), Ok(()));
         true
@@ -553,7 +568,7 @@ impl ColumnarRecordsVecBuilder {
     }
 
     /// Add a record to Self.
-    pub fn push(&mut self, record: ((&[u8], &[u8]), u64, i64)) {
+    pub fn push(&mut self, record: ((&[u8], &[u8]), [u8; 8], [u8; 8])) {
         let ((key, val), ts, diff) = record;
         if !self.current.can_fit(key, val, self.key_val_data_max_len) {
             // We don't have room in this ColumnarRecords, finish it up and
@@ -591,6 +606,7 @@ impl ColumnarRecordsVecBuilder {
 mod tests {
     use super::*;
     use mz_ore::cast::CastFrom;
+    use mz_persist_types::Codec64;
 
     /// Smoke test some edge cases around empty sets of records and empty keys/vals
     ///
@@ -605,19 +621,19 @@ mod tests {
         assert_eq!(reads, vec![]);
 
         // Empty key and val.
-        let updates: Vec<((Vec<u8>, Vec<u8>), _, _)> = vec![
+        let updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)> = vec![
             (("".into(), "".into()), 0, 0),
             (("".into(), "".into()), 1, 1),
         ];
         let mut builder = ColumnarRecordsBuilder::default();
         for ((key, val), time, diff) in updates.iter() {
-            assert!(builder.push(((key, val), *time, *diff)));
+            assert!(builder.push(((key, val), u64::encode(time), i64::encode(diff))));
         }
 
         let records = builder.finish();
         let reads: Vec<_> = records
             .iter()
-            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
+            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), u64::decode(t), i64::decode(d)))
             .collect();
         assert_eq!(reads, updates);
     }
@@ -638,13 +654,17 @@ mod tests {
             // Call reserve once at the beginning to match the usage in the
             // FromIterator impls.
             builder.reserve(num_records, key.len(), 0);
-            for (idx, x) in expected.iter().enumerate() {
-                builder.push(*x);
+            for (idx, (kv, t, d)) in expected.iter().enumerate() {
+                builder.push((*kv, u64::encode(t), i64::encode(d)));
                 assert_eq!(builder.len(), idx + 1);
             }
             let columnar = builder.finish();
             assert_eq!(columnar.len(), expected_num_columnar_records);
-            let actual = columnar.iter().flat_map(|x| x.iter()).collect::<Vec<_>>();
+            let actual = columnar
+                .iter()
+                .flat_map(|x| x.iter())
+                .map(|(kv, t, d)| (kv, u64::decode(t), i64::decode(d)))
+                .collect::<Vec<_>>();
             assert_eq!(actual, expected);
         }
 

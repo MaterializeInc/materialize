@@ -21,6 +21,8 @@ use std::sync::Once;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 pub mod maelstrom;
+pub mod open_loop;
+pub mod source_example;
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Persist command-line utilities", long_about = None)]
@@ -32,18 +34,29 @@ struct Args {
 #[derive(Debug, clap::Subcommand)]
 enum Command {
     Maelstrom(crate::maelstrom::Args),
+    OpenLoop(crate::open_loop::Args),
+    SourceExample(crate::source_example::Args),
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // This doesn't use [mz_ore::test::init_logging] because Maelstrom requires
     // that all logging goes to stderr.
     init_logging();
 
     let args: Args = mz_ore::cli::parse_args();
 
+    // Mirror the tokio Runtime configuration in our production binaries.
+    let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(ncpus_useful)
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime");
+
     let res = match args.command {
         Command::Maelstrom(args) => crate::maelstrom::txn::run(args),
+        Command::OpenLoop(args) => runtime.block_on(crate::open_loop::run(args)),
+        Command::SourceExample(args) => runtime.block_on(crate::source_example::run(args)),
     };
     if let Err(err) = res {
         eprintln!("error: {:#}", err);
