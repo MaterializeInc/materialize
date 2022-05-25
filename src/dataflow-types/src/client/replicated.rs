@@ -136,7 +136,7 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub async fn add_replica<C: ComputeClient<T> + 'static>(&mut self, id: ReplicaId, client: C) {
+    pub fn add_replica<C: ComputeClient<T> + 'static>(&mut self, id: ReplicaId, client: C) {
         for (_, frontiers) in self.uppers.values_mut() {
             frontiers.insert(id, {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();

@@ -222,8 +222,8 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub async fn add_replica(&mut self, id: ReplicaId, client: Box<dyn ComputeClient<T>>) {
-        self.compute.client.add_replica(id, client).await;
+    pub fn add_replica(&mut self, id: ReplicaId, client: Box<dyn ComputeClient<T>>) {
+        self.compute.client.add_replica(id, client);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
