@@ -13,6 +13,7 @@ syntax = "proto3";
 
 import "dataflow-types/src/client/controller/storage.proto";
 import "dataflow-types/src/plan.proto";
+import "dataflow-types/src/types/sinks.proto";
 import "expr/src/scalar.proto";
 import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
@@ -38,7 +39,7 @@ message ProtoDataflowDescription {
 
     message ProtoSinkExport {
         mz_repr.global_id.ProtoGlobalId id = 1;
-        string sink_desc = 2;
+        mz_dataflow_types.types.sinks.ProtoSinkDesc sink_desc = 2;
     }
 
     repeated ProtoSourceImport source_imports = 1;
