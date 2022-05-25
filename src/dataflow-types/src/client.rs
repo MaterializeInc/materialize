@@ -13,6 +13,9 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
+// Tonic generates code that calls clone on an Arc. Allow this here.
+#![allow(clippy::clone_on_ref_ptr)]
+
 use std::collections::BTreeSet;
 use std::fmt;
 use std::pin::Pin;
@@ -820,6 +823,9 @@ where
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
 {
+    // (LH) This is what I tried:
+    // client: partitioned::Partitioned<tcp::GrpcComputedClient, C, R>,
+    // Maybe we could do here GenericClient?
     client: partitioned::Partitioned<tcp::TcpClient<C, R>, C, R>,
 }
 
@@ -834,6 +840,8 @@ where
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {
             remotes.push(tcp::TcpClient::new(addr.to_string()));
+            // (LH):
+            //remotes.push(tcp::GrpcComputedClient::new(addr.to_string()));
         }
         Self {
             client: partitioned::Partitioned::new(remotes),
@@ -846,6 +854,22 @@ where
         }
     }
 }
+
+// (LH): With the changes above, this gets me one step closer
+//#[async_trait]
+//impl GenericClient<ComputeCommand, ComputeResponse>
+//    for RemoteClient<ComputeCommand, ComputeResponse>
+//{
+//    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
+//        trace!("Sending dataflow command: {:?}", cmd);
+//        self.client.send(cmd).await
+//    }
+//    async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
+//        let response = self.client.recv().await;
+//        trace!("Receiving dataflow response: {:?}", response);
+//        response
+//    }
+//}
 
 #[async_trait]
 impl<C, R> GenericClient<C, R> for RemoteClient<C, R>
@@ -939,28 +963,178 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use mz_repr::proto::ProtoType;
+    use mz_repr::proto::RustType;
+    use mz_repr::proto::TryFromProtoError;
     use std::cmp;
     use std::fmt;
     use std::future::Future;
+    use std::io::ErrorKind;
+    use std::net::ToSocketAddrs;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::mpsc;
+    use tokio::sync::Mutex;
+    use tokio::time::sleep;
 
     use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
+    use futures::Stream;
     use serde::de::DeserializeOwned;
     use serde::ser::Serialize;
     use tokio::io::{self, AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
+    use tokio::sync::mpsc::Receiver;
+    use tokio::sync::mpsc::Sender;
+    use tokio::sync::Notify;
     use tokio::time::{self, Instant};
     use tokio_serde::formats::Bincode;
+    use tokio_stream::wrappers::ReceiverStream;
     use tokio_util::codec::LengthDelimitedCodec;
+    use tonic::transport::Server;
+    use tonic::Request;
+    use tonic::Response;
+    use tonic::Status;
+    use tonic::Streaming;
     use tracing::error;
 
+    use super::proto_compute_client::ProtoComputeClient;
+    use super::ComputeCommand;
+    use super::ComputeResponse;
     use crate::client::GenericClient;
 
     use super::Reconnect;
+    /// Replacement for TcpClient using GRPC. Semantics of the implementation
+    /// should match the interface of TcpClient
+    #[derive(Debug)]
+    enum GrpcComputedTcpConn {
+        // Initial, disconnected state
+        Disconnected,
 
+        // We have a TCP client connection, but we have to wait for RPC answer for setting up the streams
+        AwaitResponse(ProtoComputeClient<tonic::transport::Channel>),
+
+        // Ready to go!
+        Connected(
+            (
+                Sender<super::ProtoComputeCommand>,
+                Streaming<super::ProtoComputeResponse>,
+            ),
+        ),
+
+        // Unable to connect, wait on next connect
+        Backoff(Instant),
+    }
+
+    #[derive(Debug)]
+    pub struct GrpcComputedClient {
+        addr: String,
+        state: GrpcComputedTcpConn,
+        backoff: Duration,
+    }
+
+    impl GrpcComputedClient {
+        pub fn new(addr: String) -> GrpcComputedClient {
+            GrpcComputedClient {
+                addr,
+                state: GrpcComputedTcpConn::Disconnected,
+                backoff: Duration::from_millis(10),
+            }
+        }
+
+        // Cancellation safe
+        pub async fn connect(&mut self) -> () {
+            loop {
+                match &mut self.state {
+                    GrpcComputedTcpConn::Disconnected => {
+                        match ProtoComputeClient::connect(self.addr.clone()).await {
+                            Ok(client) => {
+                                self.backoff = Duration::from_millis(10);
+                                self.state = GrpcComputedTcpConn::AwaitResponse(client);
+                                break;
+                            }
+                            Err(e) => {
+                                println!("Connection refused: {}", e);
+                                self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
+                                self.state =
+                                    GrpcComputedTcpConn::Backoff(Instant::now() + self.backoff);
+                                sleep(Duration::from_millis(1000)).await;
+                            }
+                        }
+                    }
+                    GrpcComputedTcpConn::AwaitResponse(client) => {
+                        let (tx, rx) = mpsc::channel(4);
+                        let resp_rx = client
+                            .handle(ReceiverStream::new(rx))
+                            .await
+                            .unwrap()
+                            .into_inner();
+                        self.state = GrpcComputedTcpConn::Connected((tx, resp_rx));
+                    }
+                    GrpcComputedTcpConn::Connected(_) => break,
+                    GrpcComputedTcpConn::Backoff(deadline) => {
+                        time::sleep_until(*deadline).await;
+                    }
+                }
+            }
+        }
+
+        pub fn connected(&self) -> bool {
+            matches!(self.state, GrpcComputedTcpConn::Connected(_))
+        }
+
+        pub async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
+            if let GrpcComputedTcpConn::Connected(channels) = &self.state {
+                channels.0.send((&cmd).into_proto()).await.expect("Ok");
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("Sent into disconnected channel"))
+            }
+        }
+
+        pub async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
+            if let GrpcComputedTcpConn::Connected(channels) = &mut self.state {
+                match channels.1.next().await {
+                    Some(Ok(x)) => Ok(Some(x.into_rust()?)),
+                    other => {
+                        match other {
+                            Some(Ok(_)) => unreachable!("handled above"),
+                            None => error!("connection unexpectedly terminated cleanly"),
+                            Some(Err(e)) => error!("connection unexpectedly errored: {}", e),
+                        }
+
+                        self.state = GrpcComputedTcpConn::Disconnected;
+                        self.connect().await;
+                        Err(anyhow::anyhow!("Connection severed; reconnected"))
+                    }
+                }
+            } else {
+                self.connect().await;
+                Err(anyhow::anyhow!("Connection severed; reconnected"))
+            }
+        }
+    }
+
+    // (LH): Needs some + Send or so....
+    //#[async_trait]
+    //impl GenericClient<ComputeCommand, ComputeResponse> for GrpcComputedClient {
+    //    async fn send(&mut self, cmd: ComputeCommand) -> Result<(), anyhow::Error> {
+    //        self.send(cmd).await
+    //    }
+
+    //    async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
+    //        self.recv().await
+    //    }
+    //}
+
+    /// A client to a remote dataflow server.
+    ///
+    /// If the client experiences errors, it will attempt a reconnection in the `recv` method and
+    /// produce an error for the call in which that reconnection happens, allowing a bearer to
+    /// re-issue commands. As the reconnection happens in `recv()`, the bearer is advised to use
+    /// a `select` style construct to avoid suspending their task by a call to `recv()`.
     enum TcpConn<C, R> {
         Disconnected,
         Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
@@ -974,12 +1148,6 @@ pub mod tcp {
         }
     }
 
-    /// A client to a remote dataflow server.
-    ///
-    /// If the client experiences errors, it will attempt a reconnection in the `recv` method and
-    /// produce an error for the call in which that reconnection happens, allowing a bearer to
-    /// re-issue commands. As the reconnection happens in `recv()`, the bearer is advised to use
-    /// a `select` style construct to avoid suspending their task by a call to `recv()`.
     #[derive(Debug)]
     pub struct TcpClient<C, R> {
         connection: TcpConn<C, R>,
@@ -1119,6 +1287,174 @@ pub mod tcp {
             tokio_util::codec::Framed::new(conn, length_delimited_codec()),
             Bincode::default(),
         )
+    }
+
+    pub struct GrpcComputedShared {
+        // Keep going after first client has terminated connection
+        //linger: bool,
+
+        // The echo server will input commands into this. Note, there should
+        // always be only one client
+        queue: Mutex<
+            Option<(
+                Receiver<super::ProtoComputeCommand>,
+                Sender<super::ProtoComputeResponse>,
+            )>,
+        >,
+        queue_change: Notify,
+    }
+
+    pub struct GrpcComputedServer {
+        shared: Arc<GrpcComputedShared>,
+    }
+
+    pub struct GrpcComputedServerInterface {
+        shared: Arc<GrpcComputedShared>,
+    }
+
+    impl GrpcComputedServerInterface {
+        pub async fn send(&self, resp: ComputeResponse) -> () {
+            loop {
+                match self.shared.queue.lock().await.as_ref() {
+                    Some(x) => {
+                        x.1.send((&resp).into_proto()).await.unwrap();
+                        break;
+                    }
+
+                    // Other end absent, wait for connection
+                    None => self.shared.queue_change.notified().await,
+                }
+            }
+        }
+
+        pub async fn recv(&mut self) -> Result<ComputeCommand, TryFromProtoError> {
+            loop {
+                match self.shared.queue.lock().await.as_mut() {
+                    Some(x) => match x.0.recv().await {
+                        Some(x) => return x.into_rust(),
+                        None => {
+                            println!("Recv returned None, endpoint gone, retry");
+                        }
+                    },
+
+                    // Other end absent, wait for connection
+                    None => {
+                        println!("In recv, queue is None, retry");
+                    }
+                }
+
+                self.shared.queue_change.notified().await
+            }
+        }
+    }
+
+    fn match_for_io_error(err_status: &Status) -> Option<&std::io::Error> {
+        let mut err: &(dyn std::error::Error + 'static) = err_status;
+
+        loop {
+            if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+                return Some(io_err);
+            }
+
+            // h2::Error do not expose std::io::Error with `source()`
+            // https://github.com/hyperium/h2/pull/462
+            if let Some(h2_err) = err.downcast_ref::<h2::Error>() {
+                if let Some(io_err) = h2_err.get_io() {
+                    return Some(io_err);
+                }
+            }
+
+            err = match err.source() {
+                Some(err) => err,
+                None => return None,
+            };
+        }
+    }
+
+    type ResponseStream =
+        Pin<Box<dyn Stream<Item = Result<super::ProtoComputeResponse, tonic::Status>> + Send>>;
+
+    #[tonic::async_trait]
+    impl super::proto_compute_server::ProtoCompute for GrpcComputedServer {
+        type HandleStream = ResponseStream;
+
+        async fn handle(
+            &self,
+            req: Request<Streaming<super::ProtoComputeCommand>>,
+        ) -> Result<tonic::Response<Self::HandleStream>, tonic::Status> {
+            println!("GrpcComputedServer::handle");
+
+            let mut in_stream = req.into_inner();
+            let (cmd_tx, cmd_rx) = mpsc::channel(4);
+            let (resp_tx, resp_rx) = mpsc::channel(4);
+
+            // this spawn here is required if you want to handle connection error.
+            // If we just map `in_stream` and write it back as `out_stream` the `out_stream`
+            // will be drooped when connection error occurs and error will never be propagated
+            // to mapped version of `in_stream`.
+            mz_ore::task::spawn(|| "ProtoComputeServer: ErrorChecker", async move {
+                while let Some(result) = in_stream.next().await {
+                    match result {
+                        Ok(v) => cmd_tx.send(v).await.expect("working rx"),
+                        Err(err) => {
+                            if let Some(io_err) = match_for_io_error(&err) {
+                                if io_err.kind() == ErrorKind::BrokenPipe {
+                                    // here you can handle special case when client
+                                    // disconnected in unexpected way
+                                    eprintln!("\tclient disconnected: broken pipe");
+                                    break;
+                                }
+                            }
+
+                            break;
+
+                            // TODO: Do we want to propagate errors like this?
+                            //       Alternatively, we can use a signal to gracefully terminate
+                            //       the server in the non lingering case.
+                            //
+                            //match cmd_tx.send(Err(err)).await {
+                            //    Ok(_) => (),
+                            //    Err(_err) => break, // response was droped
+                            //}
+                        }
+                    }
+                }
+                println!("\tstream ended");
+            });
+
+            // Store channels in state state
+            *self.shared.queue.lock().await = Some((cmd_rx, resp_tx));
+            self.shared.queue_change.notify_waiters();
+
+            let out_stream: ReceiverStream<super::ProtoComputeResponse> =
+                ReceiverStream::new(resp_rx);
+            let x = out_stream.map(Ok);
+
+            Ok(Response::new(Box::pin(x) as Self::HandleStream))
+        }
+    }
+
+    pub fn grpc_computed_server(listen_addr: String, _linger: bool) -> GrpcComputedServerInterface {
+        let shared = Arc::new(GrpcComputedShared {
+            //linger,
+            queue: Mutex::new(None),
+            queue_change: Notify::new(),
+        });
+
+        let server = GrpcComputedServer {
+            shared: Arc::clone(&shared),
+        };
+
+        mz_ore::task::spawn(|| "ComputedProtoServer", async move {
+            Server::builder()
+                .add_service(super::proto_compute_server::ProtoComputeServer::new(server))
+                .serve(listen_addr.to_socket_addrs().unwrap().next().unwrap())
+                // call serve_with_incoming for TLS
+                .await
+                .unwrap();
+        });
+
+        GrpcComputedServerInterface { shared }
     }
 
     /// Constructs a framed connection for the client.
