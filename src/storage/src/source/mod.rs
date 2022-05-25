@@ -879,9 +879,12 @@ where
             let source = connector.start(&timestamper);
             tokio::pin!(source);
 
+            let tick = timestamper.tick();
+            tokio::pin!(tick);
             loop {
                 tokio::select! {
-                    res = timestamper.tick() => {
+                    res = &mut tick => {
+                        tick.set(timestamper.tick());
                         if res.is_err() {
                             break;
                         }
