@@ -430,7 +430,7 @@ proptest::prop_compose! {
         index_imports in proptest::collection::vec(any_dataflow_index(), 1..3),
         objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
         index_exports in proptest::collection::vec(any_dataflow_index(), 1..3),
-        sink_ids in proptest::collection::vec(any::<GlobalId>(), 1..3),
+        sink_descs in proptest::collection::vec(any::<(GlobalId, SinkDesc<mz_repr::Timestamp>)>(), 1..3),
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<u64>(), 1..5),
         debug_name in ".*",
@@ -442,9 +442,7 @@ proptest::prop_compose! {
             objects_to_build,
             index_exports: BTreeMap::from_iter(index_exports.into_iter()),
             sink_exports: BTreeMap::from_iter(
-                sink_ids
-                    .into_iter()
-                    .map(|id| (id, crate::sinks::any_sink_desc_stub())),
+                sink_descs.into_iter(),
             ),
             as_of: if as_of_some {
                 Some(Antichain::from(as_of))
@@ -1073,14 +1071,15 @@ impl ProtoMapEntry<GlobalId, SinkDesc> for ProtoSinkExport {
     fn from_rust<'a>((id, sink_desc): (&'a GlobalId, &'a SinkDesc)) -> Self {
         ProtoSinkExport {
             id: Some(id.into_proto()),
-            sink_desc: serde_json::to_string(sink_desc).unwrap(),
+            sink_desc: Some(sink_desc.into_proto()),
         }
     }
 
     fn into_rust(self) -> Result<(GlobalId, SinkDesc), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSinkExport::id")?,
-            serde_json::from_str(&self.sink_desc)?,
+            self.sink_desc
+                .into_rust_if_some("ProtoSinkExport::sink_desc")?,
         ))
     }
 }
@@ -3455,21 +3454,6 @@ pub mod sinks {
         }
     }
 
-    /// A stub for generating arbitrary [SinkDesc].
-    /// Currently only produces the simplest instance of one.
-    pub(super) fn any_sink_desc_stub() -> SinkDesc<mz_repr::Timestamp> {
-        SinkDesc {
-            from: GlobalId::Explain,
-            from_desc: RelationDesc::empty(),
-            connector: SinkConnector::Tail(TailSinkConnector {}),
-            envelope: None,
-            as_of: SinkAsOf {
-                frontier: Antichain::new(),
-                strict: false,
-            },
-        }
-    }
-
     #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
     pub enum SinkEnvelope {
         Debezium,
@@ -3886,24 +3870,6 @@ pub mod sinks {
             ccsr_config: mz_ccsr::ClientConfig,
         },
         Json,
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use mz_repr::proto::protobuf_roundtrip;
-        use proptest::prelude::*;
-
-        proptest! {
-            #![proptest_config(ProptestConfig::with_cases(32))]
-
-            #[test]
-            fn sink_desc_protobuf_roundtrip(expect in any::<SinkDesc<mz_repr::Timestamp>>()) {
-                let actual = protobuf_roundtrip::<_, ProtoSinkDesc>(&expect);
-                assert!(actual.is_ok());
-                assert_eq!(actual.unwrap(), expect);
-            }
-        }
     }
 }
 
