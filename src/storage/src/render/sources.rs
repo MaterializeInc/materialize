@@ -14,9 +14,10 @@
 use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::consolidate::ConsolidateStream;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
-use timely::dataflow::operators::{Map, OkErr};
+use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
@@ -30,7 +31,7 @@ use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited}
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
-    SourceOutput, SourceToken,
+    SourceOutput,
 };
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 
@@ -311,7 +312,6 @@ where
                         needed_tokens.push(Arc::new(tok));
                     }
 
-<<<<<<< HEAD
                     // render envelopes
                     match &envelope {
                         SourceEnvelope::Debezium(dbz_envelope) => {
@@ -331,19 +331,18 @@ where
                                         .expect("bad tx metadata spec")
                                         .clone();
                                     // TODO(#11667): reuse the existing arrangement if it exists
-                                    let ((tx_source_ok, tx_source_err), tx_token) =
-                                        render_source(
-                                            scope,
-                                            dataflow_debug_name,
-                                            as_of_frontier,
-                                            tx_metadata.tx_metadata_global_id,
-                                            tx_src_desc,
-                                            tx_collection_metadata,
-                                            // NOTE: For now sources never have LinearOperators
-                                            // but might have in the future
-                                            None,
-                                            storage_state,
-                                        );
+                                    let ((tx_source_ok, tx_source_err), tx_token) = render_source(
+                                        scope,
+                                        dataflow_debug_name,
+                                        as_of_frontier,
+                                        tx_metadata.tx_metadata_global_id,
+                                        tx_src_desc,
+                                        tx_collection_metadata,
+                                        // NOTE: For now sources never have LinearOperators
+                                        // but might have in the future
+                                        None,
+                                        storage_state,
+                                    );
                                     needed_tokens.push(tx_token);
                                     error_collections.push(tx_source_err);
 
@@ -370,7 +369,7 @@ where
 
                             let as_of_frontier = as_of_frontier.clone();
 
-                            let source_arity = src.desc.typ().arity();
+                            let source_arity = source_desc.desc.typ().arity();
 
                             let (upsert_ok, upsert_err) = super::upsert::upsert(
                                 &transformed_results,
@@ -428,7 +427,6 @@ where
             // Perform various additional transformations on the collection.
 
             // Force a shuffling of data in case sources are not uniformly distributed.
-            use timely::dataflow::operators::Exchange;
             let mut collection = stream.inner.exchange(|x| x.hashed()).as_collection();
 
             // Implement source filtering and projection.
@@ -493,7 +491,6 @@ where
             }
 
             // Consolidate the results, as there may now be cancellations.
-            use differential_dataflow::operators::consolidate::ConsolidateStream;
             collection = collection.consolidate_stream();
 
             let source_token = Arc::new(capability);

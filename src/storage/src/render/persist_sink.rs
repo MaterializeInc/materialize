@@ -114,7 +114,7 @@ pub fn render<G>(
                     // TODO(aljoscha): Figure out how errors from this should be reported.
                     let expected_upper = shared_frontier.borrow().clone();
                     write
-                        .append(updates, expected_upper, input_frontier.clone())
+                        .compare_and_append(updates, expected_upper, input_frontier.clone())
                         .await
                         .expect("cannot append updates")
                         .expect("cannot append updates")
