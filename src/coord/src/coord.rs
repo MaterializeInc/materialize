@@ -86,7 +86,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{info, warn};
+use tracing::warn;
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -797,10 +797,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             if let Some(timestamp) = self.global_timeline.should_advance_to() {
-                info!("should advance to: {}", timestamp);
-                let start = Instant::now();
                 self.advance_local_inputs(timestamp).await;
-                info!("advancing inputs took: {} ms", start.elapsed().as_millis());
             }
         }
     }
@@ -3575,8 +3572,6 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let since = self.least_valid_read(&id_bundle, compute_instance);
 
-        println!("initial since candidate: {:?}, when: {:?}", since, when);
-
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
 
@@ -3608,19 +3603,13 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.join_assign(&ts);
         }
 
-        println!("candidate after advance_to_timestamp: {:?}", candidate);
-
         if when.advance_to_since() {
             candidate.advance_by(since.borrow());
         }
-        println!("candidate after advance_to_since: {:?}", candidate);
         let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        // Uncomment this to allow peeks at "table upper - 1"
-        // let uses_tables = false;
         if when.advance_to_table_ts(uses_tables) {
             candidate.join_assign(&self.get_local_read_ts());
         }
-        println!("candidate after advance_to_table_ts: {:?}", candidate);
         if when.advance_to_upper(uses_tables) {
             let upper = self.least_valid_write(&id_bundle, compute_instance);
 
@@ -3639,7 +3628,6 @@ impl<S: Append + 'static> Coordinator<S> {
             };
             candidate.join_assign(&upper);
         }
-        println!("candidate after advance_to_uppers: {:?}", candidate);
 
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
@@ -5650,12 +5638,8 @@ mod timeline {
         /// and strictly less than all subsequent values of `self.write_ts()`.
         pub fn read_ts(&mut self) -> T {
             match &self.state {
-                TimestampOracleState::Reading(ts) => {
-                    println!("state READING: {:?}", ts);
-                    ts.clone()
-                }
+                TimestampOracleState::Reading(ts) => ts.clone(),
                 TimestampOracleState::Writing(ts) => {
-                    println!("state WRITING: {:?}", ts);
                     // Avoid rust borrow complaint.
                     let ts = ts.clone();
                     self.state = TimestampOracleState::Reading(ts.clone());
