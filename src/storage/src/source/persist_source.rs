@@ -98,11 +98,16 @@ where
 
         loop {
             for event in listen.next().await {
-                // TODO(aljoscha): We should introduce a method that consumes a `ReadHandle` and
-                // returns a `Listen` that automatically downgrades `since` as early as possible.
-                if let ListenEvent::Progress(upper) = &event {
-                    read.downgrade_since(upper.clone()).await;
-                }
+                // TODO(petrosagg): We are incorrectly NOT downgrading the since frontier of this
+                // read handle which will hold back compaction in persist. This is currently a
+                // necessary evil to avoid too much contension on persist's consensus
+                // implementation.
+                //
+                // Once persist supports compaction and/or has better performance the code below
+                // should be enabled.
+                // if let ListenEvent::Progress(upper) = &event {
+                //     read.downgrade_since(upper.clone()).await;
+                // }
                 yield event;
             }
         }
