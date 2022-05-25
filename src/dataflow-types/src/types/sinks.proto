@@ -22,7 +22,7 @@ message ProtoSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
     ProtoSinkConnector connector = 3;
-    ProtoSinkEnvelope envelope = 4;
+    optional ProtoSinkEnvelope envelope = 4;
     ProtoSinkAsOf as_of = 5;
 }
 
@@ -65,10 +65,10 @@ message ProtoKafkaSinkConnector {
     mz_kafka_util.addr.ProtoKafkaAddrs addrs = 1;
     string topic = 2;
     string topic_prefix = 3;
-    ProtoKeyDescAndIndices key_desc_and_indices = 4;
-    ProtoRelationKeyIndicesVec relation_key_indices = 5;
+    optional ProtoKeyDescAndIndices key_desc_and_indices = 4;
+    optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
-    ProtoPublishedSchemaInfo published_schema_info = 7;
+    optional ProtoPublishedSchemaInfo published_schema_info = 7;
     ProtoKafkaSinkConsistencyConnector consistency = 8;
     bool exactly_once = 9;
     repeated mz_repr.global_id.ProtoGlobalId transitive_source_dependencies = 10;
