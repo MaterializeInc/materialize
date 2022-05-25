@@ -877,8 +877,10 @@ pub mod sources {
         /// What style of Upsert we are using
         pub style: UpsertStyle,
         /// The indices of the keys in the full value row, used
-        /// to deduplicate data in `upsert_core`
-        pub key_indices: Vec<usize>,
+        /// to deduplicate data in `upsert_core`.
+        /// The keys of this map are the indices in the value row, and the values
+        /// are the indices in the key row.
+        pub key_indices: BTreeMap<usize, usize>,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -986,15 +988,15 @@ pub mod sources {
     fn match_key_indices(
         key_desc: &RelationDesc,
         value_desc: &RelationDesc,
-    ) -> anyhow::Result<Vec<usize>> {
-        let mut indices = Vec::new();
-        for (name, key_type) in key_desc.iter() {
-            let (index, value_type) = value_desc
+    ) -> anyhow::Result<BTreeMap<usize, usize>> {
+        let mut indices = BTreeMap::new();
+        for (key_index, (name, key_type)) in key_desc.iter().enumerate() {
+            let (value_index, value_type) = value_desc
                 .get_by_name(name)
                 .ok_or_else(|| anyhow!("Value schema missing primary key column: {}", name))?;
 
             if key_type == value_type {
-                indices.push(index);
+                indices.insert(value_index, key_index);
             } else {
                 bail!(
                     "key and value column types do not match: key {:?} vs. value {:?}",
@@ -1011,7 +1013,7 @@ pub mod sources {
         ///
         /// Panics if the input envelope is `UnplannedSourceEnvelope::Upsert` and
         /// key is not passed as `Some`
-        fn into_source_envelope(self, key: Option<Vec<usize>>) -> SourceEnvelope {
+        fn into_source_envelope(self, key: Option<BTreeMap<usize, usize>>) -> SourceEnvelope {
             match self {
                 UnplannedSourceEnvelope::Upsert(upsert_style) => {
                     SourceEnvelope::Upsert(UpsertEnvelope {
@@ -1052,13 +1054,17 @@ pub mod sources {
                         KeyEnvelope::None => (value_desc, None),
                         KeyEnvelope::Flattened => {
                             // Add the key columns as a key.
-                            let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
-                            let key_desc = key_desc.with_key(key_indices.clone());
+                            let key_arity = key_desc.arity();
+                            let key_indices: BTreeMap<usize, usize> =
+                                (0..key_arity).map(|i| (i, i)).collect();
+                            let key_desc = key_desc.with_key((0..key_arity).collect());
                             (key_desc.concat(value_desc), Some(key_indices))
                         }
                         KeyEnvelope::LegacyUpsert => {
-                            let key_indices: Vec<usize> = (0..key_desc.arity()).collect();
-                            let key_desc = key_desc.with_key(key_indices.clone());
+                            let key_arity = key_desc.arity();
+                            let key_indices: BTreeMap<usize, usize> =
+                                (0..key_arity).map(|i| (i, i)).collect();
+                            let key_desc = key_desc.with_key((0..key_arity).collect());
                             let names = (0..key_desc.arity()).map(|i| format!("key{}", i));
                             // Rename key columns to "keyN"
                             (
@@ -1090,7 +1096,10 @@ pub mod sources {
                                 }
                             };
                             // In all cases the first column is the key
-                            (key_desc.with_key(vec![0]).concat(value_desc), Some(vec![0]))
+                            (
+                                key_desc.with_key(vec![0]).concat(value_desc),
+                                Some(vec![(0, 0)].into_iter().collect::<BTreeMap<_, _>>()),
+                            )
                         }
                     };
                     (self.into_source_envelope(key), keyed.concat(metadata_desc))
@@ -1101,8 +1110,10 @@ pub mod sources {
                         ScalarType::Record { fields, .. } => {
                             let mut desc = RelationDesc::from_names_and_types(fields.clone());
                             let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
-                            if let Some(key) = key.clone() {
-                                desc = desc.with_key(key);
+                            if let Some(key) = &key {
+                                desc = desc.with_key(
+                                    key.iter().map(|(_value_idx, key_idx)| *key_idx).collect(),
+                                );
                             }
 
                             let desc = match self {

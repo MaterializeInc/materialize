@@ -552,35 +552,43 @@ where
 
 /// `thin` uses information from the source description to find which indexes in the row
 /// are keys and skip them.
-fn thin(key_indices: &[usize], value: &Row, row_buf: &mut Row) -> Row {
+fn thin(key_indices: &BTreeMap<usize, usize>, value: &Row, row_buf: &mut Row) -> Row {
     let mut row_packer = row_buf.packer();
     let values = &mut value.iter();
-    let mut next_idx = 0;
-    for &key_idx in key_indices {
-        // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(key_idx - next_idx));
-        // Then, skip this key datum
-        values.next().unwrap();
-        next_idx = key_idx + 1;
+    for (value_idx, value) in values.enumerate() {
+        if !key_indices.contains_key(&value_idx) {
+            row_packer.push(value)
+        }
     }
-    // Finally, push any columns after the last key index
-    row_packer.extend(values);
-
     row_buf.clone()
 }
 
 /// `rehydrate` uses information from the source description to find which indexes in the row
 /// are keys and add them back in in the right places.
-fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_buf: &mut Row) -> Row {
+fn rehydrate(
+    key_indices: &BTreeMap<usize, usize>,
+    key: &Row,
+    thinned_value: &Row,
+    row_buf: &mut Row,
+) -> Row {
     let mut row_packer = row_buf.packer();
     let values = &mut thinned_value.iter();
+
+    let key = key.unpack(); // TODO -- can we avoid this allocation?
+
     let mut next_idx = 0;
-    for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
+    let mut key_indices_iter = key_indices.iter().peekable();
+
+    while let Some((value_idx, key_idx)) = key_indices_iter.peek() {
+        // Make borrowck happy
+        let value_idx = **value_idx;
+        let key_idx = **key_idx;
         // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(key_idx - next_idx));
+        row_packer.extend(values.take(value_idx - next_idx));
         // Then, push this key datum
-        row_packer.push(key_datum);
-        next_idx = key_idx + 1;
+        row_packer.push(key[key_idx]);
+        key_indices_iter.next().unwrap();
+        next_idx = value_idx + 1;
     }
     // Finally, push any columns after the last key index
     row_packer.extend(values);
@@ -596,7 +604,7 @@ mod tests {
     fn test_rehydrate_thin_first() {
         let mut packer = Row::default();
 
-        let key_indices = vec![0];
+        let key_indices = vec![(0, 0)].into_iter().collect();
         let key = Row::pack([Datum::String("key")]);
 
         let thinned = Row::pack([Datum::String("two")]);
@@ -615,7 +623,7 @@ mod tests {
     fn test_rehydrate_thin_middle() {
         let mut packer = Row::default();
 
-        let key_indices = vec![2];
+        let key_indices = vec![(2, 0)].into_iter().collect();
         let key = Row::pack([Datum::String("key")]);
 
         let thinned = Row::pack([
@@ -643,7 +651,7 @@ mod tests {
     fn test_rehydrate_thin_multiple() {
         let mut packer = Row::default();
 
-        let key_indices = vec![2, 4];
+        let key_indices = vec![(2, 0), (4, 0)].into_iter().collect();
         let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
 
         let thinned = Row::pack([
@@ -674,7 +682,7 @@ mod tests {
     fn test_thin_end() {
         let mut packer = Row::default();
 
-        let key_indices = vec![2];
+        let key_indices = vec![(2, 0)].into_iter().collect();
 
         assert_eq!(
             thin(
