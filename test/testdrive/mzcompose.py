@@ -51,11 +51,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="set the default number of kafka partitions per topic",
     )
     parser.add_argument(
-        "--persistent-user-tables",
-        action="store_true",
-        help="enable the --persistent-user-tables materialized option",
-    )
-    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -79,14 +74,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.aws_region is None:
         dependencies += ["localstack"]
 
-    options = []
-    if args.persistent_user_tables:
-        options.append("--persistent-user-tables")
-
-    materialized = Materialized(
-        options=options,
-    )
-
     testdrive = Testdrive(
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
@@ -94,7 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_postgres_stash=True,
     )
 
-    with c.override(materialized, testdrive):
+    with c.override(testdrive):
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
         try:
