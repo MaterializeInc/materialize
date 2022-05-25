@@ -651,7 +651,7 @@ mod tests {
     fn test_rehydrate_thin_multiple() {
         let mut packer = Row::default();
 
-        let key_indices = vec![(2, 0), (4, 0)].into_iter().collect();
+        let key_indices = vec![(2, 0), (4, 1)].into_iter().collect();
         let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
 
         let thinned = Row::pack([
