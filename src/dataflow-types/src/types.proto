@@ -14,6 +14,7 @@ syntax = "proto3";
 import "dataflow-types/src/client/controller/storage.proto";
 import "dataflow-types/src/plan.proto";
 import "dataflow-types/src/types/sinks.proto";
+import "dataflow-types/src/types/sources.proto";
 import "expr/src/scalar.proto";
 import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
@@ -63,7 +64,7 @@ message ProtoBuildDesc {
 }
 
 message ProtoSourceInstanceDesc {
-    string description = 1;
+    mz_dataflow_types.types.sources.ProtoSourceDesc description = 1;
     ProtoSourceInstanceArguments arguments = 2;
     mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 3;
 }
