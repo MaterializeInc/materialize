@@ -37,8 +37,9 @@ pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
         Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
         _ => "localhost:9092".parse().unwrap(),
     });
+// Port 2181 is used by ZooKeeper.
 static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
-    Lazy::new(|| Arc::new(PortAllocator::new(2100, 2200)));
+    Lazy::new(|| Arc::new(PortAllocator::new_with_filter(2100, 2200, &[2181])));
 
 #[derive(Clone)]
 pub struct Config {
