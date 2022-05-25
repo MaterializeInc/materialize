@@ -48,7 +48,7 @@ use crate::ShardId;
 /// tokio::time::timeout(timeout, write.fetch_recent_upper()).await
 /// # };
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,

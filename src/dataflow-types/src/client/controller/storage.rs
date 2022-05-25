@@ -27,6 +27,7 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use futures::stream::{FuturesUnordered, StreamExt};
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
@@ -411,6 +412,8 @@ where
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
+        let futs = FuturesUnordered::new();
+
         for (id, updates, new_upper) in commands {
             for update in &updates {
                 if !update.timestamp.less_than(&new_upper) {
@@ -430,19 +433,32 @@ where
                 .into_iter()
                 .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
 
-            handles
-                .write
-                .compare_and_append(updates, upper.clone(), new_upper.clone())
-                .await
-                .expect("cannot append updates")
-                .expect("cannot append updates")
-                .or(Err(StorageError::InvalidUpper(id)))?;
+            let mut write = handles.write.clone();
 
-            let mut change_batch = ChangeBatch::new();
-            change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
-            change_batch.extend(upper.iter().cloned().map(|t| (t, -1)));
-            self.update_write_frontiers(&[(id, change_batch)]).await?;
+            futs.push(async move {
+                write
+                    .compare_and_append(updates, upper.clone(), new_upper.clone())
+                    .await
+                    .expect("cannot append updates")
+                    .expect("cannot append updates")
+                    .or(Err(StorageError::InvalidUpper(id)))?;
+
+                let mut change_batch = ChangeBatch::new();
+                change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
+                change_batch.extend(upper.iter().cloned().map(|t| (t, -1)));
+
+                Ok::<_, StorageError>((id, change_batch))
+            })
         }
+
+        let change_batches = futs
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.update_write_frontiers(&change_batches).await?;
+
         Ok(())
     }
 
