@@ -977,6 +977,7 @@ pub fn plan_create_source(
             _ => Timeline::EpochMilliseconds,
         }
     };
+    // TODO(jkosh44) Add to global map
 
     let source = Source {
         create_sql,

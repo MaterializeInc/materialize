@@ -455,6 +455,15 @@ impl<S: Append + 'static> Coordinator<S> {
         self.get_local_timestamp_oracle().read_ts()
     }
 
+    /// TODO(jkosh44)
+    fn get_global_read_ts(&mut self, timeline: &Timeline) -> Timestamp {
+        self.global_timeline
+            .get_mut(timeline)
+            .expect("missing timeline")
+            .0
+            .read_ts()
+    }
+
     /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
@@ -3358,6 +3367,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         &id_bundle,
                         QueryWhen::Immediately,
                         compute_instance,
+                        &timeline,
                     )?;
                     let read_holds = read_holds::ReadHolds {
                         time: timestamp,
@@ -3432,7 +3442,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     session,
                 )?;
             }
-            self.determine_timestamp(session, &id_bundle, when, compute_instance)?
+            self.determine_timestamp(session, &id_bundle, when, compute_instance, &timeline)?
         };
 
         // before we have the corrected timestamp ^
@@ -3552,9 +3562,15 @@ impl<S: Append + 'static> Coordinator<S> {
             let id_bundle = coord
                 .index_oracle(compute_instance)
                 .sufficient_collections(uses);
+            let timeline = coord.validate_timeline(id_bundle.iter())?;
             // If a timestamp was explicitly requested, use that.
-            let timestamp =
-                coord.determine_timestamp(session, &id_bundle, when, compute_instance)?;
+            let timestamp = coord.determine_timestamp(
+                session,
+                &id_bundle,
+                when,
+                compute_instance,
+                &timeline,
+            )?;
 
             Ok::<_, CoordError>(SinkDesc {
                 from,
@@ -3697,6 +3713,7 @@ impl<S: Append + 'static> Coordinator<S> {
         id_bundle: &CollectionIdBundle,
         when: QueryWhen,
         compute_instance: ComputeInstanceId,
+        timeline: &Option<Timeline>,
     ) -> Result<Timestamp, CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
@@ -3747,8 +3764,10 @@ impl<S: Append + 'static> Coordinator<S> {
             candidate.advance_by(since.borrow());
         }
         let uses_tables = id_bundle.iter().any(|id| self.catalog.uses_tables(id));
-        if when.advance_to_table_ts(uses_tables, self.strict_serializability) {
-            candidate.join_assign(&self.get_local_read_ts());
+        if when.advance_to_global_ts(uses_tables, self.strict_serializability) {
+            if let Some(timeline) = timeline {
+                candidate.join_assign(&self.get_global_read_ts(timeline));
+            }
         }
         if when.advance_to_upper(uses_tables, self.strict_serializability) {
             let upper = self.least_valid_write(&id_bundle, compute_instance);
@@ -3960,7 +3979,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ExplainStage::Timestamp => {
                 let decorrelated_plan = decorrelate(&mut timings, raw_plan)?;
                 let optimized_plan = self.view_optimizer.optimize(decorrelated_plan)?;
-                self.validate_timeline(optimized_plan.depends_on())?;
+                let timeline = self.validate_timeline(optimized_plan.depends_on())?;
                 let source_ids = optimized_plan.depends_on();
                 let id_bundle = self
                     .index_oracle(compute_instance)
@@ -3973,6 +3992,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     &id_bundle,
                     QueryWhen::Immediately,
                     compute_instance,
+                    &timeline,
                 )?;
                 let since = self
                     .least_valid_read(&id_bundle, compute_instance)

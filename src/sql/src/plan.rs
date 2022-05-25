@@ -539,8 +539,8 @@ impl QueryWhen {
             QueryWhen::AtTimestamp(_) => false,
         }
     }
-    /// Returns whether the candidate must be advanced to the global table timestamp.
-    pub fn advance_to_table_ts(&self, uses_tables: bool, strict_serializability: bool) -> bool {
+    /// Returns whether the candidate must be advanced to the global timestamp for it's timeline.
+    pub fn advance_to_global_ts(&self, uses_tables: bool, strict_serializability: bool) -> bool {
         match self {
             QueryWhen::Immediately | QueryWhen::AtLeastTimestamp(_) => {
                 uses_tables || strict_serializability
