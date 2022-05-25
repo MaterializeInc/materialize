@@ -14,7 +14,6 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use tokio_postgres::{Client as PostgresClient, NoTls};
@@ -44,6 +43,60 @@ CREATE TABLE IF NOT EXISTS consensus (
     data bytea NOT NULL,
     PRIMARY KEY(shard, sequence_number)
 );
+CREATE OR REPLACE FUNCTION compare_and_set(
+    target_shard text,
+    expected_seqno bigint,
+    new_seqno bigint,
+    new_data bytea,
+    OUT success boolean,
+    OUT actual_seqno bigint,
+    OUT actual_data bytea
+) AS $$
+DECLARE
+   head_seqno bigint;
+   head_data bytea;
+BEGIN
+    SELECT sequence_number, data
+    FROM consensus
+    WHERE shard = target_shard
+    ORDER BY sequence_number DESC LIMIT 1
+    INTO head_seqno, head_data;
+
+    IF head_seqno IS NOT DISTINCT FROM expected_seqno THEN
+        INSERT INTO consensus VALUES (target_shard, new_seqno, new_data);
+        success := true;
+    ELSE
+        success := false;
+        actual_seqno := head_seqno;
+        actual_data := head_data;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION truncate(
+    target_shard text,
+    truncate_seqno bigint,
+    OUT success boolean
+) AS $$
+DECLARE
+   head_seqno bigint;
+BEGIN
+    SELECT sequence_number
+    FROM consensus
+    WHERE shard = target_shard
+    ORDER BY sequence_number DESC LIMIT 1
+    INTO head_seqno;
+
+    IF truncate_seqno > head_seqno THEN
+        success := false;
+    ELSE
+        DELETE FROM consensus WHERE shard = target_shard AND sequence_number < truncate_seqno;
+        success := true;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 ";
 
 impl ToSql for SeqNo {
@@ -127,7 +180,7 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 #[derive(Debug)]
 pub struct PostgresConsensus {
-    client: Arc<Mutex<PostgresClient>>,
+    client: Arc<PostgresClient>,
     _handle: JoinHandle<()>,
 }
 
@@ -150,7 +203,7 @@ impl PostgresConsensus {
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
         Ok(PostgresConsensus {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(client),
             _handle: handle,
         })
     }
@@ -164,31 +217,26 @@ impl Consensus for PostgresConsensus {
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
+        let q = "SELECT sequence_number, data FROM consensus WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
 
-        let q = "SELECT sequence_number, data FROM consensus
-             WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let client = self.client.lock().await;
-        let row = client.query_opt(&*q, &[&key]).await?;
-        let row = match row {
-            None => return Ok(None),
+        let row = match self.client.query_opt(q, &[&key]).await? {
             Some(row) => row,
+            None => return Ok(None),
         };
 
         let seqno: SeqNo = row.try_get("sequence_number")?;
-
         let data: Vec<u8> = row.try_get("data")?;
         Ok(Some(VersionedData { seqno, data }))
     }
 
     async fn compare_and_set(
         &self,
-        deadline: Instant,
+        _deadline: Instant,
         key: &str,
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
         // TODO: properly use the deadline argument.
-
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -197,53 +245,25 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        let result = if let Some(expected) = expected {
-            // Only insert the new row if:
-            // - sequence number expected is already present
-            // - expected corresponds to the most recent sequence number
-            //   i.e. there is no other sequence number > expected already
-            //   present.
-            //
-            // This query has also been written to execute within a single
-            // network round-trip (instead of a slightly simpler implementation
-            // that would call `BEGIN` and have multiple `SELECT` queries).
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     EXISTS (
-                        SELECT * FROM consensus WHERE shard = $1 AND sequence_number = $4
-                     )
-                     AND NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
-                     )
-                     ON CONFLICT DO NOTHING";
+        let q = "SELECT * FROM compare_and_set($1, $2, $3, $4);";
+        let row = self
+            .client
+            .query_one(q, &[&key, &expected, &new.seqno, &new.data])
+            .await?;
 
-            let client = self.client.lock().await;
-
-            client
-                .execute(&*q, &[&key, &new.seqno, &new.data, &expected])
-                .await?
+        let success: bool = row.try_get("success")?;
+        let ret = if success {
+            Ok(())
         } else {
-            // Insert the new row as long as no other row exists for the same shard.
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1
-                     )
-                     ON CONFLICT DO NOTHING";
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &new.seqno, &new.data]).await?
+            let seqno: Option<SeqNo> = row.try_get("actual_seqno")?;
+            let data: Option<Vec<u8>> = row.try_get("actual_data")?;
+            match (seqno, data) {
+                (Some(seqno), Some(data)) => Err(Some(VersionedData { seqno, data })),
+                (None, None) => Err(None),
+                _ => panic!("invalid state"),
+            }
         };
-
-        if result == 1 {
-            Ok(Ok(()))
-        } else {
-            // It's safe to call head in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
-            let current = self.head(deadline, key).await?;
-            Ok(Err(current))
-        }
+        Ok(ret)
     }
 
     async fn scan(
@@ -253,12 +273,10 @@ impl Consensus for PostgresConsensus {
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
-
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let client = self.client.lock().await;
-        let rows = client.query(&*q, &[&key, &from]).await?;
+        let rows = self.client.query(q, &[&key, &from]).await?;
         let mut results = vec![];
 
         for row in rows {
@@ -269,8 +287,7 @@ impl Consensus for PostgresConsensus {
 
         if results.is_empty() {
             Err(ExternalError::from(anyhow!(
-                "sequence number lower bound too high for scan: {:?}",
-                from
+                "sequence number lower bound too high for scan: {from:?}"
             )))
         } else {
             Ok(results)
@@ -279,42 +296,24 @@ impl Consensus for PostgresConsensus {
 
     async fn truncate(
         &self,
-        deadline: Instant,
+        _deadline: Instant,
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
-        let q = "DELETE FROM consensus
-                WHERE shard = $1 AND sequence_number < $2 AND
-                EXISTS(
-                    SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
-                )";
+        let q = "SELECT * FROM truncate($1, $2);";
+        let row = self.client.query_one(q, &[&key, &seqno]).await?;
 
-        let result = {
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &seqno]).await?
+        let success: bool = row.try_get("success")?;
+        let ret = if success {
+            Ok(())
+        } else {
+            Err(ExternalError::from(anyhow!(
+                "upper bound too high for truncate: {:?}",
+                seqno
+            )))
         };
-        if result == 0 {
-            // We weren't able to successfully truncate any rows inspect head to
-            // determine whether the request was valid and there were no records in
-            // the provided range, or the request was invalid because it would have
-            // also deleted head.
 
-            // It's safe to call head in a subsequent transaction rather than doing
-            // so directly in the same transaction because, once a given (seqno, data)
-            // pair exists for our shard, we enforce the invariants that
-            // 1. Our shard will always have _some_ data mapped to it.
-            // 2. All operations that modify the (seqno, data) can only increase
-            //    the sequence number.
-            let current = self.head(deadline, key).await?;
-            if current.map_or(true, |data| data.seqno < seqno) {
-                return Err(ExternalError::from(anyhow!(
-                    "upper bound too high for truncate: {:?}",
-                    seqno
-                )));
-            }
-        }
-
-        Ok(())
+        ret
     }
 }
 
