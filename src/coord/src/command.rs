@@ -289,6 +289,7 @@ pub enum ExecuteResponse {
     /// The specified variable was set to a new value.
     SetVariable {
         name: String,
+        tag: &'static str,
     },
     /// A new transaction was started.
     StartedTransaction {

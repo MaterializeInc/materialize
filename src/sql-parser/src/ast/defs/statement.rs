@@ -62,6 +62,7 @@ pub enum Statement<T: AstInfo> {
     DropClusters(DropClustersStatement),
     DropClusterReplicas(DropClusterReplicasStatement),
     SetVariable(SetVariableStatement),
+    ResetVariable(ResetVariableStatement),
     ShowDatabases(ShowDatabasesStatement<T>),
     ShowSchemas(ShowSchemasStatement<T>),
     ShowObjects(ShowObjectsStatement<T>),
@@ -122,6 +123,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::DropClusters(stmt) => f.write_node(stmt),
             Statement::DropClusterReplicas(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
+            Statement::ResetVariable(stmt) => f.write_node(stmt),
             Statement::ShowDatabases(stmt) => f.write_node(stmt),
             Statement::ShowSchemas(stmt) => f.write_node(stmt),
             Statement::ShowObjects(stmt) => f.write_node(stmt),
@@ -1309,6 +1311,23 @@ impl AstDisplay for SetVariableStatement {
 }
 impl_display!(SetVariableStatement);
 
+/// `RESET <variable>`
+///
+/// Note: this is not a standard SQL statement, but it is supported by at
+/// least MySQL and PostgreSQL. Not all syntactic forms are supported yet.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResetVariableStatement {
+    pub variable: Ident,
+}
+
+impl AstDisplay for ResetVariableStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("RESET ");
+        f.write_node(&self.variable);
+    }
+}
+impl_display!(ResetVariableStatement);
+
 /// `SHOW <variable>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowVariableStatement {
@@ -1883,6 +1902,7 @@ impl_display!(TransactionIsolationLevel);
 pub enum SetVariableValue {
     Ident(Ident),
     Literal(Value),
+    Default,
 }
 
 impl AstDisplay for SetVariableValue {
@@ -1891,6 +1911,7 @@ impl AstDisplay for SetVariableValue {
         match self {
             Ident(ident) => f.write_node(ident),
             Literal(literal) => f.write_node(literal),
+            Default => f.write_str("DEFAULT"),
         }
     }
 }

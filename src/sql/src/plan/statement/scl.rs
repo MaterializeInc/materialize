@@ -20,14 +20,14 @@ use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
-    ExecuteStatement, FetchStatement, PrepareStatement, Raw, SetVariableStatement,
-    SetVariableValue, ShowVariableStatement, Value,
+    ExecuteStatement, FetchStatement, PrepareStatement, Raw, ResetVariableStatement,
+    SetVariableStatement, ShowVariableStatement, Value,
 };
 use crate::names::Aug;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
-    FetchPlan, Plan, PreparePlan, SetVariablePlan, ShowVariablePlan,
+    FetchPlan, Plan, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
 };
 
 pub fn describe_set_variable(
@@ -47,12 +47,24 @@ pub fn plan_set_variable(
 ) -> Result<Plan, anyhow::Error> {
     Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
-        value: match value {
-            SetVariableValue::Literal(Value::String(s)) => s,
-            SetVariableValue::Literal(lit) => lit.to_string(),
-            SetVariableValue::Ident(ident) => ident.into_string(),
-        },
+        value,
         local,
+    }))
+}
+
+pub fn describe_reset_variable(
+    _: &StatementContext,
+    _: &ResetVariableStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_reset_variable(
+    _: &StatementContext,
+    ResetVariableStatement { variable }: ResetVariableStatement,
+) -> Result<Plan, anyhow::Error> {
+    Ok(Plan::ResetVariable(ResetVariablePlan {
+        name: variable.to_string(),
     }))
 }
 

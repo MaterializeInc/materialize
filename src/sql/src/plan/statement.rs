@@ -152,6 +152,7 @@ pub fn describe(
 
         // SCL statements.
         Statement::SetVariable(stmt) => Some(scl::describe_set_variable(&scx, stmt)?),
+        Statement::ResetVariable(stmt) => Some(scl::describe_reset_variable(&scx, stmt)?),
         Statement::ShowVariable(stmt) => Some(scl::describe_show_variable(&scx, stmt)?),
         Statement::Discard(stmt) => Some(scl::describe_discard(&scx, stmt)?),
         Statement::Declare(stmt) => Some(scl::describe_declare(&scx, stmt)?),
@@ -439,6 +440,10 @@ pub fn plan(
         stmt @ Statement::SetVariable(_) => {
             let (stmt, _) = resolve_stmt!(Statement::SetVariable, scx, stmt);
             scl::plan_set_variable(scx, stmt)
+        }
+        stmt @ Statement::ResetVariable(_) => {
+            let (stmt, _) = resolve_stmt!(Statement::ResetVariable, scx, stmt);
+            scl::plan_reset_variable(scx, stmt)
         }
         stmt @ Statement::ShowVariable(_) => {
             let (stmt, _) = resolve_stmt!(Statement::ShowVariable, scx, stmt);

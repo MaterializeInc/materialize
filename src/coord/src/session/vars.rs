@@ -472,6 +472,54 @@ impl Vars {
         }
     }
 
+    /// Sets the configuration parameter named `name` to its default value.
+    ///
+    /// The new value may be either committed or rolled back by the next call to
+    /// [`Vars::end_transaction`]. If `local` is true, the new value is always
+    /// discarded by the next call to [`Vars::end_transaction`], even if the
+    /// transaction is marked to commit.
+    ///
+    /// Like with [`Vars::get`], configuration parameters are matched case
+    /// insensitively. If the named configuration parameter does not exist, an
+    /// error is returned.
+    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), CoordError> {
+        if name == APPLICATION_NAME.name {
+            self.application_name.reset(local);
+        } else if name == CLIENT_MIN_MESSAGES.name {
+            self.client_min_messages.reset(local);
+        } else if name == CLUSTER.name {
+            self.cluster.reset(local);
+        } else if name == CLUSTER_REPLICA.name {
+            self.cluster_replica.reset(local);
+        } else if name == DATABASE.name {
+            self.database.reset(local);
+        } else if name == EXTRA_FLOAT_DIGITS.name {
+            self.extra_float_digits.reset(local);
+        } else if name == QGM_OPTIMIZATIONS.name {
+            self.qgm_optimizations.reset(local);
+        } else if name == SEARCH_PATH.name {
+            self.search_path.reset(local);
+        } else if name == SQL_SAFE_UPDATES.name {
+            self.sql_safe_updates.reset(local);
+        } else if name == TIMEZONE.name {
+            self.timezone.reset(local);
+        } else if name == CLIENT_ENCODING.name
+            || name == DATE_STYLE.name
+            || name == FAILPOINTS.name
+            || name == INTEGER_DATETIMES.name
+            || name == INTERVAL_STYLE.name
+            || name == SERVER_VERSION.name
+            || name == SERVER_VERSION_NUM.name
+            || name == STANDARD_CONFORMING_STRINGS.name
+            || name == TRANSACTION_ISOLATION.name
+        {
+            // fixed value
+        } else {
+            return Err(CoordError::UnknownParameter(name.into()));
+        }
+        Ok(())
+    }
+
     /// Commits or rolls back configuration parameter updates made via
     /// [`Vars::set`] since the last call to `end_transaction`.
     pub fn end_transaction(&mut self, action: EndTransactionAction) {
@@ -677,6 +725,7 @@ struct SessionVar<V>
 where
     V: Value + fmt::Debug + ?Sized + 'static,
 {
+    default_value: &'static V,
     local_value: Option<V::Owned>,
     staged_value: Option<V::Owned>,
     session_value: Option<V::Owned>,
@@ -689,6 +738,7 @@ where
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
+            default_value: &parent.value,
             local_value: None,
             staged_value: None,
             session_value: None,
@@ -708,6 +758,16 @@ where
                 Ok(())
             }
             Err(()) => Err(CoordError::InvalidParameterType(self.parent)),
+        }
+    }
+
+    fn reset(&mut self, local: bool) {
+        let value = self.default_value.to_owned();
+        if local {
+            self.local_value = Some(value);
+        } else {
+            self.local_value = None;
+            self.staged_value = Some(value);
         }
     }
 
@@ -957,13 +1017,10 @@ impl Value for Option<String> {
     const TYPE_NAME: &'static str = "optional string";
 
     fn parse(s: &str) -> Result<Self::Owned, ()> {
-        // TODO(teskje): Remove this workaround of treating empty string
-        // values as NULL once we have support for DEFAULT values (#12551).
-        let parsed = match s {
-            "" => None,
-            _ => Some(s.into()),
-        };
-        Ok(parsed)
+        match s {
+            "" => Ok(None),
+            _ => Ok(Some(s.into())),
+        }
     }
 
     fn format(&self) -> String {

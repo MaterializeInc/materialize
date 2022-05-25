@@ -139,8 +139,9 @@ use mz_sql::plan::{
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
     DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
     HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig,
-    Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig,
+    ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom,
+    TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
 use mz_transform::Optimizer;
@@ -1376,6 +1377,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::ShowObjects(_)
                     | Statement::ShowVariable(_)
                     | Statement::SetVariable(_)
+                    | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
                     | Statement::Tail(_)
                     | Statement::Raise(_) => {
@@ -1725,6 +1727,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::SetVariable(plan) => {
                 tx.send(self.sequence_set_variable(&mut session, plan), session);
+            }
+            Plan::ResetVariable(plan) => {
+                tx.send(self.sequence_reset_variable(&mut session, plan), session);
             }
             Plan::StartTransaction(plan) => {
                 let duplicated =
@@ -2823,10 +2828,30 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session
-            .vars_mut()
-            .set(&plan.name, &plan.value, plan.local)?;
-        Ok(ExecuteResponse::SetVariable { name: plan.name })
+        use mz_sql::ast::{SetVariableValue, Value};
+
+        let vars = session.vars_mut();
+        let (name, local) = (plan.name, plan.local);
+        match plan.value {
+            SetVariableValue::Literal(Value::String(s)) => vars.set(&name, &s, local)?,
+            SetVariableValue::Literal(lit) => vars.set(&name, &lit.to_string(), local)?,
+            SetVariableValue::Ident(ident) => vars.set(&name, &ident.into_string(), local)?,
+            SetVariableValue::Default => vars.reset(&name, local)?,
+        }
+
+        Ok(ExecuteResponse::SetVariable { name, tag: "SET" })
+    }
+
+    fn sequence_reset_variable(
+        &self,
+        session: &mut Session,
+        plan: ResetVariablePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        session.vars_mut().reset(&plan.name, false)?;
+        Ok(ExecuteResponse::SetVariable {
+            name: plan.name,
+            tag: "RESET",
+        })
     }
 
     async fn sequence_end_transaction(
