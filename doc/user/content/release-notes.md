@@ -27,6 +27,10 @@ the v0.26.x series through at least August 31 2022, issuing **patch releases** a
 necessary to address severe bugs and security vulnerabilities.
 {{</ note >}}
 
+{{% version-header v0.26.2 %}}
+
+- Restore CPU and memory Prometheus metrics in the [monitoring dashboard](/ops/monitoring/#quick-monitoring-dashboard).
+
 {{% version-header v0.26.1 %}}
 
 - Support configuring the
