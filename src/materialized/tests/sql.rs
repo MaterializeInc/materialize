@@ -368,7 +368,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     #[derive(PartialEq)]
     enum State {
         WaitingForData,
-        WaitingForProgress(MzTimestamp),
+        // WaitingForProgress(MzTimestamp),
         Done,
     }
 
@@ -406,7 +406,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
             assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
             assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
             assert_eq!(data_row.get::<_, String>("data"), data);
-            let data_ts: MzTimestamp = data_row.get("mz_timestamp");
+            // let data_ts: MzTimestamp = data_row.get("mz_timestamp");
             // state = State::WaitingForProgress(data_ts);
             state = State::Done;
         }
