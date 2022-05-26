@@ -76,7 +76,9 @@ where
 
     pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
         let (seqno, (shard_upper, read_cap)) = self
-            .apply_unbatched_idempotent_cmd(|seqno, state| state.register(seqno, reader_id))
+            .apply_unbatched_idempotent_cmd("register", |seqno, state| {
+                state.register(seqno, reader_id)
+            })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         (shard_upper, read_cap)
@@ -84,7 +86,9 @@ where
 
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
         let (seqno, read_cap) = self
-            .apply_unbatched_idempotent_cmd(|seqno, state| state.clone_reader(seqno, new_reader_id))
+            .apply_unbatched_idempotent_cmd("clone_reader", |seqno, state| {
+                state.clone_reader(seqno, new_reader_id)
+            })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         read_cap
@@ -97,7 +101,9 @@ where
     ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
         loop {
             let (seqno, res) = self
-                .apply_unbatched_cmd(|_, state| state.compare_and_append(keys, desc))
+                .apply_unbatched_cmd("compare_and_append", |_, state| {
+                    state.compare_and_append(keys, desc)
+                })
                 .await?;
 
             match res {
@@ -135,13 +141,17 @@ where
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
     ) -> (SeqNo, Since<T>) {
-        self.apply_unbatched_idempotent_cmd(|_, state| state.downgrade_since(reader_id, new_since))
-            .await
+        self.apply_unbatched_idempotent_cmd("downgrade_since", |_, state| {
+            state.downgrade_since(reader_id, new_since)
+        })
+        .await
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
         let (seqno, _existed) = self
-            .apply_unbatched_idempotent_cmd(|_, state| state.expire_reader(reader_id))
+            .apply_unbatched_idempotent_cmd("expire_reader", |_, state| {
+                state.expire_reader(reader_id)
+            })
             .await;
         seqno
     }
@@ -221,20 +231,21 @@ where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<Infallible, R>,
     >(
         &mut self,
+        name: &str,
         mut work_fn: WorkFn,
     ) -> (SeqNo, R) {
         let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
-            match self.apply_unbatched_cmd(&mut work_fn).await {
+            match self.apply_unbatched_cmd(name, &mut work_fn).await {
                 Ok((seqno, x)) => match x {
                     Ok(x) => return (seqno, x),
                     Err(infallible) => match infallible {},
                 },
                 Err(err) => {
                     if retry.attempt() >= INFO_MIN_ATTEMPTS {
-                        info!("apply_unbatched_idempotent_cmd received an indeterminate error, retrying in {:?}: {}", retry.next_sleep(), err);
+                        info!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", name, retry.next_sleep(), err);
                     } else {
-                        debug!("apply_unbatched_idempotent_cmd received an indeterminate error, retrying in {:?}: {}", retry.next_sleep(), err);
+                        debug!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", name, retry.next_sleep(), err);
                     }
                     retry = retry.sleep().await;
                     continue;
@@ -249,6 +260,7 @@ where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
         &mut self,
+        name: &str,
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>), Indeterminate> {
         let path = self.shard_id().to_string();
@@ -259,7 +271,8 @@ where
                 Break(err) => return Ok((self.state.seqno(), Err(err))),
             };
             trace!(
-                "apply_unbatched_cmd attempting {}\n  new_state={:?}",
+                "apply_unbatched_cmd {} attempting {}\n  new_state={:?}",
+                name,
                 self.state.seqno(),
                 new_state
             );
@@ -284,13 +297,14 @@ where
             })
             .await
             .map_err(|err| {
-                debug!("apply_unbatched_cmd errored: {}", err);
+                debug!("apply_unbatched_cmd {} errored: {}", name, err);
                 err
             })?;
             match cas_res {
                 Ok(()) => {
                     trace!(
-                        "apply_unbatched_cmd succeeded {}\n  new_state={:?}",
+                        "apply_unbatched_cmd {} succeeded {}\n  new_state={:?}",
+                        name,
                         new_state.seqno(),
                         new_state
                     );
@@ -308,7 +322,8 @@ where
                 }
                 Err(current) => {
                     debug!(
-                        "apply_unbatched_cmd lost the CaS race, retrying: {} vs {:?}",
+                        "apply_unbatched_cmd {} lost the CaS race, retrying: {} vs {:?}",
+                        name,
                         self.state.seqno(),
                         current.as_ref().map(|x| x.seqno)
                     );
@@ -429,7 +444,15 @@ where
     let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
     loop {
         match work_fn().await {
-            Ok(x) => return x,
+            Ok(x) => {
+                if retry.attempt() > 0 {
+                    debug!(
+                        "external operation {} succeeded after failing at least once",
+                        name,
+                    );
+                }
+                return x;
+            }
             Err(err) => {
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
@@ -463,7 +486,15 @@ where
     let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
     loop {
         match work_fn().await {
-            Ok(x) => return Ok(x),
+            Ok(x) => {
+                if retry.attempt() > 0 {
+                    debug!(
+                        "external operation {} succeeded after failing at least once",
+                        name,
+                    );
+                }
+                return Ok(x);
+            }
             Err(ExternalError::Determinate(err)) => {
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(

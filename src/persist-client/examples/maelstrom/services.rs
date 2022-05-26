@@ -202,7 +202,7 @@ impl BlobMulti for MaelstromBlobMulti {
         };
         let value = value
             .as_str()
-            .ok_or_else(|| anyhow!("invalid blob at {}", key))?;
+            .ok_or_else(|| anyhow!("invalid blob at {}: {:?}", key, value))?;
         let value = serde_json::from_str(value)
             .map_err(|err| anyhow!("invalid blob at {}: {}", key, err))?;
         Ok(Some(value))
@@ -229,8 +229,13 @@ impl BlobMulti for MaelstromBlobMulti {
         Ok(())
     }
 
-    async fn delete(&self, _deadline: Instant, _key: &str) -> Result<(), ExternalError> {
-        unimplemented!("not yet used")
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        // Setting the value to Null is as close as we can get with lin_kv.
+        self.handle
+            .lin_kv_write(Value::from(format!("blob/{}", key)), Value::Null)
+            .await
+            .map_err(anyhow::Error::new)?;
+        Ok(())
     }
 }
 
@@ -295,8 +300,9 @@ impl BlobMulti for CachingBlobMulti {
         self.blob.set(deadline, key, value.clone(), atomic).await
     }
 
-    async fn delete(&self, _deadline: Instant, _key: &str) -> Result<(), ExternalError> {
-        unimplemented!("not yet used")
+    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        self.cache.lock().await.remove(key);
+        self.blob.delete(deadline, key).await
     }
 }
 
