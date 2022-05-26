@@ -353,8 +353,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-
-    let config = util::Config::default().workers(2);
+    let timestamp = Arc::new(Mutex::new(0));
+    let now = {
+        let timestamp = Arc::clone(&timestamp);
+        NowFn::from(move || *timestamp.lock().unwrap())
+    };
+    let config = util::Config::default().workers(2).with_now(now);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
@@ -362,7 +366,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
     client_reads.batch_execute(
         "COMMIT; BEGIN;
-         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS) AS OF 0;",
+         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
     )?;
 
     #[derive(PartialEq)]
@@ -372,10 +376,12 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
         Done,
     }
 
+    thread::sleep(Duration::from_secs(5));
     //for i in 1..=3 {
     // let data = format!("line {}", i);
     let data = format!("line 1");
     client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
+    thread::sleep(Duration::from_secs(5));
 
     // We have to try several times. It might be that the FETCH gets
     // a batch that only contains continuous progress statements, without
