@@ -14,10 +14,9 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use tokio_postgres::{Client as PostgresClient, IsolationLevel, NoTls, Transaction};
+use tokio_postgres::{Client as PostgresClient, NoTls};
 
 use mz_ore::task;
 
@@ -42,6 +41,60 @@ CREATE TABLE IF NOT EXISTS consensus (
     data bytea NOT NULL,
     PRIMARY KEY(shard, sequence_number)
 );
+CREATE OR REPLACE FUNCTION compare_and_set(
+    target_shard text,
+    expected_seqno bigint,
+    new_seqno bigint,
+    new_data bytea,
+    OUT success boolean,
+    OUT actual_seqno bigint,
+    OUT actual_data bytea
+) AS $$
+DECLARE
+   head_seqno bigint;
+   head_data bytea;
+BEGIN
+    SELECT sequence_number, data
+    FROM consensus
+    WHERE shard = target_shard
+    ORDER BY sequence_number DESC LIMIT 1
+    INTO head_seqno, head_data;
+
+    IF head_seqno IS NOT DISTINCT FROM expected_seqno THEN
+        INSERT INTO consensus VALUES (target_shard, new_seqno, new_data);
+        success := true;
+    ELSE
+        success := false;
+        actual_seqno := head_seqno;
+        actual_data := head_data;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION truncate(
+    target_shard text,
+    truncate_seqno bigint,
+    OUT success boolean
+) AS $$
+DECLARE
+   head_seqno bigint;
+BEGIN
+    SELECT sequence_number
+    FROM consensus
+    WHERE shard = target_shard
+    ORDER BY sequence_number DESC LIMIT 1
+    INTO head_seqno;
+
+    IF truncate_seqno > head_seqno THEN
+        success := false;
+    ELSE
+        DELETE FROM consensus WHERE shard = target_shard AND sequence_number < truncate_seqno;
+        success := true;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 ";
 
 impl ToSql for SeqNo {
@@ -125,7 +178,7 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 #[derive(Debug)]
 pub struct PostgresConsensus {
-    client: Arc<Mutex<PostgresClient>>,
+    client: Arc<PostgresClient>,
     _handle: JoinHandle<()>,
 }
 
@@ -148,38 +201,9 @@ impl PostgresConsensus {
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
         Ok(PostgresConsensus {
-            client: Arc::new(Mutex::new(client)),
+            client: Arc::new(client),
             _handle: handle,
         })
-    }
-
-    async fn tx<'a>(
-        &self,
-        client: &'a mut PostgresClient,
-    ) -> Result<Transaction<'a>, ExternalError> {
-        let tx = client
-            .build_transaction()
-            .isolation_level(IsolationLevel::Serializable)
-            .start()
-            .await?;
-        Ok(tx)
-    }
-
-    async fn head_tx(
-        &self,
-        tx: &Transaction<'_>,
-        key: &str,
-    ) -> Result<Option<VersionedData>, ExternalError> {
-        let q = "SELECT sequence_number, data FROM consensus WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-
-        let row = match tx.query_opt(q, &[&key]).await? {
-            Some(row) => row,
-            None => return Ok(None),
-        };
-
-        let seqno: SeqNo = row.try_get("sequence_number")?;
-        let data: Vec<u8> = row.try_get("data")?;
-        Ok(Some(VersionedData { seqno, data }))
     }
 }
 
@@ -191,12 +215,16 @@ impl Consensus for PostgresConsensus {
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
-        let ret = self.head_tx(&tx, key).await?;
-        tx.commit().await?;
+        let q = "SELECT sequence_number, data FROM consensus WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
 
-        Ok(ret)
+        let row = match self.client.query_opt(q, &[&key]).await? {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+
+        let seqno: SeqNo = row.try_get("sequence_number")?;
+        let data: Vec<u8> = row.try_get("data")?;
+        Ok(Some(VersionedData { seqno, data }))
     }
 
     async fn compare_and_set(
@@ -207,7 +235,6 @@ impl Consensus for PostgresConsensus {
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
         // TODO: properly use the deadline argument.
-
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -216,47 +243,24 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
-        let result = if let Some(expected) = expected {
-            // Only insert the new row if:
-            // - sequence number expected is already present
-            // - expected corresponds to the most recent sequence number
-            //   i.e. there is no other sequence number > expected already
-            //   present.
-            //
-            // This query has also been written to execute within a single
-            // network round-trip (instead of a slightly simpler implementation
-            // that would call `BEGIN` and have multiple `SELECT` queries).
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     EXISTS (
-                        SELECT * FROM consensus WHERE shard = $1 AND sequence_number = $4
-                     )
-                     AND NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
-                     )
-                     ON CONFLICT DO NOTHING";
+        let q = "SELECT * FROM compare_and_set($1, $2, $3, $4);";
+        let row = self
+            .client
+            .query_one(q, &[&key, &expected, &new.seqno, &new.data])
+            .await?;
 
-            tx.execute(&*q, &[&key, &new.seqno, &new.data, &expected])
-                .await?
-        } else {
-            // Insert the new row as long as no other row exists for the same shard.
-            let q = "INSERT INTO consensus SELECT $1, $2, $3 WHERE
-                     NOT EXISTS (
-                         SELECT * FROM consensus WHERE shard = $1
-                     )
-                     ON CONFLICT DO NOTHING";
-            tx.execute(&*q, &[&key, &new.seqno, &new.data]).await?
-        };
-
-        let ret = if result == 1 {
+        let success: bool = row.try_get("success")?;
+        let ret = if success {
             Ok(())
         } else {
-            let current = self.head_tx(&tx, key).await?;
-            Err(current)
+            let seqno: Option<SeqNo> = row.try_get("actual_seqno")?;
+            let data: Option<Vec<u8>> = row.try_get("actual_data")?;
+            match (seqno, data) {
+                (Some(seqno), Some(data)) => Err(Some(VersionedData { seqno, data })),
+                (None, None) => Err(None),
+                _ => panic!("invalid state"),
+            }
         };
-
-        tx.commit().await?;
         Ok(ret)
     }
 
@@ -267,19 +271,10 @@ impl Consensus for PostgresConsensus {
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
         // TODO: properly use the deadline argument.
-
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
-        // Intentianally wait to actually use the data until after the transaction
-        // has successfully committed to ensure the reads were valid. See [1]
-        // for more details.
-        //
-        // [1]: https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE
-        let rows = tx.query(&*q, &[&key, &from]).await?;
-        tx.commit().await?;
+        let rows = self.client.query(q, &[&key, &from]).await?;
         let mut results = vec![];
 
         for row in rows {
@@ -290,8 +285,7 @@ impl Consensus for PostgresConsensus {
 
         if results.is_empty() {
             Err(ExternalError::from(anyhow!(
-                "sequence number lower bound too high for scan: {:?}",
-                from
+                "sequence number lower bound too high for scan: {from:?}"
             )))
         } else {
             Ok(results)
@@ -304,39 +298,18 @@ impl Consensus for PostgresConsensus {
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
-        let q = "DELETE FROM consensus
-                WHERE shard = $1 AND sequence_number < $2 AND
-                EXISTS(
-                    SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
-                )";
+        let q = "SELECT * FROM truncate($1, $2);";
+        let row = self.client.query_one(q, &[&key, &seqno]).await?;
 
-        let mut client = self.client.lock().await;
-        let tx = self.tx(&mut client).await?;
-        let result = tx.execute(&*q, &[&key, &seqno]).await?;
-        let ret = if result == 0 {
-            // We weren't able to successfully truncate any rows inspect head to
-            // determine whether the request was valid and there were no records in
-            // the provided range, or the request was invalid because it would have
-            // also deleted head.
-            let current = self.head_tx(&tx, key).await?;
-            // Intentionally don't early exit here and instead wait until after
-            // we have committed the transaction to ensure that our reads were
-            // valid. See [1] for more details.
-            //
-            // [1]: https://www.postgresql.org/docs/current/transaction-iso.html#XACT-SERIALIZABLE
-            if current.map_or(true, |data| data.seqno < seqno) {
-                Err(ExternalError::from(anyhow!(
-                    "upper bound too high for truncate: {:?}",
-                    seqno
-                )))
-            } else {
-                Ok(())
-            }
-        } else {
+        let success: bool = row.try_get("success")?;
+        let ret = if success {
             Ok(())
+        } else {
+            Err(ExternalError::from(anyhow!(
+                "upper bound too high for truncate: {:?}",
+                seqno
+            )))
         };
-
-        tx.commit().await?;
 
         ret
     }
