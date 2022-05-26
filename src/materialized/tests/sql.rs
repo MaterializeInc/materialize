@@ -772,6 +772,7 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
