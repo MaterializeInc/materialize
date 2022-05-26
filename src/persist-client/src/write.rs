@@ -524,7 +524,7 @@ where
     blob_keys: Vec<String>,
 
     /// Handle to the [BlobMulti] that the blobs of this batch were uploaded to.
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+    _blob: Arc<dyn BlobMulti + Send + Sync>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
@@ -563,7 +563,7 @@ where
             desc,
             blob_keys,
             shard_id,
-            blob,
+            _blob: blob,
             _phantom: PhantomData,
         }
     }
@@ -590,13 +590,18 @@ where
     /// Deletes the blobs that make up this batch from the given blob store and
     /// marks them as deleted.
     pub async fn delete(mut self) {
-        let deadline = Instant::now() + FOREVER;
-        for key in self.blob_keys.iter() {
-            retry_external("batch::delete", || async {
-                self.blob.delete(deadline, key).await
-            })
-            .await;
-        }
+        // TODO: This is temporarily disabled because nemesis seems to have
+        // caught that we sometimes delete batches that are later needed.
+        // Temporarily removing the deletions while we figure out the bug in
+        // case it has anything to do with CI timeouts.
+        //
+        // let deadline = Instant::now() + FOREVER;
+        // for key in self.blob_keys.iter() {
+        //     retry_external("batch::delete", || async {
+        //         self.blob.delete(deadline, key).await
+        //     })
+        //     .await;
+        // }
         self.blob_keys.clear();
     }
 }
