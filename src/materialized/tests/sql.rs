@@ -114,7 +114,6 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 }
 
 #[test]
-#[ignore]
 fn test_time() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -154,7 +153,6 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -183,7 +181,6 @@ fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -232,7 +229,6 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
