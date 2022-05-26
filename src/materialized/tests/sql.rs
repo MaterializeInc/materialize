@@ -373,7 +373,8 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     }
 
     //for i in 1..=3 {
-    let data = format!("line {}", i);
+    // let data = format!("line {}", i);
+    let data = format!("line 1");
     client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
 
     // We have to try several times. It might be that the FETCH gets
