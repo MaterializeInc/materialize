@@ -114,6 +114,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 }
 
 #[test]
+#[ignore]
 fn test_time() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -153,6 +154,7 @@ fn test_time() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -181,6 +183,7 @@ fn test_tail_consolidation() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -229,6 +232,7 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -351,6 +355,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[test]
+#[ignore]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -433,6 +438,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 // Verifies that tailing non-nullable columns with progress information
 // turns them into nullable columns. See #6304.
 #[test]
+#[ignore]
 fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -482,6 +488,7 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
 /// Verifies that we get continuous progress messages, regardless of if we
 /// receive data or not.
 #[test]
+#[ignore]
 fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -565,6 +572,7 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -654,6 +662,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -713,6 +722,7 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -734,6 +744,7 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 // Tests that a client that launches a non-terminating TAIL and disconnects
 // does not keep the server alive forever.
 #[test]
+#[ignore]
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -882,6 +893,7 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
 // Tests that temporary views created by one connection cannot be viewed
 // by another connection.
 #[test]
+#[ignore]
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -914,6 +926,7 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 // Test EXPLAIN TIMESTAMP with tables. Mock time to verify initial table since
 // is now(), not 0.
 #[test]
+#[ignore]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
     let timestamp = Arc::new(Mutex::new(1_000));
@@ -951,6 +964,7 @@ write frontier:[         1036]\n",
 // forever) when a client is terminated (disconnects from the server) instead
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[test]
+#[ignore]
 fn test_github_12546() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
     let config = util::Config::default();
