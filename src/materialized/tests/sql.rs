@@ -362,7 +362,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
     client_reads.batch_execute(
         "COMMIT; BEGIN;
-         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
+         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS) AS OF 0;",
     )?;
 
     #[derive(PartialEq)]
