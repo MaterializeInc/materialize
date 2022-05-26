@@ -572,16 +572,12 @@ fn rehydrate(
     let mut next_idx = 0;
     let mut key_indices_iter = key_indices_map.iter().peekable();
 
-    while let Some((value_idx, key_idx)) = key_indices_iter.peek() {
-        // Make borrowck happy
-        let value_idx = **value_idx;
-        let key_idx = **key_idx;
+    while let Some((value_idx, key_idx)) = key_indices_iter.next() {
         // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(value_idx - next_idx));
+        row_packer.extend(values.take(*value_idx - next_idx));
         // Then, push this key datum
-        row_packer.push(key_datums[key_idx]);
-        key_indices_iter.next().unwrap();
-        next_idx = value_idx + 1;
+        row_packer.push(key_datums[*key_idx]);
+        next_idx = *value_idx + 1;
     }
     // Finally, push any columns after the last key index
     row_packer.extend(values);
