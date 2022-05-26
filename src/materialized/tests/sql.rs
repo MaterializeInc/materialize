@@ -926,7 +926,6 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 // Test EXPLAIN TIMESTAMP with tables. Mock time to verify initial table since
 // is now(), not 0.
 #[test]
-#[ignore]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
     let timestamp = Arc::new(Mutex::new(1_000));
