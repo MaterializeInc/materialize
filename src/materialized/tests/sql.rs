@@ -383,16 +383,14 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
         let mut state = State::WaitingForData;
         while state != State::Done {
             let rows = client_reads.query("FETCH ALL c1", &[])?;
-            let rows = rows.iter();
+            let mut rows = rows.iter();
 
             if state == State::WaitingForData {
                 // find the data row in the sea of progress rows
-
                 // remove progress statements that occurred before our data
-                let skip_progress = state == State::WaitingForData;
-                let mut rows = rows.skip_while(move |row| {
-                    skip_progress && row.try_get::<_, String>("data").is_err()
-                });
+                rows = rows
+                    .skip_while(move |row| row.try_get::<_, String>("data").is_err())
+                    .into();
 
                 // this must be the data row
                 let data_row = rows.next();
