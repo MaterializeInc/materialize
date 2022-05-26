@@ -407,7 +407,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
             assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
             assert_eq!(data_row.get::<_, String>("data"), data);
             let data_ts: MzTimestamp = data_row.get("mz_timestamp");
-            state = State::WaitingForProgress(data_ts);
+            // state = State::WaitingForProgress(data_ts);
             state = State::Done;
         }
         /*if let State::WaitingForProgress(data_ts) = &state {
