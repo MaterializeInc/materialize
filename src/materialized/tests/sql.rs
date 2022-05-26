@@ -351,7 +351,6 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[test]
-#[ignore]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -952,6 +951,7 @@ write frontier:[         1036]\n",
 // forever) when a client is terminated (disconnects from the server) instead
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[test]
+#[ignore]
 fn test_github_12546() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
     let config = util::Config::default();
