@@ -9,6 +9,7 @@
 
 //! Persistent metadata storage for the coordinator.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -208,12 +209,7 @@ impl CatalogState {
 
     fn log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
         match self.get_entry(&id).item() {
-            CatalogItem::Source(Source {
-                connector: SourceConnector::Log,
-                ..
-            }) => {
-                out.push(id);
-            }
+            CatalogItem::Log(_) => out.push(id),
             CatalogItem::View(view) => {
                 for id in view.depends_on.iter() {
                     self.log_dependencies_inner(*id, out);
@@ -236,6 +232,7 @@ impl CatalogState {
             item @ CatalogItem::View(_) => item.uses().iter().any(|id| self.uses_tables(*id)),
             CatalogItem::Index(idx) => self.uses_tables(idx.on),
             CatalogItem::Source(_)
+            | CatalogItem::Log(_)
             | CatalogItem::Func(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
@@ -663,8 +660,9 @@ impl CatalogState {
                     ExternalSourceConnector::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local { .. } | SourceConnector::Log => Volatile,
+                SourceConnector::Local { .. } => Volatile,
             },
+            CatalogItem::Log(_) => Volatile,
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one
                 // volatile dependency exists, then this item is volatile.
@@ -952,6 +950,7 @@ pub struct CatalogEntry {
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
+    Log(&'static BuiltinLog),
     View(View),
     Sink(Sink),
     Index(Index),
@@ -1077,6 +1076,7 @@ impl CatalogItem {
         match self {
             CatalogItem::Table(_) => mz_sql::catalog::CatalogItemType::Table,
             CatalogItem::Source(_) => mz_sql::catalog::CatalogItemType::Source,
+            CatalogItem::Log(_) => mz_sql::catalog::CatalogItemType::Source,
             CatalogItem::Sink(_) => mz_sql::catalog::CatalogItemType::Sink,
             CatalogItem::View(_) => mz_sql::catalog::CatalogItemType::View,
             CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
@@ -1087,11 +1087,12 @@ impl CatalogItem {
         }
     }
 
-    pub fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, SqlCatalogError> {
+    pub fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(src) => Ok(&src.desc),
-            CatalogItem::Table(tbl) => Ok(&tbl.desc),
-            CatalogItem::View(view) => Ok(&view.desc),
+            CatalogItem::Source(src) => Ok(Cow::Borrowed(&src.desc)),
+            CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
+            CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
+            CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1132,6 +1133,7 @@ impl CatalogItem {
             CatalogItem::Index(idx) => &idx.depends_on,
             CatalogItem::Sink(sink) => &sink.depends_on,
             CatalogItem::Source(source) => &source.depends_on,
+            CatalogItem::Log(_) => &[],
             CatalogItem::Table(table) => &table.depends_on,
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
@@ -1147,6 +1149,7 @@ impl CatalogItem {
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Source(_)
+            | CatalogItem::Log(_)
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::View(_)
@@ -1166,6 +1169,7 @@ impl CatalogItem {
             CatalogItem::View(view) => view.conn_id,
             CatalogItem::Index(index) => index.conn_id,
             CatalogItem::Table(table) => table.conn_id,
+            CatalogItem::Log(_) => None,
             CatalogItem::Source(_) => None,
             CatalogItem::Sink(_) => None,
             CatalogItem::Secret(_) => None,
@@ -1205,6 +1209,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Table(i))
             }
+            CatalogItem::Log(i) => Ok(CatalogItem::Log(i)),
             CatalogItem::Source(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
@@ -1256,7 +1261,7 @@ impl CatalogItem {
 
 impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
-    pub fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, SqlCatalogError> {
+    pub fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         self.item.desc(name)
     }
 
@@ -1530,17 +1535,9 @@ impl<S: Append> Catalog<S> {
             match builtin {
                 Builtin::Log(log) => {
                     let oid = catalog.allocate_oid().await?;
-                    catalog.state.insert_item(
-                        id,
-                        oid,
-                        name.clone(),
-                        CatalogItem::Source(Source {
-                            create_sql: "TODO".to_string(),
-                            connector: mz_dataflow_types::sources::SourceConnector::Log,
-                            desc: log.variant.desc(),
-                            depends_on: vec![],
-                        }),
-                    );
+                    catalog
+                        .state
+                        .insert_item(id, oid, name.clone(), CatalogItem::Log(log));
                 }
 
                 Builtin::Table(table) => {
@@ -2982,6 +2979,7 @@ impl<S: Append> Catalog<S> {
                 create_sql: table.create_sql.clone(),
                 eval_env: None,
             },
+            CatalogItem::Log(_) => unreachable!("builtin logs cannot be serialized"),
             CatalogItem::Source(source) => SerializedCatalogItem::V1 {
                 create_sql: source.create_sql.clone(),
                 eval_env: None,
@@ -3601,7 +3599,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         self.oid()
     }
 
-    fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, SqlCatalogError> {
+    fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, SqlCatalogError> {
         Ok(self.desc(name)?)
     }
 
@@ -3627,7 +3625,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
             CatalogItem::Connector(Connector { create_sql, .. }) => create_sql,
-            CatalogItem::Func(_) => "TODO",
+            CatalogItem::Func(_) => "<builtin>",
+            CatalogItem::Log(_) => "<builtin>",
         }
     }
 

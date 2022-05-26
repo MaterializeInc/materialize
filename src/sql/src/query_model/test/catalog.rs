@@ -7,6 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use chrono::MIN_DATETIME;
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use mz_build_info::DUMMY_BUILD_INFO;
+use mz_dataflow_types::sources::SourceConnector;
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
+use mz_lowertest::*;
+use mz_ore::now::{EpochMillis, NOW_ZERO};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+
 use crate::ast::Expr;
 use crate::catalog::{
     CatalogComputeInstance, CatalogConfig, CatalogConnector, CatalogDatabase, CatalogError,
@@ -20,18 +36,6 @@ use crate::names::{
 };
 use crate::plan::StatementDesc;
 use crate::DEFAULT_SCHEMA;
-use chrono::MIN_DATETIME;
-use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::sources::SourceConnector;
-use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
-use mz_lowertest::*;
-use mz_ore::now::{EpochMillis, NOW_ZERO};
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use uuid::Uuid;
 
 static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     start_time: MIN_DATETIME,
@@ -79,9 +83,9 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn desc(&self, _: &FullObjectName) -> Result<&RelationDesc, CatalogError> {
+    fn desc(&self, _: &FullObjectName) -> Result<Cow<RelationDesc>, CatalogError> {
         match &self {
-            TestCatalogItem::BaseTable { desc, .. } => Ok(desc),
+            TestCatalogItem::BaseTable { desc, .. } => Ok(Cow::Borrowed(desc)),
             _ => Err(CatalogError::UnknownItem(format!(
                 "{:?} does not have a desc() method",
                 self

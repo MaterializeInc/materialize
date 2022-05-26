@@ -286,7 +286,7 @@ pub fn describe_tail(
         TailRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
             item.desc(&scx.catalog.resolve_full_name(item.name()))?
-                .clone()
+                .into_owned()
         }
         TailRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
