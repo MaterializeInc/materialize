@@ -324,7 +324,7 @@ pub fn plan_copy_from(
     }
     let mut desc = table
         .desc(&scx.catalog.resolve_full_name(table.name()))?
-        .clone();
+        .into_owned();
     let _ = table
         .table_details()
         .expect("attempted to insert into non-table");

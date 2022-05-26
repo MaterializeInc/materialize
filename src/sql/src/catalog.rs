@@ -11,6 +11,7 @@
 
 //! Catalog abstraction layer.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -292,7 +293,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, CatalogError>;
+    fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///

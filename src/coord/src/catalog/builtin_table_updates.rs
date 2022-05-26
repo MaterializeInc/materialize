@@ -27,7 +27,7 @@ use crate::catalog::builtin::{
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
-    Source, Type, View, SYSTEM_CONN_ID,
+    Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -154,10 +154,11 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let mut updates = match entry.item() {
+            CatalogItem::Log(_) => self.pack_source_update(id, oid, schema_id, name, "log", diff),
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                self.pack_source_update(id, oid, schema_id, name, source, diff)
+                self.pack_source_update(id, oid, schema_id, name, source.connector.name(), diff)
             }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
@@ -226,7 +227,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        source: &Source,
+        source_connector_name: &str,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -236,7 +237,7 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
-                Datum::String(source.connector.name()),
+                Datum::String(source_connector_name),
                 Datum::String(self.is_volatile(id).as_str()),
             ]),
             diff,

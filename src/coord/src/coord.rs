@@ -1641,7 +1641,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 .resolve_full_name(from_entry.name(), from_entry.conn_id()),
                         )
                         .unwrap()
-                        .clone(),
+                        .into_owned(),
                     connector: connector.clone(),
                     envelope: Some(sink.envelope),
                     as_of,
@@ -2391,7 +2391,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                         .resolve_full_name(from_entry.name(), from_entry.conn_id()),
                                 )
                                 .unwrap()
-                                .clone(),
+                                .into_owned(),
                             connector: SinkConnector::Tail(TailSinkConnector {}),
                             envelope: Some(sink.envelope),
                             as_of: SinkAsOf {
@@ -3452,7 +3452,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             .resolve_full_name(from.name(), Some(session.conn_id())),
                     )
                     .unwrap()
-                    .clone();
+                    .into_owned();
                 let sink_id = self.catalog.allocate_user_id().await?;
                 let sink_desc = make_sink_desc(self, from_id, from_desc, &[from_id][..])?;
                 let sink_name = format!("tail-{}", sink_id);
@@ -4164,7 +4164,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .resolve_full_name(table.name(), Some(session.conn_id())),
                 )
                 .expect("desc called on table")
-                .clone(),
+                .into_owned(),
             None => {
                 tx.send(
                     Err(CoordError::SqlCatalog(CatalogError::UnknownItem(

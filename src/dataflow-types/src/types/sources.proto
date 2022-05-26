@@ -180,7 +180,6 @@ message ProtoSourceConnector {
     oneof kind {
         ProtoExternal external = 1;
         ProtoLocal local = 2;
-        google.protobuf.Empty log = 3;
     }
 }
 
