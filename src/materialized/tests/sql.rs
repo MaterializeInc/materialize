@@ -434,6 +434,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 // Verifies that tailing non-nullable columns with progress information
 // turns them into nullable columns. See #6304.
 #[test]
+#[ignore]
 fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
