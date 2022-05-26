@@ -372,62 +372,60 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
         Done,
     }
 
-    //for i in 1..=3 {
-    // let data = format!("line {}", i);
-    let data = format!("line 1");
-    client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
+    for i in 1..=3 {
+        let data = format!("line {}", i);
+        client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
 
-    // We have to try several times. It might be that the FETCH gets
-    // a batch that only contains continuous progress statements, without
-    // any data. We retry until we get the batch that has the data, and
-    // then verify that it also has a progress statement.
-    let mut state = State::WaitingForData;
-    while state != State::Done {
-        let rows = client_reads.query("FETCH ALL c1", &[])?;
+        // We have to try several times. It might be that the FETCH gets
+        // a batch that only contains continuous progress statements, without
+        // any data. We retry until we get the batch that has the data, and
+        // then verify that it also has a progress statement.
+        let mut state = State::WaitingForData;
+        while state != State::Done {
+            let rows = client_reads.query("FETCH ALL c1", &[])?;
+            let rows = rows.iter();
 
-        let rows = rows.iter();
+            if state == State::WaitingForData {
+                // find the data row in the sea of progress rows
 
-        // find the data row in the sea of progress rows
+                // remove progress statements that occurred before our data
+                let skip_progress = state == State::WaitingForData;
+                let mut rows = rows.skip_while(move |row| {
+                    skip_progress && row.try_get::<_, String>("data").is_err()
+                });
 
-        // remove progress statements that occurred before our data
-        let skip_progress = state == State::WaitingForData;
-        let mut rows =
-            rows.skip_while(move |row| skip_progress && row.try_get::<_, String>("data").is_err());
+                // this must be the data row
+                let data_row = rows.next();
 
-        if state == State::WaitingForData {
-            // this must be the data row
-            let data_row = rows.next();
+                let data_row = match data_row {
+                    Some(data_row) => data_row,
+                    None => continue, //retry
+                };
 
-            let data_row = match data_row {
-                Some(data_row) => data_row,
-                None => continue, //retry
-            };
+                assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
+                assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
+                assert_eq!(data_row.get::<_, String>("data"), data);
+                let data_ts: MzTimestamp = data_row.get("mz_timestamp");
+                state = State::WaitingForProgress(data_ts);
+            }
+            if let State::WaitingForProgress(data_ts) = &state {
+                let mut num_progress_rows = 0;
+                for progress_row in rows {
+                    assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
+                    assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
+                    assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
 
-            assert_eq!(data_row.get::<_, bool>("mz_progressed"), false);
-            assert_eq!(data_row.get::<_, i64>("mz_diff"), 1);
-            assert_eq!(data_row.get::<_, String>("data"), data);
-            let data_ts: MzTimestamp = data_row.get("mz_timestamp");
-            // state = State::WaitingForProgress(data_ts);
-            state = State::Done;
+                    let progress_ts: MzTimestamp = progress_row.get("mz_timestamp");
+                    assert!(data_ts < &progress_ts);
+
+                    num_progress_rows += 1;
+                }
+                if num_progress_rows > 0 {
+                    state = State::Done;
+                }
+            }
         }
-        /*if let State::WaitingForProgress(data_ts) = &state {
-            let mut num_progress_rows = 0;
-            for progress_row in rows {
-                assert_eq!(progress_row.get::<_, bool>("mz_progressed"), true);
-                assert_eq!(progress_row.get::<_, Option<i64>>("mz_diff"), None);
-                assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
-
-                let progress_ts: MzTimestamp = progress_row.get("mz_timestamp");
-                assert!(data_ts < &progress_ts);
-
-                num_progress_rows += 1;
-            }
-            if num_progress_rows > 0 {
-                state = State::Done;
-            }
-        }*/
     }
-    //}
 
     Ok(())
 }
