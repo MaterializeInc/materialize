@@ -365,6 +365,9 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
         "COMMIT; BEGIN;
          DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
     )?;
+    // Locks the timestamp of the TAIL to before any of the following INSERTs, which is required
+    // for mz_timestamp column to be accurate
+    let _ = client_reads.query_one("FETCH 0 c", &[]);
 
     #[derive(PartialEq)]
     enum State {
@@ -432,6 +435,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     }
     //}
 
+    client_reads.batch_execute("COMMIT;")?;
     Ok(())
 }
 
