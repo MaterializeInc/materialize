@@ -512,10 +512,12 @@ fn build_datum_vec_for_evaluation<'row>(
 /// `thin` uses information from the source description to find which indexes in the row
 /// are keys and skip them.
 fn thin(key_indices: &[usize], value: &Row, row_buf: &mut Row) -> Row {
+    let mut key_indices = key_indices.to_vec();
+    key_indices.sort_unstable();
     let mut row_packer = row_buf.packer();
     let values = &mut value.iter();
     let mut next_idx = 0;
-    for &key_idx in key_indices {
+    for key_idx in key_indices {
         // First, push the datums that are before `key_idx`
         row_packer.extend(values.take(key_idx - next_idx));
         // Then, skip this key datum
@@ -531,10 +533,12 @@ fn thin(key_indices: &[usize], value: &Row, row_buf: &mut Row) -> Row {
 /// `rehydrate` uses information from the source description to find which indexes in the row
 /// are keys and add them back in in the right places.
 fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_buf: &mut Row) -> Row {
+    let mut key_indices = key_indices.to_vec();
+    key_indices.sort_unstable();
     let mut row_packer = row_buf.packer();
     let values = &mut thinned_value.iter();
     let mut next_idx = 0;
-    for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
+    for (key_idx, key_datum) in key_indices.into_iter().zip(key.iter()) {
         // First, push the datums that are before `key_idx`
         row_packer.extend(values.take(key_idx - next_idx));
         // Then, push this key datum
@@ -602,7 +606,7 @@ mod tests {
     fn test_rehydrate_thin_multiple() {
         let mut packer = Row::default();
 
-        let key_indices = vec![2, 4];
+        let key_indices = vec![4, 2];
         let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
 
         let thinned = Row::pack([
