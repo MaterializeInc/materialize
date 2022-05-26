@@ -353,12 +353,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-    let timestamp = Arc::new(Mutex::new(0));
-    let now = {
-        let timestamp = Arc::clone(&timestamp);
-        NowFn::from(move || *timestamp.lock().unwrap())
-    };
-    let config = util::Config::default().workers(2).with_now(now);
+    let config = util::Config::default()
+        .workers(2)
+        .with_now(NOW_ZERO.clone());
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
