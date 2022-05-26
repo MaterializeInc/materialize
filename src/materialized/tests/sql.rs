@@ -488,7 +488,6 @@ fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
 /// Verifies that we get continuous progress messages, regardless of if we
 /// receive data or not.
 #[test]
-#[ignore]
 fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -572,7 +571,6 @@ fn test_tail_continuous_progress() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -662,7 +660,6 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -722,7 +719,6 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -744,7 +740,6 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
 // Tests that a client that launches a non-terminating TAIL and disconnects
 // does not keep the server alive forever.
 #[test]
-#[ignore]
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -783,7 +778,6 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -893,7 +887,6 @@ fn test_tail_table_rw_timestamps() -> Result<(), Box<dyn Error>> {
 // Tests that temporary views created by one connection cannot be viewed
 // by another connection.
 #[test]
-#[ignore]
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
