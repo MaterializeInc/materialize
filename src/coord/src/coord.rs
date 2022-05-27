@@ -315,6 +315,12 @@ fn concretize_replica_config(
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
+    ///
+    /// This component offers:
+    /// - Sufficient isolation from COMPUTE, so long as communication with
+    ///   COMPUTE replicas is non-blocking.
+    /// - Insufficient isolation from STORAGE. The ADAPTER cannot tolerate
+    ///   failure of STORAGE services.
     dataflow_client: mz_dataflow_types::client::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
