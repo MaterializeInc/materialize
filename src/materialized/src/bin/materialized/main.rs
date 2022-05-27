@@ -9,7 +9,8 @@
 
 //! The main Materialize server.
 //!
-//! The name is pronounced "materialize-dee." It listens on port 6875 (MTRL).
+//! The name is pronounced "materialize-dee." It listens for pgwire connections
+//! on port 6875 (MTRL) and HTTP connections on port 6876.
 //!
 //! The design and implementation of materialized is very much in flux. See the
 //! draft architecture doc for the most up-to-date plan [0]. Access is limited
@@ -105,7 +106,8 @@ pub struct Args {
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
-    /// The address on which Prometheus metrics get exposed.
+    /// The address on which materialized listens for pgwire connections from
+    /// the cloud system.
     ///
     /// This address is never served TLS-encrypted or authenticated so care
     /// should be taken to not expose the listen address to the public internet
@@ -114,9 +116,24 @@ pub struct Args {
         long,
         hide = true,
         value_name = "HOST:PORT",
-        env = "THIRD_PARTY_METRICS_ADDR"
+        env = "MZ_INTERNAL_SQL_LISTEN_ADDR"
     )]
-    metrics_listen_addr: Option<SocketAddr>,
+    internal_sql_listen_addr: Option<SocketAddr>,
+
+    /// The address on which internal APIs get exposed.
+    ///
+    /// Internal APIs include Prometheus metrics and memory debugging.
+    ///
+    /// This address is never served TLS-encrypted or authenticated so care
+    /// should be taken to not expose the listen address to the public internet
+    /// or other unauthorized parties.
+    #[clap(
+        long,
+        hide = true,
+        value_name = "HOST:PORT",
+        env = "MZ_INTERNAL_HTTP_LISTEN_ADDR"
+    )]
+    internal_http_listen_addr: Option<SocketAddr>,
 
     // === Platform options. ===
     /// The service orchestrator implementation to use.
@@ -195,14 +212,23 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     // === Connection options. ===
-    /// The address on which to listen for connections.
+    /// The address on which materialized listens for pgwire connections.
     #[clap(
         long,
-        env = "LISTEN_ADDR",
+        env = "MZ_SQL_LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:6875"
     )]
-    listen_addr: SocketAddr,
+    sql_listen_addr: SocketAddr,
+    /// The address on which materialized listens for HTTP connections for
+    /// public endpoints.
+    #[clap(
+        long,
+        env = "MZ_HTTP_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6876"
+    )]
+    http_listen_addr: SocketAddr,
     /// How stringently to demand TLS authentication and encryption.
     ///
     /// If set to "disable", then materialized rejects HTTP and PostgreSQL
@@ -471,7 +497,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else if !args.cors_allowed_origin.is_empty() {
         AllowOrigin::list(args.cors_allowed_origin)
     } else {
-        let port = args.listen_addr.port();
+        let port = args.http_listen_addr.port();
         AllowOrigin::list([
             HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
@@ -643,8 +669,10 @@ max log level: {max_log_level}",
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
-        listen_addr: args.listen_addr,
-        metrics_listen_addr: args.metrics_listen_addr,
+        sql_listen_addr: args.sql_listen_addr,
+        http_listen_addr: args.http_listen_addr,
+        internal_sql_listen_addr: args.internal_sql_listen_addr,
+        internal_http_listen_addr: args.internal_http_listen_addr,
         tls,
         frontegg,
         cors_allowed_origin,
@@ -665,9 +693,11 @@ max log level: {max_log_level}",
     }))?;
 
     println!(
-        "materialized {} listening on {}...",
+        "materialized {} listening for pgwire connections on {}
+        for HTTP connections on {}...",
         materialized::BUILD_INFO.human_version(),
-        server.local_addr(),
+        server.sql_local_addr(),
+        server.http_local_addr(),
     );
 
     // Block forever.

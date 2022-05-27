@@ -134,7 +134,10 @@ fn test_pid_file() -> Result<(), Box<dyn Error>> {
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
     let server = util::start_server(util::Config::default())?;
-    let url = Url::parse(&format!("http://{}/api/sql", server.inner.local_addr()))?;
+    let url = Url::parse(&format!(
+        "http://{}/api/sql",
+        server.inner.http_local_addr()
+    ))?;
 
     struct TestCase {
         query: &'static str,

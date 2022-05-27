@@ -607,13 +607,15 @@ impl Runner {
                 tracing: TracingCliArgs::default(),
             },
             secrets_controller: None,
-            listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             metrics_registry: MetricsRegistry::new(),
-            metrics_listen_addr: None,
+            internal_sql_listen_addr: None,
+            internal_http_listen_addr: None,
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
@@ -646,7 +648,7 @@ impl Runner {
                 }
             };
             server_addr_tx
-                .send(Ok(server.local_addr()))
+                .send(Ok(server.sql_local_addr()))
                 .expect("receiver should not drop first");
             let _ = runtime.block_on(shutdown_tripwire);
         });
@@ -1005,6 +1007,7 @@ impl Runner {
         }
     }
 }
+
 
 async fn connect(addr: SocketAddr) -> tokio_postgres::Client {
     let (client, connection) = tokio_postgres::connect(

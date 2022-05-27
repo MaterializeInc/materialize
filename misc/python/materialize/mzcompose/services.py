@@ -38,7 +38,8 @@ class Materialized(Service):
         name: str = "materialized",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        port: Union[int, str] = 6875,
+        sql_port: Union[int, str] = 6875,
+        http_port: Union[int, str] = 6876,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
@@ -82,13 +83,18 @@ class Materialized(Service):
         if volumes_extra:
             volumes.extend(volumes_extra)
 
-        guest_port = port
-        if isinstance(port, str) and ":" in port:
-            guest_port = port.split(":")[1]
+        guest_sql_port = sql_port
+        if isinstance(sql_port, str) and ":" in sql_port:
+            guest_sql_port = sql_port.split(":")[1]
+
+        guest_http_port = http_port
+        if isinstance(http_port, str) and ":" in http_port:
+            guest_http_port = http_port.split(":")[1]
 
         command_list = [
             f"--data-directory={data_directory}",
-            f"--listen-addr 0.0.0.0:{guest_port}",
+            f"--sql-listen-addr 0.0.0.0:{guest_sql_port}",
+            f"--http-listen-addr 0.0.0.0:{guest_http_port}",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 
@@ -114,7 +120,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port, 5432, *extra_ports],
+                "ports": [sql_port, http_port, 5432, *extra_ports],
                 "environment": environment,
                 "volumes": volumes,
             }

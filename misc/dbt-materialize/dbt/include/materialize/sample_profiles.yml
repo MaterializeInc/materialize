@@ -20,7 +20,8 @@ default:
       type: materialize
       threads: 1
       host: localhost
-      port: 6875
+      sql_port: 6875
+      http_port: 6876
       user: materialize
       pass: password
       dbname: materialize
@@ -30,7 +31,8 @@ default:
       type: materialize
       threads: 1
       host: instance.materialize.cloud
-      port: 6875
+      sql_port: 6875
+      http_port: 6876
       user: materialize
       pass: password
       dbname: materialize

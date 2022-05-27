@@ -17,7 +17,8 @@ psql -Atc "CREATE SCHEMA IF NOT EXISTS consensus"
 psql -Atc "CREATE SCHEMA IF NOT EXISTS catalog"
 
 exec materialized \
-    --listen-addr=0.0.0.0:6875 \
+    --sql-listen-addr=0.0.0.0:6875 \
+    --http-listen-addr=0.0.0.0:6876 \
     "--persist-consensus-url=postgresql://materialize@$(hostname):5432?options=--search_path=consensus" \
     "--catalog-postgres-stash=postgresql://materialize@$(hostname):5432?options=--search_path=catalog" \
     "$@"
