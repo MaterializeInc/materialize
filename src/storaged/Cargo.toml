@@ -13,6 +13,7 @@ clap = { version = "3.1.18", features = ["derive", "env"] }
 futures = "0.3.21"
 mz-build-info = { path = "../build-info" }
 mz-dataflow-types = { path = "../dataflow-types" }
+mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-pid-file = { path = "../pid-file" }
