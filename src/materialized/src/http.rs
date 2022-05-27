@@ -27,6 +27,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Extension, Router};
 use futures::future::TryFutureExt;
+use futures::stream::{Stream, StreamExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -179,6 +180,32 @@ impl Server {
     //
     // If you add a new handler, please add it to the most appropriate
     // submodule, or create a new submodule if necessary. Don't add it here!
+}
+
+async fn handle_connection(server: Arc<Server>, conn: TcpStream) -> Result<(), anyhow::Error> {
+    let mut ss = SniffingStream::new(conn);
+    let mut buf = [0; 1];
+    ss.read_exact(&mut buf).await?;
+    let conn = ss.into_sniffed();
+    let (conn, conn_protocol) = match (&server.tls_context(), sniff_tls(&buf)) {
+        (Some(tls_context), true) => {
+            let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
+            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                let _ = ssl_stream.get_mut().shutdown().await;
+                return Err(e.into());
+            }
+            let client_cert = ssl_stream.ssl().peer_certificate();
+            (
+                MaybeHttpsStream::Https(ssl_stream),
+                ConnProtocol::Https { client_cert },
+            )
+        }
+        _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
+    };
+    let router = server.router.lock().expect("lock poisoned").clone();
+    let svc = router.layer(Extension(conn_protocol));
+    let http = hyper::server::conn::Http::new();
+    http.serve_connection(conn, svc).err_into().await
 }
 
 #[derive(Clone)]

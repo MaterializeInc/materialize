@@ -7,18 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use futures::stream::{Stream, StreamExt};
 use std::fmt;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
+use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
-use tracing::trace;
+use tracing::{error, trace};
 
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
+use mz_ore::task;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
@@ -77,76 +81,76 @@ impl Server {
             frontegg: config.frontegg,
         }
     }
+}
 
-    pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
-    where
-        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
-    {
-        let mut coord_client = self.coord_client.new_conn()?;
-        let conn_id = coord_client.conn_id();
-        let mut conn = Conn::Unencrypted(conn);
-        loop {
-            let message = codec::decode_startup(&mut conn).await?;
+async fn handle_connection<A>(server: Arc<Server>, conn: A) -> Result<(), anyhow::Error>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
+{
+    let mut coord_client = server.coord_client.new_conn()?;
+    let conn_id = coord_client.conn_id();
+    let mut conn = Conn::Unencrypted(conn);
+    loop {
+        let message = codec::decode_startup(&mut conn).await?;
 
-            match &message {
-                Some(message) => trace!("cid={} recv={:?}", conn_id, message),
-                None => trace!("cid={} recv=<eof>", conn_id),
+        match &message {
+            Some(message) => trace!("cid={} recv={:?}", conn_id, message),
+            None => trace!("cid={} recv=<eof>", conn_id),
+        }
+
+        conn = match message {
+            // Clients sometimes hang up during the startup sequence, e.g.
+            // because they receive an unacceptable response to an
+            // `SslRequest`. This is considered a graceful termination.
+            None => return Ok(()),
+
+            Some(FrontendStartupMessage::Startup { version, params }) => {
+                let mut conn = FramedConn::new(conn_id, conn);
+                protocol::run(protocol::RunParams {
+                    tls_mode: server.tls.as_ref().map(|tls| tls.mode),
+                    coord_client,
+                    conn: &mut conn,
+                    version,
+                    params,
+                    frontegg: server.frontegg.as_ref(),
+                })
+                .await?;
+                conn.flush().await?;
+                return Ok(());
             }
 
-            conn = match message {
-                // Clients sometimes hang up during the startup sequence, e.g.
-                // because they receive an unacceptable response to an
-                // `SslRequest`. This is considered a graceful termination.
-                None => return Ok(()),
+            Some(FrontendStartupMessage::CancelRequest {
+                conn_id,
+                secret_key,
+            }) => {
+                coord_client.cancel_request(conn_id, secret_key).await;
+                // For security, the client is not told whether the cancel
+                // request succeeds or fails.
+                return Ok(());
+            }
 
-                Some(FrontendStartupMessage::Startup { version, params }) => {
-                    let mut conn = FramedConn::new(conn_id, conn);
-                    protocol::run(protocol::RunParams {
-                        tls_mode: self.tls.as_ref().map(|tls| tls.mode),
-                        coord_client,
-                        conn: &mut conn,
-                        version,
-                        params,
-                        frontegg: self.frontegg.as_ref(),
-                    })
-                    .await?;
-                    conn.flush().await?;
-                    return Ok(());
-                }
-
-                Some(FrontendStartupMessage::CancelRequest {
-                    conn_id,
-                    secret_key,
-                }) => {
-                    coord_client.cancel_request(conn_id, secret_key).await;
-                    // For security, the client is not told whether the cancel
-                    // request succeeds or fails.
-                    return Ok(());
-                }
-
-                Some(FrontendStartupMessage::SslRequest) => match (conn, &self.tls) {
-                    (Conn::Unencrypted(mut conn), Some(tls)) => {
-                        trace!("cid={} send=AcceptSsl", conn_id);
-                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
-                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                            let _ = ssl_stream.get_mut().shutdown().await;
-                            return Err(e.into());
-                        }
-                        Conn::Ssl(ssl_stream)
+            Some(FrontendStartupMessage::SslRequest) => match (conn, &server.tls) {
+                (Conn::Unencrypted(mut conn), Some(tls)) => {
+                    trace!("cid={} send=AcceptSsl", conn_id);
+                    conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
+                    let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
+                    if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                        let _ = ssl_stream.get_mut().shutdown().await;
+                        return Err(e.into());
                     }
-                    (mut conn, _) => {
-                        trace!("cid={} send=RejectSsl", conn_id);
-                        conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                        conn
-                    }
-                },
-
-                Some(FrontendStartupMessage::GssEncRequest) => {
-                    trace!("cid={} send=RejectGssEnc", conn_id);
+                    Conn::Ssl(ssl_stream)
+                }
+                (mut conn, _) => {
+                    trace!("cid={} send=RejectSsl", conn_id);
                     conn.write_all(&[REJECT_ENCRYPTION]).await?;
                     conn
                 }
+            },
+
+            Some(FrontendStartupMessage::GssEncRequest) => {
+                trace!("cid={} send=RejectGssEnc", conn_id);
+                conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                conn
             }
         }
     }
