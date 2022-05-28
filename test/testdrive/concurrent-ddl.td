@@ -15,7 +15,7 @@
 > SELECT * FROM foo
 42
 
-$ postgres-connect name=ddl url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=ddl url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 
 $ postgres-execute connection=ddl
 DROP TABLE foo
@@ -32,7 +32,7 @@ contains:unknown catalog item 'foo'
 > SELECT * FROM foo
 42
 
-$ postgres-connect name=ddl url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=ddl url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 
 $ postgres-execute connection=ddl
 DROP TABLE foo

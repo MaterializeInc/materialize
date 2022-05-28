@@ -118,6 +118,8 @@ struct Args {
         value_name = "URL"
     )]
     materialized_url: tokio_postgres::Config,
+    #[clap(long, default_value = "6876", value_name = "PORT")]
+    materialized_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// materialized.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
@@ -275,6 +277,7 @@ async fn main() {
 
         // === Materialize options. ===
         materialized_pgconfig: args.materialized_url,
+        materialized_http_port: args.materialized_http_port,
         materialized_params: args.materialized_param,
         materialized_catalog_postgres_stash: args.validate_postgres_stash,
 

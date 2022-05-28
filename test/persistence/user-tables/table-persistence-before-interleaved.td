@@ -18,8 +18,8 @@
 
 > CREATE TABLE second_completes_first (f1 INTEGER);
 
-$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-addr}
-$ postgres-connect name=conn2 url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
+$ postgres-connect name=conn2 url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 
 $ postgres-execute connection=conn1
 BEGIN;

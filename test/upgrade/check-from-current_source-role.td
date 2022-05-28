@@ -13,7 +13,7 @@ materialize
 superuser_login
 "space role"
 
-$ postgres-execute connection=postgres://superuser_login:some_bogus_password@${testdrive.materialized-addr}
+$ postgres-execute connection=postgres://superuser_login:some_bogus_password@${testdrive.materialized-sql-addr}
 SELECT 1;
 
 > DROP ROLE superuser_login;

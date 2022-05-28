@@ -156,7 +156,7 @@ contains:invalid selection
 > CREATE TABLE c (a int);
 > INSERT INTO c VALUES (1);
 
-$ postgres-connect name=txn url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=txn url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 
 # In-flight txns don't affect updates/deletes, and vice versa
 

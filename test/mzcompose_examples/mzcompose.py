@@ -27,7 +27,10 @@ versioned_mz = [
 
 multiple_mz = [
     Materialized(
-        name=f"materialized{i}", data_directory=f"/share/materialized{i}", port=6875 + i
+        name=f"materialized{i}",
+        data_directory=f"/share/materialized{i}",
+        sql_port=6875 + 2 * i,
+        http_port=6876 + 2 * i,
     )
     for i in [1, 2]
 ]

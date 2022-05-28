@@ -118,7 +118,7 @@ contains:invalid selection
 
 > CREATE TABLE s (a int);
 
-$ postgres-connect name=writer url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=writer url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 
 # In-flight txns don't affect updates/deletes, and vice versa
 
