@@ -18,23 +18,29 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use futures::StreamExt;
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio_stream::StreamMap;
 use uuid::Uuid;
 
+use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
+use mz_ore::collections::CollectionExt;
 use mz_persist_client::{
     read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
 };
@@ -44,7 +50,9 @@ use mz_repr::{Diff, GlobalId};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
-use crate::client::{StorageClient, StorageCommand, StorageResponse};
+use crate::client::{
+    GenericClient, StorageClient, StorageCommand, StorageResponse, StoragedRemoteClient,
+};
 use crate::sources::{IngestionDescription, SourceConnector, SourceData, SourceDesc};
 use crate::Update;
 
@@ -187,7 +195,7 @@ impl Arbitrary for CollectionMetadata {
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
 pub struct StorageControllerState<T: Timestamp + Lattice + Codec64, S = mz_stash::Sqlite> {
-    pub(super) client: Box<dyn StorageClient<T>>,
+    pub(super) clients: BTreeMap<GlobalId, Box<dyn StorageClient<T>>>,
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
@@ -199,12 +207,16 @@ pub struct StorageControllerState<T: Timestamp + Lattice + Codec64, S = mz_stash
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T: Timestamp + Lattice + Codec64> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
     state: StorageControllerState<T>,
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
     /// A persist client used to write to storage collections
     persist_client: PersistClient,
+    /// An orchestrator to start and stop storage processes.
+    orchestrator: Arc<dyn NamespacedOrchestrator>,
+    /// The storaged image to use when starting new storage processes.
+    storaged_image: String,
 }
 
 #[derive(Debug)]
@@ -277,11 +289,11 @@ impl From<StashError> for StorageError {
 }
 
 impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
-    pub(super) fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
+    pub(super) fn new(state_dir: PathBuf) -> Self {
         let stash = mz_stash::Sqlite::open(&state_dir.join("storage"))
             .expect("unable to create storage stash");
         Self {
-            client,
+            clients: BTreeMap::default(),
             collections: BTreeMap::default(),
             stash,
             persist_handles: BTreeMap::default(),
@@ -292,7 +304,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
 #[async_trait]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
@@ -382,9 +394,8 @@ where
             }
         }
 
-        // Here we augment all the imported sources with the appropriate storage metadata needed by
-        // the storage instance to read them
-        let mut augmented_ingestions = Vec::with_capacity(external_ingestions.len());
+        // Here we create a new storaged process to handle each new source. Each
+        // ingestion is augmented with the collection metadata.
         for ingestion in external_ingestions {
             let mut source_imports = BTreeMap::new();
             for (id, _) in ingestion.source_imports {
@@ -392,22 +403,69 @@ where
                 source_imports.insert(id, metadata);
             }
 
-            augmented_ingestions.push(IngestionDescription {
+            let augmented_ingestion = IngestionDescription {
                 source_imports,
                 // The rest of the fields are identical
                 id: ingestion.id,
                 desc: ingestion.desc,
                 since: ingestion.since,
                 storage_metadata: self.collection_metadata(ingestion.id)?,
-            });
-        }
+            };
 
-        if !augmented_ingestions.is_empty() {
-            self.state
-                .client
-                .send(StorageCommand::CreateSources(augmented_ingestions))
+            let storage_service = self
+                .orchestrator
+                .ensure_service(
+                    &ingestion.id.to_string(),
+                    ServiceConfig {
+                        image: self.storaged_image.clone(),
+                        args: &|assigned| {
+                            vec![
+                                format!("--workers=1"),
+                                format!(
+                                    "--listen-addr={}:{}",
+                                    assigned.listen_host, assigned.ports["controller"]
+                                ),
+                                format!(
+                                    "--http-console-addr={}:{}",
+                                    assigned.listen_host, assigned.ports["http"]
+                                ),
+                            ]
+                        },
+                        ports: vec![
+                            ServicePort {
+                                name: "controller".into(),
+                                port_hint: 2100,
+                            },
+                            ServicePort {
+                                name: "http".into(),
+                                port_hint: 6875,
+                            },
+                        ],
+                        // TODO: limits?
+                        cpu_limit: None,
+                        memory_limit: None,
+                        scale: NonZeroUsize::new(1).unwrap(),
+                        labels: HashMap::new(),
+                        availability_zone: None,
+                    },
+                )
+                .await?;
+
+            // TODO: don't block waiting for a connection. Put a queue in the
+            // middle instead.
+            let mut client = Box::new({
+                let addr = storage_service.addresses("controller").into_element();
+                let mut client = StoragedRemoteClient::new(&[addr]);
+                client.connect().await;
+                client
+            });
+
+            client
+                .send(StorageCommand::CreateSources(vec![augmented_ingestion]))
                 .await
                 .expect("Storage command failed; unrecoverable");
+
+            self.state.clients.insert(ingestion.id, client);
         }
 
         Ok(())
@@ -548,7 +606,6 @@ where
         }
 
         // Translate our net compute actions into `AllowCompaction` commands.
-        let mut compaction_commands = Vec::new();
         for (id, change) in storage_net.iter_mut() {
             if !change.is_empty() {
                 let frontier = self
@@ -558,28 +615,36 @@ where
                     .frontier()
                     .to_owned();
 
-                compaction_commands.push((*id, frontier.clone()));
-
                 let handles = self.state.persist_handles.get_mut(id).unwrap();
+                handles.read.downgrade_since(frontier.clone()).await;
 
-                handles.read.downgrade_since(frontier).await;
+                if let Some(client) = self.state.clients.get_mut(id) {
+                    client
+                        .send(StorageCommand::AllowCompaction(vec![(
+                            *id,
+                            frontier.clone(),
+                        )]))
+                        .await?;
+
+                    if frontier.is_empty() {
+                        self.state.clients.remove(id);
+                        self.orchestrator.drop_service(&id.to_string()).await?;
+                    }
+                }
             }
         }
 
-        if !compaction_commands.is_empty() {
-            self.state
-                .client
-                .send(StorageCommand::AllowCompaction(compaction_commands))
-                .await
-                .expect(
-                    "Failed to send storage command; aborting as compute instance state corrupted",
-                );
-        }
         Ok(())
     }
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
-        self.state.client.recv().await
+        let mut clients = self
+            .state
+            .clients
+            .iter_mut()
+            .map(|(id, client)| (id, client.as_stream()))
+            .collect::<StreamMap<_, _>>();
+        clients.next().await.map(|(_id, res)| res).transpose()
     }
 
     /// "Linearize" the listed sources.
@@ -602,22 +667,25 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
     /// Create a new storage controller from a client it should wrap.
     pub async fn new(
-        client: Box<dyn StorageClient<T>>,
         state_dir: PathBuf,
         persist_location: PersistLocation,
+        orchestrator: Arc<dyn NamespacedOrchestrator>,
+        storaged_image: String,
     ) -> Self {
         let persist_client = persist_location.open().await.unwrap();
 
         Self {
-            state: StorageControllerState::new(client, state_dir),
+            state: StorageControllerState::new(state_dir),
             persist_location,
             persist_client,
+            orchestrator,
+            storaged_image,
         }
     }
 

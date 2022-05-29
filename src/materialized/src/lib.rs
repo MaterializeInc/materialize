@@ -13,10 +13,8 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::collections::HashMap;
 use std::fs::Permissions;
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -33,14 +31,12 @@ use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
-use mz_dataflow_types::client::StoragedRemoteClient;
 use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
-use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
@@ -288,54 +284,11 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
-    let orchestrator = Box::new(TracingOrchestrator::new(
-        orchestrator,
-        config.orchestrator.tracing,
-    ));
-    let storage_service = orchestrator
-        .namespace("storage")
-        .ensure_service(
-            "runtime",
-            ServiceConfig {
-                image: config.orchestrator.storaged_image.clone(),
-                args: &|assigned| {
-                    let mut storage_opts = vec![
-                        format!("--workers=1"),
-                        format!(
-                            "--listen-addr={}:{}",
-                            assigned.listen_host, assigned.ports["controller"]
-                        ),
-                        format!(
-                            "--http-console-addr={}:{}",
-                            assigned.listen_host, assigned.ports["http"]
-                        ),
-                    ];
-                    if config.orchestrator.linger {
-                        storage_opts.push(format!("--linger"))
-                    }
-                    storage_opts
-                },
-                ports: vec![
-                    ServicePort {
-                        name: "controller".into(),
-                        port_hint: 2100,
-                    },
-                    ServicePort {
-                        name: "http".into(),
-                        port_hint: 6875,
-                    },
-                ],
-                // TODO: limits?
-                cpu_limit: None,
-                memory_limit: None,
-                scale: NonZeroUsize::new(1).unwrap(),
-                labels: HashMap::new(),
-                availability_zone: None,
-            },
-        )
-        .await?;
     let orchestrator = mz_dataflow_types::client::controller::OrchestratorConfig {
-        orchestrator,
+        orchestrator: Box::new(TracingOrchestrator::new(
+            orchestrator,
+            config.orchestrator.tracing,
+        )),
         computed_image: config.orchestrator.computed_image,
         linger: config.orchestrator.linger,
     };
@@ -388,17 +341,11 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     };
 
     // Initialize dataflow controller.
-    let storage_client = Box::new({
-        let mut client =
-            StoragedRemoteClient::new(&[storage_service.addresses("controller").into_element()]);
-        client.connect().await;
-        client
-    });
-
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
-        storage_client,
         config.data_directory,
         config.persist_location,
+        orchestrator.orchestrator.namespace("storage"),
+        config.orchestrator.storaged_image,
     )
     .await;
     let dataflow_controller =
