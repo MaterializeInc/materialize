@@ -60,7 +60,7 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
 }
 
 /// Describes a running service managed by an `Orchestrator`.
-pub trait Service: fmt::Debug {
+pub trait Service: fmt::Debug + Send + Sync {
     /// Given the name of a port, returns the addresses for each of the
     /// service's processes, in order.
     ///

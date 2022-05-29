@@ -204,6 +204,7 @@ where
                     orchestrator,
                     computed_image,
                     linger,
+                    ..
                 } = &self.orchestrator;
 
                 let service_name = generate_replica_service_name(instance_id, replica_id);
