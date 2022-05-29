@@ -94,3 +94,6 @@ prost = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" 
 prost-build = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-derive = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
 prost-types = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+timely = { git = "https://github.com/umanwizard/timely-dataflow", branch = "communication_nonce" }

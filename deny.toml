@@ -176,7 +176,8 @@ allow-git = [
     # Dependencies that we control upstream whose official releases we don't
     # care about.
     "https://github.com/frankmcsherry/columnation",
-    "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",
+    "https://github.com/TimelyDataflow/timely-dataflow",
+    "https://github.com/umanwizard/timely-dataflow",
     "https://github.com/fede1024/rust-rdkafka.git",
 ]
