@@ -2478,6 +2478,20 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "serde",
+ "serde-value",
+ "serde_json",
+]
+
+[[package]]
+name = "k8s-openapi"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2ae2c04fcee6b01b04e3aadd56bb418932c8e0a9d8a93f48bc68c6bdcdb559d"
+dependencies = [
+ "base64",
+ "bytes",
+ "chrono",
  "http",
  "percent-encoding",
  "serde",
@@ -2492,7 +2506,7 @@ version = "0.72.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "977951a1d7dbce4c6f9c2cbed0711f568df9944010fafa88161a20f7e5163bd3"
 dependencies = [
- "k8s-openapi",
+ "k8s-openapi 0.14.0",
  "kube-client",
  "kube-core",
 ]
@@ -2515,7 +2529,7 @@ dependencies = [
  "hyper-openssl",
  "hyper-timeout",
  "jsonpath_lib",
- "k8s-openapi",
+ "k8s-openapi 0.14.0",
  "kube-core",
  "openssl",
  "pem",
@@ -2543,7 +2557,7 @@ dependencies = [
  "chrono",
  "form_urlencoded",
  "http",
- "k8s-openapi",
+ "k8s-openapi 0.14.0",
  "once_cell",
  "serde",
  "serde_json",
@@ -3463,7 +3477,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
- "k8s-openapi",
+ "k8s-openapi 0.15.0",
  "kube",
  "mz-orchestrator",
  "serde_json",
@@ -3825,7 +3839,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "k8s-openapi",
+ "k8s-openapi 0.15.0",
  "kube",
  "mz-ore",
  "mz-secrets",
