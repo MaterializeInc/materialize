@@ -7,12 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Utilities for configuring [`tracing`]
+//! Tracing utilities.
+//!
+//! This module contains application tracing utilities built on top of the
+//! [`tracing`] and [`opentelemetry`] libraries. The key exports are:
+//!
+//!  * The **[`configure`]** function, which configures the `tracing` and
+//!    `opentelemetry` crates with sensible defaults and should be called during
+//!    initialization of every Materialize binary.
+//!
+//!  * The **[`OpenTelemetryContext`]** type, which carries a tracing span
+//!    across thread or task boundaries within a process.
 
 use std::collections::HashMap;
 use std::io;
+#[cfg(feature = "tokio-console")]
+use std::net::SocketAddr;
 use std::time::Duration;
 
+#[cfg(feature = "tokio-console")]
+use console_subscriber::ConsoleLayer;
 use http::HeaderMap;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -32,58 +46,117 @@ use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
-/// Configuration for setting up [`tracing`]
+/// Application tracing configuration.
+///
+/// See the [`configure`] function for details.
 #[derive(Debug)]
 pub struct TracingConfig {
     /// The name of the service being traced.
     pub service_name: String,
-    /// Whether to prefix each log line with the service name.
-    pub log_service_name: bool,
-    /// `Targets` filter string.
-    pub log_filter: Targets,
-    /// When `Some(_)`, the https endpoint to send
-    /// opentelemetry traces.
-    pub opentelemetry_config: Option<OpenTelemetryConfig>,
-    /// When enabled, optionally turn on the
-    /// tokio console.
+    /// Configuration of the stderr log.
+    pub stderr_log: StderrLogConfig,
+    /// Optional configuration for the [`opentelemetry`] library.
+    pub opentelemetry: Option<OpenTelemetryConfig>,
+    /// Optional configuration for the [Tokio console] integration.
+    ///
+    /// [Tokio console]: https://github.com/tokio-rs/console
+    #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tokio-console")))]
     #[cfg(feature = "tokio-console")]
-    pub tokio_console: bool,
+    pub tokio_console: Option<TokioConsoleConfig>,
 }
 
-/// Configuration to setup Opentelemetry [`tracing`] subscribers
+/// Configures the stderr log.
+#[derive(Debug)]
+pub struct StderrLogConfig {
+    /// Whether to prefix each log line with the service name.
+    pub include_service_name: bool,
+    /// A filter which determines which events are emitted to the log.
+    pub filter: Targets,
+}
+
+/// Configuration for the [`opentelemetry`] library.
 #[derive(Debug)]
 pub struct OpenTelemetryConfig {
-    /// When `Some(_)`, the https endpoint to send
-    /// opentelemetry traces.
+    /// The [OTLP/HTTP] endpoint to export traces to.
+    ///
+    /// [OTLP/HTTP]: https://github.com/open-telemetry/opentelemetry-specification/blob/b13c1648bae16323868a5caf614bc10c917cc6ca/specification/protocol/otlp.md#otlphttp
     pub endpoint: String,
-    /// When `opentelemetry_endpoint` is `Some(_)`,
-    /// configure additional comma separated
-    /// headers.
+    /// Additional headers to send with every OTLP/HTTP request.
     pub headers: HeaderMap,
-    /// When `opentelemetry_endpoint` is `Some(_)`,
-    /// configure the opentelemetry layer with this log filter.
-    // TODO(guswynn): switch to just `Targets` when all processes
-    // have this supported.
-    pub log_filter: Option<Targets>,
+    /// A filter which determines which events are exported.
+    pub filter: Option<Targets>,
 }
 
-/// Configures [`tracing`] and OpenTelemetry.
+/// Configuration of the [Tokio console] integration.
+///
+/// [Tokio console]: https://github.com/tokio-rs/console
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tokio-console")))]
+#[cfg(feature = "tokio-console")]
+#[derive(Debug)]
+pub struct TokioConsoleConfig {
+    /// The address on which to listen for Tokio console connections.
+    ///
+    /// See [`console_subscriber::Builder::server_addr`].
+    pub listen_addr: SocketAddr,
+    /// How frequently to publish updates to clients.
+    ///
+    /// See [`console_subscriber::Builder::publish_interval`].
+    pub publish_interval: Duration,
+    /// How long data is retained for completed tasks.
+    ///
+    /// See [`console_subscriber::Builder::retention`].
+    pub retention: Duration,
+}
+
+#[cfg(feature = "tokio-console")]
+impl Default for TokioConsoleConfig {
+    fn default() -> TokioConsoleConfig {
+        TokioConsoleConfig {
+            listen_addr: SocketAddr::from((
+                console_subscriber::Server::DEFAULT_IP,
+                console_subscriber::Server::DEFAULT_PORT,
+            )),
+            publish_interval: ConsoleLayer::DEFAULT_PUBLISH_INTERVAL,
+            retention: ConsoleLayer::DEFAULT_RETENTION,
+        }
+    }
+}
+
+/// Enables application tracing via the [`tracing`] and [`opentelemetry`]
+/// libraries.
+///
+/// The `tracing` library is configured to emit events as textual log lines to
+/// stderr. [`StderrLogConfig`] offer a small degree of control over this
+/// behavior.
+///
+/// If the `opentelemetry` parameter is `Some`, the `tracing` library is
+/// additionally configured to export events to an observability backend, like
+/// [Jaeger] or [Honeycomb].
+///
+/// The `tokio_console` parameter enables integration with the [Tokio console].
+/// When enabled, `tracing` events are collected and made available to the Tokio
+/// console via a server running on port
+///
+/// [Jaeger]: https://jaegertracing.io
+/// [Honeycomb]: https://www.honeycomb.io
+/// [Tokio console]: https://github.com/tokio-rs/console
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
 pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
-    let fmt_layer = fmt::layer()
+    let stderr_log_layer = fmt::layer()
         .event_format(PrefixFormat {
             inner: format(),
-            prefix: config.log_service_name.then(|| config.service_name.clone()),
+            prefix: config
+                .stderr_log
+                .include_service_name
+                .then(|| config.service_name.clone()),
         })
         .with_writer(io::stderr)
         .with_ansi(atty::is(atty::Stream::Stderr))
-        // Ensure panics are logged, even if the user has specified
-        // otherwise.
-        .with_filter(config.log_filter.with_target("panic", LevelFilter::ERROR));
+        .with_filter(config.stderr_log.filter);
 
-    let otel_layer = if let Some(otel_config) = config.opentelemetry_config {
+    let otel_layer = if let Some(otel_config) = config.opentelemetry {
         // TODO(guswynn): figure out where/how to call
         // opentelemetry::global::shutdown_tracer_provider();
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
@@ -127,7 +200,7 @@ pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
             .with_tracer(tracer)
             .with_filter(
                 otel_config
-                    .log_filter
+                    .filter
                     .unwrap_or_else(|| Targets::new().with_default(LevelFilter::DEBUG)),
             );
         Some(layer)
@@ -135,11 +208,23 @@ pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
         None
     };
 
+    #[cfg(feature = "tokio-console")]
+    let tokio_console_layer = if let Some(console_config) = config.tokio_console {
+        let layer = ConsoleLayer::builder()
+            .server_addr(console_config.listen_addr)
+            .publish_interval(console_config.publish_interval)
+            .retention(console_config.retention)
+            .spawn();
+        Some(layer)
+    } else {
+        None
+    };
+
     let stack = tracing_subscriber::registry();
-    let stack = stack.with(fmt_layer);
+    let stack = stack.with(stderr_log_layer);
     let stack = stack.with(otel_layer);
     #[cfg(feature = "tokio-console")]
-    let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
+    let stack = stack.with(tokio_console_layer);
     stack.init();
 
     Ok(())
@@ -160,8 +245,8 @@ pub fn target_level(targets: &Targets, target: &str) -> Level {
     }
 }
 
-/// A wrapper around a [`tracing_subscriber::Format`] that adds an optional
-/// prefix to each event.
+/// A wrapper around a [`FormatEvent`] that adds an optional prefix to each
+/// event.
 #[derive(Debug)]
 pub struct PrefixFormat<F> {
     inner: F,
@@ -212,13 +297,13 @@ pub struct OpenTelemetryContext {
 }
 
 impl OpenTelemetryContext {
-    /// Attaches this `Context` into the current `tracing` span.
+    /// Attaches this `Context` to the current [`tracing`] span.
     pub fn attach_as_parent(&self) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(&self.inner));
         tracing::Span::current().set_parent(parent_cx);
     }
 
-    /// Obtain a `Context` from the current `tracing` span.
+    /// Obtains a `Context` from the current [`tracing`] span.
     pub fn obtain() -> Self {
         let mut map = std::collections::HashMap::new();
         global::get_text_map_propagator(|propagator| {
@@ -228,7 +313,7 @@ impl OpenTelemetryContext {
         Self { inner: map }
     }
 
-    /// Obtain an empty `Context`.
+    /// Obtains an empty `Context`.
     pub fn empty() -> Self {
         Self {
             inner: HashMap::new(),
