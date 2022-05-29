@@ -54,7 +54,7 @@ hyper = { version = "0.14.18", features = ["http1", "server"], optional = true }
 hyper-tls = { version = "0.5.0", optional = true }
 opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"], optional = true }
 opentelemetry-otlp = { version = "0.10.0", optional = true }
-console-subscriber = { version = "0.1.5", optional = true }
+console-subscriber = { version = "0.1.6", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.18.2", features = ["macros"] }
