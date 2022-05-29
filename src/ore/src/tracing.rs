@@ -18,6 +18,7 @@ use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
 use opentelemetry::global;
 use opentelemetry::propagation::{Extractor, Injector};
+use opentelemetry::sdk::propagation::TraceContextPropagator;
 use opentelemetry::sdk::{trace, Resource};
 use opentelemetry::KeyValue;
 use tonic::metadata::MetadataMap;
@@ -27,86 +28,9 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::{LevelFilter, Targets};
 use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
-use tracing_subscriber::layer::{Layer, Layered, SubscriberExt};
+use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-
-fn create_h2_alpn_https_connector() -> HttpsConnector<HttpConnector> {
-    // This accomplishes the same thing as the default
-    // + adding a `request_alpn`
-    let mut http = HttpConnector::new();
-    http.enforce_http(false);
-
-    HttpsConnector::from((
-        http,
-        tokio_native_tls::TlsConnector::from(
-            native_tls::TlsConnector::builder()
-                .request_alpns(&["h2"])
-                .build()
-                .unwrap(),
-        ),
-    ))
-}
-
-/// Setting up opentel in the background requires we are in a tokio-runtime
-/// context, hence the `async`
-// TODO(guswynn): figure out where/how to call opentelemetry::global::shutdown_tracer_provider();
-#[allow(clippy::unused_async)]
-async fn configure_opentelemetry_and_init<
-    L: Layer<S> + Send + Sync + 'static,
-    S: Subscriber + Send + Sync + 'static,
->(
-    stack: Layered<L, S>,
-    opentelemetry_config: Option<OpenTelemetryConfig>,
-) -> Result<(), anyhow::Error>
-where
-    Layered<L, S>: tracing_subscriber::util::SubscriberInitExt,
-    for<'ls> S: LookupSpan<'ls>,
-{
-    if let Some(otel_config) = opentelemetry_config {
-        use opentelemetry::sdk::propagation::TraceContextPropagator;
-        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
-
-        // Manually setup an openssl-backed, h2, proxied `Channel`,
-        // and setup the timeout according to
-        // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
-        let endpoint = Endpoint::from_shared(otel_config.endpoint)?.timeout(Duration::from_secs(
-            opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
-        ));
-
-        // TODO(guswynn): investigate if this should be non-lazy
-        let channel = endpoint.connect_with_connector_lazy(create_h2_alpn_https_connector());
-        let otlp_exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_channel(channel)
-            .with_metadata(MetadataMap::from_headers(otel_config.headers));
-
-        let tracer =
-            opentelemetry_otlp::new_pipeline()
-                .tracing()
-                .with_trace_config(trace::config().with_resource(Resource::new(vec![
-                    KeyValue::new("service.name", "materialized"),
-                ])))
-                .with_exporter(otlp_exporter)
-                .install_batch(opentelemetry::runtime::Tokio)
-                .unwrap();
-        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-
-        let stack = stack.with(
-            otel_layer.with_filter(
-                otel_config
-                    .log_filter
-                    .unwrap_or_else(|| Targets::new().with_default(LevelFilter::DEBUG)),
-            ),
-        );
-
-        stack.init();
-        Ok(())
-    } else {
-        stack.init();
-        Ok(())
-    }
-}
 
 /// Configuration for setting up [`tracing`]
 #[derive(Debug)]
@@ -144,31 +68,79 @@ pub struct OpenTelemetryConfig {
 }
 
 /// Configures [`tracing`] and OpenTelemetry.
+// Setting up OpenTelemetry in the background requires we are in a Tokio runtime
+// context, hence the `async`.
+#[allow(clippy::unused_async)]
 pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
-    // NOTE: Try harder than usual to avoid panicking in this function. It runs
-    // before our custom panic hook is installed (because the panic hook needs
-    // tracing configured to execute), so a panic here will not direct the
-    // user to file a bug report.
+    let fmt_layer = fmt::layer()
+        .event_format(PrefixFormat {
+            inner: format(),
+            prefix: config.log_service_name.then(|| config.service_name.clone()),
+        })
+        .with_writer(io::stderr)
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        // Ensure panics are logged, even if the user has specified
+        // otherwise.
+        .with_filter(config.log_filter.with_target("panic", LevelFilter::ERROR));
 
-    // Ensure panics are logged, even if the user has specified
-    // otherwise.
-    let filter = config.log_filter.with_target("panic", LevelFilter::ERROR);
+    let otel_layer = if let Some(otel_config) = config.opentelemetry_config {
+        // TODO(guswynn): figure out where/how to call
+        // opentelemetry::global::shutdown_tracer_provider();
+        opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
-    let stack = tracing_subscriber::registry().with(
-        fmt::layer()
-            .with_writer(io::stderr)
-            .with_ansi(atty::is(atty::Stream::Stderr))
-            .event_format(PrefixFormat {
-                inner: format(),
-                prefix: config.log_service_name.then(|| config.service_name),
-            })
-            .with_filter(filter),
-    );
+        // Manually set up an OpenSSL-backed, h2, proxied `Channel`,
+        // with the timeout configured according to:
+        // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
+        let channel = Endpoint::from_shared(otel_config.endpoint)?
+            .timeout(Duration::from_secs(
+                opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
+            ))
+            // TODO(guswynn): investigate if this should be non-lazy.
+            .connect_with_connector_lazy({
+                let mut http = HttpConnector::new();
+                http.enforce_http(false);
+                HttpsConnector::from((
+                    http,
+                    // This is the same as the default, plus an h2 ALPN request.
+                    tokio_native_tls::TlsConnector::from(
+                        native_tls::TlsConnector::builder()
+                            .request_alpns(&["h2"])
+                            .build()
+                            .unwrap(),
+                    ),
+                ))
+            });
+        let exporter = opentelemetry_otlp::new_exporter()
+            .tonic()
+            .with_channel(channel)
+            .with_metadata(MetadataMap::from_headers(otel_config.headers));
+        let tracer = opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_trace_config(trace::config().with_resource(Resource::new([KeyValue::new(
+                "service.name",
+                config.service_name,
+            )])))
+            .with_exporter(exporter)
+            .install_batch(opentelemetry::runtime::Tokio)
+            .unwrap();
+        let layer = tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_filter(
+                otel_config
+                    .log_filter
+                    .unwrap_or_else(|| Targets::new().with_default(LevelFilter::DEBUG)),
+            );
+        Some(layer)
+    } else {
+        None
+    };
 
+    let stack = tracing_subscriber::registry();
+    let stack = stack.with(fmt_layer);
+    let stack = stack.with(otel_layer);
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(config.tokio_console.then(|| console_subscriber::spawn()));
-
-    configure_opentelemetry_and_init(stack, config.opentelemetry_config).await?;
+    stack.init();
 
     Ok(())
 }
