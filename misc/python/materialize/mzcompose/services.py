@@ -128,7 +128,6 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        storage_addr: Optional[str] = "materialized:2101",
         workers: Optional[int] = None,
     ) -> None:
         if environment is None:
@@ -158,9 +157,6 @@ class Computed(Service):
                 command_list.append(options)
             else:
                 command_list.extend(options)
-
-        if storage_addr:
-            command_list.append(f"--storage-addr {storage_addr}")
 
         if workers:
             command_list.append(f"--workers {workers}")

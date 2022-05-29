@@ -56,8 +56,6 @@ pub struct OrchestratorConfig {
     pub orchestrator: Box<dyn Orchestrator>,
     /// The computed image to use when starting new compute instances.
     pub computed_image: String,
-    /// The storage address that compute instances should connect to.
-    pub storage_addr: String,
     /// Whether or not process should die when connection with ADAPTER is lost.
     pub linger: bool,
 }
@@ -203,7 +201,6 @@ where
                 let OrchestratorConfig {
                     orchestrator,
                     computed_image,
-                    storage_addr,
                     linger,
                 } = &self.orchestrator;
 
@@ -219,7 +216,6 @@ where
                                 image: computed_image.clone(),
                                 args: &|hosts_ports, my_ports, my_index| {
                                     let mut compute_opts = vec![
-                                        format!("--storage-addr={storage_addr}"),
                                         format!(
                                             "--listen-addr={}:{}",
                                             default_listen_host, my_ports["controller"]
