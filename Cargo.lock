@@ -6011,7 +6011,7 @@ checksum = "42657b1a6f4d817cda8e7a0ace261fe0cc946cf3a80314390b22cc61ae080792"
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#6116f0b1e28e50b364267579cf401fce254cfc01"
+source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#c5fd4d14dc4e8675433bff253806110c6b349efe"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6029,12 +6029,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#6116f0b1e28e50b364267579cf401fce254cfc01"
+source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#c5fd4d14dc4e8675433bff253806110c6b349efe"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#6116f0b1e28e50b364267579cf401fce254cfc01"
+source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#c5fd4d14dc4e8675433bff253806110c6b349efe"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -6051,7 +6051,7 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.12.0"
-source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#6116f0b1e28e50b364267579cf401fce254cfc01"
+source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#c5fd4d14dc4e8675433bff253806110c6b349efe"
 dependencies = [
  "columnation",
  "serde",
@@ -6060,7 +6060,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#6116f0b1e28e50b364267579cf401fce254cfc01"
+source = "git+https://github.com/umanwizard/timely-dataflow?branch=communication_nonce#c5fd4d14dc4e8675433bff253806110c6b349efe"
 
 [[package]]
 name = "tinytemplate"
