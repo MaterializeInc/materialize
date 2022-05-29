@@ -224,7 +224,6 @@ where
                                             assigned.listen_host, assigned.ports["http"]
                                         ),
                                         format!("--workers={}", size_config.workers),
-                                        "--log-process-name".to_string(),
                                     ];
                                     compute_opts.extend(assigned.peers.iter().map(
                                         |(host, ports)| format!("{host}:{}", ports["compute"]),
