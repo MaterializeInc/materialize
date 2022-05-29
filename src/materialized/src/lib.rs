@@ -296,10 +296,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                     let mut storage_opts = vec![
                         format!("--workers=1"),
                         format!(
-                            "--storage-addr={}:{}",
-                            default_listen_host, my_ports["compute"]
-                        ),
-                        format!(
                             "--listen-addr={}:{}",
                             default_listen_host, my_ports["controller"]
                         ),
@@ -320,10 +316,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                         port_hint: 2100,
                     },
                     ServicePort {
-                        name: "compute".into(),
-                        port_hint: 2101,
-                    },
-                    ServicePort {
                         name: "http".into(),
                         port_hint: 6875,
                     },
@@ -340,7 +332,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     let orchestrator = mz_dataflow_types::client::controller::OrchestratorConfig {
         orchestrator,
         computed_image: config.orchestrator.computed_image,
-        storage_addr: storage_service.addresses("compute").into_element(),
         linger: config.orchestrator.linger,
     };
 

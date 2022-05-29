@@ -32,28 +32,27 @@ SERVICES = [
     Localstack(),
     Computed(
         name="computed_1",
-        options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
+        options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_2",
-        options="--workers 2 --processes 2 --process 1 computed_1:2102 computed_2:2102 --storage-addr materialized:2101",
+        options="--workers 2 --processes 2 --process 1 computed_1:2102 computed_2:2102",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_3",
-        options="--workers 2 --processes 2 --process 0 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
+        options="--workers 2 --processes 2 --process 0 computed_3:2102 computed_4:2102 --linger --reconcile",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_4",
-        options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --storage-addr materialized:2101 --linger --reconcile",
+        options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --linger --reconcile",
         ports=[2100, 2102],
     ),
     Postgres(),
     Materialized(
         options="--persist-consensus-url postgres://postgres:postgres@postgres",
-        extra_ports=[2101],
     ),
     Testdrive(
         volumes=[

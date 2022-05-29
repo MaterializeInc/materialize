@@ -20,7 +20,7 @@ exporters:
     loglevel: debug
 
   jaeger:
-    endpoint: jaeger-all-in-one:14250
+    endpoint: jaeger:14250
     insecure: true
 
 processors:

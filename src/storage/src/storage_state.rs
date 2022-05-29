@@ -110,7 +110,7 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
             StorageCommand::CreateSources(sources) => {
                 for source in sources {
                     match &source.desc.connector {
-                        SourceConnector::Local { .. } | SourceConnector::Log => {
+                        SourceConnector::Local { .. } => {
                             self.storage_state.table_state.insert(
                                 source.id,
                                 TableState {

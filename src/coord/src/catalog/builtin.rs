@@ -22,9 +22,11 @@
 //! More information about builtin system tables and types can be found in
 //! <https://materialize.com/docs/sql/system-tables/>.
 
+use std::hash::Hash;
+
 use differential_dataflow::Hashable;
 use once_cell::sync::Lazy;
-use std::hash::Hash;
+use serde::Serialize;
 
 use mz_dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
 use mz_repr::{RelationDesc, ScalarType};
@@ -66,7 +68,7 @@ impl<T: TypeReference> Builtin<T> {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, Serialize)]
 pub struct BuiltinLog {
     pub variant: LogVariant,
     pub name: &'static str,

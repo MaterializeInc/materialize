@@ -736,7 +736,7 @@ pub fn plan_create_source(
                             depends_on.extend(item.uses());
 
                             Some(typecheck_debezium_transaction_metadata(
-                                tx_value_desc,
+                                &tx_value_desc,
                                 &value_desc,
                                 item.id(),
                                 data_collection_name,
@@ -1870,9 +1870,6 @@ pub fn plan_create_views(
                 SourceConnector::Local { .. } => {
                     bail!("cannot generate views from local sources")
                 }
-                SourceConnector::Log => {
-                    bail!("cannot generate views from log sources")
-                }
             }
         }
     }
@@ -2329,7 +2326,10 @@ pub fn plan_create_sink(
     let relation_key_indices = desc.typ().keys.get(0).cloned();
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
-        let cols = desc.clone().into_iter().collect::<Vec<_>>();
+        let cols = desc
+            .iter()
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect::<Vec<_>>();
         let (names, types): (Vec<_>, Vec<_>) =
             key_indices.iter().map(|&idx| cols[idx].clone()).unzip();
         let typ = RelationType::new(types);
@@ -2361,7 +2361,7 @@ pub fn plan_create_sink(
             topic,
             relation_key_indices,
             key_desc_and_indices,
-            desc.clone(),
+            desc.into_owned(),
             envelope,
             suffix_nonce,
             &root_user_dependencies,
@@ -2376,7 +2376,7 @@ pub fn plan_create_sink(
             blob_uri,
             consensus_uri,
             shard_id,
-            desc.clone(),
+            desc.into_owned(),
         )?,
     };
 
@@ -2527,7 +2527,7 @@ pub fn plan_create_index(
                 .collect()
         }
     };
-    let keys = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
+    let keys = query::plan_index_exprs(scx, &on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
         QualifiedObjectName {

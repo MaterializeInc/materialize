@@ -15,11 +15,13 @@ menu:
 
 ## Conceptual framework
 
-Indexes assemble and maintain in memory a query's results, which can
-provide future queries the data they need pre-arranged in a format they can immediately use.
-In particular, this can be very helpful for the [`JOIN`](../join) operator which needs
-to build and maintain the appropriate indexes if they do not otherwise exist.
-For more information, see [Key Concepts: Indexes](/overview/key-concepts/#indexes).
+Indexes assemble and maintain a query's results in memory, which can
+provide future queries the data they need in a format they can immediately use.
+
+In particular, manually creating indexes can be very helpful for the
+[`JOIN`](../join) operator which needs to build and maintain the appropriate
+indexes if they do not otherwise exist. For more information, see [Key Concepts:
+Indexes](/overview/key-concepts/#indexes).
 
 ### When to create indexes
 
@@ -30,6 +32,11 @@ You might want to create indexes when...
 -   You want to convert a non-materialized view or source to a materialized view or source.
 -   You want to speed up searches filtering by literal values or expressions.
 
+### Indexes + clusters
+
+Materialize maintains indexes using dataflows. Each dataflow must belong to a
+[cluster](/overview/key-concepts#clusters).
+
 ## Syntax
 
 {{< diagram "create-index.svg" >}}
@@ -39,6 +46,7 @@ Field | Use
 **DEFAULT** | Creates a default index with the same structure as the index automatically created with [**CREATE MATERIALIZED VIEW**](/sql/create-materialized-view). This provides a simple method to convert a non-materialized object to a materialized one.
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source or view on which you want to create an index.
+_cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not provided, uses the session's `cluster` variable.
 _method_ | The name of the index method to use. The only supported method is [`arrangement`](/overview/arrangements).
 _col&lowbar;expr_**...** | The expressions to use as the key for the index.
 _field_ | The name of the option you want to set.

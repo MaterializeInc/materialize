@@ -102,7 +102,7 @@ where
     match source_desc.connector.clone() {
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands. Defers entirely to `render_table`
-        SourceConnector::Local { .. } | SourceConnector::Log => unreachable!(),
+        SourceConnector::Local { .. } => unreachable!(),
 
         SourceConnector::External {
             connector,

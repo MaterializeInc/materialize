@@ -73,14 +73,6 @@ struct Args {
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
-    /// The address of the storage server to bind or connect to.
-    #[clap(
-        long,
-        env = "STORAGED_STORAGE_ADDR",
-        value_name = "HOST:PORT",
-        default_value = "127.0.0.1:2101"
-    )]
-    storage_addr: String,
     /// Whether or not process should die when connection with ADAPTER is lost.
     #[clap(long)]
     linger: bool,

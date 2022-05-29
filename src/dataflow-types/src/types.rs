@@ -2664,9 +2664,6 @@ pub mod sources {
 
         /// A local "source" is fed by a local input handle.
         Local { timeline: Timeline },
-
-        /// A source for compute logging data.
-        Log,
     }
 
     impl Arbitrary for SourceConnector {
@@ -2703,7 +2700,6 @@ pub mod sources {
                         }
                     ),
                 any::<Timeline>().prop_map(|timeline| SourceConnector::Local { timeline }),
-                Just(SourceConnector::Log)
             ]
             .boxed()
         }
@@ -2732,7 +2728,6 @@ pub mod sources {
                     SourceConnector::Local { timeline } => Kind::Local(ProtoLocal {
                         timeline: Some(timeline.into_proto()),
                     }),
-                    SourceConnector::Log => Kind::Log(()),
                 }),
             }
         }
@@ -2761,7 +2756,6 @@ pub mod sources {
                 Kind::Local(ProtoLocal { timeline }) => SourceConnector::Local {
                     timeline: timeline.into_rust_if_some("ProtoLocal::timeline")?,
                 },
-                Kind::Log(()) => SourceConnector::Log,
             })
         }
     }
@@ -2823,8 +2817,6 @@ pub mod sources {
                 } => false,
                 // Local sources (i.e., tables) also support retractions (deletes)
                 SourceConnector::Local { .. } => false,
-                // Log sources _may_ produce retractions.
-                SourceConnector::Log { .. } => false,
             }
         }
 
@@ -2832,7 +2824,6 @@ pub mod sources {
             match self {
                 SourceConnector::External { connector, .. } => connector.name(),
                 SourceConnector::Local { .. } => "local",
-                SourceConnector::Log => "log",
             }
         }
 
@@ -2840,7 +2831,6 @@ pub mod sources {
             match self {
                 SourceConnector::External { timeline, .. } => timeline.clone(),
                 SourceConnector::Local { timeline, .. } => timeline.clone(),
-                SourceConnector::Log => Timeline::EpochMilliseconds,
             }
         }
 
@@ -2878,7 +2868,6 @@ pub mod sources {
                 }
                 SourceConnector::External { .. } => None,
                 SourceConnector::Local { .. } => None,
-                SourceConnector::Log => None,
             };
 
             Ok(result)

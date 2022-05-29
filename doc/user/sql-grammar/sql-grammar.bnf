@@ -30,12 +30,20 @@ copy_to ::=
 copy_from ::=
   'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
+create_cluster ::=
+  'CREATE' 'CLUSTER' name ( inline_replica ( ',' inline_replica )* )?
+inline_replica ::= 'REPLICA' replica_name ('(' replica_option ( ',' replica_option )* ')')
+create_cluster_replica ::=
+  'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name replica_option ( ',' replica_option )*
+replica_option ::=
+    'SIZE' size |
+    'AVAILABILITY' 'ZONE' az
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
-        | 'DEFAULT INDEX ON' obj_name ('USING' method)?
+        'INDEX' index_name 'ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
+        | 'DEFAULT INDEX ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)?
     )
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
@@ -48,6 +56,7 @@ create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name
+    ('IN' 'CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' sink_kafka_connector
     ( sink_with_options )?
