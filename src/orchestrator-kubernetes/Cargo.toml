@@ -11,7 +11,7 @@ anyhow = "1.0.57"
 async-trait = "0.1.53"
 clap = { version = "3.1.18", features = ["derive"] }
 mz-orchestrator = { path = "../orchestrator" }
-k8s-openapi = { version = "0.14.0", features = ["v1_22"] }
-kube = { version = "0.72.0", features = ["ws"] }
+k8s-openapi = { version = "0.15.0", features = ["v1_22"] }
+kube = { version = "0.73.0", features = ["ws"] }
 serde_json = "1.0.81"
 sha2 = "0.10.2"
