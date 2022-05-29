@@ -26,6 +26,56 @@ bin/mzimage acquire --dev computed
 bin/mzimage acquire --dev materialized-slim
 
 kubectl apply --context=minikube  -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  type: NodePort
+  ports:
+  - port: 5432
+    name: sql
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:14.3
+        env:
+        - name: POSTGRES_HOST_AUTH_METHOD
+          value: trust
+        ports:
+        - containerPort: 5432
+          name: sql
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -85,6 +135,8 @@ spec:
             - --orchestrator=kubernetes
             - --orchestrator-service-label=materialize.cloud/example1=label1
             - --orchestrator-service-label=materialize.cloud/example2=label2
+            - --persist-consensus-url=postgres://postgres@postgres.default
+            - --catalog-postgres-stash=postgres://postgres@postgres.default
             - --kubernetes-image-pull-policy=never
             - --user-defined-secret=user-managed-secrets
             - --user-defined-secret-mount-path=/secrets
