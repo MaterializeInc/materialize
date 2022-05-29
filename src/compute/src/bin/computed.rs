@@ -169,9 +169,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
 
     mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
+        service_name: "computed".into(),
+        // Only log the service name when the presence of the
+        // `--pid-file-location` argument indicates that we're running under the
+        // process orchestrator, which intermingles log output from multiple
+        // services. Other orchestrators separate log output from different
+        // services.
+        log_service_name: args.pid_file_location.is_some(),
         log_filter: args.log_filter.clone(),
         opentelemetry_config: None,
-        prefix: args.log_process_name.then(|| "computed".into()),
         #[cfg(feature = "tokio-console")]
         tokio_console: false,
     })

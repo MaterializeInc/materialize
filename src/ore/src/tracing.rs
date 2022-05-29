@@ -25,7 +25,7 @@ use tonic::transport::Endpoint;
 use tracing::{Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::filter::{LevelFilter, Targets};
-use tracing_subscriber::fmt::format::{format, Format, Writer};
+use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, Layered, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
@@ -111,13 +111,15 @@ where
 /// Configuration for setting up [`tracing`]
 #[derive(Debug)]
 pub struct TracingConfig {
+    /// The name of the service being traced.
+    pub service_name: String,
+    /// Whether to prefix each log line with the service name.
+    pub log_service_name: bool,
     /// `Targets` filter string.
     pub log_filter: Targets,
     /// When `Some(_)`, the https endpoint to send
     /// opentelemetry traces.
     pub opentelemetry_config: Option<OpenTelemetryConfig>,
-    /// Optional prefix for log lines
-    pub prefix: Option<String>,
     /// When enabled, optionally turn on the
     /// tokio console.
     #[cfg(feature = "tokio-console")]
@@ -156,7 +158,10 @@ pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
         fmt::layer()
             .with_writer(io::stderr)
             .with_ansi(atty::is(atty::Stream::Stderr))
-            .event_format(SubprocessFormat::new_default(config.prefix))
+            .event_format(PrefixFormat {
+                inner: format(),
+                prefix: config.log_service_name.then(|| config.service_name),
+            })
             .with_filter(filter),
     );
 
@@ -183,26 +188,15 @@ pub fn target_level(targets: &Targets, target: &str) -> Level {
     }
 }
 
-/// A wrapper around a `tracing_subscriber` `Format` that
-/// prepends a subprocess name to the event logs
+/// A wrapper around a [`tracing_subscriber::Format`] that adds an optional
+/// prefix to each event.
 #[derive(Debug)]
-pub struct SubprocessFormat<F> {
+pub struct PrefixFormat<F> {
     inner: F,
-    process_name: Option<String>,
+    prefix: Option<String>,
 }
 
-impl SubprocessFormat<Format> {
-    /// Make a new `SubprocessFormat` that wraps
-    /// the `tracing_subscriber` default [`FormatEvent`].
-    pub fn new_default(process_name: Option<String>) -> Self {
-        SubprocessFormat {
-            inner: format(),
-            process_name,
-        }
-    }
-}
-
-impl<F, C, N> FormatEvent<C, N> for SubprocessFormat<F>
+impl<F, C, N> FormatEvent<C, N> for PrefixFormat<F>
 where
     C: Subscriber + for<'a> LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,
@@ -214,22 +208,20 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> std::fmt::Result {
-        match &self.process_name {
+        match &self.prefix {
             None => self.inner.format_event(ctx, writer, event)?,
-            Some(process_name) => {
+            Some(prefix) => {
                 let style = ansi_term::Style::new();
-
                 let target_style = if writer.has_ansi_escapes() {
                     style.bold()
                 } else {
                     style
                 };
-
                 write!(
                     writer,
                     "{}{}:{} ",
                     target_style.prefix(),
-                    process_name,
+                    prefix,
                     target_style.infix(style)
                 )?;
                 self.inner.format_event(ctx, writer, event)?;

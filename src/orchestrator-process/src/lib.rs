@@ -58,6 +58,10 @@ pub struct ProcessOrchestratorConfig {
 /// **This orchestrator is for development only.** Due to limitations in the
 /// Unix process API, it does not exactly conform to the documented semantics
 /// of `Orchestrator`.
+///
+/// Processes launched by this orchestrator must support a `--pid-file-location`
+/// command line flag which causes a PID file to be emitted at the specified
+/// path.
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,

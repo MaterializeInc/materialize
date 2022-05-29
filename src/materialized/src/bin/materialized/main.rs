@@ -472,6 +472,11 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
     runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
+        service_name: "materialized".into(),
+        // Only log the service name when using the process orchestrator, which
+        // intermingles log output from multiple services. Other orchestrators
+        // separate log output from different services.
+        log_service_name: matches!(args.orchestrator, Orchestrator::Process),
         log_filter: args.log_filter.clone(),
         opentelemetry_config: args.opentelemetry_endpoint.map(|endpoint| {
             mz_ore::tracing::OpenTelemetryConfig {
@@ -484,7 +489,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 log_filter: args.opentelemetry_log_filter,
             }
         }),
-        prefix: None,
         #[cfg(feature = "tokio-console")]
         tokio_console: args.tokio_console,
     }))?;
