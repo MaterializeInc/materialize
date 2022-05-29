@@ -55,6 +55,9 @@ use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
+#[cfg(feature = "tokio-console")]
+use mz_ore::tracing::TokioConsoleConfig;
+use mz_ore::tracing::{OpenTelemetryConfig, StderrLogConfig, TracingConfig};
 use mz_persist_client::PersistLocation;
 
 mod sys;
@@ -379,15 +382,15 @@ pub struct Args {
     )]
     opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
 
-    /// Log filter specific to the opentelemetry layer.
-    /// Defaults to `debug`.
+    /// Event filter specific to the opentelemetry layer.
     #[clap(
         long,
-        env = "OPENTELEMETRY_LOG_FILTER",
-        requires = "opentelemetry-log-filter",
+        env = "OPENTELEMETRY_FILTER",
+        requires = "opentelemetry-endpoint",
+        default_value = "debug",
         hide = true
     )]
-    opentelemetry_log_filter: Option<Targets>,
+    opentelemetry_filter: Targets,
 
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: Option<String>,
@@ -464,33 +467,29 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             .build()?,
     );
 
-    // Install a custom panic handler that instructs users to file a bug report.
-    // This requires that we configure tracing, so that the panic can be
-    // reported as a trace event.
-    //
-    // Avoid adding code above this point, because panics in that code won't get
-    // handled by the custom panic handler.
     let metrics_registry = MetricsRegistry::new();
-    runtime.block_on(mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
+    runtime.block_on(mz_ore::tracing::configure(TracingConfig {
         service_name: "materialized".into(),
-        // Only log the service name when using the process orchestrator, which
-        // intermingles log output from multiple services. Other orchestrators
-        // separate log output from different services.
-        log_service_name: matches!(args.orchestrator, Orchestrator::Process),
-        log_filter: args.log_filter.clone(),
-        opentelemetry_config: args.opentelemetry_endpoint.map(|endpoint| {
-            mz_ore::tracing::OpenTelemetryConfig {
+        stderr_log: StderrLogConfig {
+            // Only log the service name when using the process orchestrator,
+            // which intermingles log output from multiple services. Other
+            // orchestrators separate log output from different services.
+            include_service_name: matches!(args.orchestrator, Orchestrator::Process),
+            filter: args.log_filter.clone(),
+        },
+        opentelemetry: args
+            .opentelemetry_endpoint
+            .map(|endpoint| OpenTelemetryConfig {
                 endpoint,
                 headers: args
                     .opentelemetry_header
                     .into_iter()
                     .map(|header| (header.key, header.value))
                     .collect(),
-                log_filter: args.opentelemetry_log_filter,
-            }
-        }),
+                filter: Some(args.opentelemetry_filter),
+            }),
         #[cfg(feature = "tokio-console")]
-        tokio_console: args.tokio_console,
+        tokio_console: args.tokio_console.then(|| TokioConsoleConfig::default()),
     }))?;
 
     // Initialize fail crate for failpoint support
