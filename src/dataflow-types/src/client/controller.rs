@@ -205,7 +205,6 @@ where
                 } = &self.orchestrator;
 
                 let service_name = generate_replica_service_name(instance_id, replica_id);
-                let default_listen_host = orchestrator.listen_host();
 
                 let service =
                     orchestrator
@@ -214,25 +213,25 @@ where
                             &service_name,
                             ServiceConfig {
                                 image: computed_image.clone(),
-                                args: &|hosts_ports, my_ports, my_index| {
+                                args: &|assigned| {
                                     let mut compute_opts = vec![
                                         format!(
                                             "--listen-addr={}:{}",
-                                            default_listen_host, my_ports["controller"]
+                                            assigned.listen_host, assigned.ports["controller"]
                                         ),
                                         format!(
                                             "--http-console-addr={}:{}",
-                                            default_listen_host, my_ports["http"]
+                                            assigned.listen_host, assigned.ports["http"]
                                         ),
                                         format!("--processes={}", size_config.scale),
                                         format!("--workers={}", size_config.workers),
                                         "--log-process-name".to_string(),
                                     ];
-                                    compute_opts.extend(hosts_ports.iter().map(|(host, ports)| {
-                                        format!("{host}:{}", ports["compute"])
-                                    }));
-                                    if let Some(my_index) = my_index {
-                                        compute_opts.push(format!("--process={my_index}"));
+                                    compute_opts.extend(assigned.peers.iter().map(
+                                        |(host, ports)| format!("{host}:{}", ports["compute"]),
+                                    ));
+                                    if let Some(index) = assigned.index {
+                                        compute_opts.push(format!("--process={index}"));
                                     }
                                     if *linger {
                                         compute_opts.push(format!("--linger"));

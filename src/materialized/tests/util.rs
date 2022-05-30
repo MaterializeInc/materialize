@@ -154,7 +154,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 // NOTE(benesch): would be nice to not have to do this, but
                 // the subprocess output wreaks havoc on cargo2junit.
                 suppress_output: true,
-                process_listen_host: None,
                 data_dir: data_directory,
                 command_wrapper: vec![],
             }),

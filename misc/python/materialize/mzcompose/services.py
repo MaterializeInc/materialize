@@ -56,7 +56,6 @@ class Materialized(Service):
                 "MZ_LOG_FILTER",
                 "STORAGED_LOG_FILTER",
                 "COMPUTED_LOG_FILTER",
-                "MZ_PROCESS_LISTEN_HOST=0.0.0.0",
             ]
 
         if forward_aws_credentials:
