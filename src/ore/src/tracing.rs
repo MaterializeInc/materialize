@@ -39,7 +39,7 @@ use tonic::metadata::MetadataMap;
 use tonic::transport::Endpoint;
 use tracing::{Event, Level, Subscriber};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
@@ -49,10 +49,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// Application tracing configuration.
 ///
 /// See the [`configure`] function for details.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TracingConfig {
-    /// The name of the service being traced.
-    pub service_name: String,
     /// Configuration of the stderr log.
     pub stderr_log: StderrLogConfig,
     /// Optional configuration for the [`opentelemetry`] library.
@@ -66,7 +64,7 @@ pub struct TracingConfig {
 }
 
 /// Configures the stderr log.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StderrLogConfig {
     /// Whether to prefix each log line with the service name.
     pub include_service_name: bool,
@@ -75,16 +73,16 @@ pub struct StderrLogConfig {
 }
 
 /// Configuration for the [`opentelemetry`] library.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct OpenTelemetryConfig {
-    /// The [OTLP/HTTP] endpoint to export traces to.
+    /// The [OTLP/HTTP] endpoint to export OpenTelemetry data to.
     ///
     /// [OTLP/HTTP]: https://github.com/open-telemetry/opentelemetry-specification/blob/b13c1648bae16323868a5caf614bc10c917cc6ca/specification/protocol/otlp.md#otlphttp
     pub endpoint: String,
-    /// Additional headers to send with every OTLP/HTTP request.
+    /// Additional headers to send with every request to the endpoint.
     pub headers: HeaderMap,
     /// A filter which determines which events are exported.
-    pub filter: Option<Targets>,
+    pub filter: Targets,
 }
 
 /// Configuration of the [Tokio console] integration.
@@ -92,7 +90,7 @@ pub struct OpenTelemetryConfig {
 /// [Tokio console]: https://github.com/tokio-rs/console
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tokio-console")))]
 #[cfg(feature = "tokio-console")]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokioConsoleConfig {
     /// The address on which to listen for Tokio console connections.
     ///
@@ -106,20 +104,6 @@ pub struct TokioConsoleConfig {
     ///
     /// See [`console_subscriber::Builder::retention`].
     pub retention: Duration,
-}
-
-#[cfg(feature = "tokio-console")]
-impl Default for TokioConsoleConfig {
-    fn default() -> TokioConsoleConfig {
-        TokioConsoleConfig {
-            listen_addr: SocketAddr::from((
-                console_subscriber::Server::DEFAULT_IP,
-                console_subscriber::Server::DEFAULT_PORT,
-            )),
-            publish_interval: ConsoleLayer::DEFAULT_PUBLISH_INTERVAL,
-            retention: ConsoleLayer::DEFAULT_RETENTION,
-        }
-    }
 }
 
 /// Enables application tracing via the [`tracing`] and [`opentelemetry`]
@@ -143,14 +127,18 @@ impl Default for TokioConsoleConfig {
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
-pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
+pub async fn configure<C>(service_name: &str, config: C) -> Result<(), anyhow::Error>
+where
+    C: Into<TracingConfig>,
+{
+    let config = config.into();
     let stderr_log_layer = fmt::layer()
         .event_format(PrefixFormat {
             inner: format(),
             prefix: config
                 .stderr_log
                 .include_service_name
-                .then(|| config.service_name.clone()),
+                .then(|| service_name.to_string()),
         })
         .with_writer(io::stderr)
         .with_ansi(atty::is(atty::Stream::Stderr))
@@ -191,18 +179,14 @@ pub async fn configure(config: TracingConfig) -> Result<(), anyhow::Error> {
             .tracing()
             .with_trace_config(trace::config().with_resource(Resource::new([KeyValue::new(
                 "service.name",
-                config.service_name,
+                service_name.to_string(),
             )])))
             .with_exporter(exporter)
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();
         let layer = tracing_opentelemetry::layer()
             .with_tracer(tracer)
-            .with_filter(
-                otel_config
-                    .filter
-                    .unwrap_or_else(|| Targets::new().with_default(LevelFilter::DEBUG)),
-            );
+            .with_filter(otel_config.filter);
         Some(layer)
     } else {
         None

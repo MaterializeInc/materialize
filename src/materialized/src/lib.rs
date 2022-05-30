@@ -39,6 +39,7 @@ use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -169,6 +170,8 @@ pub struct OrchestratorConfig {
     /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
     /// ADAPTER is lost.
     pub linger: bool,
+    /// A tracing configuration to inject into all created services.
+    pub tracing: TracingCliArgs,
 }
 
 /// The orchestrator itself.
@@ -285,6 +288,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
+    let orchestrator = Box::new(TracingOrchestrator::new(
+        orchestrator,
+        config.orchestrator.tracing,
+    ));
     let storage_service = orchestrator
         .namespace("storage")
         .ensure_service(

@@ -82,7 +82,7 @@ where
 }
 
 /// A command-line argument of the form `KEY=VALUE`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KeyValueArg<K, V> {
     /// The key of the command-line argument.
     pub key: K,

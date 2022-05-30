@@ -275,7 +275,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 containers: vec![Container {
                     name: "default".into(),
                     image: Some(image),
-                    args: Some(args(ServiceAssignments {
+                    args: Some(args(&ServiceAssignments {
                         listen_host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
                         ports: &ports,
                         index: None,

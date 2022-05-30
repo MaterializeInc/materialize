@@ -1,0 +1,20 @@
+[package]
+name = "mz-orchestrator-tracing"
+description = "Service orchestration for tracing-aware services."
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.61.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0.57"
+async-trait = "0.1.53"
+clap = { version = "3.1.18", features = ["env", "derive"] }
+http = "0.2.7"
+mz-orchestrator = { path = "../orchestrator" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr" }
+tracing-subscriber = { version = "0.3.11", default-features = false }
+
+[features]
+tokio-console = ["mz-ore/tokio-console"]
