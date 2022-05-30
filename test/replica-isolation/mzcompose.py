@@ -79,7 +79,7 @@ def drop_create_replica(c: Composition) -> None:
         dedent(
             """
             > DROP CLUSTER REPLICA cluster1.replica1
-            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ('computed_2_1:2100', 'computed_2_2:2100')
+            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ('computed_1_1:2100', 'computed_1_2:2100')
             """
         )
     )
