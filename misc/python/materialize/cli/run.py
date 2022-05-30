@@ -73,7 +73,7 @@ def main() -> int:
         help="Activate the Tokio console",
         action="store_true",
     )
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
     args.channel = None
