@@ -223,7 +223,6 @@ where
                                             "--http-console-addr={}:{}",
                                             assigned.listen_host, assigned.ports["http"]
                                         ),
-                                        format!("--processes={}", size_config.scale),
                                         format!("--workers={}", size_config.workers),
                                         "--log-process-name".to_string(),
                                     ];

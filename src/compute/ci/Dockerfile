@@ -14,8 +14,8 @@ RUN apt-get update \
     && groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize
 
-COPY computed /usr/local/bin/
+COPY computed entrypoint.sh /usr/local/bin/
 
 USER materialize
 
-ENTRYPOINT ["tini", "--", "computed", "--listen-addr=0.0.0.0:2100"]
+ENTRYPOINT ["tini", "--", "entrypoint.sh"]

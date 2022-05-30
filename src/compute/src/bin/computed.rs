@@ -67,18 +67,9 @@ struct Args {
     /// Number of this computed process.
     #[clap(short = 'p', long, env = "PROCESS", value_name = "P")]
     process: Option<usize>,
-    /// Total number of computed processes.
-    #[clap(
-        short = 'n',
-        long,
-        env = "PROCESSES",
-        value_name = "N",
-        default_value = "1"
-    )]
-    processes: usize,
-    /// The hostnames of all computed processes in the cluster.
+    /// The addresses of all computed processes in the cluster.
     #[clap()]
-    hosts: Vec<String>,
+    addresses: Vec<String>,
 
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
@@ -130,74 +121,40 @@ async fn main() {
 }
 
 fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfig, anyhow::Error> {
-    let threads = args.workers;
-    let process = args.process;
-    let processes = args.processes;
-    if processes == 0 {
-        bail!("0 is a nonsensical number of processes.")
-    }
-    if process > Some(processes - 1) {
-        let process = process.unwrap();
-        bail!("Process index out of bounds: {process} out of 0..{processes}.");
-    }
-    let process = if processes == 1 {
-        0
-    } else {
-        process
-            .or_else(|| {
-                // Dirty hack: we parse the process from the hostname, if possible. This is the recommended way to get the Ordinal Index of a Kubernetes replica.
-                std::env::var("HOSTNAME").ok().and_then(|hostname| {
-                    hostname
-                        .rsplit_once('-')
-                        .and_then(|(_, idx)| idx.parse::<usize>().ok())
-                })
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Process index not provided, and failed to deduce it from hostname."
-                )
-            })?
-    };
-    let report = true;
-
-    if processes > 1 {
-        let mut addresses = Vec::new();
-        if args.hosts.is_empty() {
-            for index in 0..processes {
-                addresses.push(format!("localhost:{}", 2102 + index));
-            }
-        } else {
-            if let Ok(file) = ::std::fs::File::open(args.hosts[0].clone()) {
-                let reader = ::std::io::BufReader::new(file);
-                use ::std::io::BufRead;
-                for line in reader.lines().take(processes) {
-                    addresses.push(line?);
-                }
-            } else {
-                addresses.extend(args.hosts.iter().cloned());
-            }
-            if addresses.len() < processes {
+    if args.addresses.len() > 1 {
+        let process = match args.process {
+            None => {
                 bail!(
-                    "could only read {} addresses from {:?}, but -n: {}",
-                    addresses.len(),
-                    args.hosts,
-                    processes
+                    "--process argument must be specified when more than one address is specified"
                 );
             }
-        }
-
-        assert_eq!(processes, addresses.len());
+            Some(process) if process >= args.addresses.len() => {
+                bail!(
+                    "process index {process} out of range [0, {})",
+                    args.addresses.len()
+                );
+            }
+            Some(process) => process,
+        };
         Ok(timely::CommunicationConfig::Cluster {
-            threads,
+            threads: args.workers,
             process,
-            addresses,
-            report,
+            addresses: args.addresses.clone(),
+            report: true,
             log_fn: Box::new(|_| None),
         })
-    } else if threads > 1 {
-        Ok(timely::CommunicationConfig::Process(threads))
     } else {
-        Ok(timely::CommunicationConfig::Thread)
+        match args.process {
+            Some(process) if process > 1 => {
+                bail!("process index {process} out of range [0, 1)");
+            }
+            _ => (),
+        }
+        if args.workers > 1 {
+            Ok(timely::CommunicationConfig::Process(args.workers))
+        } else {
+            Ok(timely::CommunicationConfig::Thread)
+        }
     }
 }
 
