@@ -58,6 +58,7 @@ use uuid::Uuid;
 
 use materialized::{OrchestratorBackend, OrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -576,6 +577,7 @@ impl Runner {
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
                 linger: false,
+                tracing: TracingCliArgs::default(),
             },
             secrets_controller: None,
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

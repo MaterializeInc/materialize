@@ -79,7 +79,7 @@ pub struct ServiceConfig<'a> {
     /// A function that generates the arguments for each process of the service
     /// given the assignments that the orchestrator has made.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync),
+    pub args: &'a (dyn Fn(&ServiceAssignments) -> Vec<String> + Send + Sync),
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.

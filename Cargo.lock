@@ -2794,6 +2794,7 @@ dependencies = [
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-pgrepr",
@@ -3099,7 +3100,6 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "futures",
- "http",
  "itertools",
  "mz-avro",
  "mz-build-info",
@@ -3107,6 +3107,7 @@ dependencies = [
  "mz-expr",
  "mz-interchange",
  "mz-kafka-util",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-pid-file",
@@ -3485,6 +3486,20 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "mz-orchestrator-tracing"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "http",
+ "mz-orchestrator",
+ "mz-ore",
+ "mz-repr",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3907,6 +3922,7 @@ dependencies = [
  "materialized",
  "md-5",
  "mz-orchestrator-process",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist-client",
  "mz-pgrepr",
@@ -5692,9 +5708,9 @@ dependencies = [
  "axum",
  "clap",
  "futures",
- "http",
  "mz-build-info",
  "mz-dataflow-types",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-pid-file",
  "mz-prof",

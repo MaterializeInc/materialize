@@ -33,13 +33,12 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use clap::{ArgEnum, Parser};
 use fail::FailScenario;
-use http::header::{HeaderName, HeaderValue};
+use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
 use sysinfo::{ProcessorExt, SystemExt};
 use tower_http::cors::{self, AllowOrigin};
-use tracing_subscriber::filter::Targets;
 use url::Url;
 use uuid::Uuid;
 
@@ -50,14 +49,12 @@ use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-#[cfg(feature = "tokio-console")]
-use mz_ore::tracing::TokioConsoleConfig;
-use mz_ore::tracing::{OpenTelemetryConfig, StderrLogConfig, TracingConfig};
 use mz_persist_client::PersistLocation;
 
 mod sys;
@@ -197,39 +194,11 @@ pub struct Args {
     #[clap(long, env = "TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
 
-    // === Logging options. ===
-    /// Which log messages to emit.
-    ///
-    /// This value is a comma-separated list of filter directives. Each filter
-    /// directive has the following format:
-    ///
-    ///     [module::path=]level
-    ///
-    /// A directive indicates that log messages from the specified module that
-    /// are at least as severe as the specified level should be emitted. If a
-    /// directive omits the module, then it implicitly applies to all modules.
-    /// When directives conflict, the last directive wins. If a log message does
-    /// not match any directive, it is not emitted.
-    ///
-    /// The module path of a log message reflects its location in Materialize's
-    /// source code. Choosing module paths for filter directives requires
-    /// familiarity with Materialize's codebase and is intended for advanced
-    /// users. Note that module paths change frequency from release to release.
-    ///
-    /// The valid levels for a log message are, in increasing order of severity:
-    /// trace, debug, info, warn, and error. The special level "off" may be used
-    /// in a directive to suppress all log messages, even errors.
-    ///
-    /// The default value for this option is "info".
-    #[clap(
-        long,
-        env = "LOG_FILTER",
-        value_name = "FILTER",
-        default_value = "info"
-    )]
-    log_filter: Targets,
+    // === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 
-    // == Connection options.
+    // === Connection options. ===
     /// The address on which to listen for connections.
     #[clap(
         long,
@@ -360,49 +329,12 @@ pub struct Args {
     #[clap(long, value_name = "ID")]
     aws_external_id_prefix: Option<String>,
 
-    /// The endpoint to send opentelemetry traces to.
-    /// If not provided, tracing is not sent.
-    ///
-    /// You most likely also need to provide
-    /// `--opentelemetry-header`/`OPENTELEMETRY_HEADER`
-    /// depending on the collector you are talking to.
-    #[clap(long, env = "OPENTELEMETRY_ENDPOINT", hide = true)]
-    opentelemetry_endpoint: Option<String>,
-
-    /// Headers to pass to the OpenTelemetry collector.
-    ///
-    /// May be specified multiple times.
-    #[clap(
-        long,
-        value_name = "HEADER",
-        env = "OPENTELEMETRY_HEADER",
-        requires = "opentelemetry-endpoint",
-        use_value_delimiter = true,
-        hide = true
-    )]
-    opentelemetry_header: Vec<KeyValueArg<HeaderName, HeaderValue>>,
-
-    /// Event filter specific to the opentelemetry layer.
-    #[clap(
-        long,
-        env = "OPENTELEMETRY_FILTER",
-        requires = "opentelemetry-endpoint",
-        default_value = "debug",
-        hide = true
-    )]
-    opentelemetry_filter: Targets,
-
     #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: Option<String>,
 
     /// Availability zones compute resources may be deployed in.
     #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
     availability_zone: Vec<String>,
-
-    #[cfg(feature = "tokio-console")]
-    /// Turn on the console-subscriber to use materialize with `tokio-console`
-    #[clap(long, hide = true)]
-    tokio_console: bool,
 
     /// Prefix commands issued by the process orchestrator with the supplied value.
     #[clap(long, env = "PROCESS_ORCHESTRATOR_WRAPPER")]
@@ -442,7 +374,7 @@ fn main() {
     }
 }
 
-fn run(args: Args) -> Result<(), anyhow::Error> {
+fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
 
     // Configure signal handling as soon as possible. We want signals to be
@@ -468,29 +400,12 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     let metrics_registry = MetricsRegistry::new();
-    runtime.block_on(mz_ore::tracing::configure(TracingConfig {
-        service_name: "materialized".into(),
-        stderr_log: StderrLogConfig {
-            // Only log the service name when using the process orchestrator,
-            // which intermingles log output from multiple services. Other
-            // orchestrators separate log output from different services.
-            include_service_name: matches!(args.orchestrator, Orchestrator::Process),
-            filter: args.log_filter.clone(),
-        },
-        opentelemetry: args
-            .opentelemetry_endpoint
-            .map(|endpoint| OpenTelemetryConfig {
-                endpoint,
-                headers: args
-                    .opentelemetry_header
-                    .into_iter()
-                    .map(|header| (header.key, header.value))
-                    .collect(),
-                filter: Some(args.opentelemetry_filter),
-            }),
-        #[cfg(feature = "tokio-console")]
-        tokio_console: args.tokio_console.then(|| TokioConsoleConfig::default()),
-    }))?;
+
+    // Configure tracing to log the service name when using the process
+    // orchestrator, which intermingles log output from multiple services. Other
+    // orchestrators separate log output from different services.
+    args.tracing.log_include_service_name = matches!(args.orchestrator, Orchestrator::Process);
+    runtime.block_on(mz_ore::tracing::configure("materialized", &args.tracing))?;
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -615,6 +530,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args
             .orchestrator_linger
             .unwrap_or_else(|| args.orchestrator.default_linger_value()),
+        tracing: args.tracing.clone(),
     };
 
     // Configure storage.
@@ -743,7 +659,7 @@ max log level: {max_log_level}",
         replica_sizes,
         availability_zones: args.availability_zone,
         connector_context: ConnectorContext::from_cli_args(
-            &args.log_filter,
+            &args.tracing.log_filter.inner,
             args.aws_external_id_prefix,
         ),
     }))?;

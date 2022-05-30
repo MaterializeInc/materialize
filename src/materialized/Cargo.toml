@@ -56,6 +56,7 @@ mz-http-util = { path = "../http-util" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore", features = ["task", "tracing_"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgwire = { path = "../pgwire" }
@@ -138,7 +139,7 @@ default = ["jemalloc"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-prof/jemalloc", "tikv-jemallocator"]
-tokio-console = ["mz-ore/tokio-console"]
+tokio-console = ["mz-ore/tokio-console", "mz-orchestrator-tracing/tokio-console"]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.

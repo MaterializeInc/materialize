@@ -21,15 +21,14 @@ use serde::ser::Serialize;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
-use tracing_subscriber::filter::Targets;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
 use mz_dataflow_types::ConnectorContext;
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_ore::tracing::{StderrLogConfig, TracingConfig};
 use mz_pid_file::PidFile;
 use mz_storage::Server;
 
@@ -88,18 +87,9 @@ struct Args {
     #[clap(long, value_name = "PATH")]
     pid_file_location: Option<PathBuf>,
 
-    // === Logging options. ===
-    /// Which log messages to emit. See `materialized`'s help for more
-    /// info.
-    ///
-    /// The default value for this option is "info".
-    #[clap(
-        long,
-        env = "LOG_FILTER",
-        value_name = "FILTER",
-        default_value = "info"
-    )]
-    log_filter: Targets,
+    /// === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[tokio::main]
@@ -132,23 +122,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-
-    mz_ore::tracing::configure(TracingConfig {
-        service_name: "storaged".into(),
-        stderr_log: StderrLogConfig {
-            // Only log the service name when the presence of the
-            // `--pid-file-location` argument indicates that we're running under
-            // the process orchestrator, which intermingles log output from
-            // multiple services. Other orchestrators separate log output from
-            // different services.
-            include_service_name: args.pid_file_location.is_some(),
-            filter: args.log_filter.clone(),
-        },
-        opentelemetry: None,
-        #[cfg(feature = "tokio-console")]
-        tokio_console: None,
-    })
-    .await?;
+    mz_ore::tracing::configure("storaged", &args.tracing).await?;
 
     if args.workers == 0 {
         bail!("--workers must be greater than 0");
@@ -178,7 +152,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
-        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
+        connector_context: ConnectorContext::from_cli_args(
+            &args.tracing.log_filter.inner,
+            args.aws_external_id,
+        ),
     };
 
     let serve_config = ServeConfig {

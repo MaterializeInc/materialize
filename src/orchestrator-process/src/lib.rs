@@ -214,7 +214,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             .collect::<Vec<_>>();
         for i in 0..(scale_in.get()) {
             if !processes_exist[i] {
-                let mut args = args(ServiceAssignments {
+                let mut args = args(&ServiceAssignments {
                     listen_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
                     ports: &peers[i].1,
                     index: Some(i),
