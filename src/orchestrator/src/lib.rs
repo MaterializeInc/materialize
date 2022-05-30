@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -33,9 +34,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
 pub trait Orchestrator: fmt::Debug + Send + Sync {
-    // Default host used to bind to.
-    fn listen_host(&self) -> &str;
-
     /// Enter a namespace in the orchestrator.
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
 }
@@ -79,22 +77,9 @@ pub struct ServiceConfig<'a> {
     /// Often names a container on Docker Hub or a path on the local machine.
     pub image: String,
     /// A function that generates the arguments for each process of the service
-    /// given various information about the process to be configured.
-    ///
-    /// The first argument is the port mappings for each host; the second mapping is the
-    /// port mappings for the host or set of hosts presently being configured.
-    ///
-    /// The third argument is the index of this process in the service, _if available_.
-    /// It is not available from all orchestrators; for example, the Kubernetes orchestrator
-    /// configures the arguments for all processes at once.
+    /// given the assignments that the orchestrator has made.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(
-        &[(String, HashMap<String, u16>)],
-        &HashMap<String, u16>,
-        Option<usize>,
-    ) -> Vec<String>
-             + Send
-             + Sync),
+    pub args: &'a (dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync),
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -124,6 +109,22 @@ pub struct ServicePort {
     ///
     /// Not all orchestrator backends will make use of the hint.
     pub port_hint: u16,
+}
+
+/// Assignments that the orchestrator has made for the service.
+pub struct ServiceAssignments<'a> {
+    /// The host that the service should bind to.
+    pub listen_host: IpAddr,
+    /// The assigned port for each entry in [`ServiceConfig::ports`].
+    pub ports: &'a HashMap<String, u16>,
+    /// The index of this service in [`peers`](ServiceConfig::peers), if known.
+    ///
+    /// Not all orchestrators are capable of providing this information.
+    pub index: Option<usize>,
+    /// The hostname and port assignments for each peer in the service.
+    ///
+    /// The number of peers is determined by [`ServiceConfig::scale`].
+    pub peers: &'a [(String, HashMap<String, u16>)],
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

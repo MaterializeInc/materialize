@@ -285,23 +285,22 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
-    let default_listen_host = orchestrator.listen_host();
     let storage_service = orchestrator
         .namespace("storage")
         .ensure_service(
             "runtime",
             ServiceConfig {
                 image: config.orchestrator.storaged_image.clone(),
-                args: &|_hosts_ports, my_ports, _my_index| {
+                args: &|assigned| {
                     let mut storage_opts = vec![
                         format!("--workers=1"),
                         format!(
                             "--listen-addr={}:{}",
-                            default_listen_host, my_ports["controller"]
+                            assigned.listen_host, assigned.ports["controller"]
                         ),
                         format!(
                             "--http-console-addr={}:{}",
-                            default_listen_host, my_ports["http"]
+                            assigned.listen_host, assigned.ports["http"]
                         ),
                         "--log-process-name".to_string(),
                     ];

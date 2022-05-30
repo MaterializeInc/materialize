@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use anyhow::bail;
@@ -28,7 +29,9 @@ use kube::error::Error;
 use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
-use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
+use mz_orchestrator::{
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig,
+};
 
 const FIELD_MANAGER: &str = "materialized";
 
@@ -113,9 +116,6 @@ impl KubernetesOrchestrator {
 }
 
 impl Orchestrator for KubernetesOrchestrator {
-    fn listen_host(&self) -> &str {
-        "0.0.0.0"
-    }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         Arc::new(NamespacedKubernetesOrchestrator {
             service_api: Api::default_namespaced(self.client.clone()),
@@ -244,11 +244,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 )
             })
             .collect::<Vec<_>>();
-
         let ports = ports_in
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<HashMap<_, _>>();
+        let peers = hosts
+            .iter()
+            .map(|host| (host.clone(), ports.clone()))
+            .collect::<Vec<_>>();
+
         let mut node_selector: BTreeMap<String, String> = self
             .config
             .service_node_selector
@@ -261,10 +265,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 availability_zone,
             );
         }
-        let hosts_ports = hosts
-            .iter()
-            .map(|host| (host.clone(), ports.clone()))
-            .collect::<Vec<_>>();
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -275,7 +275,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 containers: vec![Container {
                     name: "default".into(),
                     image: Some(image),
-                    args: Some(args(&hosts_ports, &ports, None)),
+                    args: Some(args(ServiceAssignments {
+                        listen_host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+                        ports: &ports,
+                        index: None,
+                        peers: &peers,
+                    })),
                     image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                     ports: Some(
                         ports_in

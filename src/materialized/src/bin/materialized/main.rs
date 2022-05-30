@@ -162,10 +162,6 @@ pub struct Args {
         default_value_if("orchestrator", Some("process"), Some("computed"))
     )]
     computed_image: Option<String>,
-    /// The host on which processes spawned by the process orchestrator listen
-    /// for connections.
-    #[clap(long, hide = true, env = "PROCESS_LISTEN_HOST")]
-    process_listen_host: Option<String>,
     /// The image pull policy to use for services created by the Kubernetes
     /// orchestrator.
     #[structopt(long, default_value = "always", arg_enum)]
@@ -604,7 +600,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                             .expect("Port number overflow, base-service-port too large."),
                     )),
                     suppress_output: false,
-                    process_listen_host: args.process_listen_host,
                     data_dir: args.data_directory.clone(),
                     command_wrapper: args
                         .process_orchestrator_wrapper
