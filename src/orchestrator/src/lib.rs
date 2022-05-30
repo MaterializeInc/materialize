@@ -35,6 +35,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub trait Orchestrator: fmt::Debug + Send + Sync {
     // Default host used to bind to.
     fn listen_host(&self) -> &str;
+
     /// Enter a namespace in the orchestrator.
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
 }

@@ -3089,7 +3089,7 @@ dependencies = [
 
 [[package]]
 name = "mz-compute"
-version = "0.0.0"
+version = "0.26.1-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -3114,6 +3114,7 @@ dependencies = [
  "mz-repr",
  "mz-storage",
  "mz-timely-util",
+ "once_cell",
  "prometheus",
  "prost-build",
  "rdkafka",
@@ -5685,7 +5686,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "storaged"
-version = "0.0.0"
+version = "0.26.1-dev"
 dependencies = [
  "anyhow",
  "axum",
@@ -5698,6 +5699,7 @@ dependencies = [
  "mz-pid-file",
  "mz-prof",
  "mz-storage",
+ "once_cell",
  "serde",
  "tikv-jemallocator",
  "timely",

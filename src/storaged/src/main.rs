@@ -15,6 +15,7 @@ use std::process;
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
@@ -25,6 +26,7 @@ use tracing_subscriber::filter::Targets;
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
 use mz_dataflow_types::ConnectorContext;
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
@@ -44,25 +46,22 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
+pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+
 /// Independent storage server for Materialize.
 #[derive(clap::Parser)]
+#[clap(version = VERSION.as_str())]
 struct Args {
     /// The address on which to listen for a connection from the controller.
     #[clap(
         long,
-        env = "STORAGED_LISTEN_ADDR",
+        env = "LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2100"
     )]
     listen_addr: String,
     /// Number of dataflow worker threads.
-    #[clap(
-        short,
-        long,
-        env = "STORAGED_WORKERS",
-        value_name = "W",
-        default_value = "1"
-    )]
+    #[clap(short, long, env = "WORKERS", value_name = "W", default_value = "1")]
     workers: usize,
     /// The hostnames of all storaged processes in the cluster.
     #[clap()]
@@ -95,7 +94,7 @@ struct Args {
     /// The default value for this option is "info".
     #[clap(
         long,
-        env = "STORAGED_LOG_FILTER",
+        env = "LOG_FILTER",
         value_name = "FILTER",
         default_value = "info"
     )]
@@ -108,7 +107,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run(mz_ore::cli::parse_args()).await {
+    let args = cli::parse_args(CliConfig {
+        env_prefix: Some("STORAGED_"),
+        enable_version_flag: true,
+    });
+    if let Err(err) = run(args).await {
         eprintln!("storaged: fatal: {:#}", err);
         process::exit(1);
     }
