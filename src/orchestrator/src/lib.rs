@@ -111,22 +111,26 @@ pub struct ServicePort {
     pub port_hint: u16,
 }
 
-/// Assignments that the orchestrator has made for the service.
+/// Assignments that the orchestrator has made for a service.
 pub struct ServiceAssignments<'a> {
     /// The host that the service should bind to.
     pub listen_host: IpAddr,
     /// The assigned port for each entry in [`ServiceConfig::ports`].
     pub ports: &'a HashMap<String, u16>,
-    /// The index of this service in [`peers`](ServiceConfig::peers), if known.
+    /// The index of this service in [`peers`](ServiceAssignments::peers), if
+    /// known.
     ///
     /// Not all orchestrators are capable of providing this information.
     pub index: Option<usize>,
-    /// The hostname and port assignments for each peer in the service.
+    /// The hostname and port assignments for each peer in the service. The
+    /// order of peers is significant. Each peer is uniquely identified by its
+    /// position in the slice.
     ///
     /// The number of peers is determined by [`ServiceConfig::scale`].
     pub peers: &'a [(String, HashMap<String, u16>)],
 }
 
+/// Describes a limit on memory.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 
