@@ -33,6 +33,7 @@ use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::retry::Retry;
 
 trait Generator<R>: FnMut(&mut ThreadRng) -> R + Send + Sync {
@@ -583,7 +584,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     let value_gen = match args.value_format {
         ValueFormat::Bytes => {

@@ -20,6 +20,7 @@ use tracing::{error, info, Level};
 use tracing_subscriber::filter::EnvFilter;
 
 use mz_ore::cast::CastFrom;
+use mz_ore::cli::{self, CliConfig};
 
 /// Generate meaningless data in S3 to test download speeds
 #[derive(Parser)]
@@ -72,7 +73,7 @@ async fn main() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
         .with_env_filter(args.log_filter)

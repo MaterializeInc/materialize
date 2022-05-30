@@ -51,7 +51,7 @@ use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
-use mz_ore::cli::KeyValueArg;
+use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -91,13 +91,12 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
 #[derive(Parser, Debug)]
 #[clap(
     next_line_help = true,
-    args_override_self = true,
     version = VERSION.as_str(),
     long_version = LONG_VERSION.as_str(),
 )]
 pub struct Args {
     /// [DANGEROUS] Enable experimental features.
-    #[clap(long, env = "MZ_EXPERIMENTAL")]
+    #[clap(long, env = "EXPERIMENTAL")]
     experimental: bool,
 
     /// The address on which Prometheus metrics get exposed.
@@ -109,7 +108,7 @@ pub struct Args {
         long,
         hide = true,
         value_name = "HOST:PORT",
-        env = "MZ_THIRD_PARTY_METRICS_ADDR"
+        env = "THIRD_PARTY_METRICS_ADDR"
     )]
     metrics_listen_addr: Option<SocketAddr>,
 
@@ -137,7 +136,7 @@ pub struct Args {
     #[clap(
         long,
         hide = true,
-        env = "MZ_POD_NAME",
+        env = "POD_NAME",
         required_if_eq("orchestrator", "kubernetes")
     )]
     pod_name: Option<String>,
@@ -165,7 +164,7 @@ pub struct Args {
     computed_image: Option<String>,
     /// The host on which processes spawned by the process orchestrator listen
     /// for connections.
-    #[clap(long, hide = true, env = "MZ_PROCESS_LISTEN_HOST")]
+    #[clap(long, hide = true, env = "PROCESS_LISTEN_HOST")]
     process_listen_host: Option<String>,
     /// The image pull policy to use for services created by the Kubernetes
     /// orchestrator.
@@ -183,7 +182,7 @@ pub struct Args {
     /// Address of a storage process that the controller should connect to.
     #[clap(
         long,
-        env = "MZ_STORAGE_CONTROLLER_ADDR",
+        env = "STORAGE_CONTROLLER_ADDR",
         value_name = "HOST:ADDR",
         conflicts_with = "orchestrator"
     )]
@@ -193,10 +192,10 @@ pub struct Args {
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
-    #[clap(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
+    #[clap(long, env = "LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
     /// Default frequency with which to advance timestamps
-    #[clap(long, env = "MZ_TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
+    #[clap(long, env = "TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
 
     // === Logging options. ===
@@ -225,7 +224,7 @@ pub struct Args {
     /// The default value for this option is "info".
     #[clap(
         long,
-        env = "MZ_LOG_FILTER",
+        env = "LOG_FILTER",
         value_name = "FILTER",
         default_value = "info"
     )]
@@ -235,7 +234,7 @@ pub struct Args {
     /// The address on which to listen for connections.
     #[clap(
         long,
-        env = "MZ_LISTEN_ADDR",
+        env = "LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:6875"
     )]
@@ -264,7 +263,7 @@ pub struct Args {
     /// The most secure mode is "verify-full". This is the default mode when
     /// the --tls-cert option is specified. Otherwise the default is "disable".
     #[clap(
-        long, env = "MZ_TLS_MODE",
+        long, env = "TLS_MODE",
         possible_values = &["disable", "require", "verify-ca", "verify-full"],
         default_value = "disable",
         default_value_ifs = &[
@@ -276,7 +275,7 @@ pub struct Args {
     tls_mode: String,
     #[clap(
         long,
-        env = "MZ_TLS_CA",
+        env = "TLS_CA",
         required_if_eq("tls-mode", "verify-ca"),
         required_if_eq("tls-mode", "verify-full"),
         value_name = "PATH"
@@ -285,7 +284,7 @@ pub struct Args {
     /// Certificate file for TLS connections.
     #[clap(
         long,
-        env = "MZ_TLS_CERT",
+        env = "TLS_CERT",
         requires = "tls-key",
         required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
         value_name = "PATH"
@@ -294,7 +293,7 @@ pub struct Args {
     /// Private key file for TLS connections.
     #[clap(
         long,
-        env = "MZ_TLS_KEY",
+        env = "TLS_KEY",
         requires = "tls-cert",
         required_if_eq_any(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
         value_name = "PATH"
@@ -303,24 +302,19 @@ pub struct Args {
     /// Specifies the tenant id when authenticating users. Must be a valid UUID.
     #[clap(
         long,
-        env = "MZ_FRONTEGG_TENANT",
+        env = "FRONTEGG_TENANT",
         requires_all = &["frontegg-jwk", "frontegg-api-token-url"],
         hide = true
     )]
     frontegg_tenant: Option<Uuid>,
     /// JWK used to validate JWTs during user authentication as a PEM public
     /// key. Can optionally be base64 encoded with the URL-safe alphabet.
-    #[clap(
-        long,
-        env = "MZ_FRONTEGG_JWK",
-        requires = "frontegg-tenant",
-        hide = true
-    )]
+    #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg-tenant", hide = true)]
     frontegg_jwk: Option<String>,
     /// The full URL (including path) to the api-token endpoint.
     #[clap(
         long,
-        env = "MZ_FRONTEGG_API_TOKEN_URL",
+        env = "FRONTEGG_API_TOKEN_URL",
         requires = "frontegg-tenant",
         hide = true
     )]
@@ -328,14 +322,14 @@ pub struct Args {
     /// A common string prefix that is expected to be present at the beginning of passwords.
     #[clap(
         long,
-        env = "MZ_FRONTEGG_PASSWORD_PREFIX",
+        env = "FRONTEGG_PASSWORD_PREFIX",
         requires = "frontegg-tenant",
         hide = true
     )]
     frontegg_password_prefix: Option<String>,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
-    #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN", hide = true)]
+    #[structopt(long, env = "CORS_ALLOWED_ORIGIN", hide = true)]
     cors_allowed_origin: Vec<HeaderValue>,
 
     // === Storage options. ===
@@ -343,7 +337,7 @@ pub struct Args {
     #[clap(
         short = 'D',
         long,
-        env = "MZ_DATA_DIRECTORY",
+        env = "DATA_DIRECTORY",
         value_name = "PATH",
         default_value = "mzdata"
     )]
@@ -351,13 +345,13 @@ pub struct Args {
     /// Where the persist library should store its blob data.
     ///
     /// Defaults to the `persist/blob` in the data directory.
-    #[clap(long, env = "MZ_PERSIST_BLOB_URL")]
+    #[clap(long, env = "PERSIST_BLOB_URL")]
     persist_blob_url: Option<Url>,
     /// Where the persist library should perform consensus.
-    #[clap(long, env = "MZ_PERSIST_CONSENSUS_URL")]
+    #[clap(long, env = "PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Url,
     /// Postgres catalog stash connection string.
-    #[clap(long, env = "MZ_CATALOG_POSTGRES_STASH", value_name = "POSTGRES_URL")]
+    #[clap(long, env = "CATALOG_POSTGRES_STASH", value_name = "POSTGRES_URL")]
     catalog_postgres_stash: String,
 
     // === AWS options. ===
@@ -371,9 +365,9 @@ pub struct Args {
     /// If not provided, tracing is not sent.
     ///
     /// You most likely also need to provide
-    /// `--opentelemetry-header`/`MZ_OPENTELEMETRY_HEADER`
+    /// `--opentelemetry-header`/`OPENTELEMETRY_HEADER`
     /// depending on the collector you are talking to.
-    #[clap(long, env = "MZ_OPENTELEMETRY_ENDPOINT", hide = true)]
+    #[clap(long, env = "OPENTELEMETRY_ENDPOINT", hide = true)]
     opentelemetry_endpoint: Option<String>,
 
     /// Headers to pass to the OpenTelemetry collector.
@@ -382,7 +376,7 @@ pub struct Args {
     #[clap(
         long,
         value_name = "HEADER",
-        env = "MZ_OPENTELEMETRY_HEADER",
+        env = "OPENTELEMETRY_HEADER",
         requires = "opentelemetry-endpoint",
         use_value_delimiter = true,
         hide = true
@@ -393,17 +387,17 @@ pub struct Args {
     /// Defaults to `debug`.
     #[clap(
         long,
-        env = "MZ_OPENTELEMETRY_LOG_FILTER",
+        env = "OPENTELEMETRY_LOG_FILTER",
         requires = "opentelemetry-log-filter",
         hide = true
     )]
     opentelemetry_log_filter: Option<Targets>,
 
-    #[clap(long, env = "MZ_CLUSTER_REPLICA_SIZES")]
+    #[clap(long, env = "CLUSTER_REPLICA_SIZES")]
     cluster_replica_sizes: Option<String>,
 
     /// Availability zones compute resources may be deployed in.
-    #[clap(long, env = "MZ_AVAILABILITY_ZONE", use_value_delimiter = true)]
+    #[clap(long, env = "AVAILABILITY_ZONE", use_value_delimiter = true)]
     availability_zone: Vec<String>,
 
     #[cfg(feature = "tokio-console")]
@@ -412,7 +406,7 @@ pub struct Args {
     tokio_console: bool,
 
     /// Prefix commands issued by the process orchestrator with the supplied value.
-    #[clap(long, env = "MZ_PROCESS_ORCHESTRATOR_WRAPPER")]
+    #[clap(long, env = "PROCESS_ORCHESTRATOR_WRAPPER")]
     process_orchestrator_wrapper: Option<String>,
 }
 
@@ -439,7 +433,11 @@ impl Orchestrator {
 }
 
 fn main() {
-    if let Err(err) = run(Args::parse()) {
+    let args = cli::parse_args(CliConfig {
+        env_prefix: Some("MZ_"),
+        enable_version_flag: true,
+    });
+    if let Err(err) = run(args) {
         eprintln!("materialized: {:#}", err);
         process::exit(1);
     }
