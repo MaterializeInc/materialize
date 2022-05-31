@@ -125,6 +125,7 @@ impl_display_t!(ProtobufSchema);
 pub enum CsrConnector {
     Inline {
         url: String,
+        with_options: Option<BTreeMap<String, String>>,
     },
     // The reference variant needs to be creatable by the parser with just a name
     // but also must allow populating the values for use in purification and planning
@@ -548,6 +549,7 @@ impl_display_t!(CreateConnector);
 pub enum KafkaConnector {
     Inline {
         broker: String,
+        with_options: Option<BTreeMap<String, String>>,
     },
     // The reference variant needs to be creatable by the parser with just a name
     // but also must allow populating the values for use in purification and planning
@@ -613,7 +615,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
             }) => {
                 f.write_str("KAFKA ");
                 match broker {
-                    KafkaConnector::Inline { broker } => {
+                    KafkaConnector::Inline { broker, .. } => {
                         f.write_str("BROKER '");
                         f.write_node(&display::escape_single_quote_string(broker));
                         f.write_str("'");

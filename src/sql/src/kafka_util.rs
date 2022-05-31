@@ -486,3 +486,56 @@ pub fn generate_ccsr_client_config(
 
     Ok(client_config)
 }
+
+pub fn generate_ccsr_client_config_string(
+    csr_url: Url,
+    ccsr_options: &mut BTreeMap<String, String>,
+    secrets_reader: (),
+) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
+    let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
+
+    // If provided, prefer SSL options from the schema registry configuration
+    if let Some(ca_path) = ccsr_options.remove("ssl_ca_location") {
+        let mut ca_buf = Vec::new();
+        File::open(ca_path)?.read_to_end(&mut ca_buf)?;
+        let cert = Certificate::from_pem(&ca_buf)?;
+        client_config = client_config.add_root_certificate(cert);
+    }
+
+    let key_path = ccsr_options.remove("ssl_key_location");
+    let cert_path = ccsr_options.remove("ssl_certificate_location");
+    match (key_path, cert_path) {
+        (Some(key_path), Some(cert_path)) => {
+            // `reqwest` expects identity `pem` files to contain one key and
+            // at least one certificate. Because `librdkafka` expects these
+            // as two separate arguments, we simply concatenate them for
+            // `reqwest`'s sake.
+            let mut ident_buf = Vec::new();
+            File::open(key_path)?.read_to_end(&mut ident_buf)?;
+            File::open(cert_path)?.read_to_end(&mut ident_buf)?;
+            let ident = Identity::from_pem(&ident_buf)?;
+            client_config = client_config.identity(ident);
+        }
+        (None, None) => {}
+        (_, _) => bail!(
+            "Reading from SSL-auth Confluent Schema Registry \
+             requires both ssl.key.location and ssl.certificate.location"
+        ),
+    }
+
+    //let mut ccsr_options = extract(
+    //    ccsr_options,
+    //    &[Config::string("username"), Config::string("password")],
+    //)?;
+
+    error!(
+        "GENERATE CCSR CLIENT CONFIG: CCSR_OPTIONS {:?}",
+        ccsr_options
+    );
+
+    if let Some(username) = ccsr_options.remove("username") {
+        client_config = client_config.auth(username, ccsr_options.remove("password"));
+    }
+
+    Ok(client_config)
+}

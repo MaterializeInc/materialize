@@ -32,7 +32,7 @@ use mz_dataflow_types::client::{
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    ConnectorInner, ExternalSourceConnector, SourceConnector, Timeline,
+    ConnectorInner, ExternalSourceConnector, MaybeValueId, SourceConnector, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;

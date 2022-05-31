@@ -1738,6 +1738,7 @@ impl<'a> Parser<'a> {
         } else {
             CsrConnector::Inline {
                 url: self.parse_literal_string()?,
+                with_options: None,
             }
         };
         let seed = if self.parse_keyword(SEED) {
@@ -1782,6 +1783,7 @@ impl<'a> Parser<'a> {
         } else {
             CsrConnector::Inline {
                 url: self.parse_literal_string()?,
+                with_options: None,
             }
         };
 
@@ -2136,6 +2138,7 @@ impl<'a> Parser<'a> {
                 let connector = match self.expect_one_of_keywords(&[BROKER, CONNECTOR])? {
                     BROKER => KafkaConnector::Inline {
                         broker: self.parse_literal_string()?,
+                        with_options: None,
                     },
                     CONNECTOR => KafkaConnector::Reference {
                         connector: self.parse_object_name()?,

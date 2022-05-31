@@ -7,15 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
+
+use mz_dataflow_types::sources::MaybeValueId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
     CsrConnector, CsrConnectorAvro, CsrConnectorProto, Format, KafkaConnector,
-    KafkaSourceConnector, ProtobufSchema, UnresolvedObjectName,
+    KafkaSourceConnector, ProtobufSchema, UnresolvedObjectName, WithOption,
 };
 
 use crate::catalog::SessionCatalog;
-use crate::normalize;
+use crate::normalize::{self, SqlMaybeValueId};
 use crate::plan::{PlanError, StatementContext};
 
 /// Uses the provided catalog to populate all Connector references with the values of the connector
@@ -30,35 +33,52 @@ pub fn populate_connectors<T: AstInfo>(
         connector:
             CreateSourceConnector::Kafka(
                 KafkaSourceConnector {
-                    connector: kafka_connector @ KafkaConnector::Reference { .. },
+                    connector: kafka_connector,
                     ..
                 },
                 ..,
             ),
+        with_options: stmt_with_options,
         ..
     } = &mut stmt
     {
-        let name = match kafka_connector {
-            KafkaConnector::Reference { connector, .. } => connector,
-            _ => unreachable!(),
-        };
-        let p_o_name = normalize::unresolved_object_name(name.clone())?;
-        let conn = catalog.resolve_item(&p_o_name)?;
-        let resolved_source_connector = conn.catalog_connector()?;
-        depends_on.push(conn.id());
-        *kafka_connector = KafkaConnector::Reference {
-            connector: name.to_owned(),
-            broker: Some(resolved_source_connector.uri()),
-            with_options: Some(resolved_source_connector.options(secrets_reader)),
+        match kafka_connector {
+            KafkaConnector::Reference {
+                connector: name, ..
+            } => {
+                let p_o_name = normalize::unresolved_object_name(name.clone())?;
+                let conn = catalog.resolve_item(&p_o_name)?;
+                let resolved_source_connector = conn.catalog_connector()?;
+                depends_on.push(conn.id());
+                *kafka_connector = KafkaConnector::Reference {
+                    connector: name.to_owned(),
+                    broker: Some(resolved_source_connector.uri()),
+                    with_options: Some(resolved_source_connector.options(secrets_reader)),
+                };
+            }
+            KafkaConnector::Inline {
+                broker: _,
+                with_options,
+            } => {
+                let new_options = crate::kafka_util::read_secrets_config(
+                    crate::kafka_util::extract_config(&mut normalize::options_catalog(
+                        stmt_with_options,
+                        catalog,
+                    )?)?,
+                    secrets_reader,
+                )?;
+                *with_options = Some(new_options);
+            }
         };
     };
 
     if let CreateSourceStatement {
         format: CreateSourceFormat::Bare(ref mut format),
+        ref mut with_options,
         ..
     } = stmt
     {
-        populate_connector_for_format(format, catalog, depends_on, secrets_reader)?;
+        populate_connector_for_format(format, catalog, depends_on, with_options, secrets_reader)?;
         return Ok(stmt);
     };
     if let CreateSourceStatement {
@@ -67,11 +87,12 @@ pub fn populate_connectors<T: AstInfo>(
                 ref mut key,
                 ref mut value,
             },
+        ref mut with_options,
         ..
     } = stmt
     {
-        populate_connector_for_format(key, catalog, depends_on, secrets_reader)?;
-        populate_connector_for_format(value, catalog, depends_on, secrets_reader)?;
+        populate_connector_for_format(key, catalog, depends_on, with_options, secrets_reader)?;
+        populate_connector_for_format(value, catalog, depends_on, with_options, secrets_reader)?;
     };
     Ok(stmt)
 }
@@ -81,6 +102,7 @@ fn populate_connector_for_format<T: AstInfo>(
     format: &mut Format<T>,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
+    stmt_with_options: &mut Vec<WithOption<T>>,
     secrets_reader: (),
 ) -> Result<(), anyhow::Error> {
     Ok(match format {
@@ -92,11 +114,25 @@ fn populate_connector_for_format<T: AstInfo>(
                         ..
                     },
             } => {
-                let name = match csr_connector {
-                    CsrConnector::Reference { connector, .. } => connector,
-                    _ => unreachable!(),
+                match csr_connector {
+                    CsrConnector::Reference {
+                        connector: name, ..
+                    } => {
+                        *csr_connector = populate_csr_connector_reference(
+                            name,
+                            catalog,
+                            depends_on,
+                            secrets_reader,
+                        )?;
+                    }
+                    CsrConnector::Inline { with_options, .. } => {
+                        *with_options = Some(generate_csr_connector_inline(
+                            stmt_with_options,
+                            catalog,
+                            secrets_reader,
+                        )?)
+                    }
                 };
-                *csr_connector = populate_csr_connector(name, catalog, depends_on, secrets_reader)?;
             }
             _ => {}
         },
@@ -108,11 +144,25 @@ fn populate_connector_for_format<T: AstInfo>(
                         ..
                     },
             } => {
-                let name = match csr_connector {
-                    CsrConnector::Reference { connector, .. } => connector,
-                    _ => unreachable!(),
+                match csr_connector {
+                    CsrConnector::Reference {
+                        connector: name, ..
+                    } => {
+                        *csr_connector = populate_csr_connector_reference(
+                            name,
+                            catalog,
+                            depends_on,
+                            secrets_reader,
+                        )?;
+                    }
+                    CsrConnector::Inline { with_options, .. } => {
+                        *with_options = Some(generate_csr_connector_inline(
+                            stmt_with_options,
+                            catalog,
+                            secrets_reader,
+                        )?)
+                    }
                 };
-                *csr_connector = populate_csr_connector(name, catalog, depends_on, secrets_reader)?;
             }
             _ => {}
         },
@@ -121,7 +171,7 @@ fn populate_connector_for_format<T: AstInfo>(
 }
 
 /// Helper function which reifies individual [`CsrConnector::Reference`] instances
-fn populate_csr_connector(
+fn populate_csr_connector_reference(
     name: &UnresolvedObjectName,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
@@ -136,6 +186,24 @@ fn populate_csr_connector(
         url: Some(resolved_csr_connector.uri()),
         with_options: Some(resolved_csr_connector.options(secrets_reader)),
     })
+}
+
+fn generate_csr_connector_inline<T: AstInfo>(
+    with_options: &mut Vec<WithOption<T>>,
+    catalog: &dyn SessionCatalog,
+    secrets_reader: (),
+) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    crate::kafka_util::read_secrets_config(
+        normalize::options_catalog(with_options, catalog)?
+            .into_iter()
+            // XXX(chae): this probably isn't right?
+            .map(|(k, v)| match v {
+                SqlMaybeValueId::Value(v) => (k, MaybeValueId::Value(v.to_string())),
+                SqlMaybeValueId::Secret(id) => (k, MaybeValueId::Secret(id)),
+            })
+            .collect::<BTreeMap<_, _>>(),
+        secrets_reader,
+    )
 }
 
 /// Turn all [`UnresolvedObjectName`]s in [`CsrConnector::Reference`]s within the statement into fully qualified names

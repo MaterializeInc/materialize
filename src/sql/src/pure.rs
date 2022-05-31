@@ -55,6 +55,7 @@ pub async fn purify_create_source(
     now: u64,
     mut stmt: CreateSourceStatement<Raw>,
     connector_context: ConnectorContext,
+    secrets_reader: (),
 ) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
     let CreateSourceStatement {
         connector,
@@ -65,7 +66,7 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
-    let mut with_options_map = normalize::options(with_options)?;
+    let mut with_options_map = normalize::options_without_secrets(with_options)?;
     let mut config_options = BTreeMap::new();
 
     match connector {
@@ -92,7 +93,16 @@ pub async fn purify_create_source(
                     };
                     (broker_url, Some(options))
                 }
-                KafkaConnector::Inline { broker } => (broker.to_string(), None),
+                KafkaConnector::Inline {
+                    broker,
+                    with_options,
+                } => {
+                    let options = match with_options {
+                        Some(opts) => opts,
+                        None => panic!("didn't populate connector {}", broker),
+                    };
+                    (broker.to_string(), Some(options))
+                }
             };
             config_options = if let Some(options) = connector_options {
                 options
@@ -100,8 +110,12 @@ pub async fn purify_create_source(
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
                     .collect::<BTreeMap<String, String>>()
             } else {
+                BTreeMap::new()
                 // Verify that the provided security options are valid and then test them.
-                kafka_util::extract_config(&mut with_options_map)?
+                //kafka_util::read_secrets_config(
+                //    kafka_util::extract_config(&mut with_options_map)?,
+                //    secrets_reader,
+                //)?
             };
             let consumer = kafka_util::create_consumer(
                 &broker,
@@ -116,7 +130,9 @@ pub async fn purify_create_source(
             match kafka_util::lookup_start_offsets(
                 Arc::clone(&consumer),
                 &topic,
+                // XXX(chae): THIS IS WRONG
                 &with_options_map,
+                //&config_options,
                 now,
             )
             .await?
@@ -342,22 +358,30 @@ async fn purify_csr_connector_proto(
     let CsrConnectorProto {
         connector,
         seed,
-        with_options: ccsr_options,
+        with_options: _,
     } = csr_connector;
     match seed {
         None => {
-            let url = match connector {
-                CsrConnector::Inline { url } => url,
-                CsrConnector::Reference { url, .. } => url
-                    .as_ref()
-                    .expect("CSR Connector must specify Registry URL"),
-            }
-            .parse()?;
-            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
-            let ccsr_config = kafka_util::generate_ccsr_client_config(
+            let (url, ccsr_options) = match connector {
+                CsrConnector::Inline {
+                    ref url,
+                    with_options,
+                } => (url, with_options),
+                CsrConnector::Reference {
+                    url, with_options, ..
+                } => (
+                    url.as_ref()
+                        .expect("CSR Connector must specify Registry URL"),
+                    with_options,
+                ),
+            };
+            let url = url.parse()?;
+            // XXX(chae)
+            let ccsr_options = ccsr_options.as_mut().unwrap();
+            let ccsr_config = kafka_util::generate_ccsr_client_config_string(
                 url,
-                &kafka_options,
-                &mut normalize::options(&ccsr_options),
+                ccsr_options,
+                //&mut normalize::options(&ccsr_options),
                 (),
             )?;
 
@@ -408,19 +432,24 @@ async fn purify_csr_connector_avro(
             "PURIFY: connector: {:?}, with_options: {:?}",
             connector, ccsr_options
         );
-        let url = match connector {
-            CsrConnector::Inline { url } => url,
-            CsrConnector::Reference { url, .. } => url
-                .as_ref()
-                .expect("CSR Connector must specify Registry URL"),
-        }
-        .parse()?;
-
+        let (url, ccsr_options) = match connector {
+            CsrConnector::Inline { url, with_options } => (url, with_options),
+            CsrConnector::Reference {
+                url, with_options, ..
+            } => (
+                url.as_mut()
+                    .expect("CSR Connector must specify Registry URL"),
+                with_options,
+            ),
+        };
+        let url = url.parse()?;
+        let ccsr_options = ccsr_options.as_mut().unwrap();
+        // XXX(chae)
         let ccsr_config = task::block_in_place(|| {
-            kafka_util::generate_ccsr_client_config(
+            kafka_util::generate_ccsr_client_config_string(
                 url,
-                &connector_options,
-                &mut normalize::options(ccsr_options),
+                ccsr_options,
+                //&mut normalize::options(ccsr_options)?,
                 (),
             )
         })?;

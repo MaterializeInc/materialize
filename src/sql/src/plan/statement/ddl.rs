@@ -363,7 +363,10 @@ pub fn plan_create_source(
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
             let (broker, options) = match &kafka.connector {
-                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker.to_owned(), None),
+                mz_sql_parser::ast::KafkaConnector::Inline {
+                    broker,
+                    with_options,
+                } => (broker.to_owned(), None),
                 mz_sql_parser::ast::KafkaConnector::Reference {
                     broker,
                     with_options,
@@ -518,7 +521,8 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let aws =
+                normalize::aws_config_sql_maybe_value(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
             let encoding = get_encoding(format, &envelope, with_options_original, scx)?;
@@ -529,7 +533,7 @@ pub fn plan_create_source(
             pattern,
             compression,
         } => {
-            let aws = normalize::aws_config(&mut with_options, None)?;
+            let aws = normalize::aws_config_sql_maybe_value(&mut with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
                 let dtks = match ks {
@@ -1340,9 +1344,10 @@ fn get_encoding_inner(
                         },
                 } => {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => {
-                            (normalize::options(&ccsr_options, scx)?, url)
-                        }
+                        CsrConnector::Inline {
+                            url,
+                            with_options: _,
+                        } => (normalize::options(&ccsr_options, scx)?, url),
                         CsrConnector::Reference {
                             url, with_options, ..
                         } => {
@@ -1419,9 +1424,10 @@ fn get_encoding_inner(
                     seed
                 {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => {
-                            (normalize::options(&ccsr_options, scx)?, url)
-                        }
+                        CsrConnector::Inline {
+                            url,
+                            with_options: _,
+                        } => (normalize::options(&ccsr_options, scx)?, url),
                         CsrConnector::Reference {
                             url, with_options, ..
                         } => {
@@ -1957,7 +1963,11 @@ fn kafka_sink_builder(
         Some(Format::Avro(AvroSchema::Csr {
             csr_connector:
                 CsrConnectorAvro {
-                    connector: CsrConnector::Inline { url },
+                    connector:
+                        CsrConnector::Inline {
+                            url,
+                            with_options: _,
+                        },
                     seed,
                     with_options,
                 },
@@ -2138,7 +2148,11 @@ fn get_kafka_sink_consistency_config(
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connector:
                     CsrConnectorAvro {
-                        connector: CsrConnector::Inline { url: uri },
+                        connector:
+                            CsrConnector::Inline {
+                                url: uri,
+                                with_options: None,
+                            },
                         seed,
                         with_options,
                     },

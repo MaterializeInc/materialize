@@ -31,6 +31,7 @@ use mz_sql_parser::ast::{
     UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 
+use crate::catalog::SessionCatalog;
 use crate::names::{
     Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
 };
@@ -121,6 +122,12 @@ pub fn options<T: AstInfo>(
     options: &[WithOption<T>],
     scx: &StatementContext,
 ) -> Result<BTreeMap<String, SqlMaybeValueId>, PlanError> {
+    options_catalog(options, scx.catalog)
+}
+pub fn options_catalog<T: AstInfo>(
+    options: &[WithOption<T>],
+    catalog: &dyn SessionCatalog,
+) -> Result<BTreeMap<String, SqlMaybeValueId>, PlanError> {
     options
         .iter()
         .map(|o| {
@@ -135,8 +142,7 @@ pub fn options<T: AstInfo>(
                 {
                     WithOptionValue::Value(value) => SqlMaybeValueId::Value(value.clone()),
                     WithOptionValue::ObjectName(object_name) => {
-                        let id = scx
-                            .catalog
+                        let id = catalog
                             .resolve_item(&unresolved_object_name(object_name.clone())?)?
                             .id();
                         SqlMaybeValueId::Secret(id)
@@ -146,6 +152,46 @@ pub fn options<T: AstInfo>(
                     }
                 },
             ))
+        })
+        .collect()
+}
+
+pub fn options_without_secrets<T: AstInfo>(
+    options: &[WithOption<T>],
+) -> Result<BTreeMap<String, Value>, PlanError> {
+    options
+        .iter()
+        .map(|o| {
+            Ok((
+                o.key.to_string(),
+                match o
+                    .value
+                    .as_ref()
+                    // The only places that generate options that do not require
+                    // keys and values do not currently use this code path.
+                    .expect("check that all entries have values before calling `options`")
+                {
+                    WithOptionValue::Value(value) => value.clone(),
+                    WithOptionValue::ObjectName(object_name) => {
+                        Value::String(object_name.to_ast_string())
+                    }
+                    WithOptionValue::DataType(data_type) => {
+                        Value::String(data_type.to_ast_string())
+                    }
+                },
+            ))
+        })
+        .collect()
+}
+
+pub fn options_strip_secrets<T: AstInfo>(
+    options: &BTreeMap<String, SqlMaybeValueId>,
+) -> Result<BTreeMap<String, Value>, anyhow::Error> {
+    options
+        .iter()
+        .map(|(k, v)| match v {
+            SqlMaybeValueId::Value(v) => Ok((k.to_owned(), v.clone())),
+            SqlMaybeValueId::Secret(_) => bail!("unexpectedly found secrets"),
         })
         .collect()
 }
@@ -631,6 +677,79 @@ macro_rules! with_options {
 
 /// Normalizes option values that contain AWS connection parameters.
 pub fn aws_config(
+    options: &mut BTreeMap<String, Value>,
+    region: Option<String>,
+) -> Result<AwsConfig, anyhow::Error> {
+    let mut extract = |key| match options.remove(key) {
+        Some(Value::String(key)) => {
+            if !key.is_empty() {
+                Ok(Some(key))
+            } else {
+                Ok(None)
+            }
+        }
+        Some(_) => bail!("{} must be a string", key),
+        _ => Ok(None),
+    };
+
+    let credentials = match extract("profile")? {
+        Some(profile_name) => {
+            for name in &["access_key_id", "secret_access_key", "token"] {
+                let extracted = extract(name);
+                if matches!(extracted, Ok(Some(_)) | Err(_)) {
+                    bail!(
+                        "AWS profile cannot be set in combination with '{0}', \
+                         configure '{0}' inside the profile file",
+                        name
+                    );
+                }
+            }
+            AwsCredentials::Profile { profile_name }
+        }
+        None => {
+            let access_key_id = extract("access_key_id")?;
+            let secret_access_key = extract("secret_access_key")?;
+            let session_token = extract("token")?;
+            let credentials = match (access_key_id, secret_access_key, session_token) {
+                (None, None, None) => AwsCredentials::Default,
+                (Some(access_key_id), Some(secret_access_key), session_token) => {
+                    AwsCredentials::Static {
+                        access_key_id,
+                        secret_access_key,
+                        session_token,
+                    }
+                }
+                (Some(_), None, _) => {
+                    bail!("secret_access_key must be specified if access_key_id is specified")
+                }
+                (None, Some(_), _) => {
+                    bail!("secret_access_key cannot be specified without access_key_id")
+                }
+                (None, None, Some(_)) => bail!("token cannot be specified without access_key_id"),
+            };
+
+            credentials
+        }
+    };
+
+    let region = match region {
+        Some(region) => Some(region),
+        None => extract("region")?,
+    };
+    let endpoint = match extract("endpoint")? {
+        None => None,
+        Some(endpoint) => Some(SerdeUri(endpoint.parse().context("parsing AWS endpoint")?)),
+    };
+    let arn = extract("role_arn")?;
+    Ok(AwsConfig {
+        credentials,
+        region,
+        endpoint,
+        role: arn.map(|arn| AwsAssumeRole { arn }),
+    })
+}
+
+pub fn aws_config_sql_maybe_value(
     options: &mut BTreeMap<String, SqlMaybeValueId>,
     region: Option<String>,
 ) -> Result<AwsConfig, anyhow::Error> {

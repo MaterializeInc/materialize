@@ -880,8 +880,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        // XXX(chae): use
-        let secrets_reader = self.secrets_reader;
+        let secrets_reader = &self.secrets_reader;
 
         let plan = match self
             .handle_statement(&mut session, Statement::CreateSource(stmt), &params, ())
@@ -1459,7 +1458,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let stmt = stmt.clone();
         let params = portal.parameters.clone();
         // XXX(chae): use
-        let secrets_reader = self.secrets_reader.clone();
+        let secrets_reader = &self.secrets_reader;
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
@@ -1472,12 +1471,13 @@ impl<S: Append + 'static> Coordinator<S> {
                     stmt,
                     &catalog,
                     &mut vec![],
-                    secrets_reader.clone().map(|_| ()),
+                    (),
                 ) {
                     Ok(stmt) => mz_sql::pure::purify_create_source(
                         self.now(),
                         stmt,
                         self.connector_context.clone(),
+                        (),
                     ),
                     Err(e) => return tx.send(Err(e.into()), session),
                 };
@@ -1497,15 +1497,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // All other statements are handled immediately.
-            _ => match self
-                .handle_statement(
-                    &mut session,
-                    stmt,
-                    &params,
-                    secrets_reader.clone().map(|_| ()),
-                )
-                .await
-            {
+            _ => match self.handle_statement(&mut session, stmt, &params, ()).await {
                 Ok(plan) => self.sequence_plan(tx, session, plan).await,
                 Err(e) => tx.send(Err(e), session),
             },
