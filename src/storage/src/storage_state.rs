@@ -37,8 +37,6 @@ const TS_BINDING_FEEDBACK_INTERVAL: Duration = Duration::from_millis(1_000);
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
-    /// State about each table, keyed by table ID.
-    pub table_state: HashMap<GlobalId, TableState<mz_repr::Timestamp>>,
     /// Source descriptions that have been created and not yet dropped.
     ///
     /// For the moment we retain all source descriptions, even those that have been
@@ -111,23 +109,9 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                 for source in sources {
                     match &source.desc.connector {
                         SourceConnector::Local { .. } => {
-                            self.storage_state.table_state.insert(
-                                source.id,
-                                TableState {
-                                    since: Antichain::from_elem(Timestamp::minimum()),
-                                    upper: Timestamp::minimum(),
-                                    data: vec![],
-                                    last_consolidated_size: 0,
-                                },
-                            );
-
-                            // Initialize shared frontier tracking.
-                            self.storage_state.source_uppers.insert(
-                                source.id,
-                                Rc::new(RefCell::new(Antichain::from_elem(
-                                    mz_repr::Timestamp::minimum(),
-                                ))),
-                            );
+                            // TODO(benesch): fix the types here so that we can
+                            // enforce this statically.
+                            unreachable!("local sources are handled entirely by controller");
                         }
                         SourceConnector::External {
                             connector: ExternalSourceConnector::Persist(persist_connector),
@@ -189,9 +173,6 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                 for (id, frontier) in list {
                     if frontier.is_empty() {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
-
-                        // Drop table-related state.
-                        self.storage_state.table_state.remove(&id);
                         // Clean up per-source state.
                         self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
@@ -199,8 +180,6 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                         self.storage_state.source_tokens.remove(&id);
                         self.storage_state.ts_source_mapping.remove(&id);
                         self.storage_state.persist_handles.remove(&id);
-                    } else if let Some(table_state) = self.storage_state.table_state.get_mut(&id) {
-                        table_state.since = frontier.clone();
                     }
                 }
             }

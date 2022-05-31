@@ -45,7 +45,7 @@ use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{CreateSourceCommand, StorageClient, StorageCommand, StorageResponse};
-use crate::sources::{SourceData, SourceDesc};
+use crate::sources::{SourceConnector, SourceData, SourceDesc};
 use crate::Update;
 
 include!(concat!(
@@ -372,19 +372,23 @@ where
 
             self.state.collections.insert(id, collection_state);
 
-            dataflow_commands.push(CreateSourceCommand {
-                id,
-                desc,
-                since,
-                storage_metadata: self.collection_metadata(id)?,
-            });
+            if matches!(desc.connector, SourceConnector::External { .. }) {
+                dataflow_commands.push(CreateSourceCommand {
+                    id,
+                    desc,
+                    since,
+                    storage_metadata: self.collection_metadata(id)?,
+                });
+            }
         }
 
-        self.state
-            .client
-            .send(StorageCommand::CreateSources(dataflow_commands))
-            .await
-            .expect("Storage command failed; unrecoverable");
+        if !dataflow_commands.is_empty() {
+            self.state
+                .client
+                .send(StorageCommand::CreateSources(dataflow_commands))
+                .await
+                .expect("Storage command failed; unrecoverable");
+        }
 
         Ok(())
     }
