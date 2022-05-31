@@ -501,5 +501,7 @@ fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_that_timeout_works() -> Result<(), Box<dyn Error>> {
     // This should always timeout
-    loop {std::thread::sleep(Duration::from_millis(1_000));}
+    loop {
+        std::thread::sleep(Duration::from_millis(1_000));
+    }
 }
