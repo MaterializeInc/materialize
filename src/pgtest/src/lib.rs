@@ -103,7 +103,7 @@ struct PgConn {
     stream: TcpStream,
     recv_buf: BytesMut,
     send_buf: BytesMut,
-    timeout: Duration,
+    _timeout: Duration,
     verbose: bool,
 }
 
@@ -113,7 +113,7 @@ impl PgConn {
             stream: TcpStream::connect(addr)?,
             recv_buf: BytesMut::new(),
             send_buf: BytesMut::new(),
-            timeout,
+            _timeout: timeout,
             verbose,
         };
 
@@ -311,7 +311,7 @@ impl PgConn {
     /// An error is returned if a new message is not received within the timeout.
     pub fn recv(&mut self) -> anyhow::Result<(char, Message)> {
         let mut buf = [0; 1024];
-        let until = Instant::now();
+        let _until = Instant::now();
         loop {
             // if until.elapsed() > self.timeout {
             //     bail!("timeout after {:?} waiting for new message", self.timeout);
