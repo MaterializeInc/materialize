@@ -207,7 +207,7 @@ Misbehaved release notes:
   - Instead of limiting SQL statements to 8KiB, limit them to 1024KiB instead.
 
 Link to at least one page where users can learn more about either the change or
-the area which the change was made. Notes about new features can be concise if
+the area in which the change was made. Notes about new features can be concise if
 the new feature has comprehensive documentation. Notes about changes to features
 must be more detailed, as the note is likely the only documentation of the
 change in behavior. Consider linking to a GitHub issue or pull request via the
@@ -642,7 +642,7 @@ is easier to understand and less likely to have bugs.
 
 Some amount of complexity is inevitable. After all, Materialize provides value
 to its customers by absorbing complexity. But the goal is to strip away all
-*incidental* complexity, leaving only the *essential* commplexity of the problem
+*incidental* complexity, leaving only the *essential* complexity of the problem
 domain.
 
 The challenge is often defining what "simple" means. Which of these code samples
