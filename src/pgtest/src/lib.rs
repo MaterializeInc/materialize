@@ -117,7 +117,7 @@ impl PgConn {
             verbose,
         };
 
-        conn.stream.set_read_timeout(Some(timeout))?;
+        conn.stream.set_read_timeout(None)?;
         conn.send(|buf| frontend::startup_message(vec![("user", user)], buf).unwrap())?;
         match conn.recv()?.1 {
             Message::AuthenticationOk => {}
