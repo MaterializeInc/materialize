@@ -76,10 +76,9 @@ pub struct TracingCliArgs {
         default_value = "info"
     )]
     pub log_filter: SerializableTargets,
-    /// Whether to prefix each stderr log line with name of the service that
-    /// emitted the event.
+    /// An optional prefix for each stderr log line.
     #[clap(long, env = "LOG_INCLUDE_SERVICE_NAME")]
-    pub log_include_service_name: bool,
+    pub log_prefix: Option<String>,
     /// Export tracing events to the provided observability backend.
     ///
     /// The specified endpoint should speak the OTLP/HTTP protocol. If the
@@ -161,7 +160,7 @@ impl From<&TracingCliArgs> for TracingConfig {
     fn from(args: &TracingCliArgs) -> TracingConfig {
         TracingConfig {
             stderr_log: StderrLogConfig {
-                include_service_name: args.log_include_service_name,
+                prefix: args.log_prefix.clone(),
                 filter: args.log_filter.inner.clone(),
             },
             opentelemetry: args.opentelemetry_endpoint.clone().map(|endpoint| {
@@ -214,6 +213,7 @@ impl TracingOrchestrator {
 impl Orchestrator for TracingOrchestrator {
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         Arc::new(NamespacedTracingOrchestrator {
+            namespace: namespace.to_string(),
             inner: self.inner.namespace(namespace),
             tracing_args: self.tracing_args.clone(),
         })
@@ -222,6 +222,7 @@ impl Orchestrator for TracingOrchestrator {
 
 #[derive(Debug)]
 struct NamespacedTracingOrchestrator {
+    namespace: String,
     inner: Arc<dyn NamespacedOrchestrator>,
     tracing_args: TracingCliArgs,
 }
@@ -239,7 +240,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             let mut args = (service_config.args)(assigned);
             let TracingCliArgs {
                 log_filter,
-                log_include_service_name,
+                log_prefix,
                 opentelemetry_endpoint,
                 opentelemetry_header,
                 opentelemetry_filter,
@@ -251,8 +252,8 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 tokio_console_retention,
             } = &self.tracing_args;
             args.push(format!("--log-filter={log_filter}"));
-            if *log_include_service_name {
-                args.push("--log-include-service-name".into());
+            if log_prefix.is_some() {
+                args.push(format!("--log-prefix={}-{}", self.namespace, id));
             }
             if let Some(endpoint) = opentelemetry_endpoint {
                 args.push(format!("--opentelemetry-endpoint={endpoint}"));

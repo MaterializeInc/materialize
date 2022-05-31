@@ -67,7 +67,8 @@ pub struct TracingConfig {
 #[derive(Debug, Clone)]
 pub struct StderrLogConfig {
     /// Whether to prefix each log line with the service name.
-    pub include_service_name: bool,
+    /// An optional prefix for each stderr log line.
+    pub prefix: Option<String>,
     /// A filter which determines which events are emitted to the log.
     pub filter: Targets,
 }
@@ -135,10 +136,7 @@ where
     let stderr_log_layer = fmt::layer()
         .event_format(PrefixFormat {
             inner: format(),
-            prefix: config
-                .stderr_log
-                .include_service_name
-                .then(|| service_name.to_string()),
+            prefix: config.stderr_log.prefix,
         })
         .with_writer(io::stderr)
         .with_ansi(atty::is(atty::Stream::Stderr))

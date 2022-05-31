@@ -404,7 +404,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other
     // orchestrators separate log output from different services.
-    args.tracing.log_include_service_name = matches!(args.orchestrator, Orchestrator::Process);
+    args.tracing.log_prefix = if matches!(args.orchestrator, Orchestrator::Process) {
+        Some("materialized".to_string())
+    } else {
+        None
+    };
     runtime.block_on(mz_ore::tracing::configure("materialized", &args.tracing))?;
 
     // Initialize fail crate for failpoint support
