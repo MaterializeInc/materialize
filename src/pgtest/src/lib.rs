@@ -313,9 +313,9 @@ impl PgConn {
         let mut buf = [0; 1024];
         let _until = Instant::now();
         loop {
-            // if until.elapsed() > self.timeout {
-            //     bail!("timeout after {:?} waiting for new message", self.timeout);
-            // }
+            if until.elapsed() > self.timeout {
+                bail!("timeout after {:?} waiting for new message", self.timeout);
+            }
             let mut ch: char = '0';
             if self.recv_buf.len() > 0 {
                 ch = self.recv_buf[0] as char;
