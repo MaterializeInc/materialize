@@ -73,6 +73,8 @@ class Generator:
 
 
 class Connections(Generator):
+    COUNT = 25  # https://github.com/MaterializeInc/materialize/issues/12775
+
     @classmethod
     def body(cls) -> None:
         for i in cls.all():
@@ -84,6 +86,8 @@ class Connections(Generator):
 
 
 class Tables(Generator):
+    COUNT = 10  # https://github.com/MaterializeInc/materialize/issues/12773
+
     @classmethod
     def body(cls) -> None:
         for i in cls.all():
@@ -363,6 +367,8 @@ class Columns(Generator):
 
 
 class TablesCommaJoinNoCondition(Generator):
+    COUNT = 100  # https://github.com/MaterializeInc/materialize/issues/12806
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
@@ -912,6 +918,7 @@ class Rows(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='60s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT})")
 
@@ -984,6 +991,7 @@ class RowsJoinLargeRetraction(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='60s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
 
