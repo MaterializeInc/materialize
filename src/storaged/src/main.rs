@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::process;
 
 use anyhow::bail;
+use axum::routing;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
 use once_cell::sync::Lazy;
@@ -141,8 +142,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         tracing::info!("serving storaged HTTP server on {}", addr);
         mz_ore::task::spawn(
             || "storaged_http_server",
-            axum::Server::bind(&addr.parse()?)
-                .serve(mz_prof::http::router(&BUILD_INFO).into_make_service()),
+            axum::Server::bind(&addr.parse()?).serve(
+                mz_prof::http::router(&BUILD_INFO)
+                    .route(
+                        "/api/health",
+                        routing::get(mz_http_util::handle_health_check),
+                    )
+                    .into_make_service(),
+            ),
         );
     }
 

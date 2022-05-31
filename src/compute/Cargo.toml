@@ -20,6 +20,7 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 mz-build-info = { path = "../build-info" }
 mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
+mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }

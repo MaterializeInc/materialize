@@ -354,12 +354,17 @@ impl MetricsServer {
 
     pub async fn serve(self, addr: SocketAddr) {
         let metrics_registry = self.metrics_registry;
-        let router = Router::new().route(
-            "/metrics",
-            routing::get(
-                move || async move { metrics::handle_prometheus(&metrics_registry).await },
-            ),
-        );
+        let router = Router::new()
+            .route(
+                "/metrics",
+                routing::get(
+                    move || async move { metrics::handle_prometheus(&metrics_registry).await },
+                ),
+            )
+            .route(
+                "/api/health",
+                routing::get(mz_http_util::handle_health_check),
+            );
         let server = axum::Server::bind(&addr).serve(router.into_make_service());
         if let Err(err) = server.await {
             error!("error serving metrics endpoint: {}", err);
