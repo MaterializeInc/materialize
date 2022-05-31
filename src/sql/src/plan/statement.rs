@@ -241,6 +241,7 @@ pub fn plan(
     catalog: &dyn SessionCatalog,
     stmt: Statement<Raw>,
     params: &Params,
+    secrets_reader: (),
 ) -> Result<Plan, anyhow::Error> {
     macro_rules! resolve_stmt {
         ($statement_type:path, $scx:expr, $stmt:expr) => {{
@@ -292,7 +293,7 @@ pub fn plan(
         }
         stmt @ Statement::CreateSource(_) => {
             let (stmt, _) = resolve_stmt!(Statement::CreateSource, scx, stmt);
-            ddl::plan_create_source(scx, stmt)
+            ddl::plan_create_source(scx, stmt, secrets_reader)
         }
         stmt @ Statement::CreateView(_) => {
             let (stmt, depends_on) = resolve_stmt!(Statement::CreateView, scx, stmt);

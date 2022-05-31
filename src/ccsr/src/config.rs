@@ -12,6 +12,7 @@ use std::time::Duration;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 use url::Url;
 
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -123,6 +124,7 @@ impl ClientConfig {
     /// Enables HTTP basic authentication with the specified username and
     /// optional password.
     pub fn auth(mut self, username: String, password: Option<String>) -> ClientConfig {
+        error!("CCSR CLIENT AUTH SETTING: {:?} {:?}", username, password);
         self.auth = Some(Auth { username, password });
         self
     }

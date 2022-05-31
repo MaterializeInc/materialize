@@ -3027,8 +3027,16 @@ impl<S: Append> Catalog<S> {
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
+        // XXX(chae): FIGURE THIS OUT
+        let secrets_reader = ();
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
-        let plan = mz_sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let plan = mz_sql::plan::plan(
+            pcx,
+            &self.for_system_session(),
+            stmt,
+            &Params::empty(),
+            secrets_reader,
+        )?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
@@ -3581,8 +3589,16 @@ impl mz_sql::catalog::CatalogConnector for Connector {
         self.connector.uri()
     }
 
-    fn options(&self) -> std::collections::BTreeMap<String, String> {
-        self.connector.options()
+    fn options(&self, secrets_reader: ()) -> std::collections::BTreeMap<String, String> {
+        self.connector
+            .options()
+            .into_iter()
+            .map(|(k, v)| match v {
+                MaybeValueId::Value(v) => (k, v),
+                // XXX(chae): convert
+                MaybeValueId::Secret(id) => (k, id.to_string()),
+            })
+            .collect::<BTreeMap<String, String>>()
     }
 }
 

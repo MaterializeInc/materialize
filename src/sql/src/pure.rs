@@ -23,7 +23,7 @@ use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
 use tokio::task;
-use tracing::info;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
@@ -65,7 +65,7 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
-    let mut with_options_map = normalize::options(with_options);
+    let mut with_options_map = normalize::options(with_options)?;
     let mut config_options = BTreeMap::new();
 
     match connector {
@@ -358,6 +358,7 @@ async fn purify_csr_connector_proto(
                 url,
                 &kafka_options,
                 &mut normalize::options(&ccsr_options),
+                (),
             )?;
 
             let value =
@@ -403,6 +404,10 @@ async fn purify_csr_connector_avro(
         with_options: ccsr_options,
     } = csr_connector;
     if seed.is_none() {
+        error!(
+            "PURIFY: connector: {:?}, with_options: {:?}",
+            connector, ccsr_options
+        );
         let url = match connector {
             CsrConnector::Inline { url } => url,
             CsrConnector::Reference { url, .. } => url
@@ -416,6 +421,7 @@ async fn purify_csr_connector_avro(
                 url,
                 &connector_options,
                 &mut normalize::options(ccsr_options),
+                (),
             )
         })?;
 
@@ -449,6 +455,7 @@ async fn get_remote_csr_schema(
     schema_registry_config: mz_ccsr::ClientConfig,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
+    error!("GET REMOTE CSR SCHEMA: {:?}", schema_registry_config);
     let ccsr_client = schema_registry_config.clone().build()?;
 
     let value_schema_name = format!("{}-value", topic);

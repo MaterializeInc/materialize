@@ -364,7 +364,6 @@ pub struct Coordinator<S> {
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
     /// Handle to secrets reader that gives us access to user secrets
-    #[allow(dead_code)]
     secrets_reader: SecretsReader,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
@@ -881,8 +880,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => return tx.send(Err(e), session),
         };
 
+        // XXX(chae): use
+        let secrets_reader = self.secrets_reader;
+
         let plan = match self
-            .handle_statement(&mut session, Statement::CreateSource(stmt), &params)
+            .handle_statement(&mut session, Statement::CreateSource(stmt), &params, ())
             .await
         {
             Ok(Plan::CreateSource(plan)) => plan,
@@ -1180,10 +1182,16 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &mut Session,
         stmt: mz_sql::ast::Statement<Raw>,
         params: &mz_sql::plan::Params,
+        secrets_reader: (),
     ) -> Result<mz_sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
-        let plan =
-            mz_sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
+        let plan = mz_sql::plan::plan(
+            Some(&pcx),
+            &self.catalog.for_session(session),
+            stmt,
+            params,
+            secrets_reader,
+        )?;
         Ok(plan)
     }
 
@@ -1450,6 +1458,8 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let stmt = stmt.clone();
         let params = portal.parameters.clone();
+        // XXX(chae): use
+        let secrets_reader = self.secrets_reader.clone();
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
@@ -1458,15 +1468,19 @@ impl<S: Append + 'static> Coordinator<S> {
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
                 let catalog = self.catalog.for_session(&session);
-                let purify_fut =
-                    match mz_sql::connectors::populate_connectors(stmt, &catalog, &mut vec![]) {
-                        Ok(stmt) => mz_sql::pure::purify_create_source(
-                            self.now(),
-                            stmt,
-                            self.connector_context.clone(),
-                        ),
-                        Err(e) => return tx.send(Err(e.into()), session),
-                    };
+                let purify_fut = match mz_sql::connectors::populate_connectors(
+                    stmt,
+                    &catalog,
+                    &mut vec![],
+                    secrets_reader.clone().map(|_| ()),
+                ) {
+                    Ok(stmt) => mz_sql::pure::purify_create_source(
+                        self.now(),
+                        stmt,
+                        self.connector_context.clone(),
+                    ),
+                    Err(e) => return tx.send(Err(e.into()), session),
+                };
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx
@@ -1483,7 +1497,15 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // All other statements are handled immediately.
-            _ => match self.handle_statement(&mut session, stmt, &params).await {
+            _ => match self
+                .handle_statement(
+                    &mut session,
+                    stmt,
+                    &params,
+                    secrets_reader.clone().map(|_| ()),
+                )
+                .await
+            {
                 Ok(plan) => self.sequence_plan(tx, session, plan).await,
                 Err(e) => tx.send(Err(e), session),
             },

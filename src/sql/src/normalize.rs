@@ -20,7 +20,7 @@ use anyhow::{bail, Context};
 use itertools::Itertools;
 
 use mz_dataflow_types::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
-use mz_repr::ColumnName;
+use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
@@ -107,16 +107,24 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
     Ok(&op.op)
 }
 
+pub enum SqlMaybeValueId {
+    Value(Value),
+    Secret(GlobalId),
+}
+
 /// Normalizes a list of `WITH` options.
 ///
 /// # Panics
 /// - If any `WithOption`'s `value` is `None`. You can prevent generating these
 ///   values during parsing.
-pub fn options<T: AstInfo>(options: &[WithOption<T>]) -> BTreeMap<String, Value> {
+pub fn options<T: AstInfo>(
+    options: &[WithOption<T>],
+    scx: &StatementContext,
+) -> Result<BTreeMap<String, SqlMaybeValueId>, PlanError> {
     options
         .iter()
         .map(|o| {
-            (
+            Ok((
                 o.key.to_string(),
                 match o
                     .value
@@ -125,15 +133,19 @@ pub fn options<T: AstInfo>(options: &[WithOption<T>]) -> BTreeMap<String, Value>
                     // keys and values do not currently use this code path.
                     .expect("check that all entries have values before calling `options`")
                 {
-                    WithOptionValue::Value(value) => value.clone(),
+                    WithOptionValue::Value(value) => SqlMaybeValueId::Value(value.clone()),
                     WithOptionValue::ObjectName(object_name) => {
-                        Value::String(object_name.to_ast_string())
+                        let id = scx
+                            .catalog
+                            .resolve_item(&unresolved_object_name(object_name.clone())?)?
+                            .id();
+                        SqlMaybeValueId::Secret(id)
                     }
                     WithOptionValue::DataType(data_type) => {
-                        Value::String(data_type.to_ast_string())
+                        SqlMaybeValueId::Value(Value::String(data_type.to_ast_string()))
                     }
                 },
-            )
+            ))
         })
         .collect()
 }
@@ -619,11 +631,11 @@ macro_rules! with_options {
 
 /// Normalizes option values that contain AWS connection parameters.
 pub fn aws_config(
-    options: &mut BTreeMap<String, Value>,
+    options: &mut BTreeMap<String, SqlMaybeValueId>,
     region: Option<String>,
 ) -> Result<AwsConfig, anyhow::Error> {
     let mut extract = |key| match options.remove(key) {
-        Some(Value::String(key)) => {
+        Some(SqlMaybeValueId::Value(Value::String(key))) => {
             if !key.is_empty() {
                 Ok(Some(key))
             } else {

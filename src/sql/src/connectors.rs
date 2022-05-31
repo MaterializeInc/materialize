@@ -24,6 +24,7 @@ pub fn populate_connectors<T: AstInfo>(
     mut stmt: CreateSourceStatement<T>,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
+    secrets_reader: (),
 ) -> Result<CreateSourceStatement<T>, anyhow::Error> {
     if let CreateSourceStatement {
         connector:
@@ -48,7 +49,7 @@ pub fn populate_connectors<T: AstInfo>(
         *kafka_connector = KafkaConnector::Reference {
             connector: name.to_owned(),
             broker: Some(resolved_source_connector.uri()),
-            with_options: Some(resolved_source_connector.options()),
+            with_options: Some(resolved_source_connector.options(secrets_reader)),
         };
     };
 
@@ -57,7 +58,7 @@ pub fn populate_connectors<T: AstInfo>(
         ..
     } = stmt
     {
-        populate_connector_for_format(format, catalog, depends_on)?;
+        populate_connector_for_format(format, catalog, depends_on, secrets_reader)?;
         return Ok(stmt);
     };
     if let CreateSourceStatement {
@@ -69,8 +70,8 @@ pub fn populate_connectors<T: AstInfo>(
         ..
     } = stmt
     {
-        populate_connector_for_format(key, catalog, depends_on)?;
-        populate_connector_for_format(value, catalog, depends_on)?;
+        populate_connector_for_format(key, catalog, depends_on, secrets_reader)?;
+        populate_connector_for_format(value, catalog, depends_on, secrets_reader)?;
     };
     Ok(stmt)
 }
@@ -80,6 +81,7 @@ fn populate_connector_for_format<T: AstInfo>(
     format: &mut Format<T>,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
+    secrets_reader: (),
 ) -> Result<(), anyhow::Error> {
     Ok(match format {
         Format::Avro(avro_schema) => match avro_schema {
@@ -94,7 +96,7 @@ fn populate_connector_for_format<T: AstInfo>(
                     CsrConnector::Reference { connector, .. } => connector,
                     _ => unreachable!(),
                 };
-                *csr_connector = populate_csr_connector(name, catalog, depends_on)?;
+                *csr_connector = populate_csr_connector(name, catalog, depends_on, secrets_reader)?;
             }
             _ => {}
         },
@@ -110,7 +112,7 @@ fn populate_connector_for_format<T: AstInfo>(
                     CsrConnector::Reference { connector, .. } => connector,
                     _ => unreachable!(),
                 };
-                *csr_connector = populate_csr_connector(name, catalog, depends_on)?;
+                *csr_connector = populate_csr_connector(name, catalog, depends_on, secrets_reader)?;
             }
             _ => {}
         },
@@ -123,6 +125,7 @@ fn populate_csr_connector(
     name: &UnresolvedObjectName,
     catalog: &dyn SessionCatalog,
     depends_on: &mut Vec<GlobalId>,
+    secrets_reader: (),
 ) -> Result<CsrConnector, anyhow::Error> {
     let p_o_name = normalize::unresolved_object_name(name.clone())?;
     let conn = catalog.resolve_item(&p_o_name)?;
@@ -131,7 +134,7 @@ fn populate_csr_connector(
     Ok(CsrConnector::Reference {
         connector: name.to_owned(),
         url: Some(resolved_csr_connector.uri()),
-        with_options: Some(resolved_csr_connector.options()),
+        with_options: Some(resolved_csr_connector.options(secrets_reader)),
     })
 }
 

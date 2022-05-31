@@ -12,3 +12,14 @@
 ! CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
 contains:Source format must be specified
+
+> CREATE SECRET sec AS '1234'
+
+> CREATE MATERIALIZED SOURCE secret_kafka FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}' WITH (
+    security_protocol = 'SSL',
+    ssl_key_password = sec
+  )
+  FORMAT CSV WITH 2 COLUMNS;
+
+> SELECT * FROM secret_kafka;

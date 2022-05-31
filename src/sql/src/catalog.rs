@@ -272,7 +272,7 @@ pub trait CatalogConnector {
     fn uri(&self) -> String;
 
     /// Returns the options associated with this connector as a Vec, if the type does not support options or none were specified this will be empty
-    fn options(&self) -> std::collections::BTreeMap<String, String>;
+    fn options(&self, secrets_reader: ()) -> std::collections::BTreeMap<String, String>;
 }
 
 /// An item in a [`SessionCatalog`].

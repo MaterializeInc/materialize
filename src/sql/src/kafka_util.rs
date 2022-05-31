@@ -17,8 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 
+use mz_dataflow_types::sources::MaybeValueId;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
+use mz_repr::GlobalId;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -27,6 +29,9 @@ use tokio::time::Duration;
 
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_sql_parser::ast::Value;
+use tracing::error;
+
+use crate::normalize::SqlMaybeValueId;
 
 enum ValType {
     Path,
@@ -110,24 +115,26 @@ impl Config {
 }
 
 fn extract(
-    input: &mut BTreeMap<String, Value>,
+    input: &mut BTreeMap<String, SqlMaybeValueId>,
     configs: &[Config],
-) -> Result<BTreeMap<String, String>, anyhow::Error> {
+) -> Result<BTreeMap<String, MaybeValueId>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
-        let value = match input.remove(config.name) {
-            Some(v) => config
-                .val_type
-                .process_val(&v)
-                .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
-            // Check for default values
-            None => match &config.default {
-                Some(v) => v.to_string(),
-                None => continue,
-            },
-        };
-        let value = config.do_transform(value);
+        let value =
+            match input.remove(config.name) {
+                Some(SqlMaybeValueId::Value(v)) => MaybeValueId::Value(
+                    config.do_transform(config.val_type.process_val(&v).map_err(|e| {
+                        anyhow!("Invalid WITH option {}={}: {}", config.name, v, e)
+                    })?),
+                ),
+                Some(SqlMaybeValueId::Secret(id)) => MaybeValueId::Secret(id),
+                // Check for default values
+                None => match &config.default {
+                    Some(v) => MaybeValueId::Value(config.do_transform(v.to_string())),
+                    None => continue,
+                },
+            };
         out.insert(config.get_kafka_config_key(), value);
     }
     Ok(out)
@@ -144,8 +151,8 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &mut BTreeMap<String, Value>,
-) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
+) -> Result<BTreeMap<String, MaybeValueId>, anyhow::Error> {
     extract(
         with_options,
         &[
@@ -383,14 +390,15 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    _kafka_options: &BTreeMap<String, String>,
-    ccsr_options: &mut BTreeMap<String, Value>,
+    _kafka_options: &BTreeMap<String, MaybeValueId>,
+    ccsr_options: &mut BTreeMap<String, SqlMaybeValueId>,
+    secrets_reader: (),
 ) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
     if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
-        Some(Value::String(path)) => Some(path),
+        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path),
         Some(_) => {
             bail!("ssl_ca_location must be a string");
         }
@@ -404,7 +412,7 @@ pub fn generate_ccsr_client_config(
 
     let ssl_key_location = ccsr_options.remove("ssl_key_location");
     let key_path = match &&ssl_key_location {
-        Some(Value::String(path)) => Some(path),
+        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path),
         Some(_) => {
             bail!("ssl_key_location must be a string");
         }
@@ -412,7 +420,7 @@ pub fn generate_ccsr_client_config(
     };
     let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
     let cert_path = match &ssl_certificate_location {
-        Some(Value::String(path)) => Some(path),
+        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path),
         Some(_) => {
             bail!("ssl_certificate_location must be a string");
         }
@@ -442,8 +450,24 @@ pub fn generate_ccsr_client_config(
         &[Config::string("username"), Config::string("password")],
     )?;
 
+    error!(
+        "GENERATE CCSR CLIENT CONFIG: CCSR_OPTIONS {:?}",
+        ccsr_options
+    );
+
     if let Some(username) = ccsr_options.remove("username") {
-        client_config = client_config.auth(username, ccsr_options.remove("password"));
+        let username = match username {
+            MaybeValueId::Value(username) => username,
+            // XXX chae
+            MaybeValueId::Secret(id) => todo!(),
+        };
+        let password = match ccsr_options.remove("password") {
+            // XXX chae
+            Some(MaybeValueId::Value(password)) => todo!(),
+            Some(MaybeValueId::Secret(id)) => Some(String::new()),
+            None => None,
+        };
+        client_config = client_config.auth(username, password);
     }
 
     Ok(client_config)

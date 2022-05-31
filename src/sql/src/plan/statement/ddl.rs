@@ -39,7 +39,7 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MaybeValueId,
     PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
     SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
@@ -82,8 +82,8 @@ use crate::names::{
     RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedObjectName, SchemaSpecifier,
 };
-use crate::normalize;
 use crate::normalize::ident;
+use crate::normalize::{self, SqlMaybeValueId};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -304,9 +304,10 @@ pub fn describe_create_source(
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
+    secrets_reader: (),
 ) -> Result<Plan, anyhow::Error> {
     let mut depends_on = vec![];
-    let stmt = populate_connectors(stmt, scx.catalog, &mut depends_on)?;
+    let stmt = populate_connectors(stmt, scx.catalog, &mut depends_on, secrets_reader)?;
     let CreateSourceStatement {
         name,
         col_names,
@@ -333,12 +334,12 @@ pub fn plan_create_source(
     };
 
     let with_options_original = with_options;
-    let mut with_options = normalize::options(with_options_original);
+    let mut with_options = normalize::options(with_options_original, &scx)?;
     let mut with_option_objects = normalize::option_objects(with_options_original);
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val {
-            Value::Number(n) => match n.parse::<u64>() {
+            SqlMaybeValueId::Value(Value::Number(n)) => match n.parse::<u64>() {
                 Ok(n) => Duration::from_millis(n),
                 Err(_) => bail!("timestamp_frequency_ms must be an u64"),
             },
@@ -420,7 +421,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original, scx)?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -516,7 +517,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original, scx)?;
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -558,7 +559,7 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
+            let encoding = get_encoding(format, &envelope, with_options_original, scx)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -1250,16 +1251,17 @@ fn get_encoding(
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
     with_options: &Vec<WithOption<Aug>>,
+    scx: &StatementContext,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
-        CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options)?,
+        CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options, scx)?,
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(key, with_options)? {
+            let key = match get_encoding_inner(key, with_options, scx)? {
                 SourceDataEncoding::Single(key) => key,
                 SourceDataEncoding::KeyValue { key, .. } => key,
             };
-            let value = match get_encoding_inner(value, with_options)? {
+            let value = match get_encoding_inner(value, with_options, scx)? {
                 SourceDataEncoding::Single(value) => value,
                 SourceDataEncoding::KeyValue { value, .. } => value,
             };
@@ -1282,6 +1284,7 @@ fn get_encoding(
 fn get_encoding_inner(
     format: &Format<Aug>,
     with_options: &Vec<WithOption<Aug>>,
+    scx: &StatementContext,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncoding::Single(match format {
@@ -1329,7 +1332,9 @@ fn get_encoding_inner(
                         },
                 } => {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options), url),
+                        CsrConnector::Inline { url } => {
+                            (normalize::options(&ccsr_options, scx)?, url)
+                        }
                         CsrConnector::Reference {
                             url, with_options, ..
                         } => {
@@ -1338,10 +1343,12 @@ fn get_encoding_inner(
                                 None => unreachable!("connector must already be populated"),
                             };
                             let client_options = match with_options {
-                                Some(opts) => BTreeMap::from_iter(
-                                    opts.iter()
-                                        .map(|(k, v)| (k.to_owned(), Value::String(v.to_string()))),
-                                ),
+                                Some(opts) => BTreeMap::from_iter(opts.iter().map(|(k, v)| {
+                                    (
+                                        k.to_owned(),
+                                        SqlMaybeValueId::Value(Value::String(v.to_string())),
+                                    )
+                                })),
                                 None => BTreeMap::new(),
                             };
                             (client_options, registry_url)
@@ -1349,8 +1356,9 @@ fn get_encoding_inner(
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options, scx))?,
                         &mut ccsr_with_options,
+                        (),
                     )?;
                     normalize::ensure_empty_options(
                         &ccsr_with_options,
@@ -1403,7 +1411,9 @@ fn get_encoding_inner(
                     seed
                 {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options), url),
+                        CsrConnector::Inline { url } => {
+                            (normalize::options(&ccsr_options, scx), url)
+                        }
                         CsrConnector::Reference {
                             url, with_options, ..
                         } => {
@@ -1423,8 +1433,9 @@ fn get_encoding_inner(
                     // We validate here instead of in purification, to match the behavior of avro
                     let _ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options, scx))?,
                         &mut ccsr_with_options,
+                        (),
                     )?;
                     normalize::ensure_empty_options(
                         &ccsr_with_options,
@@ -1941,13 +1952,14 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            let mut ccsr_with_options = normalize::options(&with_options);
+            let mut ccsr_with_options = normalize::options(&with_options, scx);
 
             let schema_registry_url = url.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 schema_registry_url.clone(),
                 &config_options,
                 &mut ccsr_with_options,
+                (),
             )?;
 
             let include_transaction =
@@ -1988,6 +2000,7 @@ fn kafka_sink_builder(
         reuse_topic,
         consistency,
         consistency_topic,
+        scx,
     )?;
 
     let broker_addrs = broker.parse()?;
@@ -2101,6 +2114,7 @@ fn get_kafka_sink_consistency_config(
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
+    scx: &StatementContext,
 ) -> Result<Option<(String, KafkaSinkFormat)>, anyhow::Error> {
     let result = match consistency {
         Some(KafkaConsistency {
@@ -2119,11 +2133,12 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = uri.parse::<Url>()?;
-                let mut ccsr_with_options = normalize::options(&with_options);
+                let mut ccsr_with_options = normalize::options(&with_options, scx);
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     config_options,
                     &mut ccsr_with_options,
+                    (),
                 )?;
 
                 Some((
@@ -2270,7 +2285,7 @@ pub fn plan_create_sink(
         scx.catalog.config().nonce
     );
 
-    let mut with_options = normalize::options(&with_options);
+    let mut with_options = normalize::options(&with_options, scx);
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connector {
@@ -2995,7 +3010,38 @@ pub fn plan_create_connector(
             broker,
             with_options,
         } => {
-            let mut with_options = normalize::options(&with_options);
+            // XXX(chae): here is where we strip the Ident-ness of the with options.  We should keep it (or validate it's a SECRET idk?) and
+            // convert to enum of Value / GlobalId -- everywhere that uses the output map then needs to have a secrets reader around.
+            //
+            // The thing is: in order to resolve / determine if it is in fact a secret, we need a reference to the catalog.
+            //
+            // - If we require something is only ever a secret or a string, we _could_ leave it as a string and then decide later if that's acceptable.
+            //   However, that could be a little odd because it means that we wouldn't error on `'secret'` being provided instead of `secret`.  This is
+            //   odd but maybe acceptable because we DEF don't want to validate on a param by param basis when we parse.  That'd be whack.
+            // - If we allow either, we need to retain the information about whether it's a string or an ident so that we can branch and decide later.
+            //   This is more flexible I think but requires more handling and that we "infect" more things with with_options not necessarily being string.
+            //   I think that's an okay / correct thing to do.
+            //
+            // I think my take is that we should have enum { Value, UnresolvedObjectName } here -- which can be used later on by whatever as necessary.  At
+            // some point (purification??), we need to convert the ident into a global id.  Once we have a global ID, we can use SecretsReader
+            //
+            //
+            // May 27 end of day notes:
+            // - Purification might need to add a step with catalog access that's "short" to convert UnresolvedObjectNames to GlobalIds
+            //   I think this is needed in pufication because that requires constructing a kafka consumer -- but that step uses the KafkaConnector struct which
+            //   requires WithOptions. BUT purification should NOT generally inline the secrets.  Likely, for ergonomic reasons, should also not convert to the
+            //   Value / Secret enum described below.
+            // - Planning converts to enum { Value(Value), Secret(GlobalId) }
+            // - Right when creating kafka consumer / ccsr config is when convert GlobalId to Value with SecretReader
+            // Specific interfaces:
+            //   - normalize::options: Vec<WithOption> -> BTreeMap<enum {Value, GlobalId}>; REQ SCX
+            //   - kafka_util::extract_config: BTreeMap<enum {Value, GlobalId}>
+            // I feel less sureabout the normalize::options than extract_config.
+            //   - Anyting that needs to convert GlobalId -> String does so at the last minute with a SecretsReader that's plumbed through
+            // Things to plumb:
+            //  - StatementContext (maybe just catalog is easier / more appropriate tbh?)
+            //  - SecretsReader: Nick used Arc<dyn SecretsReader>
+            let mut with_options = normalize::options(&with_options, &scx);
             ConnectorInner::Kafka {
                 broker: broker.parse()?,
                 config_options: kafka_util::extract_config(&mut with_options)?,
@@ -3005,13 +3051,20 @@ pub fn plan_create_connector(
             registry,
             with_options,
         } => {
-            let with_options = normalize::options(&with_options);
+            let with_options = normalize::options(&with_options, scx);
             ConnectorInner::CSR {
                 registry,
                 with_options: with_options
                     .iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_string()))
-                    .collect::<BTreeMap<String, String>>(),
+                    .map(|(k, v)| match v {
+                        SqlMaybeValueId::Value(v) => {
+                            (k.to_owned(), MaybeValueId::Value(v.to_string()))
+                        }
+                        SqlMaybeValueId::Secret(global_id) => {
+                            (k.to_owned(), MaybeValueId::Secret(*global_id))
+                        }
+                    })
+                    .collect::<BTreeMap<String, MaybeValueId>>(),
             }
         }
     };
