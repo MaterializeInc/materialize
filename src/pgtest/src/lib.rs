@@ -313,9 +313,9 @@ impl PgConn {
         let mut buf = [0; 1024];
         let until = Instant::now();
         loop {
-            if until.elapsed() > self.timeout {
-                bail!("timeout after {:?} waiting for new message", self.timeout);
-            }
+            // if until.elapsed() > self.timeout {
+            //     bail!("timeout after {:?} waiting for new message", self.timeout);
+            // }
             let mut ch: char = '0';
             if self.recv_buf.len() > 0 {
                 ch = self.recv_buf[0] as char;
@@ -471,7 +471,8 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
             .remove("conn")
             .map(|args| Some(args.into_first()))
             .unwrap_or(None);
-        match tc.directive.as_str() {
+        println!("about to execute test case {:?}", tc);
+        let res = match tc.directive.as_str() {
             "send" => {
                 for line in lines {
                     if pgt.verbose {
@@ -580,7 +581,9 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                 )
             }
             _ => panic!("unknown directive {}", tc.input),
-        }
+        };
+        println!("successfully executed test case {:?}", tc);
+        res
     })
 }
 
