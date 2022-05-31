@@ -25,8 +25,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
-use mz_compute::server::Server;
-
+use mz_pid_file::PidFile;
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
 // comfortably handled by the macOS system allocator. Consider re-evaluating if
@@ -188,13 +187,18 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         linger: args.linger,
     };
 
-    let (server, client) = mz_compute::server::serve(config)?;
+    let (_server, client) = mz_compute::server::serve(config)?;
     let mut client: Box<dyn ComputeClient> = Box::new(client);
     if args.reconcile {
         client = Box::new(ComputeCommandReconcile::new(client))
     }
 
-    serve(serve_config, server, client).await
+    let mut _pid_file = None;
+    if let Some(pid_file_location) = &args.pid_file_location {
+        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
+    }
+
+    serve(serve_config, client).await
 }
 
 struct ServeConfig {
@@ -202,28 +206,47 @@ struct ServeConfig {
     linger: bool,
 }
 
-async fn serve<G>(config: ServeConfig, _server: Server, mut client: G) -> Result<(), anyhow::Error>
+async fn serve<G>(config: ServeConfig, mut client: G) -> Result<(), anyhow::Error>
 where
     G: GenericClient<ComputeCommand, ComputeResponse>,
 {
-    let (mut grpc_serve, mut shutdown_rx) =
-        mz_dataflow_types::client::tcp::grpc_computed_server(config.listen_addr, config.linger);
+    let mut grpc_serve = mz_dataflow_types::client::tcp::grpc_computed_server(config.listen_addr);
 
     loop {
-        select! {
-            cmd = grpc_serve.recv() => {
-                client.send(cmd?).await.unwrap()
-            },
-            res = client.recv() => {
-                match res.unwrap() {
-                    None => { },
-                    Some(response) => grpc_serve.send(response).await
-                }
-            },
-            _ = shutdown_rx.recv() => break
+        // This select implies that the .recv functions of the clients must be cancellation safe.
+        loop {
+            select! {
+                res = grpc_serve.recv() => {
+                    match res {
+                        Ok(cmd) => client.send(cmd).await.unwrap(),
+                        Err(err) => {
+                            tracing::warn!("Lost connection: {}", err);
+                            break;
+                        }
+                    }
+                },
+                res = client.recv() => {
+                    match res.unwrap() {
+                        None => { },
+                        Some(response) => {
+                            match grpc_serve.send(response).await {
+                                Ok(_) =>  { } ,
+                                Err(err) => {
+                                    tracing::warn!("Lost connection: {}", err);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                },
+            }
         }
+        if !config.linger {
+            tracing::info!("coordinator connection gone; terminating");
+            break;
+        }
+        tracing::info!("coordinator connection gone; waiting for reconnect");
     }
 
-    info!("coordinator connection gone; terminating");
     Ok(())
 }

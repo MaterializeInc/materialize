@@ -28,6 +28,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use maplit::hashmap;
+use mz_repr::proto::RustType;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
@@ -40,7 +41,7 @@ use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
     ConcreteComputeInstanceReplicaConfig, ControllerResponse, ReplicaId, StorageResponse,
 };
-use crate::client::{ComputedRemoteClient, GenericClient, ProtoSerializableTimestamp};
+use crate::client::{ComputedRemoteClient, GenericClient};
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
 
@@ -153,7 +154,9 @@ pub struct Controller<T = mz_repr::Timestamp> {
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + Codec64 + Copy + Unpin + ProtoSerializableTimestamp,
+    T: Timestamp + Lattice + Codec64 + Copy + Unpin,
+    ComputeCommand<T>: RustType<super::ProtoComputeCommand>,
+    ComputeResponse<T>: RustType<super::ProtoComputeResponse>,
 {
     pub async fn create_instance(
         &mut self,

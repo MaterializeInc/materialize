@@ -23,7 +23,7 @@ import "google/protobuf/empty.proto";
 package mz_dataflow_types.client;
 
 service ProtoCompute {
-    rpc Handle (stream ProtoComputeCommand) returns (stream ProtoComputeResponse);
+    rpc CommandResponseStream (stream ProtoComputeCommand) returns (stream ProtoComputeResponse);
 }
 
 message ProtoInstanceConfig {
