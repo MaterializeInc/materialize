@@ -19,6 +19,7 @@ from materialize.mzcompose.services import (
     Computed,
     Kafka,
     Materialized,
+    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -1026,7 +1027,11 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(memory="8G"),
+    Postgres(),
+    Materialized(
+        memory="8G",
+        options="--persist-consensus-url postgres://postgres:postgres@postgres",
+    ),
     Testdrive(default_timeout="60s"),
 ]
 
@@ -1043,8 +1048,11 @@ def run_test(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
 
+    c.wait_for_postgres()
     c.up("materialized")
     c.wait_for_materialized()
 
@@ -1063,8 +1071,11 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
 
+    c.wait_for_postgres()
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
 
@@ -1106,7 +1117,10 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Create multiple clusters with multiple nodes and replicas each"""
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
+    c.wait_for_postgres()
 
     parser.add_argument(
         "--workers",
