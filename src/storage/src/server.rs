@@ -102,7 +102,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
             timely_worker,
             command_rx,
             storage_state: StorageState {
-                table_state: HashMap::new(),
                 source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 persist_handles: HashMap::new(),
