@@ -135,6 +135,7 @@ impl CatalogState {
                 Datum::String(&name),
                 Datum::from(size.as_deref()),
                 Datum::from(az),
+                Datum::String("healthy"),
             ]),
             diff,
         }
