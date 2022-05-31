@@ -40,6 +40,7 @@ use tokio::task::JoinHandle;
 use tracing::{error, trace, warn};
 use uuid::Uuid;
 
+use mz_ore::task::RuntimeExt;
 use mz_persist_client::{
     read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
 };
@@ -717,7 +718,7 @@ where
         };
 
         let _ = runtime_handle.spawn_named(|| "PersistWorker::drop", async move {
-            let res = handle.await;
+            let res = handle.await.expect("join error");
             match res {
                 Ok(()) => (), // All good!
                 Err(e) => {
