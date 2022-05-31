@@ -16,12 +16,12 @@
 
 //! Persist command-line utilities
 
-use std::sync::Once;
-
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
-
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::task::RuntimeExt;
+use mz_ore::tracing::TracingConfig;
+use tokio::runtime::Handle;
+use tracing::{info_span, Instrument};
 
 pub mod maelstrom;
 pub mod open_loop;
@@ -32,6 +32,9 @@ pub mod source_example;
 struct Args {
     #[clap(subcommand)]
     command: Command,
+
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -42,10 +45,6 @@ enum Command {
 }
 
 fn main() {
-    // This doesn't use [mz_ore::test::init_logging] because Maelstrom requires
-    // that all logging goes to stderr.
-    init_logging();
-
     let args: Args = cli::parse_args(CliConfig::default());
 
     // Mirror the tokio Runtime configuration in our production binaries.
@@ -56,36 +55,38 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
+    runtime
+        .block_on(mz_ore::tracing::configure(
+            "persist-open-loop",
+            TracingConfig::from(&args.tracing),
+        ))
+        .expect("failed to init tracing");
+
+    let root_span = info_span!("persistcli");
     let res = match args.command {
-        Command::Maelstrom(args) => runtime.block_on(async {
+        Command::Maelstrom(args) => runtime.block_on(async move {
             // Run the maelstrom stuff in a spawn_blocking because it internally
-            // spawns tasks, so the runtime need to be in the TLC.
-            runtime
-                .handle()
-                .spawn_blocking_named(|| "maelstrom::run", || crate::maelstrom::txn::run(args))
+            // spawns tasks, so the runtime needs to be in the TLC.
+            Handle::current()
+                .spawn_blocking_named(
+                    || "maelstrom::run",
+                    move || root_span.in_scope(|| crate::maelstrom::txn::run(args)),
+                )
                 .await
                 .expect("task failed")
         }),
-        Command::OpenLoop(args) => runtime.block_on(crate::open_loop::run(args)),
-        Command::SourceExample(args) => runtime.block_on(crate::source_example::run(args)),
+        Command::OpenLoop(args) => {
+            runtime.block_on(crate::open_loop::run(args).instrument(root_span))
+        }
+        Command::SourceExample(args) => {
+            runtime.block_on(crate::source_example::run(args).instrument(root_span))
+        }
     };
+
+    mz_ore::tracing::shutdown();
+
     if let Err(err) = res {
         eprintln!("error: {:#}", err);
         std::process::exit(1);
     }
-}
-
-static LOG_INIT: Once = Once::new();
-
-fn init_logging() {
-    LOG_INIT.call_once(|| {
-        let default_level = "info";
-        let filter = EnvFilter::try_from_env("MZ_LOG_FILTER")
-            .or_else(|_| EnvFilter::try_new(default_level))
-            .unwrap();
-        FmtSubscriber::builder()
-            .with_env_filter(filter)
-            .with_writer(std::io::stderr)
-            .init();
-    });
 }

@@ -227,6 +227,11 @@ where
     Ok(())
 }
 
+/// Shutdown any tracing infra, if any.
+pub fn shutdown() {
+    opentelemetry::global::shutdown_tracer_provider();
+}
+
 /// Returns the level of a specific target from a [`Targets`].
 pub fn target_level(targets: &Targets, target: &str) -> Level {
     if targets.would_enable(target, &Level::TRACE) {

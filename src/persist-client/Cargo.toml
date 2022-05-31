@@ -35,8 +35,8 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.21"
 futures-util = "0.3"
 mz-ore = { path = "../ore" }
-mz-persist-types = { path = "../persist-types" }
 mz-persist = { path = "../persist" }
+mz-persist-types = { path = "../persist-types" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 serde = { version = "1.0.137", features = ["derive"] }
@@ -45,6 +45,9 @@ tokio = { version = "1.18.2", default-features = false, features = ["macros", "s
 tracing = "0.1.34"
 uuid = { version = "1.1.1", features = ["v4"] }
 
+[features]
+tokio-console = ["mz-ore/tokio-console"]
+
 [dev-dependencies]
 async-trait = "0.1.56"
 axum = "0.5.6"
@@ -52,8 +55,9 @@ clap = { version = "3.1.18", features = ["derive", "env"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
 futures-task = "0.3.21"
 mz-http-util = { path = "../http-util" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+mz-ore = { path = "../ore", features = ["tracing_"] }
 num_cpus = "1.13.1"
 num_enum = "0.5.7"
 serde_json = "1.0.81"
 tempfile = "3.2.0"
-tracing-subscriber = { version = "0.3.11", default-features = false, features = ["env-filter", "fmt"] }

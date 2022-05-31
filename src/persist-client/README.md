@@ -85,3 +85,49 @@ cargo bench -p mz-persist-client --bench=benches
 Larger writes are expected to take the above latency floor plus however long it
 takes to write the extra data to e.g s3. TODO: Get real numbers for larger
 batches.
+
+## OpenTelemetry Tracing Spans
+
+Persist offers introspection into performance and behavior through integration
+with the [tracing] crate.
+
+[tracing]: https://docs.rs/tracing
+
+Materialize defaults to logs (tracing events) at "info" and above and
+opentelemetry (tracing spans) at "debug" and above. This is because our stderr
+log formatter includes any spans that are active at the time of the log event
+AND that match the log (not opentelemetry) filter. Example of what this looks
+like:
+
+```text
+2022-06-02T21:18:48.220658Z  INFO my_span{my_field=foo}: my_crate::my_module: Hello, world!
+```
+
+So in practice, with the default flag settings, spans at:
+
+- _info_: Exported to opentelemetry AND included in any event logs that happen
+  while the span is active as described above. Nothing in persist meets this
+  bar.
+- _debug_: Exported to opentelemetry (but not included in logs).
+- _trace_: Completely disabled.
+
+There are many policies we could adopt for what is instrumented and at what
+level. At the same time, it's early enough that there are lots of unknowns
+around what will be most useful for debugging real problems and what knobs are
+wanted to opt into additional detail. As a result, we adopt a common idiom of
+spans at the API boundary between persist and the rest of mz (as well as
+persist's API boundary with external systems such as s3 and aurora, which we
+wouldn't do if they themselves offered tracing integration). In detail:
+
+- All persist spans have a `shard` field and no other fields.
+- Every method in the persist public API is traced at debug level. However, this
+  excludes "sugar" methods (e.g. append and snapshot) that are implemented
+  entirely in terms of other public persist API methods, which are traced at
+  trace level.
+- All writes to external systems are traced at debug level. Reads from S3 are
+  also traced at debug level. Reads from Aurora are traced at trace level (too
+  spammy).
+- Additional debugging information is traced at trace level.
+
+We'll tune this policy over time as we gain experience debugging persist in
+production.

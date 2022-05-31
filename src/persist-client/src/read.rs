@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tokio::runtime::Handle;
-use tracing::{info, trace, warn};
+use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
@@ -81,6 +81,7 @@ pub struct SnapshotSplit {
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
+    shard_id: ShardId,
     as_of: Antichain<T>,
     batches: Vec<(String, Description<T>)>,
     blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -109,6 +110,7 @@ where
     /// [differential_dataflow::consolidation::consolidate_updates].
     ///
     /// An None value is returned if this iterator is exhausted.
+    #[instrument(level = "debug", name = "snap::next", skip_all, fields(shard = %self.shard_id))]
     pub async fn next(&mut self) -> Option<Vec<((Result<K, String>, Result<V, String>), T, D)>> {
         trace!("SnapshotIter::next");
         loop {
@@ -200,6 +202,7 @@ where
     /// The returned updates might or might not be consolidated. If you have a
     /// use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
+    #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
         trace!("Listen::next");
 
@@ -296,6 +299,7 @@ where
     ///
     /// It is possible to heartbeat a reader lease by calling this with
     /// `new_since` equal to `self.since()` (making the call a no-op).
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
         let (_seqno, current_reader_since) = self
@@ -317,6 +321,7 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn listen(&self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
         trace!("ReadHandle::listen as_of={:?}", as_of);
         if PartialOrder::less_than(&as_of, &self.since) {
@@ -346,6 +351,7 @@ where
     /// immediately consuming it from a single place. If you need to parallelize
     /// snapshot iteration (potentially from multiple machines), see
     /// [Self::snapshot_splits] and [Self::snapshot_iter].
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot(
         &self,
         as_of: Antichain<T>,
@@ -385,6 +391,7 @@ where
     /// This method exists to allow users to parallelize snapshot iteration. If
     /// you want to immediately consume the snapshot from a single place, you
     /// likely want the [Self::snapshot] helper.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot_splits(
         &self,
         as_of: Antichain<T>,
@@ -416,6 +423,7 @@ where
 
     /// Trade in an exchange-able [SnapshotSplit] for an iterator over the data
     /// it represents.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot_iter(
         &self,
         split: SnapshotSplit,
@@ -427,6 +435,7 @@ where
                 handle_shard: self.machine.shard_id(),
             });
         }
+        let shard_id = split.shard_id;
 
         let batches = split
             .batches
@@ -435,6 +444,7 @@ where
             .collect();
 
         let iter = SnapshotIter {
+            shard_id,
             as_of: Antichain::from(
                 split
                     .as_of
@@ -451,6 +461,7 @@ where
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
     /// `since`.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self) -> Self {
         trace!("ReadHandle::clone");
         let new_reader_id = ReaderId::new();
@@ -474,6 +485,7 @@ where
     /// a tokio [Handle] being available in the TLC at the time of drop (which
     /// is a bit subtle). Also, explicit expiry allows for control over when it
     /// happens.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         trace!("ReadHandle::expire");
         self.machine.expire_reader(&self.reader_id).await;
@@ -523,12 +535,16 @@ where
         // Spawn a best-effort task to expire this read handle. It's fine if
         // this doesn't run to completion, we'd just have to wait out the lease
         // before the shard-global since is unblocked.
+        //
+        // Intentionally create the span outside the task to set the parent.
+        let expire_span = debug_span!("drop::expire");
         let _ = handle.spawn_named(
             || format!("ReadHandle::expire ({})", self.reader_id),
             async move {
                 trace!("ReadHandle::expire");
                 machine.expire_reader(&reader_id).await;
-            },
+            }
+            .instrument(expire_span),
         );
     }
 }
@@ -547,10 +563,12 @@ where
     TFn: FnMut(&mut T) -> bool,
 {
     let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+    let get_span = debug_span!("fetch_batch::get");
     let value = loop {
         let value = retry_external("fetch_batch::get", || async {
             blob.get(Instant::now() + FOREVER, key).await
         })
+        .instrument(get_span.clone())
         .await;
         match value {
             Some(x) => break x,
@@ -570,36 +588,39 @@ where
             }
         };
     };
+    drop(get_span);
 
-    let batch = BlobTraceBatchPart::decode(&value)
-        .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
-        // We received a State that we couldn't decode. This could
-        // happen if persist messes up backward/forward compatibility,
-        // if the durable data was corrupted, or if operations messes up
-        // deployment. In any case, fail loudly.
-        .expect("internal error: invalid encoded state");
-    let mut ret = Vec::new();
-    for chunk in batch.updates {
-        for ((k, v), t, d) in chunk.iter() {
-            let mut t = T::decode(t);
-            if !desc.lower().less_equal(&t) {
-                continue;
+    trace_span!("fetch_batch::decode").in_scope(|| {
+        let batch = BlobTraceBatchPart::decode(&value)
+            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
+            // We received a State that we couldn't decode. This could
+            // happen if persist messes up backward/forward compatibility,
+            // if the durable data was corrupted, or if operations messes up
+            // deployment. In any case, fail loudly.
+            .expect("internal error: invalid encoded state");
+        let mut ret = Vec::new();
+        for chunk in batch.updates {
+            for ((k, v), t, d) in chunk.iter() {
+                let mut t = T::decode(t);
+                if !desc.lower().less_equal(&t) {
+                    continue;
+                }
+                if desc.upper().less_equal(&t) {
+                    continue;
+                }
+                // NB: t_fn might mutate t (i.e. a snapshots will forward it to the
+                // as_of), but the desc checks above only make sense if it hasn't be
+                // mutated yet.
+                let keep = t_fn(&mut t);
+                if !keep {
+                    continue;
+                }
+                let k = K::decode(k);
+                let v = V::decode(v);
+                let d = D::decode(d);
+                ret.push(((k, v), t, d));
             }
-            if desc.upper().less_equal(&t) {
-                continue;
-            }
-            // NB: t_fn might mutate t (i.e. a snapshots will forward it to the
-            // as_of), but the desc checks above only make sense if it hasn't be
-            // mutated yet.
-            let keep = t_fn(&mut t);
-            if !keep {
-                continue;
-            }
-            let k = K::decode(k);
-            let v = V::decode(v);
-            let d = D::decode(d);
-            ret.push(((k, v), t, d));
         }
-    }
-    ret
+        ret
+    })
 }

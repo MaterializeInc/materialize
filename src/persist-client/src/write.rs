@@ -26,7 +26,7 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, debug_span, info, instrument, trace, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
@@ -79,6 +79,7 @@ where
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
         trace!("WriteHandle::fetch_recent_upper");
         self.machine.fetch_upper().await
@@ -114,6 +115,7 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -172,6 +174,7 @@ where
     /// TODO: This already retries [mz_persist::location::Determinate] errors,
     /// so the signature could be changed to only return Indeterminate, but
     /// leaving it as ExternalError for now to save churn on storage PR rebases.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -242,6 +245,7 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn append_batch(
         &mut self,
         mut batch: Batch<K, V, T, D>,
@@ -361,6 +365,7 @@ where
     /// TODO: This already retries [mz_persist::location::Determinate] errors,
     /// so the signature could be changed to only return Indeterminate, but
     /// leaving it as ExternalError for now to save churn on storage PR rebases.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
         batch: &mut Batch<K, V, T, D>,
@@ -442,6 +447,7 @@ where
 
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
     /// a handle to the batch.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     async fn batch<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
@@ -598,6 +604,7 @@ where
 
     /// Deletes the blobs that make up this batch from the given blob store and
     /// marks them as deleted.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn delete(mut self) {
         // TODO: This is temporarily disabled because nemesis seems to have
         // caught that we sometimes delete batches that are later needed.
@@ -668,6 +675,7 @@ where
     ///
     /// This fails if any of the updates in this batch are beyond the given
     /// `upper`.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
     pub async fn finish(self, upper: Antichain<T>) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if upper.less_equal(&self.max_ts) {
             return Err(InvalidUsage::UpdateBeyondUpper {
@@ -722,11 +730,13 @@ where
         };
 
         let mut buf = Vec::new();
-        batch.encode(&mut buf);
+        trace_span!("make_batch::encode").in_scope(|| {
+            batch.encode(&mut buf);
+        });
         let buf = Bytes::from(buf);
 
         let key = Uuid::new_v4().to_string();
-        let () = retry_external("compare_and_append::set", || async {
+        let () = retry_external("make_batch::set", || async {
             self.blob
                 .set(
                     Instant::now() + FOREVER,
@@ -736,6 +746,7 @@ where
                 )
                 .await
         })
+        .instrument(debug_span!("make_batch::set", payload_len = buf.len()))
         .await;
 
         let batch = Batch::new(
@@ -765,7 +776,6 @@ where
 
         self.max_ts.join_assign(ts);
 
-        trace!("writing update {:?}", ((key, val), ts, diff));
         self.key_buf.clear();
         self.val_buf.clear();
         K::encode(key, &mut self.key_buf);

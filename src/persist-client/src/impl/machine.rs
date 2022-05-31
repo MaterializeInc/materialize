@@ -22,7 +22,7 @@ use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, Versi
 use mz_persist::retry::{Retry, RetryStream};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug, info, trace};
+use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::state::{ReadCapability, Since, State, StateCollections, Upper};
@@ -222,7 +222,7 @@ where
                 "next_listen_batch didn't find new data, retrying in {:?}",
                 retry.next_sleep()
             );
-            retry = retry.sleep().await;
+            retry = retry.sleep().instrument(trace_span!("listen::sleep")).await;
         }
     }
 
@@ -283,6 +283,7 @@ where
             // if the state change itself is _idempotent_, then we're free to
             // retry even indeterminate errors. See
             // [Self::apply_unbatched_idempotent_cmd].
+            let payload_len = new.data.len();
             let cas_res = retry_determinate("apply_unbatched_cmd::cas", || async {
                 self.consensus
                     .compare_and_set(
@@ -293,6 +294,7 @@ where
                     )
                     .await
             })
+            .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
             .await
             .map_err(|err| {
                 debug!("apply_unbatched_cmd {} errored: {}", name, err);
@@ -314,6 +316,7 @@ where
                             .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
                             .await
                     })
+                    .instrument(trace_span!("apply_unbatched_cmd::truncate"))
                     .await;
 
                     return Ok((self.state.seqno(), Ok(work_ret)));
@@ -403,6 +406,7 @@ where
                 .head(Instant::now() + FOREVER, &shard_id.to_string())
                 .await
         })
+        .instrument(trace_span!("fetch_and_update_state::head"))
         .await;
         self.update_state(current).await;
     }
