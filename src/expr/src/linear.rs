@@ -56,7 +56,7 @@ pub struct MapFilterProject {
     pub projection: Vec<usize>,
     /// The expected number of input columns.
     ///
-    /// This is needed to enure correct identification of newly formed
+    /// This is needed to ensure correct identification of newly formed
     /// columns in the output.
     pub input_arity: usize,
 }
@@ -289,7 +289,7 @@ impl MapFilterProject {
     /// Extracts any MapFilterProject at the root of the expression.
     ///
     /// The expression will be modified to extract any maps, filters, and
-    /// projections, which will be return as `Self`. If there are no maps,
+    /// projections, which will be returned as `Self`. If there are no maps,
     /// filters, or projections the method will return an identity operator.
     ///
     /// The extracted expressions may contain temporal predicates, and one

@@ -69,7 +69,7 @@ pub trait CollectionPlan {
 
 /// An abstract syntax tree which defines a collection.
 ///
-/// The AST is meant reflect the capabilities of the `differential_dataflow::Collection` type,
+/// The AST is meant to reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum MirRelationExpr {
