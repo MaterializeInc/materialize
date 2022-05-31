@@ -93,11 +93,25 @@ class Materialized(Service):
 
         command_list = [
             f"--data-directory={data_directory}",
-            f"--sql-listen-addr 0.0.0.0:{guest_sql_port}",
-            f"--http-listen-addr 0.0.0.0:{guest_http_port}",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 
+        config_ports = [sql_port, 5432, *extra_ports]
+        default_port_commands = [ f"--sql-listen-addr 0.0.0.0:{guest_sql_port}",
+            f"--http-listen-addr 0.0.0.0:{guest_http_port}",]
+
+        if isinstance(image, str) and ":v" in image:
+            version = image.split(":v")[1]
+            version_nums = version.split(".")
+            if int(version_nums[0]) == 0 and int(version_nums[1]) <= 26:
+                command_list.append(f"--listen-addr 0.0.0.0:{guest_sql_port}")
+            else:
+                config_ports.append(http_port)
+                command_list.extend(default_port_commands)
+        else:
+            config_ports.append(http_port)
+            command_list.extend(default_port_commands)
+        
         if options:
             if isinstance(options, str):
                 command_list.append(options)
@@ -120,11 +134,13 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [sql_port, http_port, 5432, *extra_ports],
+                "ports": config_ports,
                 "environment": environment,
                 "volumes": volumes,
             }
         )
+
+        print(config)
 
         super().__init__(name=name, config=config)
 
