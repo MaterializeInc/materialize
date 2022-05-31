@@ -198,6 +198,20 @@ pub fn extract_config(
     )
 }
 
+pub fn read_secrets_config(
+    with_options: BTreeMap<String, MaybeValueId>,
+    secrets_reader: (),
+) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    Ok(with_options
+        .into_iter()
+        .map(|(k, v)| match v {
+            MaybeValueId::Value(v) => (k, v),
+            // XXX(chae): use secret reader
+            MaybeValueId::Secret(id) => (k, id.to_string()),
+        })
+        .collect::<BTreeMap<String, String>>())
+}
+
 /// Create a new `rdkafka::ClientConfig` with the provided
 /// [`options`](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md),
 /// and test its ability to create an `rdkafka::consumer::BaseConsumer`.

@@ -386,12 +386,15 @@ pub fn plan_create_source(
             let config_options = if let Some(opts) = options {
                 opts
             } else {
-                kafka_util::extract_config(&mut with_options)?
+                kafka_util::read_secrets_config(
+                    kafka_util::extract_config(&mut with_options)?,
+                    secrets_reader,
+                )?
             };
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
                 None => None,
-                Some(Value::String(s)) => Some(s),
+                Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
@@ -405,10 +408,11 @@ pub fn plan_create_source(
                 None => {
                     start_offsets.insert(0, 0);
                 }
-                Some(Value::Number(n)) => {
+                Some(SqlMaybeValueId::Secret(_)) => bail!("start_offset cannot be a secret"),
+                Some(SqlMaybeValueId::Value(Value::Number(n))) => {
                     start_offsets.insert(0, parse_offset(&n)?);
                 }
-                Some(Value::Array(vs)) => {
+                Some(SqlMaybeValueId::Value(Value::Array(vs))) => {
                     for (i, v) in vs.iter().enumerate() {
                         match v {
                             Value::Number(n) => {
@@ -418,7 +422,7 @@ pub fn plan_create_source(
                         }
                     }
                 }
-                Some(v) => bail!("invalid start_offset value: {}", v),
+                Some(SqlMaybeValueId::Value(v)) => bail!("invalid start_offset value: {}", v),
             }
 
             let encoding = get_encoding(format, &envelope, with_options_original, scx)?;
@@ -718,7 +722,7 @@ pub fn plan_create_source(
                             // This syntax needs to be changed before allowing without experimental flag!
                             let data_collection_name =
                                 match with_options.remove("tx_metadata_collection_name") {
-                                    Some(Value::String(d)) => d,
+                                    Some(SqlMaybeValueId::Value(Value::String(d))) => d,
                                     Some(_) => bail!("tx_metadata_collection_name must be String"),
                                     None => bail!(
                                         "Require tx_metadata_collection_name with tx_metadata"
@@ -754,7 +758,7 @@ pub fn plan_create_source(
                             Ok(_) => Cow::from("ordered"),
                             Err(_) => Cow::from("none"),
                         },
-                        Some(Value::String(s)) => Cow::from(s),
+                        Some(SqlMaybeValueId::Value(Value::String(s))) => Cow::from(s),
                         _ => bail!("deduplication option must be a string"),
                     };
 
@@ -796,13 +800,13 @@ pub fn plan_create_source(
 
                             let dedup_start = match with_options.remove("deduplication_start") {
                                 None => None,
-                                Some(Value::String(start)) => Some(parse_datetime(&start)?),
+                                Some(SqlMaybeValueId::Value(Value::String(start))) => Some(parse_datetime(&start)?),
                                 _ => bail!("deduplication_start option must be a string"),
                             };
 
                             let dedup_end = match with_options.remove("deduplication_end") {
                                 None => None,
-                                Some(Value::String(end)) => Some(parse_datetime(&end)?),
+                                Some(SqlMaybeValueId::Value(Value::String(end))) => Some(parse_datetime(&end)?),
                                 _ => bail!("deduplication_end option must be a string"),
                             };
 
@@ -819,7 +823,7 @@ pub fn plan_create_source(
                                     let pad_start =
                                         match with_options.remove("deduplication_pad_start") {
                                             None => None,
-                                            Some(Value::String(pad_start)) => {
+                                            Some(SqlMaybeValueId::Value(Value::String(pad_start))) => {
                                                 Some(parse_datetime(&pad_start)?)
                                             }
                                             _ => bail!(
@@ -907,7 +911,7 @@ pub fn plan_create_source(
 
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
-        Some(Value::Boolean(b)) => b,
+        Some(SqlMaybeValueId::Value(Value::Boolean(b))) => b,
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
 
@@ -965,15 +969,19 @@ pub fn plan_create_source(
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
     let timeline = if let Some(timeline) = with_options.remove("timeline") {
         match timeline {
-            Value::String(timeline) => Timeline::User(timeline),
-            v => bail!("unsupported timeline value {}", v.to_ast_string()),
+            SqlMaybeValueId::Secret(_) => bail!("timeline must not be secret"),
+            SqlMaybeValueId::Value(Value::String(timeline)) => Timeline::User(timeline),
+            SqlMaybeValueId::Value(v) => bail!("unsupported timeline value {}", v.to_ast_string()),
         }
     } else {
         match envelope {
             SourceEnvelope::CdcV2 => match with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
-                Some(Value::Boolean(true)) => Timeline::EpochMilliseconds,
-                Some(v) => bail!("unsupported epoch_ms_timeline value {}", v),
+                Some(SqlMaybeValueId::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
+                Some(SqlMaybeValueId::Value(v)) => {
+                    bail!("unsupported epoch_ms_timeline value {}", v)
+                }
+                Some(SqlMaybeValueId::Secret(_)) => bail!("epoch_ms_timeline must not be secret"),
             },
             _ => Timeline::EpochMilliseconds,
         }
@@ -1356,7 +1364,7 @@ fn get_encoding_inner(
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options, scx))?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options, scx)?)?,
                         &mut ccsr_with_options,
                         (),
                     )?;
@@ -1412,7 +1420,7 @@ fn get_encoding_inner(
                 {
                     let (mut ccsr_with_options, registry_url) = match connector {
                         CsrConnector::Inline { url } => {
-                            (normalize::options(&ccsr_options, scx), url)
+                            (normalize::options(&ccsr_options, scx)?, url)
                         }
                         CsrConnector::Reference {
                             url, with_options, ..
@@ -1423,7 +1431,12 @@ fn get_encoding_inner(
                             };
                             let client_options = match with_options {
                                 Some(opts) => BTreeMap::from_iter(opts.iter().map(|(k, v)| {
-                                    (k.to_owned(), crate::ast::Value::String(v.to_owned()))
+                                    (
+                                        k.to_owned(),
+                                        SqlMaybeValueId::Value(crate::ast::Value::String(
+                                            v.to_owned(),
+                                        )),
+                                    )
                                 })),
                                 None => BTreeMap::new(),
                             };
@@ -1433,7 +1446,7 @@ fn get_encoding_inner(
                     // We validate here instead of in purification, to match the behavior of avro
                     let _ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options, scx))?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options, scx)?)?,
                         &mut ccsr_with_options,
                         (),
                     )?;
@@ -1891,7 +1904,7 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
-    with_options: &mut BTreeMap<String, Value>,
+    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
     broker: String,
     topic_prefix: String,
     relation_key_indices: Option<Vec<usize>>,
@@ -1903,7 +1916,7 @@ fn kafka_sink_builder(
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
-        Some(Value::String(topic)) => Some(topic),
+        Some(SqlMaybeValueId::Value(Value::String(topic))) => Some(topic),
         Some(_) => bail!("consistency_topic must be a string"),
     };
     if consistency_topic.is_some() && consistency.is_some() {
@@ -1912,14 +1925,14 @@ fn kafka_sink_builder(
         bail!("Cannot specify consistency_topic and CONSISTENCY options simultaneously");
     }
     let reuse_topic = match with_options.remove("reuse_topic") {
-        Some(Value::Boolean(b)) => b,
+        Some(SqlMaybeValueId::Value(Value::Boolean(b))) => b,
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
     let config_options = kafka_util::extract_config(with_options)?;
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
-        Some(Value::String(s)) => Some(s),
+        Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
         None => None,
         Some(_) => bail!("avro_key_fullname must be a string"),
     };
@@ -1929,7 +1942,7 @@ fn kafka_sink_builder(
     }
 
     let avro_value_fullname = match with_options.remove("avro_value_fullname") {
-        Some(Value::String(s)) => Some(s),
+        Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
         None => None,
         Some(_) => bail!("avro_value_fullname must be a string"),
     };
@@ -1952,7 +1965,7 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            let mut ccsr_with_options = normalize::options(&with_options, scx);
+            let mut ccsr_with_options = normalize::options(&with_options, scx)?;
 
             let schema_registry_url = url.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -2030,7 +2043,7 @@ fn kafka_sink_builder(
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
         None => -1,
-        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => n.parse::<i32>()?,
         Some(_) => bail!("partition count for sink topics must be an integer"),
     };
 
@@ -2043,7 +2056,7 @@ fn kafka_sink_builder(
     // Use the user supplied value for replication factor, or default to -1 (broker default)
     let replication_factor = match with_options.remove("replication_factor") {
         None => -1,
-        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => n.parse::<i32>()?,
         Some(_) => bail!("replication factor for sink topics must be an integer"),
     };
 
@@ -2055,7 +2068,7 @@ fn kafka_sink_builder(
 
     let retention_duration = match with_options.remove("retention_ms") {
         None => None,
-        Some(Value::Number(n)) => match n.parse::<i64>()? {
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => match n.parse::<i64>()? {
             -1 => Some(None),
             millis @ 0.. => Some(Some(Duration::from_millis(millis as u64))),
             _ => bail!("retention ms for sink topics must be greater than or equal to -1"),
@@ -2065,7 +2078,7 @@ fn kafka_sink_builder(
 
     let retention_bytes = match with_options.remove("retention_bytes") {
         None => None,
-        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => Some(n.parse::<i64>()?),
         Some(_) => bail!("retention bytes for sink topics must be an integer"),
     };
 
@@ -2080,6 +2093,7 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
+    let config_options = kafka_util::read_secrets_config(config_options, ())?;
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
         format,
@@ -2110,7 +2124,7 @@ fn kafka_sink_builder(
 fn get_kafka_sink_consistency_config(
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
-    config_options: &BTreeMap<String, String>,
+    config_options: &BTreeMap<String, MaybeValueId>,
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
@@ -2133,7 +2147,7 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = uri.parse::<Url>()?;
-                let mut ccsr_with_options = normalize::options(&with_options, scx);
+                let mut ccsr_with_options = normalize::options(&with_options, scx)?;
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     config_options,
@@ -2285,7 +2299,7 @@ pub fn plan_create_sink(
         scx.catalog.config().nonce
     );
 
-    let mut with_options = normalize::options(&with_options, scx);
+    let mut with_options = normalize::options(&with_options, scx)?;
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connector {
@@ -3041,7 +3055,7 @@ pub fn plan_create_connector(
             // Things to plumb:
             //  - StatementContext (maybe just catalog is easier / more appropriate tbh?)
             //  - SecretsReader: Nick used Arc<dyn SecretsReader>
-            let mut with_options = normalize::options(&with_options, &scx);
+            let mut with_options = normalize::options(&with_options, &scx)?;
             ConnectorInner::Kafka {
                 broker: broker.parse()?,
                 config_options: kafka_util::extract_config(&mut with_options)?,
@@ -3051,7 +3065,7 @@ pub fn plan_create_connector(
             registry,
             with_options,
         } => {
-            let with_options = normalize::options(&with_options, scx);
+            let with_options = normalize::options(&with_options, scx)?;
             ConnectorInner::CSR {
                 registry,
                 with_options: with_options
