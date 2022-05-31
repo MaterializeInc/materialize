@@ -320,11 +320,22 @@ impl PgConn {
             if self.recv_buf.len() > 0 {
                 ch = self.recv_buf[0] as char;
             }
-            if let Some(msg) = Message::parse(&mut self.recv_buf)? {
-                return Ok((ch, msg));
-            };
+            match Message::parse(&mut self.recv_buf) {
+                Ok(Some(msg)) => return Ok((ch, msg)),
+                Err(e) => {
+                    println!("PARSING FAILED: {e}!!!!!!!!!!!!");
+                    return Err(e.into());
+                }
+                _ => {}
+            }
             // If there was no message, read more bytes.
-            let sz = self.stream.read(&mut buf)?;
+            let sz = match self.stream.read(&mut buf) {
+                Ok(sz) => sz,
+                Err(e) => {
+                    println!("READING FAILED: {e}!!!!!!!!!!!!");
+                    return Err(e.into());
+                }
+            };
             self.recv_buf.extend_from_slice(&buf[..sz]);
         }
     }
