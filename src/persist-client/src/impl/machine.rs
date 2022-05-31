@@ -19,7 +19,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
-use mz_persist::retry::Retry;
+use mz_persist::retry::{Retry, RetryStream};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, info, trace};
@@ -150,8 +150,7 @@ where
         &mut self,
         as_of: &Antichain<T>,
     ) -> Result<Vec<(String, Description<T>)>, Since<T>> {
-        let mut fetches = 0;
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+        let mut retry: Option<RetryStream> = None;
         loop {
             let upper = match self.state.snapshot(as_of) {
                 Ok(Ok(x)) => return Ok(x),
@@ -163,17 +162,31 @@ where
             };
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
-            if fetches > 0 {
-                info!(
-                    "snapshot as of {:?} not available for upper {:?} retrying in {:?}",
-                    as_of,
-                    upper,
-                    retry.next_sleep()
-                );
-                retry = retry.sleep().await;
-            }
+            retry = Some(match retry.take() {
+                None => Retry::persist_defaults(SystemTime::now()).into_retry_stream(),
+                Some(retry) => {
+                    // Use a duration based threshold here instead of the usual
+                    // INFO_MIN_ATTEMPTS because here we're waiting on an
+                    // external thing to arrive.
+                    if retry.next_sleep() >= Duration::from_millis(64) {
+                        info!(
+                            "snapshot as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            as_of,
+                            upper,
+                            retry.next_sleep()
+                        );
+                    } else {
+                        debug!(
+                            "snapshot as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            as_of,
+                            upper,
+                            retry.next_sleep()
+                        );
+                    }
+                    retry.sleep().await
+                }
+            });
             self.fetch_and_update_state().await;
-            fetches += 1;
         }
     }
 
@@ -190,7 +203,8 @@ where
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
                 return (keys.to_owned(), desc.clone());
             }
-            // Wait a bit and try again.
+            // Wait a bit and try again. Intentionally don't ever log this at
+            // info level.
             //
             // TODO: See if we can watch for changes in Consensus to be more
             // reactive here.
@@ -217,8 +231,11 @@ where
                     Err(infallible) => match infallible {},
                 },
                 Err(err) => {
-                    debug!(
-                        "apply_unbatched_idempotent_cmd received an indeterminate error, retrying in {:?}: {}", retry.next_sleep(), err);
+                    if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                        info!("apply_unbatched_idempotent_cmd received an indeterminate error, retrying in {:?}: {}", retry.next_sleep(), err);
+                    } else {
+                        debug!("apply_unbatched_idempotent_cmd received an indeterminate error, retrying in {:?}: {}", retry.next_sleep(), err);
+                    }
                     retry = retry.sleep().await;
                     continue;
                 }
@@ -400,6 +417,8 @@ where
     }
 }
 
+pub const INFO_MIN_ATTEMPTS: usize = 3;
+
 pub const FOREVER: Duration = Duration::from_secs(1_000_000_000);
 
 pub async fn retry_external<R, F, WorkFn>(name: &str, mut work_fn: WorkFn) -> R
@@ -412,12 +431,21 @@ where
         match work_fn().await {
             Ok(x) => return x,
             Err(err) => {
-                info!(
-                    "external operation {} failed, retrying in {:?}: {}",
-                    name,
-                    retry.next_sleep(),
-                    err
-                );
+                if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                    info!(
+                        "external operation {} failed, retrying in {:?}: {}",
+                        name,
+                        retry.next_sleep(),
+                        err
+                    );
+                } else {
+                    debug!(
+                        "external operation {} failed, retrying in {:?}: {}",
+                        name,
+                        retry.next_sleep(),
+                        err
+                    );
+                }
                 retry = retry.sleep().await;
             }
         }
@@ -437,12 +465,21 @@ where
         match work_fn().await {
             Ok(x) => return Ok(x),
             Err(ExternalError::Determinate(err)) => {
-                info!(
-                    "external operation {} failed, retrying in {:?}: {}",
-                    name,
-                    retry.next_sleep(),
-                    err
-                );
+                if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                    info!(
+                        "external operation {} failed, retrying in {:?}: {}",
+                        name,
+                        retry.next_sleep(),
+                        err
+                    );
+                } else {
+                    debug!(
+                        "external operation {} failed, retrying in {:?}: {}",
+                        name,
+                        retry.next_sleep(),
+                        err
+                    );
+                }
                 retry = retry.sleep().await;
                 continue;
             }
