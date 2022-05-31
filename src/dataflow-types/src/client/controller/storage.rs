@@ -591,45 +591,68 @@ where
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
     ) -> Result<(), StorageError> {
         // Location to record consequences that we need to act on.
-        let mut storage_net = Vec::default();
+        let mut storage_net = HashMap::new();
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
             if let Ok(collection) = self.collection_mut(key) {
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
-                storage_net.push((key, update));
+
+                let (changes, frontier) = storage_net
+                    .entry(key)
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new()));
+
+                changes.extend(update.drain());
+                *frontier = collection.read_capabilities.frontier().to_owned();
             } else {
                 // This is confusing and we should probably error.
                 panic!("Unknown collection identifier {}", key);
             }
         }
 
-        // Translate our net compute actions into `AllowCompaction` commands.
-        for (id, change) in storage_net.iter_mut() {
-            if !change.is_empty() {
-                let frontier = self
-                    .collection(*id)
-                    .unwrap()
-                    .read_capabilities
-                    .frontier()
-                    .to_owned();
+        // Translate our net compute actions into `AllowCompaction` commands and
+        // downgrade persist sinces.
 
-                let handles = self.state.persist_handles.get_mut(id).unwrap();
-                handles.read.downgrade_since(frontier.clone()).await;
+        let futs = FuturesUnordered::new();
 
-                if let Some(client) = self.state.clients.get_mut(id) {
-                    client
-                        .send(StorageCommand::AllowCompaction(vec![(
-                            *id,
-                            frontier.clone(),
-                        )]))
-                        .await?;
+        // We cannot iterate through the changes and then set off a persist call
+        // on the read handle because we cannot mutably borrow the read handle
+        // multiple times.
+        //
+        // Instead, we iterate through all available read handles and see if
+        // there are any changes for it. If yes, we downgrade.
+        for (id, persist_handle) in self.state.persist_handles.iter_mut() {
+            let (mut changes, frontier) = match storage_net.remove(id) {
+                Some(changes) => changes,
+                None => continue,
+            };
+            if changes.is_empty() {
+                continue;
+            }
 
-                    if frontier.is_empty() {
-                        self.state.clients.remove(id);
-                        self.orchestrator.drop_service(&id.to_string()).await?;
-                    }
+            let fut = async move {
+                persist_handle.read.downgrade_since(frontier.clone()).await;
+                (*id, frontier)
+            };
+
+            futs.push(fut);
+        }
+
+        let compaction_commands = futs.collect::<Vec<_>>().await;
+
+        for (id, frontier) in compaction_commands {
+            if let Some(client) = self.state.clients.get_mut(&id) {
+                client
+                    .send(StorageCommand::AllowCompaction(vec![(
+                        id,
+                        frontier.clone(),
+                    )]))
+                    .await?;
+
+                if frontier.is_empty() {
+                    self.state.clients.remove(&id);
+                    self.orchestrator.drop_service(&id.to_string()).await?;
                 }
             }
         }
