@@ -311,7 +311,7 @@ impl PgConn {
     /// An error is returned if a new message is not received within the timeout.
     pub fn recv(&mut self) -> anyhow::Result<(char, Message)> {
         let mut buf = [0; 1024];
-        let _until = Instant::now();
+        let until = Instant::now();
         loop {
             if until.elapsed() > self.timeout {
                 bail!("timeout after {:?} waiting for new message", self.timeout);
