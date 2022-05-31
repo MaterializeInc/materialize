@@ -706,7 +706,9 @@ where
     fn drop(&mut self) {
         self.send(PersistWorkerCmd::Shutdown);
 
-        let handle = match Handle::try_current() {
+        let handle = self.handle.take().expect("missing join handle");
+
+        let runtime_handle = match Handle::try_current() {
             Ok(x) => x,
             Err(_) => {
                 warn!("PersistDowngrade dropped without a tokio Runtime present, cannot join on handle");
@@ -714,16 +716,15 @@ where
             }
         };
 
-        let res = handle
-            .block_on(self.handle.take().expect("missing join handle"))
-            .expect("join error");
-
-        match res {
-            Ok(()) => (), // All good!
-            Err(e) => {
-                error!("error while shutting down PersistDowngrade: {}", e)
+        let _ = runtime_handle.spawn_named(|| "PersistWorker::drop", async move {
+            let res = handle.await;
+            match res {
+                Ok(()) => (), // All good!
+                Err(e) => {
+                    error!("error while shutting down PersistDowngrade: {}", e)
+                }
             }
-        }
+        });
     }
 }
 
