@@ -559,6 +559,8 @@ where
             // Keep trying, it'll show up. The deadline will eventually bail
             // us out of this loop if something has gone wrong internally.
             None => {
+                // This is quite unexpected given that our initial blobs _are_
+                // linearizable, so always log at info.
                 info!(
                     "unexpected missing blob, trying again in {:?}: {}",
                     retry.next_sleep(),

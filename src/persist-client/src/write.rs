@@ -25,11 +25,11 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::{retry_external, Machine, FOREVER};
+use crate::r#impl::machine::{retry_external, Machine, FOREVER, INFO_MIN_ATTEMPTS};
 use crate::r#impl::state::Upper;
 use crate::ShardId;
 
@@ -264,11 +264,19 @@ where
             let res = match res {
                 Ok(x) => x,
                 Err(err) => {
-                    info!(
-                        "external operation append::caa failed, retrying in {:?}: {}",
-                        retry.next_sleep(),
-                        err
-                    );
+                    if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                        info!(
+                            "external operation append::caa failed, retrying in {:?}: {}",
+                            retry.next_sleep(),
+                            err
+                        );
+                    } else {
+                        debug!(
+                            "external operation append::caa failed, retrying in {:?}: {}",
+                            retry.next_sleep(),
+                            err
+                        );
+                    }
                     retry = retry.sleep().await;
                     continue;
                 }
