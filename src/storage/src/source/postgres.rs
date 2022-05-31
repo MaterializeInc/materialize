@@ -13,7 +13,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
-use futures::{pin_mut, FutureExt, StreamExt, TryStreamExt};
+use futures::{pin_mut, FutureExt, StreamExt};
 use mz_postgres_util::TableInfo;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
@@ -624,7 +624,10 @@ impl PostgresTaskInfo {
         let mut last_keepalive = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
-        let closer = self.sender.clone();
+
+        use mz_ore::concurrency::{select2_send_biased, Either2, SelectableWrapper};
+        let mut closer = self.sender.clone();
+        let mut stream = SelectableWrapper(stream);
         loop {
             // This select is safe because `Sender::closed` is cancel-safe
             // and when `closed` finishes, dropping the `try_next` future is fine,
@@ -633,13 +636,10 @@ impl PostgresTaskInfo {
             // just holds a reference to the stream, so it is cancel-safe.
             //
             // TODO(guswynn): avoid this select! complexity by just moving to `SourceReader::next`
-            tokio::select! {
-                biased;
-                _ = closer.closed() => {
-                    return Ok(())
-                },
-                item = stream.try_next() => {
-                    if let Some(item) = item? {
+            match select2_send_biased(&mut closer, &mut stream).await {
+                Either2::One(_) => return Ok(()),
+                Either2::Two(item) => {
+                    if let Some(item) = item.transpose()? {
                         use ReplicationMessage::*;
                         // The upstream will periodically request keepalive responses by setting the reply field
                         // to 1. However, we cannot rely on these messages arriving on time. For example, when
@@ -660,6 +660,7 @@ impl PostgresTaskInfo {
 
                             try_recoverable!(
                                 stream
+                                    .0
                                     .as_mut()
                                     .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
                                     .await
@@ -686,7 +687,9 @@ impl PostgresTaskInfo {
                                             continue;
                                         }
                                         let new_tuple = insert.tuple().tuple_data();
-                                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
+                                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(
+                                            rel_id, new_tuple
+                                        ));
                                         inserts.push(row);
                                     }
                                     Update(update) => {
@@ -700,8 +703,9 @@ impl PostgresTaskInfo {
                                             .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
                                                     Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
                                         .tuple_data();
-                                        let old_row =
-                                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
+                                        let old_row = try_fatal!(PostgresTaskInfo::row_from_tuple(
+                                            rel_id, old_tuple
+                                        ));
                                         deletes.push(old_row);
 
                                         // If the new tuple contains unchanged toast values, reuse the ones
@@ -715,8 +719,9 @@ impl PostgresTaskInfo {
                                                 TupleData::UnchangedToast => old,
                                                 _ => new,
                                             });
-                                        let new_row =
-                                            try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, new_tuple));
+                                        let new_row = try_fatal!(PostgresTaskInfo::row_from_tuple(
+                                            rel_id, new_tuple
+                                        ));
                                         inserts.push(new_row);
                                     }
                                     Delete(delete) => {
@@ -730,7 +735,9 @@ impl PostgresTaskInfo {
                                             .ok_or_else(|| anyhow!("Old row missing from replication stream for table with OID = {}. \
                                                     Did you forget to set REPLICA IDENTITY to FULL for your table?", rel_id)))
                                         .tuple_data();
-                                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(rel_id, old_tuple));
+                                        let row = try_fatal!(PostgresTaskInfo::row_from_tuple(
+                                            rel_id, old_tuple
+                                        ));
                                         deletes.push(row);
                                     }
                                     Commit(commit) => {
@@ -754,7 +761,9 @@ impl PostgresTaskInfo {
                                         match self.source_tables.get(&rel_id) {
                                             Some(source_table) => {
                                                 // Start with the cheapest check first, this will catch the majority of alters
-                                                if source_table.columns.len() != relation.columns().len() {
+                                                if source_table.columns.len()
+                                                    != relation.columns().len()
+                                                {
                                                     error!(
                                                         "alter table detected on {} with id {}",
                                                         source_table.name, source_table.relation_id
@@ -766,7 +775,9 @@ impl PostgresTaskInfo {
                                                     )));
                                                 }
                                                 if source_table.name.ne(relation.name().unwrap())
-                                                    || source_table.namespace.ne(relation.namespace().unwrap())
+                                                    || source_table
+                                                        .namespace
+                                                        .ne(relation.namespace().unwrap())
                                                 {
                                                     error!(
                                                         "table name changed on {}.{} with id {} to {}.{}",
@@ -784,13 +795,16 @@ impl PostgresTaskInfo {
                                                 }
                                                 // Relation messages do not include nullability/primary_key data
                                                 // so we check the name, type_oid, and type_mod explicitly and error if any of them differ
-                                                if !source_table.columns.iter().zip(relation.columns()).all(
-                                                    |(src, rel)| {
+                                                if !source_table
+                                                    .columns
+                                                    .iter()
+                                                    .zip(relation.columns())
+                                                    .all(|(src, rel)| {
                                                         src.name == rel.name().unwrap()
                                                             && src.type_oid == rel.type_id()
                                                             && src.type_mod == rel.type_modifier()
-                                                    },
-                                                ) {
+                                                    })
+                                                {
                                                     error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.relation_id, source_table.columns, relation.columns());
                                                     return Err(Fatal(anyhow!(
                                                         "source table {} with oid {} has been altered",
@@ -813,7 +827,10 @@ impl PostgresTaskInfo {
                                             // Filter here makes option handling in map "safe"
                                             .filter_map(|id| self.source_tables.get(&id))
                                             .map(|table| {
-                                                format!("name: {} id: {}", table.name, table.relation_id)
+                                                format!(
+                                                    "name: {} id: {}",
+                                                    table.name, table.relation_id
+                                                )
                                             })
                                             .collect::<Vec<String>>();
                                         return Err(Fatal(anyhow!(
@@ -823,7 +840,11 @@ impl PostgresTaskInfo {
                                     }
                                     // The enum is marked as non_exhaustive. Better to be conservative here in
                                     // case a new message is relevant to the semantics of our source
-                                    _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
+                                    _ => {
+                                        return Err(Fatal(anyhow!(
+                                            "unexpected logical replication message"
+                                        )))
+                                    }
                                 }
                             }
                             // Handled above
@@ -832,7 +853,7 @@ impl PostgresTaskInfo {
                             _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
                         }
                     } else {
-                        return Err(Recoverable(anyhow!("replication stream ended")))
+                        return Err(Recoverable(anyhow!("replication stream ended")));
                     }
                 }
             }

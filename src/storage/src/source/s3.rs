@@ -146,19 +146,23 @@ async fn download_objects_task(
     }
     let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
 
+    use mz_ore::concurrency::{select2_send, Either2};
     loop {
-        let msg = tokio::select! {
-            msg = rx.recv() => {
+        let msg = match select2_send(&mut rx, &mut shutdown_rx).await {
+            Either2::One(msg) => {
                 if let Some(msg) = msg {
                     msg
                 } else {
                     break;
                 }
             }
-            status = shutdown_rx.changed() => {
-                if status.is_ok() {
+            Either2::Two(status) => {
+                if status.is_some() {
                     if let DataflowStatus::Stopped = *shutdown_rx.borrow() {
-                        debug!("source_id={} download_objects received dataflow shutdown message", source_id);
+                        debug!(
+                            "source_id={} download_objects received dataflow shutdown message",
+                            source_id
+                        );
                         break;
                     }
                 }

@@ -3539,6 +3539,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
+ "tokio-stream",
  "tonic",
  "tracing",
  "tracing-opentelemetry",

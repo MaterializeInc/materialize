@@ -788,11 +788,12 @@ where
             timestamp_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
             let mut pending_messages = vec![];
+            use mz_ore::concurrency::{select2, Either2, SelectableWrapper};
+
+            let mut source_stream = SelectableWrapper(source_stream);
             loop {
-                // TODO(guswyn): move lots of this out of the macro so rustfmt works better
-                tokio::select! {
-                    // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
-                    item = source_stream.next() => {
+                match select2(&mut source_stream, &mut timestamp_interval).await {
+                    Either2::One(item) => {
                         match item {
                             Some(Ok(message)) => match message {
                                 // Note that this
@@ -805,9 +806,9 @@ where
                                 //    can be improved, tracked in
                                 //    <https://github.com/MaterializeInc/materialize/issues/12557>
                                 SourceMessageType::Finalized(message) => {
-                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
-                                        &message.partition
-                                    ) {
+                                    if let Some(untimestamped_messages) =
+                                        untimestamped_messages.get_mut(&message.partition)
+                                    {
                                         pending_messages.extend(untimestamped_messages.drain(..));
                                     }
                                     pending_messages.push(Ok(message));
@@ -815,9 +816,9 @@ where
                                 SourceMessageType::InProgress(message) => {
                                     // this extra if-statement is just here to avoid a clone in
                                     // case we have expensive partition id's someday
-                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
-                                        &message.partition
-                                    ) {
+                                    if let Some(untimestamped_messages) =
+                                        untimestamped_messages.get_mut(&message.partition)
+                                    {
                                         untimestamped_messages.push(Ok(message))
                                     } else {
                                         untimestamped_messages
@@ -826,42 +827,46 @@ where
                                             .push(Ok(message))
                                     }
                                 }
-                            }
+                            },
                             // TODO: make errors definite
                             Some(Err(e)) => pending_messages.push(Err(e)),
-                            None => {},
+                            None => {}
                         }
                     }
                     // It's time to timestamp a batch
-                    _ = timestamp_interval.tick() => {
+                    Either2::Two(_) => {
                         let mut max_offsets = HashMap::new();
                         for message in pending_messages.iter().filter_map(|m| m.as_ref().ok()) {
                             let entry = max_offsets.entry(message.partition.clone()).or_default();
                             *entry = std::cmp::max(*entry, message.offset);
                         }
-                        let (bindings, progress) = match timestamper.timestamp_offsets(&max_offsets).await {
-                            Ok((bindings, progress)) => (bindings, progress),
-                            Err(e) => {
-                                error!("Error timestamping offsets: {}", e);
-                                return;
-                            }
-                        };
+                        let (bindings, progress) =
+                            match timestamper.timestamp_offsets(&max_offsets).await {
+                                Ok((bindings, progress)) => (bindings, progress),
+                                Err(e) => {
+                                    error!("Error timestamping offsets: {}", e);
+                                    return;
+                                }
+                            };
 
                         for msg in pending_messages.drain(..) {
-                            match msg{
+                            match msg {
                                 Ok(message) => {
-                                    let ts = bindings.get(&message.partition).expect("timestamper didn't return partition").0;
+                                    let ts = bindings
+                                        .get(&message.partition)
+                                        .expect("timestamper didn't return partition")
+                                        .0;
                                     yield Event::Message(ts, Ok(message));
-                                },
+                                }
                                 Err(e) => {
                                     // TODO: make errors definite
                                     yield Event::Message(0, Err(e));
-                                },
+                                }
                             }
                         }
                         let progress_some = progress.as_option().is_some();
                         yield Event::Progress(progress.into_option());
-                        if source_stream.is_done() {
+                        if source_stream.0.is_done() {
                             // We just emitted the last piece of data that needed to be timestamped
                             if progress_some {
                                 yield Event::Progress(None);
