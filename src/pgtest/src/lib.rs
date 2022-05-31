@@ -313,7 +313,7 @@ impl PgConn {
         let mut buf = [0; 1024];
         let until = Instant::now();
         loop {
-            if until.elapsed() > self.timeout {
+            if until.elapsed() > Duration::from_secs(120) {
                 bail!("timeout after {:?} waiting for new message", self.timeout);
             }
             let mut ch: char = '0';
