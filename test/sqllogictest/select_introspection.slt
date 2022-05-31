@@ -17,8 +17,10 @@ INSERT INTO test VALUES('a', 'b')
 
 statement ok
 CREATE CLUSTER test
-  REPLICA replica_a (SIZE '1'),
-  REPLICA replica_b (SIZE '2'),
+  REPLICAS (
+    replica_a (SIZE '1'),
+    replica_b (SIZE '2')
+  ),
   INTROSPECTION GRANULARITY '50 milliseconds'
 
 statement ok
@@ -120,7 +122,7 @@ DROP CLUSTER test CASCADE
 
 statement ok
 CREATE CLUSTER test
-  REPLICA replica_a (SIZE '1'),
+  REPLICAS (replica_a (SIZE '1')),
   INTROSPECTION GRANULARITY 'off'
 
 query error cannot read log sources on cluster with disabled introspection

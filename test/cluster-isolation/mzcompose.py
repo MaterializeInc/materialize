@@ -231,14 +231,14 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.sql(
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
-            CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100'));
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100')));
             """
         )
 
         c.sql(
             """
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
-            CREATE CLUSTER cluster2 REPLICA replica1 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'));
+            CREATE CLUSTER cluster2 REPLICAS (replica1 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100')));
             """
         )
 

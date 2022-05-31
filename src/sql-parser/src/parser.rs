@@ -2552,6 +2552,7 @@ impl<'a> Parser<'a> {
         } else {
             self.parse_comma_separated(Parser::parse_cluster_option)?
         };
+
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
@@ -2582,13 +2583,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[REPLICA, INTROSPECTION])? {
-            REPLICA => {
-                let name = self.parse_identifier()?;
+        match self.expect_one_of_keywords(&[REPLICAS, INTROSPECTION])? {
+            REPLICAS => {
                 self.expect_token(&Token::LParen)?;
-                let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+
+                let replicas = if self.peek_token() == Some(Token::RParen) {
+                    vec![]
+                } else {
+                    self.parse_comma_separated(|parser| {
+                        let name = parser.parse_identifier()?;
+                        parser.expect_token(&Token::LParen)?;
+                        let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
+                        parser.expect_token(&Token::RParen)?;
+                        Ok(ReplicaDefinition { name, options })
+                    })?
+                };
+
                 self.expect_token(&Token::RParen)?;
-                Ok(ClusterOption::Replica(ReplicaDefinition { name, options }))
+                Ok(ClusterOption::Replicas(replicas))
             }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
                 DEBUGGING => {

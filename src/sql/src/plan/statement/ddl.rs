@@ -2721,7 +2721,7 @@ pub fn plan_create_cluster(
     _: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let mut replicas = vec![];
+    let mut replicas_definitions = None;
     let mut introspection_debugging = None;
     let mut introspection_granularity = None;
 
@@ -2740,14 +2740,24 @@ pub fn plan_create_cluster(
                 introspection_granularity =
                     Some(with_option_type!(Some(interval), OptionalInterval));
             }
-            ClusterOption::Replica(replica) => {
-                replicas.push((
-                    normalize::ident(replica.name),
-                    plan_replica_config(replica.options)?,
-                ));
+            ClusterOption::Replicas(replicas) => {
+                if replicas_definitions.is_some() {
+                    bail!("REPLICAS specified more than once");
+                }
+
+                let mut defs = Vec::with_capacity(replicas.len());
+                for ReplicaDefinition { name, options } in replicas {
+                    defs.push((normalize::ident(name), plan_replica_config(options)?));
+                }
+                replicas_definitions = Some(defs);
             }
         }
     }
+
+    let replicas = match replicas_definitions {
+        Some(r) => r,
+        None => bail_unsupported!("CLUSTER without REPLICAS option"),
+    };
 
     let introspection_granularity =
         introspection_granularity.unwrap_or(Some(DEFAULT_INTROSPECTION_GRANULARITY));

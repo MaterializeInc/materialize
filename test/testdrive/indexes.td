@@ -226,7 +226,7 @@ contains:unknown catalog item 'nonexistent'
 ! SHOW INDEX FROM foo_primary_idx
 contains:cannot show indexes on materialize.public.foo_primary_idx because it is a index
 
-> CREATE CLUSTER clstr REPLICA r1 (REMOTE ('localhost:1234'))
+> CREATE CLUSTER clstr REPLICAS (r1 (REMOTE ('localhost:1234')))
 > CREATE DEFAULT INDEX IN CLUSTER clstr ON foo;
 > SHOW INDEXES IN CLUSTER clstr WHERE on_name = 'foo'
 clstr foo  foo_primary_idx1   1  a       <null>                     false
