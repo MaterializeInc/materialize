@@ -611,8 +611,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
                             idx.compute_instance,
-                            // TODO(benesch): why is this hardcoded to 1000?
-                            Some(1000),
+                            self.logical_compaction_window_ms,
                         )
                         .await;
                     } else {
