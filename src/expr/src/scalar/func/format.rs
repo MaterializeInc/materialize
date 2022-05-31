@@ -16,7 +16,7 @@
 use std::fmt;
 
 use aho_corasick::AhoCorasickBuilder;
-use enum_iterator::IntoEnumIterator;
+use enum_iterator::Sequence;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::scalar::func::TimestampLike;
@@ -24,7 +24,7 @@ use crate::scalar::func::TimestampLike;
 /// The raw tokens that can appear in a format string. Many of these tokens
 /// overlap, in which case the longest matching token should be selected.
 #[repr(u8)]
-#[derive(Eq, PartialEq, TryFromPrimitive, IntoPrimitive, IntoEnumIterator)]
+#[derive(Eq, PartialEq, TryFromPrimitive, IntoPrimitive, Sequence)]
 enum DateTimeToken {
     a_d,
     A_D,
@@ -245,7 +245,7 @@ impl DateTimeToken {
     /// Returns the list of all known patterns, in the same order as the enum
     /// variants.
     fn patterns() -> Vec<&'static str> {
-        Self::into_enum_iter().map(|v| v.pattern()).collect()
+        enum_iterator::all::<Self>().map(|v| v.pattern()).collect()
     }
 
     /// Returns the `DateTimeField` associated with this token, if any.

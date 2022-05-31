@@ -15,16 +15,18 @@ use std::process;
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
+use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
-use tracing_subscriber::filter::Targets;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
 use mz_dataflow_types::ConnectorContext;
+use mz_orchestrator_tracing::TracingCliArgs;
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
@@ -44,25 +46,22 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
+pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+
 /// Independent storage server for Materialize.
 #[derive(clap::Parser)]
+#[clap(version = VERSION.as_str())]
 struct Args {
     /// The address on which to listen for a connection from the controller.
     #[clap(
         long,
-        env = "STORAGED_LISTEN_ADDR",
+        env = "LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2100"
     )]
     listen_addr: String,
     /// Number of dataflow worker threads.
-    #[clap(
-        short,
-        long,
-        env = "STORAGED_WORKERS",
-        value_name = "W",
-        default_value = "1"
-    )]
+    #[clap(short, long, env = "WORKERS", value_name = "W", default_value = "1")]
     workers: usize,
     /// The hostnames of all storaged processes in the cluster.
     #[clap()]
@@ -88,27 +87,18 @@ struct Args {
     #[clap(long, value_name = "PATH")]
     pid_file_location: Option<PathBuf>,
 
-    // === Logging options. ===
-    /// Which log messages to emit. See `materialized`'s help for more
-    /// info.
-    ///
-    /// The default value for this option is "info".
-    #[clap(
-        long,
-        env = "STORAGED_LOG_FILTER",
-        value_name = "FILTER",
-        default_value = "info"
-    )]
-    log_filter: Targets,
-
-    /// Add the process name to the tracing logs
-    #[clap(long, hide = true)]
-    log_process_name: bool,
+    /// === Tracing options. ===
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run(mz_ore::cli::parse_args()).await {
+    let args = cli::parse_args(CliConfig {
+        env_prefix: Some("STORAGED_"),
+        enable_version_flag: true,
+    });
+    if let Err(err) = run(args).await {
         eprintln!("storaged: fatal: {:#}", err);
         process::exit(1);
     }
@@ -132,15 +122,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-
-    mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
-        log_filter: args.log_filter.clone(),
-        opentelemetry_config: None,
-        prefix: args.log_process_name.then(|| "storaged".into()),
-        #[cfg(feature = "tokio-console")]
-        tokio_console: false,
-    })
-    .await?;
+    mz_ore::tracing::configure("storaged", &args.tracing).await?;
 
     if args.workers == 0 {
         bail!("--workers must be greater than 0");
@@ -170,7 +152,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
-        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
+        connector_context: ConnectorContext::from_cli_args(
+            &args.tracing.log_filter.inner,
+            args.aws_external_id,
+        ),
     };
 
     let serve_config = ServeConfig {

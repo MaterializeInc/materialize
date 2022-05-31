@@ -56,7 +56,6 @@ class Materialized(Service):
                 "MZ_LOG_FILTER",
                 "STORAGED_LOG_FILTER",
                 "COMPUTED_LOG_FILTER",
-                "MZ_PROCESS_LISTEN_HOST=0.0.0.0",
             ]
 
         if forward_aws_credentials:
@@ -162,7 +161,6 @@ class Computed(Service):
             command_list.append(f"--workers {workers}")
 
         if peers:
-            command_list.append(f"--processes {len(peers)}")
             command_list.append(f"--process {peers.index(name)}")
             command_list.append(" ".join(f"{peer}:2102" for peer in peers))
 

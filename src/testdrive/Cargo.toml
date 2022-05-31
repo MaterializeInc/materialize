@@ -22,7 +22,7 @@ byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.1.18", features = ["derive"] }
-flate2 = "1.0.23"
+flate2 = "1.0.24"
 futures = "0.3.21"
 globset = "0.4.8"
 http = "0.2.7"
@@ -67,5 +67,5 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = "0.1.8"
 tokio-util = { version = "0.7.2", features = ["compat"] }
 url = "2.2.2"
-uuid = "1.0.0"
+uuid = "1.1.0"
 walkdir = "2.3.2"

@@ -8,7 +8,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-#
+
 # This code creates TLS certificates for the various TLS-enabled services that
 # appear throughout our mzcompose infrastructure. See test/kafka-ssl for a
 # representative example.
@@ -136,7 +136,6 @@ done
 
 for i in kafka kafka1 kafka2 schema-registry
 do
-
     create_cert $i "ca" $i
     create_cert "materialized-$i" "ca-selective" "materialized"
 

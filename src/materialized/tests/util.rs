@@ -27,6 +27,7 @@ use tower_http::cors::AllowOrigin;
 use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -154,13 +155,13 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 // NOTE(benesch): would be nice to not have to do this, but
                 // the subprocess output wreaks havoc on cargo2junit.
                 suppress_output: true,
-                process_listen_host: None,
                 data_dir: data_directory,
                 command_wrapper: vec![],
             }),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
             linger: false,
+            tracing: TracingCliArgs::default(),
         },
         secrets_controller: None,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

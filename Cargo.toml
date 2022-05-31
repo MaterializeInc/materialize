@@ -25,6 +25,7 @@ members = [
     "src/orchestrator",
     "src/orchestrator-kubernetes",
     "src/orchestrator-process",
+    "src/orchestrator-tracing",
     "src/persist-client",
     "src/persist-types",
     "src/persist",

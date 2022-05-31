@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import contextlib
 import inspect
 import os
@@ -19,6 +20,7 @@ from materialize.mzcompose.services import (
     Computed,
     Kafka,
     Materialized,
+    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -1026,33 +1028,54 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(memory="8G"),
+    Postgres(),
+    Materialized(
+        memory="8G",
+        options="--persist-consensus-url postgres://postgres:postgres@postgres",
+    ),
     Testdrive(default_timeout="60s"),
 ]
 
 
-def run_test(c: Composition) -> None:
+def run_test(c: Composition, args: argparse.Namespace) -> None:
     c.up("testdrive", persistent=True)
 
-    for cls in Generator.__subclasses__():
+    scenarios = (
+        [globals()[args.scenario]] if args.scenario else Generator.__subclasses__()
+    )
+
+    for scenario in scenarios:
         with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
             with contextlib.redirect_stdout(tmp):
-                cls.generate()
+                scenario.generate()
                 sys.stdout.flush()
                 c.exec("testdrive", os.path.basename(tmp.name))
 
 
-def workflow_default(c: Composition) -> None:
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
+    )
 
+    args = parser.parse_args()
+
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
+
+    c.wait_for_postgres()
     c.up("materialized")
     c.wait_for_materialized()
 
-    run_test(c)
+    run_test(c, args)
 
 
 def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all the limits tests against a multi-node, multi-replica cluster"""
+
+    parser.add_argument(
+        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
+    )
 
     parser.add_argument(
         "--workers",
@@ -1063,8 +1086,11 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
 
+    c.wait_for_postgres()
     c.up("materialized")
     c.wait_for_materialized(service="materialized")
 
@@ -1101,12 +1127,15 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
         """
         )
 
-        run_test(c)
+        run_test(c, args)
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Create multiple clusters with multiple nodes and replicas each"""
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "postgres"]
+    )
+    c.wait_for_postgres()
 
     parser.add_argument(
         "--workers",

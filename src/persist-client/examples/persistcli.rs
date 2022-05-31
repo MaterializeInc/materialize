@@ -20,6 +20,8 @@ use std::sync::Once;
 
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
+use mz_ore::cli::{self, CliConfig};
+
 pub mod maelstrom;
 pub mod open_loop;
 pub mod source_example;
@@ -43,7 +45,7 @@ fn main() {
     // that all logging goes to stderr.
     init_logging();
 
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));

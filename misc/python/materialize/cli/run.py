@@ -73,7 +73,7 @@ def main() -> int:
         help="Activate the Tokio console",
         action="store_true",
     )
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
     args.channel = None
@@ -89,7 +89,7 @@ def main() -> int:
             path = ROOT / "target" / "debug" / args.program
         command = [str(path), *args.args]
         if args.tokio_console:
-            command += ["--tokio-console"]
+            command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "materialized":
             if args.reset:
                 print("Removing mzdata directory...")

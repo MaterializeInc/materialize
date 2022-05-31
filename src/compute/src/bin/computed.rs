@@ -14,17 +14,19 @@ use std::process;
 use anyhow::bail;
 use futures::sink::SinkExt;
 use futures::stream::TryStreamExt;
-use mz_build_info::{build_info, BuildInfo};
+use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
-use tracing_subscriber::filter::Targets;
 
+use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{ComputeClient, GenericClient};
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
 use mz_dataflow_types::ConnectorContext;
+use mz_orchestrator_tracing::TracingCliArgs;
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
@@ -45,41 +47,29 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
+pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
+
 /// Independent dataflow server for Materialize.
 #[derive(clap::Parser)]
+#[clap(version = VERSION.as_str())]
 struct Args {
     /// The address on which to listen for a connection from the controller.
     #[clap(
         long,
-        env = "COMPUTED_LISTEN_ADDR",
+        env = "LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:2100"
     )]
     listen_addr: String,
     /// Number of dataflow worker threads.
-    #[clap(
-        short,
-        long,
-        env = "COMPUTED_WORKERS",
-        value_name = "W",
-        default_value = "1"
-    )]
+    #[clap(short, long, env = "WORKERS", value_name = "W", default_value = "1")]
     workers: usize,
     /// Number of this computed process.
-    #[clap(short = 'p', long, env = "COMPUTED_PROCESS", value_name = "P")]
+    #[clap(short = 'p', long, env = "PROCESS", value_name = "P")]
     process: Option<usize>,
-    /// Total number of computed processes.
-    #[clap(
-        short = 'n',
-        long,
-        env = "COMPUTED_PROCESSES",
-        value_name = "N",
-        default_value = "1"
-    )]
-    processes: usize,
-    /// The hostnames of all computed processes in the cluster.
+    /// The addresses of all computed processes in the cluster.
     #[clap()]
-    hosts: Vec<String>,
+    addresses: Vec<String>,
 
     /// An external ID to be supplied to all AWS AssumeRole operations.
     ///
@@ -100,101 +90,57 @@ struct Args {
     #[clap(long, value_name = "PATH")]
     pid_file_location: Option<PathBuf>,
 
-    // === Logging options. ===
-    /// Which log messages to emit. See `materialized`'s help for more
-    /// info.
-    ///
-    /// The default value for this option is "info".
-    #[clap(
-        long,
-        env = "COMPUTED_LOG_FILTER",
-        value_name = "FILTER",
-        default_value = "info"
-    )]
-    log_filter: Targets,
-
-    /// Add the process name to the tracing logs
-    #[clap(long, hide = true)]
-    log_process_name: bool,
+    #[clap(flatten)]
+    tracing: TracingCliArgs,
 }
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run(mz_ore::cli::parse_args()).await {
+    let args = cli::parse_args(CliConfig {
+        env_prefix: Some("COMPUTED_"),
+        enable_version_flag: true,
+    });
+    if let Err(err) = run(args).await {
         eprintln!("computed: fatal: {:#}", err);
         process::exit(1);
     }
 }
 
 fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfig, anyhow::Error> {
-    let threads = args.workers;
-    let process = args.process;
-    let processes = args.processes;
-    if processes == 0 {
-        bail!("0 is a nonsensical number of processes.")
-    }
-    if process > Some(processes - 1) {
-        let process = process.unwrap();
-        bail!("Process index out of bounds: {process} out of 0..{processes}.");
-    }
-    let process = if processes == 1 {
-        0
-    } else {
-        process
-            .or_else(|| {
-                // Dirty hack: we parse the process from the hostname, if possible. This is the recommended way to get the Ordinal Index of a Kubernetes replica.
-                std::env::var("HOSTNAME").ok().and_then(|hostname| {
-                    hostname
-                        .rsplit_once('-')
-                        .and_then(|(_, idx)| idx.parse::<usize>().ok())
-                })
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Process index not provided, and failed to deduce it from hostname."
-                )
-            })?
-    };
-    let report = true;
-
-    if processes > 1 {
-        let mut addresses = Vec::new();
-        if args.hosts.is_empty() {
-            for index in 0..processes {
-                addresses.push(format!("localhost:{}", 2102 + index));
-            }
-        } else {
-            if let Ok(file) = ::std::fs::File::open(args.hosts[0].clone()) {
-                let reader = ::std::io::BufReader::new(file);
-                use ::std::io::BufRead;
-                for line in reader.lines().take(processes) {
-                    addresses.push(line?);
-                }
-            } else {
-                addresses.extend(args.hosts.iter().cloned());
-            }
-            if addresses.len() < processes {
+    if args.addresses.len() > 1 {
+        let process = match args.process {
+            None => {
                 bail!(
-                    "could only read {} addresses from {:?}, but -n: {}",
-                    addresses.len(),
-                    args.hosts,
-                    processes
+                    "--process argument must be specified when more than one address is specified"
                 );
             }
-        }
-
-        assert_eq!(processes, addresses.len());
+            Some(process) if process >= args.addresses.len() => {
+                bail!(
+                    "process index {process} out of range [0, {})",
+                    args.addresses.len()
+                );
+            }
+            Some(process) => process,
+        };
         Ok(timely::CommunicationConfig::Cluster {
-            threads,
+            threads: args.workers,
             process,
-            addresses,
-            report,
+            addresses: args.addresses.clone(),
+            report: true,
             log_fn: Box::new(|_| None),
         })
-    } else if threads > 1 {
-        Ok(timely::CommunicationConfig::Process(threads))
     } else {
-        Ok(timely::CommunicationConfig::Thread)
+        match args.process {
+            Some(process) if process > 1 => {
+                bail!("process index {process} out of range [0, 1)");
+            }
+            _ => (),
+        }
+        if args.workers > 1 {
+            Ok(timely::CommunicationConfig::Process(args.workers))
+        } else {
+            Ok(timely::CommunicationConfig::Thread)
+        }
     }
 }
 
@@ -207,15 +153,7 @@ fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-
-    mz_ore::tracing::configure(mz_ore::tracing::TracingConfig {
-        log_filter: args.log_filter.clone(),
-        opentelemetry_config: None,
-        prefix: args.log_process_name.then(|| "computed".into()),
-        #[cfg(feature = "tokio-console")]
-        tokio_console: false,
-    })
-    .await?;
+    mz_ore::tracing::configure("computed", &args.tracing).await?;
 
     if args.workers == 0 {
         bail!("--workers must be greater than 0");
@@ -245,7 +183,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
-        connector_context: ConnectorContext::from_cli_args(&args.log_filter, args.aws_external_id),
+        connector_context: ConnectorContext::from_cli_args(
+            &args.tracing.log_filter.inner,
+            args.aws_external_id,
+        ),
     };
 
     let serve_config = ServeConfig {

@@ -29,6 +29,7 @@ use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
 
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 
 use mz_testdrive::Config;
@@ -177,7 +178,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
         .with_env_filter(args.log_filter)
