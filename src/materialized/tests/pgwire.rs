@@ -497,3 +497,9 @@ fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
     let dir: PathBuf = ["..", "..", "test", "pgtest-mz"].iter().collect();
     pg_test_inner(dir)
 }
+
+#[test]
+fn test_that_timeout_works() -> Result<(), Box<dyn Error>> {
+    // This should always timeout
+    loop {}
+}
