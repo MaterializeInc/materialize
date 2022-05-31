@@ -482,6 +482,7 @@ fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 fn test_pgtest() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -490,6 +491,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+#[ignore]
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
