@@ -1144,7 +1144,8 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("availability_zone", ScalarType::String.nullable(true)),
+        .with_column("availability_zone", ScalarType::String.nullable(true))
+        .with_column("status", ScalarType::String.nullable(false)),
 });
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
