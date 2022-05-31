@@ -191,7 +191,7 @@ where
     };
 
     #[cfg(feature = "tokio-console")]
-    let tokio_console_layer = if let Some(console_config) = config.tokio_console {
+    let tokio_console_layer = if let Some(console_config) = config.tokio_console.clone() {
         let layer = ConsoleLayer::builder()
             .server_addr(console_config.listen_addr)
             .publish_interval(console_config.publish_interval)
@@ -208,6 +208,14 @@ where
     #[cfg(feature = "tokio-console")]
     let stack = stack.with(tokio_console_layer);
     stack.init();
+
+    #[cfg(feature = "tokio-console")]
+    if let Some(console_config) = config.tokio_console {
+        tracing::info!(
+            "starting tokio console on http://{}",
+            console_config.listen_addr
+        );
+    }
 
     Ok(())
 }
