@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_dataflow_types::sources::MaybeValueId;
+use mz_dataflow_types::sources::MaybeStringId;
 use mz_repr::GlobalId;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
@@ -198,8 +198,8 @@ fn generate_csr_connector_inline<T: AstInfo>(
             .into_iter()
             // XXX(chae): this probably isn't right?
             .map(|(k, v)| match v {
-                SqlMaybeValueId::Value(v) => (k, MaybeValueId::Value(v.to_string())),
-                SqlMaybeValueId::Secret(id) => (k, MaybeValueId::Secret(id)),
+                SqlMaybeValueId::Value(v) => (k, MaybeStringId::Value(v.to_string())),
+                SqlMaybeValueId::Secret(id) => (k, MaybeStringId::Secret(id)),
             })
             .collect::<BTreeMap<_, _>>(),
         secrets_reader,

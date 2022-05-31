@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 
-use mz_dataflow_types::sources::MaybeValueId;
+use mz_dataflow_types::sources::MaybeStringId;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_repr::GlobalId;
@@ -117,21 +117,21 @@ impl Config {
 fn extract(
     input: &mut BTreeMap<String, SqlMaybeValueId>,
     configs: &[Config],
-) -> Result<BTreeMap<String, MaybeValueId>, anyhow::Error> {
+) -> Result<BTreeMap<String, MaybeStringId>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
         let value =
             match input.remove(config.name) {
-                Some(SqlMaybeValueId::Value(v)) => MaybeValueId::Value(
+                Some(SqlMaybeValueId::Value(v)) => MaybeStringId::Value(
                     config.do_transform(config.val_type.process_val(&v).map_err(|e| {
                         anyhow!("Invalid WITH option {}={}: {}", config.name, v, e)
                     })?),
                 ),
-                Some(SqlMaybeValueId::Secret(id)) => MaybeValueId::Secret(id),
+                Some(SqlMaybeValueId::Secret(id)) => MaybeStringId::Secret(id),
                 // Check for default values
                 None => match &config.default {
-                    Some(v) => MaybeValueId::Value(config.do_transform(v.to_string())),
+                    Some(v) => MaybeStringId::Value(config.do_transform(v.to_string())),
                     None => continue,
                 },
             };
@@ -152,7 +152,7 @@ fn extract(
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &mut BTreeMap<String, SqlMaybeValueId>,
-) -> Result<BTreeMap<String, MaybeValueId>, anyhow::Error> {
+) -> Result<BTreeMap<String, MaybeStringId>, anyhow::Error> {
     extract(
         with_options,
         &[
@@ -199,15 +199,15 @@ pub fn extract_config(
 }
 
 pub fn read_secrets_config(
-    with_options: BTreeMap<String, MaybeValueId>,
+    with_options: BTreeMap<String, MaybeStringId>,
     secrets_reader: (),
 ) -> Result<BTreeMap<String, String>, anyhow::Error> {
     Ok(with_options
         .into_iter()
         .map(|(k, v)| match v {
-            MaybeValueId::Value(v) => (k, v),
+            MaybeStringId::Value(v) => (k, v),
             // XXX(chae): use secret reader
-            MaybeValueId::Secret(id) => (k, id.to_string()),
+            MaybeStringId::Secret(id) => (k, id.to_string()),
         })
         .collect::<BTreeMap<String, String>>())
 }
@@ -404,7 +404,7 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    _kafka_options: &BTreeMap<String, MaybeValueId>,
+    _kafka_options: &BTreeMap<String, MaybeStringId>,
     ccsr_options: &mut BTreeMap<String, SqlMaybeValueId>,
     secrets_reader: (),
 ) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
@@ -471,14 +471,14 @@ pub fn generate_ccsr_client_config(
 
     if let Some(username) = ccsr_options.remove("username") {
         let username = match username {
-            MaybeValueId::Value(username) => username,
+            MaybeStringId::Value(username) => username,
             // XXX chae
-            MaybeValueId::Secret(id) => todo!(),
+            MaybeStringId::Secret(id) => todo!(),
         };
         let password = match ccsr_options.remove("password") {
             // XXX chae
-            Some(MaybeValueId::Value(password)) => todo!(),
-            Some(MaybeValueId::Secret(id)) => Some(String::new()),
+            Some(MaybeStringId::Value(password)) => todo!(),
+            Some(MaybeStringId::Secret(id)) => Some(String::new()),
             None => None,
         };
         client_config = client_config.auth(username, password);

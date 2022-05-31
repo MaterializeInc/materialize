@@ -39,7 +39,7 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MaybeValueId,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MaybeStringId,
     PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
     SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
@@ -2134,7 +2134,7 @@ fn kafka_sink_builder(
 fn get_kafka_sink_consistency_config(
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
-    config_options: &BTreeMap<String, MaybeValueId>,
+    config_options: &BTreeMap<String, MaybeStringId>,
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
@@ -3086,13 +3086,13 @@ pub fn plan_create_connector(
                     .iter()
                     .map(|(k, v)| match v {
                         SqlMaybeValueId::Value(v) => {
-                            (k.to_owned(), MaybeValueId::Value(v.to_string()))
+                            (k.to_owned(), MaybeStringId::Value(v.to_string()))
                         }
                         SqlMaybeValueId::Secret(global_id) => {
-                            (k.to_owned(), MaybeValueId::Secret(*global_id))
+                            (k.to_owned(), MaybeStringId::Secret(*global_id))
                         }
                     })
-                    .collect::<BTreeMap<String, MaybeValueId>>(),
+                    .collect::<BTreeMap<String, MaybeStringId>>(),
             }
         }
     };

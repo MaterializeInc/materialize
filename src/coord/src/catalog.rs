@@ -32,7 +32,7 @@ use mz_dataflow_types::client::{
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    ConnectorInner, ExternalSourceConnector, MaybeValueId, SourceConnector, Timeline,
+    ConnectorInner, ExternalSourceConnector, MaybeStringId, SourceConnector, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -3594,9 +3594,9 @@ impl mz_sql::catalog::CatalogConnector for Connector {
             .options()
             .into_iter()
             .map(|(k, v)| match v {
-                MaybeValueId::Value(v) => (k, v),
+                MaybeStringId::Value(v) => (k, v),
                 // XXX(chae): convert
-                MaybeValueId::Secret(id) => (k, id.to_string()),
+                MaybeStringId::Secret(id) => (k, id.to_string()),
             })
             .collect::<BTreeMap<String, String>>()
     }

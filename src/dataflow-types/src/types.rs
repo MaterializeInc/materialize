@@ -2561,7 +2561,7 @@ pub mod sources {
 
     // XXX: please help me come up with a better name lol
     #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-    pub enum MaybeValueId {
+    pub enum MaybeStringId {
         Value(String),
         Secret(GlobalId),
     }
@@ -2570,11 +2570,11 @@ pub mod sources {
     pub enum ConnectorInner {
         Kafka {
             broker: KafkaAddrs,
-            config_options: BTreeMap<String, MaybeValueId>,
+            config_options: BTreeMap<String, MaybeStringId>,
         },
         CSR {
             registry: String,
-            with_options: BTreeMap<String, MaybeValueId>,
+            with_options: BTreeMap<String, MaybeStringId>,
         },
     }
 
@@ -2586,7 +2586,7 @@ pub mod sources {
             }
         }
 
-        pub fn options(&self) -> BTreeMap<String, MaybeValueId> {
+        pub fn options(&self) -> BTreeMap<String, MaybeStringId> {
             match self {
                 ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
                 ConnectorInner::CSR { with_options, .. } => with_options.clone(),
