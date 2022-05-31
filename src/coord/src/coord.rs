@@ -5113,7 +5113,7 @@ pub mod fast_path_peek {
 
     #[derive(Debug)]
     pub struct PeekDataflowPlan<T> {
-        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, (), T>,
+        desc: mz_dataflow_types::DataflowDescription<mz_dataflow_types::Plan<T>, GlobalId, T>,
         id: GlobalId,
         key: Vec<MirScalarExpr>,
         permutation: HashMap<usize, usize>,

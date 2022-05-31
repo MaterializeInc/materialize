@@ -375,7 +375,7 @@ where
             if matches!(desc.connector, SourceConnector::External { .. }) {
                 dataflow_commands.push(CreateSourceCommand {
                     id,
-                    desc,
+                    desc: desc.map_storage_metadata(&mut |id| self.collection_metadata(id))?,
                     since,
                     storage_metadata: self.collection_metadata(id)?,
                 });

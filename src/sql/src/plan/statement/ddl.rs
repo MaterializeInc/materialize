@@ -1235,7 +1235,7 @@ fn typecheck_debezium_transaction_metadata(
     };
 
     Ok(DebeziumTransactionMetadata {
-        tx_metadata_global_id,
+        tx_metadata_storage_metadata: tx_metadata_global_id,
         tx_status_idx,
         tx_transaction_id_idx,
         tx_data_collections_idx,

@@ -57,7 +57,7 @@ pub struct StorageState {
     /// dropped, as this is used to check for rebinding of previous identifiers.
     /// Once we have a better mechanism to avoid that, for example that identifiers
     /// must strictly increase, we can clean up descriptions when sources are dropped.
-    pub source_descriptions: HashMap<GlobalId, SourceDesc>,
+    pub source_descriptions: HashMap<GlobalId, SourceDesc<CollectionMetadata>>,
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the

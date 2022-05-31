@@ -309,7 +309,7 @@ pub struct CreateSourceCommand<T> {
     /// The source identifier
     pub id: GlobalId,
     /// The source description
-    pub desc: SourceDesc,
+    pub desc: SourceDesc<CollectionMetadata>,
     /// The initial `since` frontier
     pub since: Antichain<T>,
     /// Additional storage controller metadata needed to ingest this source

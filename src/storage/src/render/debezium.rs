@@ -21,6 +21,7 @@ use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use tracing::{debug, error, info, warn};
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::{
     sources::{DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode, DebeziumSourceProjection},
     DataflowError, DecodeError,
@@ -31,7 +32,7 @@ use mz_repr::{Datum, Diff, Row, Timestamp};
 use crate::source::DecodeResult;
 
 pub(crate) fn render<G: Scope>(
-    envelope: &DebeziumEnvelope,
+    envelope: &DebeziumEnvelope<CollectionMetadata>,
     input: &Stream<G, DecodeResult>,
     debug_name: String,
 ) -> (
@@ -127,7 +128,7 @@ where
 }
 
 pub(crate) fn render_tx<G: Scope>(
-    envelope: &DebeziumEnvelope,
+    envelope: &DebeziumEnvelope<CollectionMetadata>,
     input: &Stream<G, DecodeResult>,
     tx_ok: Collection<G, Row, Diff>,
     debug_name: String,
@@ -168,7 +169,7 @@ where
         tx_status_idx,
         tx_transaction_id_idx,
         data_transaction_id_idx,
-        tx_metadata_global_id: _,
+        tx_metadata_storage_metadata: _,
     } = tx_metadata_description;
 
     let tx_dist = move |&(ref row, time, _diff): &(Row, Timestamp, Diff)| match row
@@ -470,7 +471,7 @@ struct DebeziumDeduplicationState {
     // transferred as-is from the previous avro-debezium code. Find a better place to put this or
     // avoid it completely.
     filenames_to_indices: HashMap<String, i64>,
-    projection: DebeziumDedupProjection,
+    projection: DebeziumDedupProjection<CollectionMetadata>,
 }
 
 /// If we need to deal with debezium possibly going back after it hasn't seen things.
@@ -613,7 +614,7 @@ enum RowCoordinates {
 }
 
 impl DebeziumDeduplicationState {
-    fn new(envelope: DebeziumEnvelope) -> Option<Self> {
+    fn new(envelope: DebeziumEnvelope<CollectionMetadata>) -> Option<Self> {
         let (full, projection) = match envelope.mode {
             DebeziumMode::Ordered(projection) => (None, projection),
             DebeziumMode::Full(projection) => (Some(TrackFull::from_keys()), projection),

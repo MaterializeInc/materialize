@@ -29,6 +29,7 @@ use mz_expr::PartitionId;
 use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
+use crate::source::persist_source;
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
@@ -72,7 +73,7 @@ pub fn render_source<G>(
     dataflow_debug_name: &String,
     as_of_frontier: &Antichain<G::Timestamp>,
     src_id: GlobalId,
-    source_desc: SourceDesc,
+    source_desc: SourceDesc<CollectionMetadata>,
     storage_metadata: CollectionMetadata,
     mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
@@ -318,31 +319,15 @@ where
                         SourceEnvelope::Debezium(dbz_envelope) => {
                             let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
                                 Some(tx_metadata) => {
-                                    //TODO(petrosagg): this should read from storage
-                                    let tx_src_desc = storage_state
-                                        .source_descriptions
-                                        .get(&tx_metadata.tx_metadata_global_id)
-                                        // N.B. tx_id is validated when constructing dbz_envelope
-                                        .expect("bad tx metadata spec")
-                                        .clone();
-                                    let tx_collection_metadata = storage_state
-                                        .collection_metadata
-                                        .get(&tx_metadata.tx_metadata_global_id)
-                                        // N.B. tx_id is validated when constructing dbz_envelope
-                                        .expect("bad tx metadata spec")
-                                        .clone();
-                                    // TODO(#11667): reuse the existing arrangement if it exists
-                                    let ((tx_source_ok, tx_source_err), tx_token) = render_source(
-                                        scope,
-                                        dataflow_debug_name,
-                                        as_of_frontier,
-                                        tx_metadata.tx_metadata_global_id,
-                                        tx_src_desc,
-                                        tx_collection_metadata,
-                                        // NOTE: For now sources never have LinearOperators
-                                        // but might have in the future
-                                        None,
-                                        storage_state,
+                                    let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
+                                        persist_source::persist_source(
+                                            scope,
+                                            tx_metadata.tx_metadata_storage_metadata.clone(),
+                                            as_of_frontier.clone(),
+                                        );
+                                    let (tx_source_ok, tx_source_err) = (
+                                        tx_source_ok_stream.as_collection(),
+                                        tx_source_err_stream.as_collection(),
                                     );
                                     needed_tokens.push(tx_token);
                                     error_collections.push(tx_source_err);

@@ -252,7 +252,7 @@ pub struct Update<T = mz_repr::Timestamp> {
 }
 
 /// A commonly used name for dataflows contain MIR expressions.
-pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
+pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, GlobalId>;
 
 /// An association of a global identifier to an expression.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -283,9 +283,12 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 /// context-dependent options like the ability to apply filtering and
 /// projection to the records as they emerge.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SourceInstanceDesc<M> {
+pub struct SourceInstanceDesc<M>
+where
+    M: Arbitrary + Clone + 'static,
+{
     /// A description of the source to construct.
-    pub description: crate::types::sources::SourceDesc,
+    pub description: crate::types::sources::SourceDesc<M>,
     /// Arguments for this instantiation of the source.
     pub arguments: SourceInstanceArguments,
     /// Additional metadata used by storage instances to render this source instance and by the
@@ -293,15 +296,18 @@ pub struct SourceInstanceDesc<M> {
     pub storage_metadata: M,
 }
 
-impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
+impl<M> Arbitrary for SourceInstanceDesc<M>
+where
+    M: Arbitrary + Clone,
+{
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            any::<SourceDesc>(),
+            any::<SourceDesc<M>>(),
             any::<SourceInstanceArguments>(),
-            any::<CollectionMetadata>(),
+            any::<M>(),
         )
             .prop_map(
                 |(description, arguments, storage_metadata)| SourceInstanceDesc {
@@ -338,6 +344,29 @@ impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata
     }
 }
 
+impl<M> SourceInstanceDesc<M>
+where
+    M: Arbitrary + Clone + 'static,
+{
+    /// Maps embedded storage metadata from one type to another.
+    pub fn map_storage_metadata<F, M2, E>(self, f: &mut F) -> Result<SourceInstanceDesc<M2>, E>
+    where
+        F: FnMut(M) -> Result<M2, E>,
+        M2: Arbitrary + Clone + 'static,
+    {
+        let SourceInstanceDesc {
+            description,
+            arguments,
+            storage_metadata,
+        } = self;
+        Ok(SourceInstanceDesc {
+            description: description.map_storage_metadata(f)?,
+            arguments,
+            storage_metadata: f(storage_metadata)?,
+        })
+    }
+}
+
 /// Per-source construction arguments.
 #[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments {
@@ -362,29 +391,12 @@ impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {
 /// Type alias for source subscriptions, (dataflow_id, source_id).
 pub type SourceInstanceId = (uuid::Uuid, mz_repr::GlobalId);
 
-/// A formed request for source instantiation.
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
-    /// The source's own identifier.
-    pub source_id: mz_repr::GlobalId,
-    /// A dataflow identifier that should be unique across dataflows.
-    pub dataflow_id: uuid::Uuid,
-    /// Arguments to the source instantiation.
-    pub arguments: SourceInstanceArguments,
-    /// Frontier beyond which updates must be correct.
-    pub as_of: Antichain<T>,
-}
-
-impl<T> SourceInstanceRequest<T> {
-    /// Source identifier uniquely identifying this instantiation.
-    pub fn unique_id(&self) -> SourceInstanceId {
-        (self.dataflow_id, self.source_id)
-    }
-}
-
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
+pub struct DataflowDescription<P, S = GlobalId, T = mz_repr::Timestamp>
+where
+    S: Arbitrary + Clone + 'static,
+{
     /// Sources instantiations made available to the dataflow.
     pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<S>>,
     /// Indexes made available to the dataflow.
@@ -768,7 +780,7 @@ impl Default for ConnectorContext {
     }
 }
 
-impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
+impl<T> DataflowDescription<OptimizedMirRelationExpr, GlobalId, T> {
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -803,7 +815,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
             id,
             SourceInstanceDesc {
                 description,
-                storage_metadata: (),
+                storage_metadata: id,
                 arguments: SourceInstanceArguments { operators: None },
             },
         );
@@ -896,6 +908,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 impl<P, S, T> DataflowDescription<P, S, T>
 where
     P: CollectionPlan,
+    S: Arbitrary + Clone + 'static,
 {
     /// Identifiers of exported objects (indexes and sinks).
     pub fn export_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
@@ -978,7 +991,12 @@ where
     }
 }
 
-impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P, S, T> {
+impl<P, S, T> DataflowDescription<P, S, T>
+where
+    P: PartialEq,
+    S: Arbitrary + Clone + PartialEq + 'static,
+    T: timely::PartialOrder,
+{
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
     /// Compatible dataflows have equal exports, imports, and objects to build. The `as_of` of
@@ -997,6 +1015,45 @@ impl<P: PartialEq, S: PartialEq, T: timely::PartialOrder> DataflowDescription<P,
             false
         };
         equality && partial
+    }
+}
+
+impl<P, S, T> DataflowDescription<P, S, T>
+where
+    S: Arbitrary + Clone + 'static,
+{
+    /// Maps embedded storage metadata from one type to another.
+    pub fn map_storage_metadata<F, S2, E>(
+        self,
+        f: &mut F,
+    ) -> Result<DataflowDescription<P, S2, T>, E>
+    where
+        F: FnMut(S) -> Result<S2, E>,
+        S2: Arbitrary + Clone + 'static,
+    {
+        let DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            debug_name,
+            id,
+        } = self;
+        Ok(DataflowDescription {
+            source_imports: source_imports
+                .into_iter()
+                .map(|(key, val)| Ok((key, val.map_storage_metadata(f)?)))
+                .collect::<Result<BTreeMap<_, _>, _>>()?,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            debug_name,
+            id,
+        })
     }
 }
 
@@ -1119,6 +1176,7 @@ pub mod sources {
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
+    use crate::client::controller::storage::CollectionMetadata;
     use crate::postgres_source::PostgresSourceDetails;
     use crate::DataflowError;
 
@@ -1792,7 +1850,10 @@ pub mod sources {
     /// asserting that `SourceEnvelope` is `None` with `KeyEnvelope::None`.
     // TODO(guswynn): update this ^ when SimpleSource is gone.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-    pub enum SourceEnvelope {
+    pub enum SourceEnvelope<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         /// The most trivial version is `None`, which typically produces triples where the diff
         /// is `1`. However, some sources are able to produce values with more exotic diff's,
         /// such as the posgres source. Currently, this is the only variant usable with
@@ -1803,7 +1864,7 @@ pub mod sources {
         None(KeyEnvelope),
         /// `Debezium` avoids holding onto previously seen values by trusting the required
         /// `before` and `after` value fields coming from the upstream source.
-        Debezium(DebeziumEnvelope),
+        Debezium(DebeziumEnvelope<M>),
         /// `Upsert` holds onto previously seen values and produces `1` or `-1` diffs depending on
         /// whether or not the required _key_ outputed by the source has been seen before. This also
         /// supports a `Debezium` mode.
@@ -1816,7 +1877,7 @@ pub mod sources {
         DifferentialRow,
     }
 
-    impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
+    impl RustType<ProtoSourceEnvelope> for SourceEnvelope<CollectionMetadata> {
         fn into_proto(self: &Self) -> ProtoSourceEnvelope {
             use proto_source_envelope::Kind;
             ProtoSourceEnvelope {
@@ -1845,6 +1906,28 @@ pub mod sources {
         }
     }
 
+    impl<M> SourceEnvelope<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        /// Maps embedded storage metadata from one type to another.
+        pub fn map_storage_metadata<F, M2, E>(self, f: &mut F) -> Result<SourceEnvelope<M2>, E>
+        where
+            F: FnMut(M) -> Result<M2, E>,
+            M2: Arbitrary + Clone + 'static,
+        {
+            match self {
+                SourceEnvelope::None(e) => Ok(SourceEnvelope::None(e)),
+                SourceEnvelope::Debezium(e) => {
+                    Ok(SourceEnvelope::Debezium(e.map_storage_metadata(f)?))
+                }
+                SourceEnvelope::Upsert(e) => Ok(SourceEnvelope::Upsert(e)),
+                SourceEnvelope::CdcV2 => Ok(SourceEnvelope::CdcV2),
+                SourceEnvelope::DifferentialRow => Ok(SourceEnvelope::DifferentialRow),
+            }
+        }
+    }
+
     /// `UnplannedSourceEnvelope` is a `SourceEnvelope` missing some information. This information
     /// is obtained in `UnplannedSourceEnvelope::desc`, where
     /// `UnplannedSourceEnvelope::into_source_envelope`
@@ -1852,7 +1935,7 @@ pub mod sources {
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum UnplannedSourceEnvelope {
         None(KeyEnvelope),
-        Debezium(DebeziumEnvelope),
+        Debezium(DebeziumEnvelope<GlobalId>),
         Upsert(UpsertStyle),
         CdcV2,
         /// An envelope for sources that directly read differential Rows. This is internal and
@@ -1924,15 +2007,18 @@ pub mod sources {
     }
 
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-    pub struct DebeziumEnvelope {
+    pub struct DebeziumEnvelope<M = GlobalId>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         /// The column index containing the `before` row
         pub before_idx: usize,
         /// The column index containing the `after` row
         pub after_idx: usize,
-        pub mode: DebeziumMode,
+        pub mode: DebeziumMode<M>,
     }
 
-    impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
+    impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope<CollectionMetadata> {
         fn into_proto(self: &Self) -> ProtoDebeziumEnvelope {
             ProtoDebeziumEnvelope {
                 before_idx: self.before_idx.into_proto(),
@@ -1952,9 +2038,35 @@ pub mod sources {
         }
     }
 
+    impl<M> DebeziumEnvelope<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        /// Maps embedded storage metadata from one type to another.
+        pub fn map_storage_metadata<F, M2, E>(self, f: &mut F) -> Result<DebeziumEnvelope<M2>, E>
+        where
+            F: FnMut(M) -> Result<M2, E>,
+            M2: Arbitrary + Clone + 'static,
+        {
+            let DebeziumEnvelope {
+                before_idx,
+                after_idx,
+                mode,
+            } = self;
+            Ok(DebeziumEnvelope {
+                before_idx,
+                after_idx,
+                mode: mode.map_storage_metadata(f)?,
+            })
+        }
+    }
+
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-    pub struct DebeziumTransactionMetadata {
-        pub tx_metadata_global_id: GlobalId,
+    pub struct DebeziumTransactionMetadata<M = GlobalId>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        pub tx_metadata_storage_metadata: M,
         pub tx_status_idx: usize,
         pub tx_transaction_id_idx: usize,
         pub tx_data_collections_idx: usize,
@@ -1964,10 +2076,12 @@ pub mod sources {
         pub data_transaction_id_idx: usize,
     }
 
-    impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata {
+    impl RustType<ProtoDebeziumTransactionMetadata>
+        for DebeziumTransactionMetadata<CollectionMetadata>
+    {
         fn into_proto(self: &Self) -> ProtoDebeziumTransactionMetadata {
             ProtoDebeziumTransactionMetadata {
-                tx_metadata_global_id: Some(self.tx_metadata_global_id.into_proto()),
+                tx_metadata_storage_metadata: Some(self.tx_metadata_storage_metadata.into_proto()),
                 tx_status_idx: self.tx_status_idx.into_proto(),
                 tx_transaction_id_idx: self.tx_transaction_id_idx.into_proto(),
                 tx_data_collections_idx: self.tx_data_collections_idx.into_proto(),
@@ -1984,9 +2098,11 @@ pub mod sources {
 
         fn from_proto(proto: ProtoDebeziumTransactionMetadata) -> Result<Self, TryFromProtoError> {
             Ok(DebeziumTransactionMetadata {
-                tx_metadata_global_id: proto
-                    .tx_metadata_global_id
-                    .into_rust_if_some("ProtoDebeziumTransactionMetadata::tx_metadata_global_id")?,
+                tx_metadata_storage_metadata: proto
+                    .tx_metadata_storage_metadata
+                    .into_rust_if_some(
+                        "ProtoDebeziumTransactionMetadata::tx_metadata_storage_metadata",
+                    )?,
                 tx_status_idx: proto.tx_status_idx.into_rust()?,
                 tx_transaction_id_idx: proto.tx_transaction_id_idx.into_rust()?,
                 tx_data_collections_idx: proto.tx_data_collections_idx.into_rust()?,
@@ -1998,6 +2114,42 @@ pub mod sources {
                     .into_rust()?,
                 tx_data_collection_name: proto.tx_data_collection_name,
                 data_transaction_id_idx: proto.data_transaction_id_idx.into_rust()?,
+            })
+        }
+    }
+
+    impl<M> DebeziumTransactionMetadata<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        /// Maps embedded storage metadata from one type to another.
+        pub fn map_storage_metadata<F, M2, E>(
+            self,
+            f: &mut F,
+        ) -> Result<DebeziumTransactionMetadata<M2>, E>
+        where
+            F: FnMut(M) -> Result<M2, E>,
+            M2: Arbitrary + Clone + 'static,
+        {
+            let DebeziumTransactionMetadata {
+                tx_metadata_storage_metadata,
+                tx_status_idx,
+                tx_transaction_id_idx,
+                tx_data_collections_idx,
+                tx_data_collections_data_collection_idx,
+                tx_data_collections_event_count_idx,
+                tx_data_collection_name,
+                data_transaction_id_idx,
+            } = self;
+            Ok(DebeziumTransactionMetadata {
+                tx_metadata_storage_metadata: f(tx_metadata_storage_metadata)?,
+                tx_status_idx,
+                tx_transaction_id_idx,
+                tx_data_collections_idx,
+                tx_data_collections_data_collection_idx,
+                tx_data_collections_event_count_idx,
+                tx_data_collection_name,
+                data_transaction_id_idx,
             })
         }
     }
@@ -2031,32 +2183,38 @@ pub mod sources {
     /// not hold, in which case we are required to track individual messages, instead of just
     /// the highest-ever-seen message.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-    pub enum DebeziumMode {
+    pub enum DebeziumMode<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         /// Do not perform any deduplication
         None,
         /// We can trust high water mark
-        Ordered(DebeziumDedupProjection),
+        Ordered(DebeziumDedupProjection<M>),
         /// We need to store some piece of state for every message
-        Full(DebeziumDedupProjection),
+        Full(DebeziumDedupProjection<M>),
         FullInRange {
-            projection: DebeziumDedupProjection,
+            projection: DebeziumDedupProjection<M>,
             pad_start: Option<NaiveDateTime>,
             start: NaiveDateTime,
             end: NaiveDateTime,
         },
     }
 
-    impl Arbitrary for DebeziumMode {
+    impl<M> Arbitrary for DebeziumMode<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         type Strategy = BoxedStrategy<Self>;
         type Parameters = ();
 
         fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
             prop_oneof![
                 Just(DebeziumMode::None),
-                any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Ordered),
-                any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Full),
+                any::<DebeziumDedupProjection<M>>().prop_map(DebeziumMode::Ordered),
+                any::<DebeziumDedupProjection<M>>().prop_map(DebeziumMode::Full),
                 (
-                    any::<DebeziumDedupProjection>(),
+                    any::<DebeziumDedupProjection<M>>(),
                     any::<bool>(),
                     any_naive_datetime(),
                     any_naive_datetime(),
@@ -2081,7 +2239,7 @@ pub mod sources {
         }
     }
 
-    impl RustType<ProtoDebeziumMode> for DebeziumMode {
+    impl RustType<ProtoDebeziumMode> for DebeziumMode<CollectionMetadata> {
         fn into_proto(self: &Self) -> ProtoDebeziumMode {
             use proto_debezium_mode::{Kind, ProtoFullInRange};
             ProtoDebeziumMode {
@@ -2128,8 +2286,11 @@ pub mod sources {
         }
     }
 
-    impl DebeziumMode {
-        pub fn tx_metadata(&self) -> Option<&DebeziumTransactionMetadata> {
+    impl<M> DebeziumMode<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        pub fn tx_metadata(&self) -> Option<&DebeziumTransactionMetadata<M>> {
             match self {
                 DebeziumMode::Ordered(DebeziumDedupProjection { tx_metadata, .. })
                 | DebeziumMode::Full(DebeziumDedupProjection { tx_metadata, .. })
@@ -2142,8 +2303,40 @@ pub mod sources {
         }
     }
 
+    impl<M> DebeziumMode<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        /// Maps embedded storage metadata from one type to another.
+        pub fn map_storage_metadata<F, M2, E>(self, f: &mut F) -> Result<DebeziumMode<M2>, E>
+        where
+            F: FnMut(M) -> Result<M2, E>,
+            M2: Arbitrary + Clone + 'static,
+        {
+            match self {
+                DebeziumMode::None => Ok(DebeziumMode::None),
+                DebeziumMode::Ordered(e) => Ok(DebeziumMode::Ordered(e.map_storage_metadata(f)?)),
+                DebeziumMode::Full(e) => Ok(DebeziumMode::Full(e.map_storage_metadata(f)?)),
+                DebeziumMode::FullInRange {
+                    projection,
+                    pad_start,
+                    start,
+                    end,
+                } => Ok(DebeziumMode::FullInRange {
+                    projection: projection.map_storage_metadata(f)?,
+                    pad_start,
+                    start,
+                    end,
+                }),
+            }
+        }
+    }
+
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-    pub struct DebeziumDedupProjection {
+    pub struct DebeziumDedupProjection<M = GlobalId>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         /// The column index containing the debezium source metadata
         pub source_idx: usize,
         /// The record index of the `source.snapshot` field
@@ -2154,10 +2347,10 @@ pub mod sources {
         pub transaction_idx: usize,
         /// The record index of the `transaction.total_order` field
         pub total_order_idx: usize,
-        pub tx_metadata: Option<DebeziumTransactionMetadata>,
+        pub tx_metadata: Option<DebeziumTransactionMetadata<M>>,
     }
 
-    impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
+    impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection<CollectionMetadata> {
         fn into_proto(self: &Self) -> ProtoDebeziumDedupProjection {
             ProtoDebeziumDedupProjection {
                 source_idx: self.source_idx.into_proto(),
@@ -2179,6 +2372,37 @@ pub mod sources {
                 transaction_idx: proto.transaction_idx.into_rust()?,
                 total_order_idx: proto.total_order_idx.into_rust()?,
                 tx_metadata: proto.tx_metadata.into_rust()?,
+            })
+        }
+    }
+    impl<M> DebeziumDedupProjection<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        /// Maps embedded storage metadata from one type to another.
+        pub fn map_storage_metadata<F, M2, E>(
+            self,
+            f: &mut F,
+        ) -> Result<DebeziumDedupProjection<M2>, E>
+        where
+            F: FnMut(M) -> Result<M2, E>,
+            M2: Arbitrary + Clone + 'static,
+        {
+            let DebeziumDedupProjection {
+                source_idx,
+                snapshot_idx,
+                source_projection,
+                transaction_idx,
+                total_order_idx,
+                tx_metadata,
+            } = self;
+            Ok(DebeziumDedupProjection {
+                source_idx,
+                snapshot_idx,
+                source_projection,
+                transaction_idx,
+                total_order_idx,
+                tx_metadata: tx_metadata.map(|m| m.map_storage_metadata(f)).transpose()?,
             })
         }
     }
@@ -2296,7 +2520,7 @@ pub mod sources {
         ///
         /// Panics if the input envelope is `UnplannedSourceEnvelope::Upsert` and
         /// key is not passed as `Some`
-        fn into_source_envelope(self, key: Option<Vec<usize>>) -> SourceEnvelope {
+        fn into_source_envelope(self, key: Option<Vec<usize>>) -> SourceEnvelope<GlobalId> {
             match self {
                 UnplannedSourceEnvelope::Upsert(upsert_style) => {
                     SourceEnvelope::Upsert(UpsertEnvelope {
@@ -2320,7 +2544,7 @@ pub mod sources {
             key_desc: Option<RelationDesc>,
             value_desc: RelationDesc,
             metadata_desc: RelationDesc,
-        ) -> anyhow::Result<(SourceEnvelope, RelationDesc)> {
+        ) -> anyhow::Result<(SourceEnvelope<GlobalId>, RelationDesc)> {
             Ok(match &self {
                 UnplannedSourceEnvelope::None(key_envelope)
                 | UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope)) => {
@@ -2624,12 +2848,15 @@ pub mod sources {
     /// as well as related metadata about the columns, their types, and properties
     /// of the collection.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-    pub struct SourceDesc {
-        pub connector: SourceConnector,
+    pub struct SourceDesc<M = GlobalId>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        pub connector: SourceConnector<M>,
         pub desc: RelationDesc,
     }
 
-    impl RustType<ProtoSourceDesc> for SourceDesc {
+    impl RustType<ProtoSourceDesc> for SourceDesc<CollectionMetadata> {
         fn into_proto(self: &Self) -> ProtoSourceDesc {
             ProtoSourceDesc {
                 connector: Some(self.connector.into_proto()),
@@ -2647,16 +2874,37 @@ pub mod sources {
         }
     }
 
+    impl<M> SourceDesc<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        /// Maps embedded storage metadata from one type to another.
+        pub fn map_storage_metadata<F, M2, E>(self, f: &mut F) -> Result<SourceDesc<M2>, E>
+        where
+            F: FnMut(M) -> Result<M2, E>,
+            M2: Arbitrary + Clone + 'static,
+        {
+            let SourceDesc { connector, desc } = self;
+            Ok(SourceDesc {
+                connector: connector.map_storage_metadata(f)?,
+                desc,
+            })
+        }
+    }
+
     /// A `SourceConnector` describes how data is produced for a source, be
     /// it from a local table, or some upstream service. It is the first
     /// step of _rendering_ of a source, and describes only how to produce
     /// a stream of messages associated with MzOffset's.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-    pub enum SourceConnector {
+    pub enum SourceConnector<M = GlobalId>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         External {
             connector: ExternalSourceConnector,
             encoding: encoding::SourceDataEncoding,
-            envelope: SourceEnvelope,
+            envelope: SourceEnvelope<M>,
             metadata_columns: Vec<IncludedColumnSource>,
             ts_frequency: Duration,
             timeline: Timeline,
@@ -2666,7 +2914,10 @@ pub mod sources {
         Local { timeline: Timeline },
     }
 
-    impl Arbitrary for SourceConnector {
+    impl<M> Arbitrary for SourceConnector<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         type Strategy = BoxedStrategy<Self>;
         type Parameters = ();
 
@@ -2675,7 +2926,7 @@ pub mod sources {
                 (
                     any::<ExternalSourceConnector>(),
                     any::<encoding::SourceDataEncoding>(),
-                    any::<SourceEnvelope>(),
+                    any::<SourceEnvelope<M>>(),
                     any::<Vec<IncludedColumnSource>>(),
                     any_duration(),
                     any::<Timeline>(),
@@ -2705,7 +2956,7 @@ pub mod sources {
         }
     }
 
-    impl RustType<ProtoSourceConnector> for SourceConnector {
+    impl RustType<ProtoSourceConnector> for SourceConnector<CollectionMetadata> {
         fn into_proto(self: &Self) -> ProtoSourceConnector {
             use proto_source_connector::{Kind, ProtoExternal, ProtoLocal};
             ProtoSourceConnector {
@@ -2760,7 +3011,10 @@ pub mod sources {
         }
     }
 
-    impl SourceConnector {
+    impl<M> SourceConnector<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
         /// Returns `true` if this connector yields input data (including
         /// timestamps) that is stable across restarts. This is important for
         /// exactly-once Sinks that need to ensure that the same data is written,
@@ -2871,6 +3125,37 @@ pub mod sources {
             };
 
             Ok(result)
+        }
+    }
+
+    impl<M> SourceConnector<M>
+    where
+        M: Arbitrary + Clone + 'static,
+    {
+        /// Maps embedded storage metadata from one type to another.
+        pub fn map_storage_metadata<F, M2, E>(self, f: &mut F) -> Result<SourceConnector<M2>, E>
+        where
+            F: FnMut(M) -> Result<M2, E>,
+            M2: Arbitrary + Clone + 'static,
+        {
+            match self {
+                SourceConnector::Local { timeline } => Ok(SourceConnector::Local { timeline }),
+                SourceConnector::External {
+                    connector,
+                    encoding,
+                    envelope,
+                    metadata_columns,
+                    ts_frequency,
+                    timeline,
+                } => Ok(SourceConnector::External {
+                    connector,
+                    encoding,
+                    envelope: envelope.map_storage_metadata(f)?,
+                    metadata_columns,
+                    ts_frequency,
+                    timeline,
+                }),
+            }
         }
     }
 
