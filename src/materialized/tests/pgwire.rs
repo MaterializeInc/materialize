@@ -491,7 +491,6 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-#[ignore]
 // Materialize's differences from Postgres' responses.
 fn test_pgtest_mz() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();

@@ -103,7 +103,7 @@ struct PgConn {
     stream: TcpStream,
     recv_buf: BytesMut,
     send_buf: BytesMut,
-    _timeout: Duration,
+    timeout: Duration,
     verbose: bool,
 }
 
@@ -113,7 +113,7 @@ impl PgConn {
             stream: TcpStream::connect(addr)?,
             recv_buf: BytesMut::new(),
             send_buf: BytesMut::new(),
-            _timeout: timeout,
+            timeout,
             verbose,
         };
 
