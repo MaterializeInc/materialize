@@ -88,7 +88,10 @@ Adding replicas to clusters | See [Cluster replica scaling](/sql/create-cluster#
 ## Example
 
 ```sql
-CREATE CLUSTER c1 REPLICA r1 (SIZE = 'medium'), REPLICA r2 (SIZE = 'medium');
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE = 'medium'), r2 (SIZE = 'medium'));
+
+-- Create an empty cluster
+CREATE CLUSTER c1 REPLICAS ();
 ```
 
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html

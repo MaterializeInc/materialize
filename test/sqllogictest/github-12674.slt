@@ -15,10 +15,10 @@ CREATE SOURCE test_source FROM PUBNUB
   CHANNEL 'pubnub-market-orders'
 
 statement ok
-CREATE CLUSTER with_index REPLICA r (SIZE '1')
+CREATE CLUSTER with_index REPLICAS (r (SIZE '1'))
 
 statement ok
-CREATE CLUSTER without_index REPLICA r (SIZE '1')
+CREATE CLUSTER without_index REPLICAS (r (SIZE '1'))
 
 statement ok
 SET CLUSTER = with_index

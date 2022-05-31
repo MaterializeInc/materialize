@@ -907,8 +907,8 @@ pub enum ClusterOption<T: AstInfo> {
     IntrospectionGranularity(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
     IntrospectionDebugging(WithOptionValue<T>),
-    /// The `REPLICA` option.
-    Replica(ReplicaDefinition<T>),
+    /// The `REPLICAS` option.
+    Replicas(Vec<ReplicaDefinition<T>>),
 }
 
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
@@ -922,11 +922,9 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
                 f.write_str("INTROSPECTION DEBUGGING ");
                 f.write_node(debugging);
             }
-            ClusterOption::Replica(replica) => {
-                f.write_str("REPLICA ");
-                f.write_node(&replica.name);
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(&replica.options));
+            ClusterOption::Replicas(replicas) => {
+                f.write_str("REPLICAS (");
+                f.write_node(&display::comma_separated(&replicas));
                 f.write_str(")");
             }
         }
@@ -940,6 +938,18 @@ pub struct ReplicaDefinition<T: AstInfo> {
     /// The comma-separated options.
     pub options: Vec<ReplicaOption<T>>,
 }
+
+// Note that this display is meant for replicas defined inline when creating
+// clusters.
+impl<T: AstInfo> AstDisplay for ReplicaDefinition<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(")");
+    }
+}
+impl_display_t!(ReplicaDefinition);
 
 /// `CREATE CLUSTER REPLICA ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

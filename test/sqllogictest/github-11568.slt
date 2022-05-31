@@ -12,7 +12,7 @@
 mode cockroach
 
 statement ok
-create cluster c replica r1 (remote ('1.0:1234'))
+create cluster c replicas (r1 (remote ('1.0:1234')))
 
 statement ok
 set cluster = c
