@@ -1415,7 +1415,7 @@ fn plan_view_select(
     // don't need to clone the Select.
 
     // Extract hints about group size if there are any
-    let mut options = crate::normalize::options(&s.options);
+    let mut options = crate::normalize::options(&s.options)?;
 
     let option = options.remove("expected_group_size");
 
