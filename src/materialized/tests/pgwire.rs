@@ -13,6 +13,7 @@ use std::error::Error;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::thread;
 use std::time::Duration;
 
 use bytes::BytesMut;
@@ -486,6 +487,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
+    thread::sleep(Duration::from_secs(85));
     pg_test_inner(dir)
 }
 
