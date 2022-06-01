@@ -20,6 +20,7 @@ use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tracing::trace;
+use tracing::warn;
 
 use mz_dataflow_types::{
     client::controller::storage::CollectionMetadata, sources::SourceData, DataflowError,
