@@ -71,7 +71,7 @@ pub struct Args {
     record_size_bytes: usize,
 
     /// Batch size in number of records (if applicable).
-    #[clap(long, env = "", value_name = "R", default_value_t = 10)]
+    #[clap(long, env = "", value_name = "R", default_value_t = 100)]
     batch_size: usize,
 
     /// Duration in seconds between subsequent informational log outputs.
@@ -126,8 +126,8 @@ where
     let data_generator =
         DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
 
-    let benchmark_description = format!("num-readers={} num-writers={} runtime-seconds={} records-per-second={} record-size-bytes={} batch-size={}",
-                                        args.num_readers, args.num_writers, args.runtime_seconds, args.records_per_second,
+    let benchmark_description = format!("num-readers={} num-writers={} runtime-seconds={} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
+                                        args.num_readers, args.num_writers, args.runtime_seconds, num_records_total, args.records_per_second,
                                         args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
@@ -173,50 +173,50 @@ where
                 // as a relative duration from start.
                 let mut prev_log = Duration::from_millis(0);
                 loop {
+                    // Data generation can be CPU expensive, so generate it
+                    // in a spawn_blocking to play nicely with the rest of
+                    // the async code.
+                    let mut data_generator = data_generator.clone();
+                    let batch = mz_ore::task::spawn_blocking(
+                        || "data_generator-batch",
+                        move || data_generator.gen_batch(usize::cast_from(batch_idx)),
+                    )
+                    .await
+                    .expect("task failed");
+                    trace!("data generator {} made a batch", idx);
+
+                    // Intentionally return before the sleep if we got a None
+                    // batch (indicating that we're done).
+                    let batch = match batch {
+                        Some(x) => x,
+                        None => {
+                            let records_sent = usize::cast_from(batch_idx) * args.batch_size;
+                            let finished = format!(
+                                "Data generator {} finished after {} ms and sent {} records",
+                                idx,
+                                start.elapsed().as_millis(),
+                                records_sent
+                            );
+                            return Ok(finished);
+                        }
+                    };
+                    batch_idx += 1;
+
                     // Sleep so this doesn't busy wait if it's ahead of
                     // schedule.
                     let elapsed = start.elapsed();
-                    let next_batch_time = time_per_batch * (batch_idx + 1);
-                    let sleep = next_batch_time.saturating_sub(start.elapsed());
+                    let next_batch_time = time_per_batch * (batch_idx);
+                    let sleep = next_batch_time.saturating_sub(elapsed);
                     if sleep > Duration::ZERO {
                         trace!("Data generator ahead of schedule, sleeping for {:?}", sleep);
                         tokio::time::sleep(sleep).await;
                     }
 
-                    // Write down any batches we were supposed to have already sent
-                    // according to the desired batch writing rate.
-                    while start.elapsed() > time_per_batch * batch_idx {
-                        // Data generation can be CPU expensive, so generate it
-                        // in a spawn_blocking to play nicely with the rest of
-                        // the async code.
-                        let mut data_generator = data_generator.clone();
-                        let batch = mz_ore::task::spawn_blocking(
-                            || "data_generator-batch",
-                            move || data_generator.gen_batch(usize::cast_from(batch_idx)),
-                        )
-                        .await
-                        .expect("task failed");
-                        batch_idx += 1;
-
-                        let batch = match batch {
-                            Some(batch) => batch,
-                            None => {
-                                let records_sent = usize::cast_from(batch_idx) * args.batch_size;
-                                let finished =
-                                    format!(
-                                    "Data generator {} finished after {} ms and sent {} records",
-                                    idx, start.elapsed().as_millis(), records_sent
-                                );
-                                return Ok(finished);
-                            }
-                        };
-                        trace!("data generator {} wrote a batch", idx);
-
-                        // send will only error if the matching receiver has been dropped.
-                        if let Err(SendError(_)) = tx.send(batch) {
-                            bail!("receiver unexpectedly dropped");
-                        }
+                    // send will only error if the matching receiver has been dropped.
+                    if let Err(SendError(_)) = tx.send(batch) {
+                        bail!("receiver unexpectedly dropped");
                     }
+                    trace!("data generator {} wrote a batch", idx);
 
                     if elapsed - prev_log > logging_granularity {
                         let records_sent = usize::cast_from(batch_idx) * args.batch_size;
