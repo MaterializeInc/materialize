@@ -516,6 +516,7 @@ class ResolvedImage:
             *(f"--build-arg={k}={v}" for k, v in build_args.items()),
             "-t",
             self.spec(),
+            f"--platform=linux/{self.image.rd.arch.go_str()}",
             str(self.image.path),
         ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
@@ -790,6 +791,13 @@ class Repository:
             help="whether to enable code coverage compilation flags",
             action="store_true",
         )
+        parser.add_argument(
+            "--arch",
+            default=Arch.X86_64,
+            help="the CPU architecture to build for",
+            type=Arch,
+            choices=Arch,
+        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -798,7 +806,9 @@ class Repository:
         The provided namespace must contain the options installed by
         `Repository.install_arguments`.
         """
-        return cls(root, release_mode=args.release, coverage=args.coverage)
+        return cls(
+            root, release_mode=args.release, coverage=args.coverage, arch=args.arch
+        )
 
     @property
     def root(self) -> Path:
