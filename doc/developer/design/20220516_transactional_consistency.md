@@ -53,10 +53,10 @@ We can then use these timestamp to form a total order constrained by real time:
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 < the timestamp of T2.
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is write-only, and
   T2 is read-only.
-- Transaction T1 can be arbitrarily ordered with Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is
-  read-only, and T2 is read-only.
-- Transaction T1 can be arbitrarily ordered with Transaction T2 if the timestamp of T1 == the timestamp of T2, T1 is
-  write-only, and T2 is write-only.
+- Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, the timestamp for T1
+  was assigned before the timestamp of T2, T1 is read-only, and T2 is read-only.
+- Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, the Global ID of T1 is
+  less than the Global ID of T2, T1 is write-only, and T2 is write-only.
 
 ### Global Timestamp
 
