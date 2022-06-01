@@ -26,7 +26,7 @@ use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
@@ -210,18 +210,29 @@ impl BlobMulti for S3BlobMulti {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
-        let object = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(&path)
-            .part_number(1)
-            .send()
-            .await;
-        let first_part = match object {
-            Ok(object) => object,
-            Err(SdkError::ServiceError { err, .. }) if err.is_no_such_key() => return Ok(None),
-            Err(err) => return Err(ExternalError::from(anyhow!("s3 get meta err: {}", err))),
+        use mz_ore::retry::Retry;
+        let first_part = Retry::default().retry_async(|r| async {
+            warn!("Retry {}", r.i);
+            let object = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&path)
+                .part_number(1)
+                .send()
+                .await;
+            match object {
+                Ok(object) => Ok(Some(object)),
+                Err(SdkError::ServiceError { err, .. }) if err.is_no_such_key() => Ok(None),
+                Err(err) => return Err(ExternalError::from(anyhow!("s3 get meta err: {}", err))),
+            }
+        }
+        ).await?;
+        let first_part = if let Some(first_part) = first_part {
+            first_part
+        }
+        else {
+                    return Ok(None);
         };
         let num_parts = if first_part.parts_count() == 0 {
             // For a non-multipart upload, parts_count will be 0. The rest of
