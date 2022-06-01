@@ -125,6 +125,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
     mz_ore::tracing::configure("storaged", &args.tracing).await?;
 
+    let mut _pid_file = None;
+    if let Some(pid_file_location) = &args.pid_file_location {
+        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
+    }
+
     if args.workers == 0 {
         bail!("--workers must be greater than 0");
     }
@@ -176,11 +181,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
     let (server, client) = mz_storage::serve(config)?;
     let client: Box<dyn StorageClient> = Box::new(client);
-
-    let mut _pid_file = None;
-    if let Some(pid_file_location) = &args.pid_file_location {
-        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
-    }
 
     serve(serve_config, server, client).await
 }

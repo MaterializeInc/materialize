@@ -148,6 +148,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
     mz_ore::tracing::configure("computed", &args.tracing).await?;
 
+    let mut _pid_file = None;
+    if let Some(pid_file_location) = &args.pid_file_location {
+        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
+    }
+
     if args.workers == 0 {
         bail!("--workers must be greater than 0");
     }
@@ -191,11 +196,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut client: Box<dyn ComputeClient> = Box::new(client);
     if args.reconcile {
         client = Box::new(ComputeCommandReconcile::new(client))
-    }
-
-    let mut _pid_file = None;
-    if let Some(pid_file_location) = &args.pid_file_location {
-        _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
     }
 
     serve(serve_config, client).await
