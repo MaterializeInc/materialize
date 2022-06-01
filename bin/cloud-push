@@ -28,4 +28,4 @@ for image in materialized-slim storaged computed; do
     docker push "$username/$image"
 done
 
-echo "Launch environment with materialized image ref \`$username/$image:latest\`"
+echo "Launch environment with materialized image ref \`$username/materialized-slim:latest\`"
