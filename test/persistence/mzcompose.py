@@ -10,7 +10,7 @@
 import os
 import time
 from argparse import Namespace
-from typing import List, Union
+from typing import Union
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (

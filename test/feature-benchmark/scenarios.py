@@ -13,7 +13,7 @@ from typing import List
 
 from parameterized import parameterized_class  # type: ignore
 
-from materialize.feature_benchmark.action import Action, Kgen, LambdaAction, TdAction
+from materialize.feature_benchmark.action import Action, Kgen, TdAction
 from materialize.feature_benchmark.measurement_source import (
     Lambda,
     MeasurementSource,
