@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crossbeam_channel::TryRecvError;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -25,7 +26,7 @@ use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, Sourc
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
 use mz_persist_client::{write::WriteHandle, PersistLocation};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Row, Timestamp};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -33,6 +34,21 @@ use crate::source::metrics::SourceBaseMetrics;
 /// How frequently each dataflow worker sends timestamp binding updates
 /// back to the coordinator.
 const TS_BINDING_FEEDBACK_INTERVAL: Duration = Duration::from_millis(1_000);
+
+/// State maintained for each worker thread.
+///
+/// Much of this state can be viewed as local variables for the worker thread,
+/// holding state that persists across function calls.
+pub struct Worker<'w, A: Allocate> {
+    /// The underlying Timely worker.
+    pub timely_worker: &'w mut TimelyWorker<A>,
+    /// The channel from which commands are drawn.
+    pub command_rx: crossbeam_channel::Receiver<StorageCommand>,
+    /// The channel over which storage responses are reported.
+    pub response_tx: mpsc::UnboundedSender<StorageResponse>,
+    /// The state associated with collection ingress and egress.
+    pub storage_state: StorageState,
+}
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
@@ -75,17 +91,38 @@ pub struct StorageState {
     pub connector_context: ConnectorContext,
 }
 
-/// A wrapper around [StorageState] with a live timely worker and response channel.
-pub struct ActiveStorageState<'a, A: Allocate> {
-    /// The underlying Timely worker.
-    pub timely_worker: &'a mut TimelyWorker<A>,
-    /// The storage state itself.
-    pub storage_state: &'a mut StorageState,
-    /// The channel over which frontier information is reported.
-    pub response_tx: &'a mut mpsc::UnboundedSender<StorageResponse>,
-}
+impl<'w, A: Allocate> Worker<'w, A> {
+    /// Draws from `dataflow_command_receiver` until shutdown.
+    pub fn run(&mut self) {
+        let mut shutdown = false;
+        while !shutdown {
+            // Ask Timely to execute a unit of work. If Timely decides there's
+            // nothing to do, it will park the thread. We rely on another thread
+            // unparking us when there's new work to be done, e.g., when sending
+            // a command or when new Kafka messages have arrived.
+            self.timely_worker.step_or_park(None);
 
-impl<'a, A: Allocate> ActiveStorageState<'a, A> {
+            self.report_frontier_progress();
+
+            // Handle any received commands.
+            let mut cmds = vec![];
+            let mut empty = false;
+            while !empty {
+                match self.command_rx.try_recv() {
+                    Ok(cmd) => cmds.push(cmd),
+                    Err(TryRecvError::Empty) => empty = true,
+                    Err(TryRecvError::Disconnected) => {
+                        empty = true;
+                        shutdown = true;
+                    }
+                }
+            }
+            for cmd in cmds {
+                self.handle_storage_command(cmd);
+            }
+        }
+    }
+
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
@@ -130,8 +167,8 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                             );
 
                             crate::render::build_storage_dataflow(
-                                self.timely_worker,
-                                self.storage_state,
+                                &mut self.timely_worker,
+                                &mut self.storage_state,
                                 &source.id.to_string(),
                                 source.clone(),
                             );
