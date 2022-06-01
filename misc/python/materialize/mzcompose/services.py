@@ -142,8 +142,6 @@ class Materialized(Service):
             }
         )
 
-        print(config)
-
         super().__init__(name=name, config=config)
 
 
