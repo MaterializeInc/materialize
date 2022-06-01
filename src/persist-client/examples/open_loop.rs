@@ -14,6 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use mz_ore::metrics::MetricsRegistry;
+use mz_persist_client::cache::PersistClientCache;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
 use tokio::task::JoinHandle;
@@ -90,7 +92,9 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
     };
-    let persist = location.open().await?;
+    let persist = PersistClientCache::new(&MetricsRegistry::new())
+        .open(location)
+        .await?;
 
     let shard_id = match args.shard_id.clone() {
         Some(shard_id) => ShardId::from_str(&shard_id).map_err(anyhow::Error::msg)?,

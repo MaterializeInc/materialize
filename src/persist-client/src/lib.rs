@@ -23,6 +23,7 @@ use std::sync::Arc;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
@@ -32,11 +33,13 @@ use timely::progress::Timestamp;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
+use crate::cache::PersistClientCache;
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
 
+pub mod cache;
 pub mod error;
 pub mod read;
 pub mod write;
@@ -64,15 +67,12 @@ pub struct PersistLocation {
 }
 
 impl PersistLocation {
-    /// Returns a new client for interfacing with persist shards made durable to
-    /// the given `location`.
-    ///
-    /// The same `location` may be used concurrently from multiple processes.
-    /// Concurrent usage is subject to the constraints documented on individual
-    /// methods (mostly [WriteHandle::append]).
+    /// TODO: Plumb [PersistClientCache] to the necessary places and remove
+    /// this.
     pub async fn open(&self) -> Result<PersistClient, ExternalError> {
-        let (blob, consensus) = self.open_locations().await?;
-        PersistClient::new(blob, consensus).await
+        PersistClientCache::new(&MetricsRegistry::new())
+            .open(self.clone())
+            .await
     }
 
     /// Opens the associated implementations of [BlobMulti] and [Consensus].
@@ -187,7 +187,7 @@ impl PersistClient {
     /// the given [BlobMulti] and [Consensus].
     ///
     /// This is exposed mostly for testing. Persist users likely want
-    /// [PersistLocation::open].
+    /// [PersistClientCache::open].
     pub async fn new(
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
@@ -313,7 +313,6 @@ mod tests {
     use std::task::Context;
 
     use futures_task::noop_waker;
-    use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
     use mz_persist::workload::DataGenerator;
     use timely::progress::Antichain;
     use timely::PartialOrder;
@@ -325,9 +324,11 @@ mod tests {
     use super::*;
 
     pub async fn new_test_client() -> PersistClient {
-        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
-        let consensus = Arc::new(MemConsensus::default());
-        PersistClient::new(blob, consensus)
+        PersistClientCache::new_no_metrics()
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
             .await
             .expect("client construction failed")
     }
