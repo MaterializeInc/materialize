@@ -8,7 +8,7 @@ menu:
 
 `CREATE MATERIALIZED VIEW` creates a materialized view, which lets you retrieve
 incrementally updated results of a `SELECT` query very quickly. Despite the
-simplicity of creating a materialize view, it's Materialize's most powerful
+simplicity of creating a materialized view, it's Materialize's most powerful
 feature.
 
 ## Conceptual framework
