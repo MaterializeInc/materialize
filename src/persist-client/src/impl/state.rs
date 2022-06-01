@@ -656,4 +656,119 @@ mod tests {
         // Can insert an empty batch with an upper equal to lower.
         assert_eq!(state.compare_and_append(&[], &desc(5, 5)), Continue(()));
     }
+
+    #[test]
+    fn snapshot() {
+        mz_ore::test::init_logging();
+
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+        // Cannot take a snapshot with as_of == shard upper.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(0)),
+            Ok(Err(Upper(Antichain::from_elem(0))))
+        );
+
+        // Cannot take a snapshot with as_of > shard upper.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(5)),
+            Ok(Err(Upper(Antichain::from_elem(0))))
+        );
+
+        // Advance upper to 5.
+        assert_eq!(
+            state
+                .collections
+                .compare_and_append(&["key1".to_owned()], &desc(0, 5)),
+            Continue(())
+        );
+
+        // Can take a snapshot with as_of < upper.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(0)),
+            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+        );
+
+        // Can take a snapshot with as_of >= shard since, as long as as_of < shard_upper.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(4)),
+            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+        );
+
+        // Cannot take a snapshot with as_of >= upper.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(5)),
+            Ok(Err(Upper(Antichain::from_elem(5))))
+        );
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(6)),
+            Ok(Err(Upper(Antichain::from_elem(5))))
+        );
+
+        let reader = ReaderId::new();
+        // Advance the since to 2.
+        let _ = state.collections.register(SeqNo::minimum(), &reader);
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader, &Antichain::from_elem(2)),
+            Continue(Since(Antichain::from_elem(2)))
+        );
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+        // Cannot take a snapshot with as_of < shard_since.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(1)),
+            Err(Since(Antichain::from_elem(2)))
+        );
+
+        // Advance the upper to 10 via an empty batch.
+        assert_eq!(
+            state.collections.compare_and_append(&[], &desc(5, 10)),
+            Continue(())
+        );
+
+        // Can still take snapshots at times < upper, but the empty batch is missing
+        // because of a performance optimization.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(7)),
+            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+        );
+
+        // Cannot take snapshots with as_of >= upper.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(10)),
+            Ok(Err(Upper(Antichain::from_elem(10))))
+        );
+
+        // Advance upper to 15.
+        assert_eq!(
+            state
+                .collections
+                .compare_and_append(&["key2".to_owned()], &desc(10, 15)),
+            Continue(())
+        );
+
+        // Filter out batches whose lowers are less than the requested as of (the
+        // batches that are too far in the future for the requested as_of).
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(9)),
+            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+        );
+
+        // Don't filter out batches whose lowers are <= the requested as_of.
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(10)),
+            Ok(Ok(vec![
+                ("key1".to_owned(), desc(0, 5)),
+                ("key2".to_owned(), desc(10, 15))
+            ]))
+        );
+
+        assert_eq!(
+            state.snapshot(&Antichain::from_elem(11)),
+            Ok(Ok(vec![
+                ("key1".to_owned(), desc(0, 5)),
+                ("key2".to_owned(), desc(10, 15))
+            ]))
+        );
+    }
 }
