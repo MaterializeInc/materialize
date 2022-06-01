@@ -323,7 +323,7 @@ pub fn plan_create_source(
     let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     let with_options_original = with_options;
-    let mut with_options = normalize::options(with_options_original);
+    let mut with_options = normalize::options(with_options_original)?;
     let mut with_option_objects = normalize::option_objects(with_options_original);
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
@@ -1246,7 +1246,7 @@ fn get_encoding_inner(
                         },
                 } => {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options), url),
+                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options)?, url),
                         CsrConnector::Reference {
                             url, with_options, ..
                         } => {
@@ -1266,7 +1266,7 @@ fn get_encoding_inner(
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options)?)?,
                         &mut ccsr_with_options,
                     )?;
                     normalize::ensure_empty_options(
@@ -1320,7 +1320,7 @@ fn get_encoding_inner(
                     seed
                 {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options), url),
+                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options)?, url),
                         CsrConnector::Reference {
                             url, with_options, ..
                         } => {
@@ -1340,7 +1340,7 @@ fn get_encoding_inner(
                     // We validate here instead of in purification, to match the behavior of avro
                     let _ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options))?,
+                        &kafka_util::extract_config(&mut normalize::options(with_options)?)?,
                         &mut ccsr_with_options,
                     )?;
                     normalize::ensure_empty_options(
@@ -1858,7 +1858,7 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            let mut ccsr_with_options = normalize::options(&with_options);
+            let mut ccsr_with_options = normalize::options(&with_options)?;
 
             let schema_registry_url = url.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -2036,7 +2036,7 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = uri.parse::<Url>()?;
-                let mut ccsr_with_options = normalize::options(&with_options);
+                let mut ccsr_with_options = normalize::options(&with_options)?;
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     config_options,
@@ -2187,7 +2187,7 @@ pub fn plan_create_sink(
         scx.catalog.config().nonce
     );
 
-    let mut with_options = normalize::options(&with_options);
+    let mut with_options = normalize::options(&with_options)?;
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connector {
@@ -2912,7 +2912,7 @@ pub fn plan_create_connector(
             broker,
             with_options,
         } => {
-            let mut with_options = normalize::options(&with_options);
+            let mut with_options = normalize::options(&with_options)?;
             ConnectorInner::Kafka {
                 broker: broker.parse()?,
                 config_options: kafka_util::extract_config(&mut with_options)?,
@@ -2922,7 +2922,7 @@ pub fn plan_create_connector(
             registry,
             with_options,
         } => {
-            let with_options = normalize::options(&with_options);
+            let with_options = normalize::options(&with_options)?;
             ConnectorInner::CSR {
                 registry,
                 with_options: with_options

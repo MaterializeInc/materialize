@@ -1827,6 +1827,9 @@ pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
     ObjectName(UnresolvedObjectName),
     DataType(T::DataType),
+    // Temporary variant until we have support for connectors, which will use
+    // explicit fields for each secret reference.
+    Secret(T::ObjectName),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
@@ -1835,6 +1838,10 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             WithOptionValue::Value(value) => f.write_node(value),
             WithOptionValue::ObjectName(name) => f.write_node(name),
             WithOptionValue::DataType(typ) => f.write_node(typ),
+            WithOptionValue::Secret(name) => {
+                f.write_str("SECRET ");
+                f.write_node(name)
+            }
         }
     }
 }

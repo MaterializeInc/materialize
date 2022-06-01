@@ -109,33 +109,31 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
 
 /// Normalizes a list of `WITH` options.
 ///
-/// # Panics
+/// # Errors
 /// - If any `WithOption`'s `value` is `None`. You can prevent generating these
 ///   values during parsing.
-pub fn options<T: AstInfo>(options: &[WithOption<T>]) -> BTreeMap<String, Value> {
-    options
-        .iter()
-        .map(|o| {
-            (
-                o.key.to_string(),
-                match o
-                    .value
-                    .as_ref()
-                    // The only places that generate options that do not require
-                    // keys and values do not currently use this code path.
-                    .expect("check that all entries have values before calling `options`")
-                {
-                    WithOptionValue::Value(value) => value.clone(),
-                    WithOptionValue::ObjectName(object_name) => {
-                        Value::String(object_name.to_ast_string())
-                    }
-                    WithOptionValue::DataType(data_type) => {
-                        Value::String(data_type.to_ast_string())
-                    }
-                },
-            )
-        })
-        .collect()
+/// - If any `WithOption` has a value of type `WithOptionValue::Secret`.
+pub fn options<T: AstInfo>(
+    options: &[WithOption<T>],
+) -> Result<BTreeMap<String, Value>, anyhow::Error> {
+    let mut out = BTreeMap::new();
+    for option in options {
+        let value = match &option.value {
+            Some(WithOptionValue::Value(value)) => value.clone(),
+            Some(WithOptionValue::ObjectName(object_name)) => {
+                Value::String(object_name.to_ast_string())
+            }
+            Some(WithOptionValue::DataType(data_type)) => Value::String(data_type.to_ast_string()),
+            Some(WithOptionValue::Secret(_)) => {
+                bail!("secret references not yet supported");
+            }
+            None => {
+                bail!("option {} requires a value", option.key);
+            }
+        };
+        out.insert(option.key.to_string(), value);
+    }
+    Ok(out)
 }
 
 /// Normalizes `WITH` option keys without normalizing their corresponding

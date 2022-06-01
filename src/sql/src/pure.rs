@@ -65,7 +65,7 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
-    let mut with_options_map = normalize::options(with_options);
+    let mut with_options_map = normalize::options(with_options)?;
     let mut config_options = BTreeMap::new();
 
     match connector {
@@ -352,11 +352,11 @@ async fn purify_csr_connector_proto(
                     .expect("CSR Connector must specify Registry URL"),
             }
             .parse()?;
-            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
+            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options)?)?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
                 &kafka_options,
-                &mut normalize::options(&ccsr_options),
+                &mut normalize::options(&ccsr_options)?,
             )?;
 
             let value =
@@ -414,7 +414,7 @@ async fn purify_csr_connector_avro(
             kafka_util::generate_ccsr_client_config(
                 url,
                 &connector_options,
-                &mut normalize::options(ccsr_options),
+                &mut normalize::options(ccsr_options)?,
             )
         })?;
 

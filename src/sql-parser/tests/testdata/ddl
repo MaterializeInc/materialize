@@ -487,6 +487,44 @@ CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([Number("2"), Number("40000000")]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SEKRET)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = sekret)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(ObjectName(UnresolvedObjectName([Ident("sekret")]))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(ObjectName(UnresolvedObjectName([Ident("secret")]))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement roundtrip
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
+
+parse-statement roundtrip
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
 CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
 ----
 CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'

@@ -3008,7 +3008,20 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
-        if let Some(value) = self.maybe_parse(Parser::parse_value) {
+        if self.parse_keyword(SECRET) {
+            // HACK(benesch): temporarily allow secret references of the form
+            // `KEY = SECRET db.schema.item`. `KEY = SECRET` is still allowed
+            // for backwards copmatibility and parses as the ident `secret`.
+            // Once we have connectors with explicit fields for secret
+            // references, we can remove this hack.
+            if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
+                Ok(WithOptionValue::Secret(secret))
+            } else {
+                Ok(WithOptionValue::ObjectName(UnresolvedObjectName(vec![
+                    Ident::new("secret"),
+                ])))
+            }
+        } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
         } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
             Ok(WithOptionValue::ObjectName(object_name))
