@@ -58,6 +58,21 @@ We can then use these timestamp to form a total order constrained by real time:
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, the Global ID of T1 is
   less than the Global ID of T2, T1 is write-only, and T2 is write-only.
 
+### Timelines
+
+Timelines are the unit of consistency that Materialize provides and can be read about in detail in the
+[Timeline design doc](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210408_timelines.md)
+. Every database object belongs to a single timeline and each read transaction can only include objects from a single
+timeline. Each timeline defines their own notion of time and consistency guarantees are only provided within a single
+timeline. There can only be at most a single Coordinator thread assigning timestamps per timeline (though multiple
+timelines can share a thread if they want). All the properties discussed below need to happen on a per-timeline basis,
+and require no communication across timelines (except maybe to serialize access to the catalog).
+
+Currently, The most common timeline is the `EpochMillisecond` timeline, which uses the system clock to track real time.
+This document will mention that one specifically to provide examples occasionally.
+
+The document also allows user tables to exist in any timeline.
+
 ### Global Timestamp
 
 All reads to any object and all writes to user tables are assigned a timestamp by the Coordinator on a single thread.
@@ -69,18 +84,23 @@ The logic for determining what timestamp to return must satisfy:
     - If the query is a write and the most recently completed query was a read, then the timestamp returned must be
       strictly larger than the previous timestamp.
 
-We can accomplish this by using a single global timestamp per timeline. We do not allow reads across timelines and
-therefore provide no consistency guarantees across timelines. For the `EpochMilliseconds` timeline, which is used for
-user tables and most sources, the global timestamp will be initialized to the current system time and be advanced
-periodically to the current value of a monotonically increasing system clock. All other global timestamps will be
-initialized to the timeline's minimum value and be periodically advanced in the following
+We can accomplish this by using a single global timestamp per timeline. The timestamp will be initialized to some valid
+initial value and be advanced periodically to some valid value that is higher than the previous value. The periodic
+advancements should maintain the property that the global timestamp is within some error bound of all the timestamps
+being assigned to data from upstream sources. All reads are given a timestamp equal to the global timestamp. All writes
+to user tables are given a timestamp larger than the global timestamp, and when the write completes then the timestamp
+should be advanced to the timestamp of that write.
+
+As an example, the `EpochMilliseconds` timeline's timestamp can be initialized to the current system time and be
+advanced periodically to the current value of a monotonically increasing system clock. All other global timestamps can
+be initialized to the timeline's minimum value and can be periodically advanced in the following
 way: `global_timestamp = max(min(uppers) - 1, global_timestamp)`, where `uppers` is the list of all `upper`s in the
-timeline.
+timeline. These are just potential implementations and not the only correct implementations.
 
 If some operation is given timestamp `ts`, then once that operation completes the global timestamp must be larger than
 or equal to `ts`. How this specific property is achieved for reads is described
-in [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp) and how it's achieved for writes is
-described in [Group Commit/Write Coalesce](#Group Commit/Write Coalesce).
+in [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp) and how it's achieved for writes to
+user tables is described in [Group Commit/Write Coalesce](#Group Commit/Write Coalesce).
 
 The properties described in this section are sufficient to ensure Strict Serializability across one start of
 Materialize (i.e. not between restarts).
@@ -111,15 +131,12 @@ Strict Serializability across restarts.
 
 ### Group Commit/Write Coalesce
 
-NOTE: This section refers only to user tables and the `EpochMillis` timeline. We do not dicuss any consistency
-guarantees with respect to writes from upstream sources in this document.
-
 Write read cycles (write followed by read followed by write followed by read etc) and consecutive writes can cause the
 global timestamp to increase in an unbounded fashion.
 
-Proposal: All writes across all sessions should be blocked and added to a queue. At the end of X millisecond all pending
-writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits are all assigned the
-current global write timestamp.
+Proposal: All writes across all sessions per timeline should be blocked and added to a queue. At the end of X
+millisecond all pending writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits
+are all assigned the current global write timestamp.
 
 NOTE: The `TimestampOracle` provides us the property that the global write timestamp will be higher than all previous
 reads.
@@ -139,16 +156,20 @@ NOTE: This would also fix the problem discussed in [#12198](https://github.com/M
 Proposal: Explicitly hold read capabilities for the global timestamp for all sources. All reads are assigned a timestamp
 equal to the global timestamp.
 
-Periodically the Coordinator will need to update the read capabilities to the current global timestamp. As the interval
-between read capability updates increase, the memory usage of each node goes up and the communication between each node
-goes down, and vice versa.
-
 This approach guarantees that when a read completes, the global timestamp is equal to or larger than the timestamp of
 that read.
 
 We can still allow non-strict serializable reads to exist at the same time. The timestamps of these reads will not be
 constrained to the global timestamp and will be selected using the old method of timestamp selection. This will allow
 clients to trade off consistency for recency and performance on a per-query basis.
+
+Periodically the Coordinator will want to update the read capabilities to allow compaction to happen. There are multiple
+dimensions to these update with their own tradeoffs:
+
+- As the interval between updates increase, the memory usage of each node goes up and the communication between each
+  node goes down, and vice versa.
+- A higher value chosen for the new read capability will decrease the amount of memory used, but potentially increase
+  the latency of lower consistency reads, and vice versa.
 
 ### Upstream Source Acknowledgements
 
@@ -180,7 +201,6 @@ they are guaranteed to also be able to see the transaction in Materialize. Howev
 transaction in Materialize before their transaction commits in the upstream source. This is still a powerful and useful
 guarantee to provide. Therefore, we should break the second bullet point into the two properties described above and
 indicate that we only plan to support the first property.
-> Any write from an upstream source that has been acknowledged by Materialize will be visible in all future queries.
 
 Proposal: When STORAGE wants to acknowledge some data that has a timestamp `ts`, it must wait until it knows that the
 global timestamp is larger than or equal to `ts`. STORAGE can discover this by one of the following ways (NOTE: these
