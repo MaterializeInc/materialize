@@ -33,7 +33,7 @@ use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
-use mz_dataflow_types::client::RemoteClient;
+use mz_dataflow_types::client::StoragedRemoteClient;
 use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
@@ -390,7 +390,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     // Initialize dataflow controller.
     let storage_client = Box::new({
         let mut client =
-            RemoteClient::new(&[storage_service.addresses("controller").into_element()]);
+            StoragedRemoteClient::new(&[storage_service.addresses("controller").into_element()]);
         client.connect().await;
         client
     });

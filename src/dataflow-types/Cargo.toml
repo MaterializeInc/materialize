@@ -22,6 +22,8 @@ futures = "0.3.21"
 globset = { version = "0.4.8", features = ["serde1"] }
 http = "0.2.7"
 http-serde = "1.1.0"
+h2 = "0.3"
+itertools = "0.10.3"
 maplit = "1.0.2"
 mz-ccsr = { path = "../ccsr" }
 mz-expr = { path = "../expr" }
@@ -35,6 +37,7 @@ mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-stash = { path = "../stash" }
+tonic = "0.7.2"
 prost = "0.10.3"
 regex = "1.5.6"
 serde = { version = "1.0.137", features = ["derive"] }
@@ -53,4 +56,4 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 
 [build-dependencies]
-prost-build = { version = "0.10.3", features = ["vendored"] }
+tonic-build = "0.7"

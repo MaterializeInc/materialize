@@ -7,23 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
 use std::path::PathBuf;
 use std::process;
 
 use anyhow::bail;
 use axum::routing;
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
 use once_cell::sync::Lazy;
-use serde::de::DeserializeOwned;
-use serde::ser::Serialize;
-use tokio::net::TcpListener;
 use tokio::select;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::{ComputeClient, GenericClient};
+use mz_dataflow_types::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
 use mz_dataflow_types::ConnectorContext;
 use mz_orchestrator_tracing::TracingCliArgs;
@@ -31,9 +25,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 
-use mz_compute::server::Server;
 use mz_pid_file::PidFile;
-
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
 // comfortably handled by the macOS system allocator. Consider re-evaluating if
@@ -162,12 +154,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let timely_config = create_timely_config(&args)?;
 
     info!("about to bind to {:?}", args.listen_addr);
-    let listener = TcpListener::bind(args.listen_addr).await?;
-
-    info!(
-        "listening for coordinator connection on {}...",
-        listener.local_addr()?
-    );
 
     if let Some(addr) = args.http_console_addr {
         tracing::info!("serving computed HTTP server on {}", addr);
@@ -197,11 +183,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
 
     let serve_config = ServeConfig {
-        listener,
+        listen_addr: args.listen_addr,
         linger: args.linger,
     };
 
-    let (server, client) = mz_compute::server::serve(config)?;
+    let (_server, client) = mz_compute::server::serve(config)?;
     let mut client: Box<dyn ComputeClient> = Box::new(client);
     if args.reconcile {
         client = Box::new(ComputeCommandReconcile::new(client))
@@ -212,50 +198,55 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         _pid_file = Some(PidFile::open(&pid_file_location).unwrap());
     }
 
-    serve(serve_config, server, client).await
+    serve(serve_config, client).await
 }
 
 struct ServeConfig {
-    listener: TcpListener,
+    listen_addr: String,
     linger: bool,
 }
 
-async fn serve<G, C, R>(
-    config: ServeConfig,
-    _server: Server,
-    mut client: G,
-) -> Result<(), anyhow::Error>
+async fn serve<G>(config: ServeConfig, mut client: G) -> Result<(), anyhow::Error>
 where
-    G: GenericClient<C, R>,
-    C: DeserializeOwned + fmt::Debug + Send + Unpin,
-    R: Serialize + fmt::Debug + Send + Unpin,
+    G: GenericClient<ComputeCommand, ComputeResponse>,
 {
-    loop {
-        let (conn, _addr) = config.listener.accept().await?;
-        info!("coordinator connection accepted");
+    let mut grpc_serve = mz_dataflow_types::client::tcp::grpc_computed_server(config.listen_addr);
 
-        let mut conn = mz_dataflow_types::client::tcp::framed_server(conn);
+    loop {
+        // This select implies that the .recv functions of the clients must be cancellation safe.
         loop {
             select! {
-                cmd = conn.try_next() => match cmd? {
-                    None => break,
-                    Some(cmd) => { client.send(cmd).await.unwrap(); },
+                res = grpc_serve.recv() => {
+                    match res {
+                        Ok(cmd) => client.send(cmd).await.unwrap(),
+                        Err(err) => {
+                            tracing::warn!("Lost connection: {}", err);
+                            break;
+                        }
+                    }
                 },
                 res = client.recv() => {
                     match res.unwrap() {
-                        None => break,
-                        Some(response) => { conn.send(response).await?; }
+                        None => { },
+                        Some(response) => {
+                            match grpc_serve.send(response).await {
+                                Ok(_) =>  { } ,
+                                Err(err) => {
+                                    tracing::warn!("Lost connection: {}", err);
+                                    break;
+                                }
+                            }
+                        }
                     }
-                }
+                },
             }
         }
         if !config.linger {
+            tracing::info!("coordinator connection gone; terminating");
             break;
-        } else {
-            info!("coordinator connection gone; lingering");
         }
+        tracing::info!("coordinator connection gone; waiting for reconnect");
     }
 
-    info!("coordinator connection gone; terminating");
     Ok(())
 }

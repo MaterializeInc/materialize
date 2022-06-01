@@ -28,6 +28,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use maplit::hashmap;
+use mz_repr::proto::RustType;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
@@ -36,12 +37,11 @@ use tokio_stream::StreamMap;
 use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
 use mz_persist_types::Codec64;
 
-use crate::client::GenericClient;
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse, RemoteClient, ReplicaId,
-    StorageResponse,
+    ConcreteComputeInstanceReplicaConfig, ControllerResponse, ReplicaId, StorageResponse,
 };
+use crate::client::{ComputedRemoteClient, GenericClient};
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
 
@@ -155,6 +155,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + Codec64 + Copy + Unpin,
+    ComputeCommand<T>: RustType<super::ProtoComputeCommand>,
+    ComputeResponse<T>: RustType<super::ProtoComputeResponse>,
 {
     pub async fn create_instance(
         &mut self,
@@ -190,7 +192,7 @@ where
         match config {
             ConcreteComputeInstanceReplicaConfig::Remote { replicas } => {
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
-                let client = RemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
+                let client = ComputedRemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 compute_instance.add_replica(replica_id, client);
             }
@@ -261,7 +263,7 @@ where
                             },
                         )
                         .await?;
-                let client = RemoteClient::new(&service.addresses("controller"));
+                let client = ComputedRemoteClient::new(&service.addresses("controller"));
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
                     .unwrap()
