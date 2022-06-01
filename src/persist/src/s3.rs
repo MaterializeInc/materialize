@@ -24,6 +24,7 @@ use aws_sdk_s3::Client as S3Client;
 use aws_types::credentials::SharedCredentialsProvider;
 use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
+use mz_ore::retry::RetryState;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
 use tracing::{debug, trace, warn};
@@ -211,8 +212,9 @@ impl BlobMulti for S3BlobMulti {
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
         use mz_ore::retry::Retry;
-        let first_part = Retry::default().retry_async(|r| async {
-            warn!("Retry {}", r.i);
+        let first_part = Retry::default().retry_async(|_| async {
+            
+            warn!("Retry");
             let object = self
                 .client
                 .get_object()
