@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Instant;
 
 use anyhow::anyhow;
 use timely::communication::initialize::WorkerGuards;
@@ -98,14 +97,11 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
             timely_worker,
             command_rx,
             storage_state: StorageState {
-                source_descriptions: HashMap::new(),
                 source_uppers: HashMap::new(),
                 persist_handles: HashMap::new(),
-                collection_metadata: HashMap::new(),
                 source_tokens: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
-                last_bindings_feedback: Instant::now(),
                 now: now.clone(),
                 source_metrics,
                 timely_worker_index,
