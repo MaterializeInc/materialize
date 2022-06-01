@@ -8,10 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
-from materialize import spawn
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Computed,

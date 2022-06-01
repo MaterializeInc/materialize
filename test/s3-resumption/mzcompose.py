@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from os import environ
-from unittest.mock import patch
-
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Localstack,

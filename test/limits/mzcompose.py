@@ -9,7 +9,6 @@
 
 import argparse
 import contextlib
-import inspect
 import os
 import sys
 import tempfile
@@ -611,9 +610,9 @@ class NestedCTEsIndependent(Generator):
         )
         table_list = ", ".join(f"a{i}" for i in cls.all())
         print(
-            f"> WITH a{1} AS (SELECT * FROM t1 WHERE f1 <= 1), {cte_list} SELECT * FROM a{cls.COUNT};"
+            f"> WITH a{1} AS (SELECT * FROM t1 WHERE f1 <= 1), {cte_list} SELECT * FROM {table_list};"
         )
-        print(f"{cls.COUNT}")
+        print(" ".join(f"{a}" for a in cls.all()))
 
 
 class NestedCTEsChained(Generator):
@@ -629,7 +628,6 @@ class NestedCTEsChained(Generator):
             f"a{i} AS (SELECT a{i-1}.f1 + 0 AS f1 FROM a{i-1}, t1 WHERE a{i-1}.f1 = t1.f1)"
             for i in cls.no_first()
         )
-        table_list = ", ".join(f"a{i}" for i in cls.all())
         print(
             f"> WITH a{1} AS (SELECT * FROM t1), {cte_list} SELECT * FROM a{cls.COUNT};"
         )

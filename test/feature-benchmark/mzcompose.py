@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List, Optional, Type
+from typing import List, Type
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path

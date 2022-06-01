@@ -7,8 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import time
-
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import Materialized, Postgres, Testdrive
 

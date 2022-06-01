@@ -9,7 +9,7 @@
 
 from pathlib import Path
 
-from materialize import ci_util, spawn, ui
+from materialize import ci_util, ui
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,

@@ -9,16 +9,16 @@
 
 import unittest
 
-import psycopg2
-import psycopg3
-import sqlalchemy
-from psycopg3.oids import builtins
+import psycopg2  # type: ignore
+import psycopg3  # type: ignore
+import sqlalchemy  # type: ignore
+from psycopg3.oids import builtins  # type: ignore
 
 MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 
 
 class SmokeTest(unittest.TestCase):
-    def test_custom_types(self):
+    def test_custom_types(self) -> None:
         with psycopg3.connect(MATERIALIZED_URL, autocommit=True) as conn:
             # Text encoding of lists and maps is supported...
             with conn.cursor() as cur:
@@ -44,12 +44,12 @@ class SmokeTest(unittest.TestCase):
                 ):
                     cur.execute("SELECT '{a => 1, b => 2}'::map[text => int]")
 
-    def test_sqlalchemy(self):
+    def test_sqlalchemy(self) -> None:
         engine = sqlalchemy.engine.create_engine(MATERIALIZED_URL)
         results = [[c1, c2] for c1, c2 in engine.execute("VALUES (1, 2), (3, 4)")]
         self.assertEqual(results, [[1, 2], [3, 4]])
 
-    def test_psycopg2_tail(self):
+    def test_psycopg2_tail(self) -> None:
         """Test TAIL with psycopg2 via server cursors."""
         with psycopg2.connect(MATERIALIZED_URL) as conn:
             conn.set_session(autocommit=True)
@@ -85,7 +85,7 @@ class SmokeTest(unittest.TestCase):
                 self.assertEqual(b, "b")
                 self.assertEqual(cur.fetchone(), None)
 
-    def test_psycopg3_tail_copy(self):
+    def test_psycopg3_tail_copy(self) -> None:
         """Test tail with psycopg3 via its new binary COPY decoding support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:
             conn.autocommit = True
@@ -141,7 +141,7 @@ class SmokeTest(unittest.TestCase):
     # There might be problem with stream and the cancellation message. Skip until
     # resolved.
     @unittest.skip("https://github.com/psycopg/psycopg3/issues/30")
-    def test_psycopg3_tail_stream(self):
+    def test_psycopg3_tail_stream(self) -> None:
         """Test tail with psycopg3 via its new streaming query support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:
             conn.autocommit = True
