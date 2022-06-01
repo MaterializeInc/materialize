@@ -1100,21 +1100,19 @@ pub mod sources {
     use anyhow::{anyhow, bail};
     use bytes::BufMut;
     use chrono::NaiveDateTime;
-    use differential_dataflow::lattice::Lattice;
+
     use globset::{Glob, GlobBuilder};
     use proptest::prelude::{any, Arbitrary, BoxedStrategy, Just, Strategy};
     use proptest::prop_oneof;
     use proptest_derive::Arbitrary;
     use prost::Message;
     use serde::{Deserialize, Serialize};
-    use timely::progress::{Antichain, Timestamp};
+    use timely::progress::Antichain;
     use uuid::Uuid;
 
     use mz_kafka_util::KafkaAddrs;
-    use mz_persist_client::read::ReadHandle;
-    use mz_persist_client::{PersistLocation, ShardId};
+
     use mz_persist_types::Codec;
-    use mz_persist_types::Codec64;
     use mz_repr::chrono::any_naive_datetime;
     use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError};
     use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
@@ -2828,8 +2826,7 @@ pub mod sources {
                         ExternalSourceConnector::S3(_)
                         | ExternalSourceConnector::Kafka(_)
                         | ExternalSourceConnector::Kinesis(_)
-                        | ExternalSourceConnector::PubNub(_)
-                        | ExternalSourceConnector::Persist(_),
+                        | ExternalSourceConnector::PubNub(_),
                     ..
                 } => false,
                 // Local sources (i.e., tables) also support retractions (deletes)
@@ -2858,37 +2855,6 @@ pub mod sources {
                 false
             }
         }
-
-        /// Returns a `ReadHandle` that can be used to read from the persist shard that a rendered
-        /// version of this connector would write to or if the input data is available as a persist
-        /// shard. Returns `None` if this type of connector doesn't write to persist.
-        pub async fn get_read_handle<T: Timestamp + Lattice + Codec64>(
-            &self,
-        ) -> Result<Option<ReadHandle<Row, Row, T, mz_repr::Diff>>, anyhow::Error> {
-            let result = match self {
-                SourceConnector::External {
-                    connector: ExternalSourceConnector::Persist(persist_connector),
-                    ..
-                } => {
-                    let location = PersistLocation {
-                        blob_uri: persist_connector.blob_uri.clone(),
-                        consensus_uri: persist_connector.consensus_uri.clone(),
-                    };
-
-                    let persist_client = location.open().await?;
-
-                    let read = persist_client
-                        .open_reader::<Row, Row, T, mz_repr::Diff>(persist_connector.shard_id)
-                        .await?;
-
-                    Some(read)
-                }
-                SourceConnector::External { .. } => None,
-                SourceConnector::Local { .. } => None,
-            };
-
-            Ok(result)
-        }
     }
 
     #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -2898,7 +2864,6 @@ pub mod sources {
         S3(S3SourceConnector),
         Postgres(PostgresSourceConnector),
         PubNub(PubNubSourceConnector),
-        Persist(PersistSourceConnector),
     }
 
     impl RustType<ProtoExternalSourceConnector> for ExternalSourceConnector {
@@ -2915,9 +2880,6 @@ pub mod sources {
                         Kind::Postgres(postgres.into_proto())
                     }
                     ExternalSourceConnector::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
-                    ExternalSourceConnector::Persist(persist) => {
-                        Kind::Persist(persist.into_proto())
-                    }
                 }),
             }
         }
@@ -2935,7 +2897,6 @@ pub mod sources {
                     ExternalSourceConnector::Postgres(postgres.into_rust()?)
                 }
                 Kind::Pubnub(pubnub) => ExternalSourceConnector::PubNub(pubnub.into_rust()?),
-                Kind::Persist(persist) => ExternalSourceConnector::Persist(persist.into_rust()?),
             })
         }
     }
@@ -3021,7 +2982,6 @@ pub mod sources {
                 }
                 Self::Postgres(_) => vec![],
                 Self::PubNub(_) => vec![],
-                Self::Persist(_) => vec![],
             }
         }
 
@@ -3033,7 +2993,6 @@ pub mod sources {
                 ExternalSourceConnector::S3(_) => Some("mz_record"),
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
-                ExternalSourceConnector::Persist(_) => None,
             }
         }
 
@@ -3076,9 +3035,9 @@ pub mod sources {
                         Vec::new()
                     }
                 }
-                ExternalSourceConnector::Postgres(_)
-                | ExternalSourceConnector::PubNub(_)
-                | ExternalSourceConnector::Persist(_) => Vec::new(),
+                ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => {
+                    Vec::new()
+                }
             }
         }
 
@@ -3090,7 +3049,6 @@ pub mod sources {
                 ExternalSourceConnector::S3(_) => "s3",
                 ExternalSourceConnector::Postgres(_) => "postgres",
                 ExternalSourceConnector::PubNub(_) => "pubnub",
-                ExternalSourceConnector::Persist(_) => "persist",
             }
         }
 
@@ -3108,7 +3066,6 @@ pub mod sources {
                 ExternalSourceConnector::S3(_) => None,
                 ExternalSourceConnector::Postgres(_) => None,
                 ExternalSourceConnector::PubNub(_) => None,
-                ExternalSourceConnector::Persist(_) => None,
             }
         }
 
@@ -3119,8 +3076,7 @@ pub mod sources {
                 ExternalSourceConnector::Kafka(_)
                 | ExternalSourceConnector::Kinesis(_)
                 | ExternalSourceConnector::Postgres(_)
-                | ExternalSourceConnector::PubNub(_)
-                | ExternalSourceConnector::Persist(_) => false,
+                | ExternalSourceConnector::PubNub(_) => false,
             }
         }
     }
@@ -3198,31 +3154,6 @@ pub mod sources {
             Ok(PubNubSourceConnector {
                 subscribe_key: proto.subscribe_key,
                 channel: proto.channel,
-            })
-        }
-    }
-
-    #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-    pub struct PersistSourceConnector {
-        pub consensus_uri: String,
-        pub blob_uri: String,
-        pub shard_id: ShardId,
-    }
-
-    impl RustType<ProtoPersistSourceConnector> for PersistSourceConnector {
-        fn into_proto(&self) -> ProtoPersistSourceConnector {
-            ProtoPersistSourceConnector {
-                consensus_uri: self.consensus_uri.clone(),
-                blob_uri: self.blob_uri.clone(),
-                shard_id: self.shard_id.into_proto(),
-            }
-        }
-
-        fn from_proto(proto: ProtoPersistSourceConnector) -> Result<Self, TryFromProtoError> {
-            Ok(PersistSourceConnector {
-                consensus_uri: proto.consensus_uri,
-                blob_uri: proto.blob_uri,
-                shard_id: proto.shard_id.into_rust()?,
             })
         }
     }

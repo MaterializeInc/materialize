@@ -98,7 +98,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
             command_rx,
             storage_state: StorageState {
                 source_uppers: HashMap::new(),
-                persist_handles: HashMap::new(),
                 source_tokens: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
