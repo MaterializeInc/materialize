@@ -106,8 +106,8 @@ Materialize (i.e. not between restarts).
   operations.
 - [X] These timestamps are non-decreasing in real-time order: all timestamps are assigned sequentially on a single
   thread. Each timestamp is guaranteed to be larger than or equal to the timestamp of the most recently completed query.
-- [X] With strict increases for writes following reads: the global timestamp explicitly increases after all writes (
-  See [Group Commit/Write Coalesce](#Group Commit/Write Coalesce)).
+- [X] With strict increases for writes following reads: the timestamp assigned to all writes is larger than all previous
+  timestamps (See [Group Commit/Write Coalesce](#Group Commit/Write Coalesce)).
 - [X] Each timestamp is assigned to an event at some real-time moment within the event's bounds: For any two events e1
   and e2, if e2 starts after e1 finished, then e2's timestamp will be larger or equal timestamp to e1's timestamp.
 - [X] Each timestamp transition is made durable before any subsequent response is issued: writes wait for an `append`
