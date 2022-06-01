@@ -824,4 +824,53 @@ mod tests {
             ]))
         );
     }
+
+    #[test]
+    fn next_listen_batch() {
+        mz_ore::test::init_logging();
+
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new());
+
+        // Empty collection never has any batches to listen for, regardless of the
+        // current frontier.
+        assert_eq!(state.next_listen_batch(&Antichain::from_elem(0)), None);
+        assert_eq!(state.next_listen_batch(&Antichain::new()), None);
+
+        // Add two batches of data, one from [0, 5) and then another from [5, 10).
+        assert_eq!(
+            state
+                .collections
+                .compare_and_append(&["key1".to_owned()], &desc(0, 5)),
+            Continue(())
+        );
+        assert_eq!(
+            state
+                .collections
+                .compare_and_append(&["key2".to_owned()], &desc(5, 10)),
+            Continue(())
+        );
+
+        // All frontiers in [0, 5) return the first batch.
+        for t in 0..=4 {
+            assert_eq!(
+                state.next_listen_batch(&Antichain::from_elem(t)),
+                Some((vec!["key1".to_owned()].as_slice(), &desc(0, 5)))
+            );
+        }
+
+        // All frontiers in [5, 10) return the second batch.
+        for t in 5..=9 {
+            assert_eq!(
+                state.next_listen_batch(&Antichain::from_elem(t)),
+                Some((vec!["key2".to_owned()].as_slice(), &desc(5, 10)))
+            );
+        }
+
+        // There is no batch currently available for t = 10.
+        assert_eq!(state.next_listen_batch(&Antichain::from_elem(10)), None);
+
+        // By definition, there is no frontier ever at the empty antichain which
+        // is the time after all possible times.
+        assert_eq!(state.next_listen_batch(&Antichain::new()), None);
+    }
 }
