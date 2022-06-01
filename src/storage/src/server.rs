@@ -14,20 +14,16 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use anyhow::anyhow;
-use crossbeam_channel::TryRecvError;
 use timely::communication::initialize::WorkerGuards;
-use timely::communication::Allocate;
-use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{LocalClient, LocalStorageClient, StorageCommand, StorageResponse};
+use mz_dataflow_types::client::{LocalClient, LocalStorageClient};
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
 use crate::source::metrics::SourceBaseMetrics;
-use crate::storage_state::ActiveStorageState;
-use crate::storage_state::StorageState;
+use crate::storage_state::{StorageState, Worker};
 use crate::DecodeMetrics;
 
 /// Configures a dataflow server.
@@ -72,13 +68,13 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
     let (command_txs, command_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| crossbeam_channel::unbounded())
         .unzip();
-    let (storage_response_txs, storage_response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
+    let (response_tx, response_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
         .map(|_| mpsc::unbounded_channel())
         .unzip();
     // Mutexes around a vector of optional (take-able) pairs of (tx, rx) for worker/client communication.
     let command_channels: Mutex<Vec<_>> = Mutex::new(command_rxs.into_iter().map(Some).collect());
     let storage_response_channels: Mutex<Vec<_>> =
-        Mutex::new(storage_response_txs.into_iter().map(Some).collect());
+        Mutex::new(response_tx.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
@@ -93,7 +89,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
         let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
             .take()
             .unwrap();
-        let storage_response_tx = storage_response_channels.lock().unwrap()
+        let response_tx = storage_response_channels.lock().unwrap()
             [timely_worker_index % config.workers]
             .take()
             .unwrap();
@@ -116,7 +112,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
                 timely_worker_peers,
                 connector_context: config.connector_context.clone(),
             },
-            storage_response_tx,
+            response_tx,
         }
         .run()
     })
@@ -126,65 +122,9 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
         .iter()
         .map(|g| g.thread().clone())
         .collect::<Vec<_>>();
-    let storage_client = LocalClient::new(storage_response_rxs, command_txs, worker_threads);
+    let storage_client = LocalClient::new(response_rxs, command_txs, worker_threads);
     let server = Server {
         _worker_guards: worker_guards,
     };
     Ok((server, storage_client))
-}
-
-/// State maintained for each worker thread.
-///
-/// Much of this state can be viewed as local variables for the worker thread,
-/// holding state that persists across function calls.
-struct Worker<'w, A: Allocate> {
-    /// The underlying Timely worker.
-    timely_worker: &'w mut TimelyWorker<A>,
-    /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<StorageCommand>,
-    /// The state associated with collection ingress and egress.
-    storage_state: StorageState,
-    /// The channel over which storage responses are reported.
-    storage_response_tx: mpsc::UnboundedSender<StorageResponse>,
-}
-
-impl<'w, A: Allocate> Worker<'w, A> {
-    /// Draws from `dataflow_command_receiver` until shutdown.
-    fn run(&mut self) {
-        let mut shutdown = false;
-        while !shutdown {
-            // Ask Timely to execute a unit of work. If Timely decides there's
-            // nothing to do, it will park the thread. We rely on another thread
-            // unparking us when there's new work to be done, e.g., when sending
-            // a command or when new Kafka messages have arrived.
-            self.timely_worker.step_or_park(None);
-
-            self.activate_storage().report_frontier_progress();
-
-            // Handle any received commands.
-            let mut cmds = vec![];
-            let mut empty = false;
-            while !empty {
-                match self.command_rx.try_recv() {
-                    Ok(cmd) => cmds.push(cmd),
-                    Err(TryRecvError::Empty) => empty = true,
-                    Err(TryRecvError::Disconnected) => {
-                        empty = true;
-                        shutdown = true;
-                    }
-                }
-            }
-            for cmd in cmds {
-                self.activate_storage().handle_storage_command(cmd);
-            }
-        }
-    }
-
-    fn activate_storage(&mut self) -> ActiveStorageState<A> {
-        ActiveStorageState {
-            timely_worker: &mut *self.timely_worker,
-            storage_state: &mut self.storage_state,
-            response_tx: &mut self.storage_response_tx,
-        }
-    }
 }
