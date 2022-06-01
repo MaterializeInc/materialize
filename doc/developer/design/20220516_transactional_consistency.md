@@ -94,8 +94,8 @@ Materialize (i.e. not between restarts).
 - [X] Each timestamp is assigned to an event at some real-time moment within the event's bounds: For any two events e1
   and e2, if e2 starts after e1 finished, then e2's timestamp will be larger or equal timestamp to e1's timestamp.
 - [X] Each timestamp transition is made durable before any subsequent response is issued: writes wait for an `append`
-  command to be processed before returning a response to the client.
-    - NOTE: There is ongoing work to ensure that an `append` command doesn't return until it is durable.
+  command to be made durable before returning a response to the client, additionally all timestamp transitions are
+  persisted to disk (See [Global Timestamp Recovery](#Global Timestamp Recovery)).
 
 ### Global Timestamp Recovery
 
