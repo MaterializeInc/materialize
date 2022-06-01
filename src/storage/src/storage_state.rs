@@ -9,7 +9,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::TryRecvError;
@@ -72,7 +71,7 @@ pub struct StorageState {
     /// Persist shard ids for the reclocking collection of a source.
     pub collection_metadata: HashMap<GlobalId, CollectionMetadata>,
     /// Handles to created sources, keyed by ID
-    pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
+    pub source_tokens: HashMap<GlobalId, Rc<dyn Any>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.

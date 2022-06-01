@@ -100,7 +100,7 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
@@ -155,7 +155,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                 source.storage_metadata,
                 source_data,
                 storage_state,
-                Arc::clone(&token),
+                Rc::clone(&token),
             );
 
             storage_state.source_tokens.insert(source.id, token);

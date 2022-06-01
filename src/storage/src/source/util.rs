@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -16,6 +17,7 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
+use mz_ore::collections::CollectionExt;
 use mz_repr::Timestamp;
 
 use super::{SourceStatus, SourceToken};
@@ -67,30 +69,25 @@ where
     let (mut data_output, data_stream) = builder.new_output();
     builder.set_notify(false);
 
-    builder.build(|mut capabilities| {
-        let mut capabilities = Some(capabilities.pop().unwrap());
-
-        let drop_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
-        let drop_activator_weak = Arc::downgrade(&drop_activator);
+    builder.build(|capabilities| {
+        let capability = Rc::new(RefCell::new(Some(capabilities.into_element())));
 
         // Export a token to the outside word that will keep this source alive.
         token = Some(SourceToken {
-            activator: drop_activator,
+            capability: Rc::clone(&capability),
+            activator: scope.activator_for(&operator_info.address[..]),
         });
 
         let mut tick = construct(operator_info);
 
         move |_frontier| {
-            // Drop all capabilities if the thread-safe `SourceToken` is dropped.
-            if drop_activator_weak.upgrade().is_none() {
-                capabilities = None;
-            }
-            if let Some(data_cap) = &mut capabilities {
+            let mut capability = capability.borrow_mut();
+            if let Some(cap) = &mut *capability {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                if let SourceStatus::Done = tick(data_cap, &mut data_output.activate()) {
+                if let SourceStatus::Done = tick(cap, &mut data_output.activate()) {
                     // The inner source is finished. Drop our capability.
-                    capabilities = None;
+                    *capability = None;
                 }
             }
         }
