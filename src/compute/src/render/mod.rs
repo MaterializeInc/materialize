@@ -164,6 +164,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                     dataflow.as_of.clone().unwrap(),
                 );
 
+                // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
+                // type checker happy. We should decide what we want our tokens to look like
+                let token = Rc::new(token) as Rc<dyn std::any::Any>;
+
                 let (mut ok, mut err) = (ok_stream.as_collection(), err_stream.as_collection());
 
                 // We do not trust `replay` to correctly advance times.

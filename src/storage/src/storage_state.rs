@@ -10,7 +10,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use crossbeam_channel::TryRecvError;
 use timely::communication::Allocate;
@@ -20,9 +19,8 @@ use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::client::{StorageCommand, StorageResponse};
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, SourceDesc};
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
 use mz_persist_client::{write::WriteHandle, PersistLocation};
@@ -30,10 +28,6 @@ use mz_repr::{GlobalId, Row, Timestamp};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-
-/// How frequently each dataflow worker sends timestamp binding updates
-/// back to the coordinator.
-const TS_BINDING_FEEDBACK_INTERVAL: Duration = Duration::from_millis(1_000);
 
 /// State maintained for each worker thread.
 ///
@@ -52,13 +46,6 @@ pub struct Worker<'w, A: Allocate> {
 
 /// Worker-local state related to the ingress or egress of collections of data.
 pub struct StorageState {
-    /// Source descriptions that have been created and not yet dropped.
-    ///
-    /// For the moment we retain all source descriptions, even those that have been
-    /// dropped, as this is used to check for rebinding of previous identifiers.
-    /// Once we have a better mechanism to avoid that, for example that identifiers
-    /// must strictly increase, we can clean up descriptions when sources are dropped.
-    pub source_descriptions: HashMap<GlobalId, SourceDesc>,
     /// The highest observed upper frontier for collection.
     ///
     /// This is shared among all source instances, so that they can jointly advance the
@@ -69,16 +56,12 @@ pub struct StorageState {
     /// Persist handles for all sources that deal with persist collections/shards.
     pub persist_handles:
         HashMap<GlobalId, WriteHandle<Row, Row, mz_repr::Timestamp, mz_repr::Diff>>,
-    /// Persist shard ids for the reclocking collection of a source.
-    pub collection_metadata: HashMap<GlobalId, CollectionMetadata>,
     /// Handles to created sources, keyed by ID
     pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.
     pub reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
-    /// Tracks the last time we sent binding durability info over `response_tx`.
-    pub last_bindings_feedback: Instant,
     /// Undocumented
     pub now: NowFn,
     /// Metrics for the source-specific side of dataflows.
@@ -175,19 +158,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                     }
 
-                    self.storage_state
-                        .source_descriptions
-                        .insert(source.id, source.desc);
-
                     use timely::progress::Timestamp;
                     self.storage_state.reported_frontiers.insert(
                         source.id,
                         Antichain::from_elem(mz_repr::Timestamp::minimum()),
                     );
-
-                    self.storage_state
-                        .collection_metadata
-                        .insert(source.id, source.storage_metadata);
                 }
             }
             StorageCommand::AllowCompaction(list) => {
@@ -195,7 +170,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     if frontier.is_empty() {
                         // Indicates that we may drop `id`, as there are no more valid times to read.
                         // Clean up per-source state.
-                        self.storage_state.source_descriptions.remove(&id);
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.source_tokens.remove(&id);
@@ -217,11 +191,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// with the understanding if that if made durable (and ack'd back to the workers) the source will
     /// in fact progress with this write frontier.
     pub fn report_frontier_progress(&mut self) {
-        // Do nothing if dataflow workers can't send feedback or if not enough time has elapsed since
-        // the last time we reported timestamp bindings.
-        if self.storage_state.last_bindings_feedback.elapsed() < TS_BINDING_FEEDBACK_INTERVAL {
-            return;
-        }
         let mut changes = Vec::new();
 
         // Check if any observed frontier should advance the reported frontiers.
@@ -281,7 +250,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         if !changes.is_empty() {
             self.send_storage_response(StorageResponse::FrontierUppers(changes));
         }
-        self.storage_state.last_bindings_feedback = Instant::now();
     }
 
     /// Send a response to the coordinator.

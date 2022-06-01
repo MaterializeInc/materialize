@@ -38,7 +38,7 @@ use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
-use crate::{sources::SourceDesc, DataflowDescription, PeekResponse, TailResponse};
+use crate::{sources::IngestionDescription, DataflowDescription, PeekResponse, TailResponse};
 
 pub mod controller;
 pub use controller::Controller;
@@ -307,24 +307,11 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-/// A command creating a single source
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateSourceCommand<T> {
-    /// The source identifier
-    pub id: GlobalId,
-    /// The source description
-    pub desc: SourceDesc,
-    /// The initial `since` frontier
-    pub since: Antichain<T>,
-    /// Additional storage controller metadata needed to ingest this source
-    pub storage_metadata: CollectionMetadata,
-}
-
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<CreateSourceCommand<T>>),
+    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which

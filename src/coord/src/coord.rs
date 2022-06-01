@@ -99,7 +99,8 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
-    ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
+    ExternalSourceConnector, IngestionDescription, PostgresSourceConnector, SourceConnector,
+    Timeline,
 };
 use mz_dataflow_types::{
     BuildDesc, ConnectorContext, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
@@ -543,13 +544,23 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let entries: Vec<_> = self.catalog.entries().cloned().collect();
+        let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
+        // Topologically sort entries based on the used_by relationship
+        entries.sort_unstable_by(|a, b| {
+            use std::cmp::Ordering;
+            if a.used_by().contains(&b.id()) {
+                Ordering::Less
+            } else if b.used_by().contains(&a.id()) {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        });
+
         let logs: HashSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
-        // Sources and indexes may be depended upon by other catalog items,
-        // insert them first.
         for entry in &entries {
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
@@ -565,15 +576,23 @@ impl<S: Append + 'static> Coordinator<S> {
                         .source_description_for(entry.id())
                         .unwrap();
 
+                    let mut ingestion = IngestionDescription {
+                        id: entry.id(),
+                        desc: source_description,
+                        since: Antichain::from_elem(Timestamp::minimum()),
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                    };
+
+                    for id in entry.uses() {
+                        if self.catalog.state().get_entry(id).source().is_some() {
+                            ingestion.source_imports.insert(*id, ());
+                        }
+                    }
+
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![(
-                            entry.id(),
-                            (
-                                source_description,
-                                Antichain::from_elem(Timestamp::minimum()),
-                            ),
-                        )])
+                        .create_sources(vec![ingestion])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -591,12 +610,24 @@ impl<S: Append + 'static> Coordinator<S> {
                         .state()
                         .source_description_for(entry.id())
                         .unwrap();
+
+                    let mut ingestion = IngestionDescription {
+                        id: entry.id(),
+                        desc: source_description,
+                        since: Antichain::from_elem(since_ts),
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                    };
+
+                    for id in entry.uses() {
+                        if self.catalog.state().get_entry(id).source().is_some() {
+                            ingestion.source_imports.insert(*id, ());
+                        }
+                    }
+
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![(
-                            entry.id(),
-                            (source_description, Antichain::from_elem(since_ts)),
-                        )])
+                        .create_sources(vec![ingestion])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -621,12 +652,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.ship_dataflow(df, idx.compute_instance).await;
                     }
                 }
-                _ => (), // Handled in next loop.
-            }
-        }
-
-        for entry in entries {
-            match entry.item() {
                 CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
@@ -651,7 +676,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await?;
                 }
-                _ => (), // Handled in prior loop.
+                // Nothing to do for these cases
+                CatalogItem::Log(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connector(_) => {}
             }
         }
 
@@ -2187,14 +2217,21 @@ impl<S: Append + 'static> Coordinator<S> {
                     .state()
                     .source_description_for(table_id)
                     .unwrap();
+
+                let ingestion = IngestionDescription {
+                    id: table_id,
+                    desc: source_description,
+                    since: Antichain::from_elem(since_ts),
+                    source_imports: BTreeMap::new(),
+                    storage_metadata: (),
+                };
+
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![(
-                        table_id,
-                        (source_description, Antichain::from_elem(since_ts)),
-                    )])
+                    .create_sources(vec![ingestion])
                     .await
                     .unwrap();
+
                 self.initialize_storage_read_policies(
                     vec![table_id],
                     self.logical_compaction_window_ms,
@@ -2290,17 +2327,26 @@ impl<S: Append + 'static> Coordinator<S> {
                     .source_description_for(source_id)
                     .unwrap();
 
+                let mut ingestion = IngestionDescription {
+                    id: source_id,
+                    desc: source_description,
+                    since: Antichain::from_elem(Timestamp::minimum()),
+                    source_imports: BTreeMap::new(),
+                    storage_metadata: (),
+                };
+
+                for id in self.catalog.state().get_entry(&source_id).uses() {
+                    if self.catalog.state().get_entry(id).source().is_some() {
+                        ingestion.source_imports.insert(*id, ());
+                    }
+                }
+
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![(
-                        source_id,
-                        (
-                            source_description,
-                            Antichain::from_elem(Timestamp::minimum()),
-                        ),
-                    )])
+                    .create_sources(vec![ingestion])
                     .await
                     .unwrap();
+
                 self.initialize_storage_read_policies(
                     vec![source_id],
                     self.logical_compaction_window_ms,

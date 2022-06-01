@@ -44,8 +44,8 @@ use mz_repr::{Diff, GlobalId};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
-use crate::client::{CreateSourceCommand, StorageClient, StorageCommand, StorageResponse};
-use crate::sources::{SourceConnector, SourceData, SourceDesc};
+use crate::client::{StorageClient, StorageCommand, StorageResponse};
+use crate::sources::{IngestionDescription, SourceConnector, SourceData, SourceDesc};
 use crate::Update;
 
 include!(concat!(
@@ -80,7 +80,7 @@ pub trait StorageController: Debug + Send {
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
     async fn create_sources(
         &mut self,
-        mut bindings: Vec<(GlobalId, (SourceDesc, Antichain<Self::Timestamp>))>,
+        ingestions: Vec<IngestionDescription<(), Self::Timestamp>>,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -323,31 +323,32 @@ where
 
     async fn create_sources(
         &mut self,
-        mut bindings: Vec<(GlobalId, (SourceDesc, Antichain<T>))>,
+        mut ingestions: Vec<IngestionDescription<(), T>>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         // 1. create a dropped source identifier, or
         // 2. create an existing source identifier with a new description.
-        // Make sure to check for errors within `bindings` as well.
-        bindings.sort_by_key(|(id, _)| *id);
-        bindings.dedup();
-        for pos in 1..bindings.len() {
-            if bindings[pos - 1].0 == bindings[pos].0 {
-                return Err(StorageError::SourceIdReused(bindings[pos].0));
+        // Make sure to check for errors within `ingestions` as well.
+        ingestions.sort_by_key(|ingestion| ingestion.id);
+        ingestions.dedup();
+        for pos in 1..ingestions.len() {
+            if ingestions[pos - 1].id == ingestions[pos].id {
+                return Err(StorageError::SourceIdReused(ingestions[pos].id));
             }
         }
-        for (id, description_since) in bindings.iter() {
-            if let Ok(collection) = self.collection(*id) {
-                if &collection.description != description_since {
-                    return Err(StorageError::SourceIdReused(*id));
+        for ingestion in ingestions.iter() {
+            if let Ok(collection) = self.collection(ingestion.id) {
+                let (desc, since) = &collection.description;
+                if (desc, since) != (&ingestion.desc, &ingestion.since) {
+                    return Err(StorageError::SourceIdReused(ingestion.id));
                 }
             }
         }
 
-        let mut dataflow_commands = vec![];
+        let mut external_ingestions = vec![];
 
         // Install collection state for each bound source.
-        for (id, (desc, since)) in bindings {
+        for ingestion in ingestions {
             // TODO(petrosagg): durably record the persist shard we mint here
             let persist_shard = ShardId::new();
             let (write, read) = self
@@ -357,35 +358,54 @@ where
                 .expect("invalid persist usage");
             self.state
                 .persist_handles
-                .insert(id, PersistHandles { read, write });
+                .insert(ingestion.id, PersistHandles { read, write });
 
             let timestamp_shard_id = TypedCollection::new("timestamp-shard-id")
-                .insert_without_overwrite(&mut self.state.stash, &id, ShardId::new())
+                .insert_without_overwrite(&mut self.state.stash, &ingestion.id, ShardId::new())
                 .await?;
 
             let collection_state = CollectionState::new(
-                desc.clone(),
-                since.clone(),
+                ingestion.desc.clone(),
+                ingestion.since.clone(),
                 persist_shard,
                 timestamp_shard_id,
             );
 
-            self.state.collections.insert(id, collection_state);
+            self.state
+                .collections
+                .insert(ingestion.id, collection_state);
 
-            if matches!(desc.connector, SourceConnector::External { .. }) {
-                dataflow_commands.push(CreateSourceCommand {
-                    id,
-                    desc,
-                    since,
-                    storage_metadata: self.collection_metadata(id)?,
-                });
+            // TODO(petrosagg): it's weird that tables go through this path and we filter them
+            // manually. Think how to make better types to reflect their differences
+            if matches!(ingestion.desc.connector, SourceConnector::External { .. }) {
+                external_ingestions.push(ingestion);
             }
         }
 
-        if !dataflow_commands.is_empty() {
+        // Here we augment all the imported sources with the appropriate storage metadata needed by
+        // the storage instance to read them
+        let mut augmented_ingestions = Vec::with_capacity(external_ingestions.len());
+        for ingestion in external_ingestions {
+            let mut source_imports = BTreeMap::new();
+            for (id, _) in ingestion.source_imports {
+                let metadata = self.collection_metadata(id)?;
+                source_imports.insert(id, metadata);
+            }
+
+            augmented_ingestions.push(IngestionDescription {
+                source_imports,
+                // The rest of the fields are identical
+                id: ingestion.id,
+                desc: ingestion.desc,
+                since: ingestion.since,
+                storage_metadata: self.collection_metadata(ingestion.id)?,
+            });
+        }
+
+        if !augmented_ingestions.is_empty() {
             self.state
                 .client
-                .send(StorageCommand::CreateSources(dataflow_commands))
+                .send(StorageCommand::CreateSources(augmented_ingestions))
                 .await
                 .expect("Storage command failed; unrecoverable");
         }
