@@ -43,7 +43,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    mz_ore::test::timeout(Duration::from_secs(60*5), || {
+    mz_ore::test::timeout(Duration::from_secs(60 * 5), || {
         // Create a listener that will simulate a slow Confluent Schema Registry.
         info!("test_no_block: creating listener");
         let listener = TcpListener::bind("localhost:0")?;
