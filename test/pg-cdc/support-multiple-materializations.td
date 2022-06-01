@@ -44,12 +44,10 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 1 true
 2 false
 
-! CREATE MATERIALIZED VIEW t1_mat_dupe AS
+> CREATE MATERIALIZED VIEW t1_mat_dupe AS
   SELECT * FROM t1
-contains:Cannot re-materialize source mz_source
 
-! CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (t1 as t1_not_a_dupe, t2 as t2_not_a_dupe)
-contains:Cannot re-materialize source mz_source
+> CREATE MATERIALIZED VIEWS FROM SOURCE mz_source (t1 as t1_not_a_dupe, t2 as t2_not_a_dupe)
 
 > DROP VIEW t1_mat;
 
