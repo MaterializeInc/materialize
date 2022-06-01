@@ -3098,10 +3098,10 @@ pub mod sources {
         pub fn requires_single_materialization(&self) -> bool {
             match self {
                 ExternalSourceConnector::S3(c) => c.requires_single_materialization(),
-                ExternalSourceConnector::Postgres(_) => true,
 
                 ExternalSourceConnector::Kafka(_)
                 | ExternalSourceConnector::Kinesis(_)
+                | ExternalSourceConnector::Postgres(_)
                 | ExternalSourceConnector::PubNub(_)
                 | ExternalSourceConnector::Persist(_) => false,
             }
