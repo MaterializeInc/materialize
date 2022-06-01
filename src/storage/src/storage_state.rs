@@ -9,7 +9,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use crossbeam_channel::TryRecvError;
 use timely::communication::Allocate;
@@ -54,7 +53,7 @@ pub struct StorageState {
     /// and we should aim for that but are not there yet.
     pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
     /// Handles to created sources, keyed by ID
-    pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
+    pub source_tokens: HashMap<GlobalId, Rc<dyn Any>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.

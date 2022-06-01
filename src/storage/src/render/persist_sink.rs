@@ -10,7 +10,6 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::Exchange;
@@ -32,7 +31,7 @@ pub fn render<G>(
     storage_metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
-    token: Arc<dyn Any + Send + Sync>,
+    token: Rc<dyn Any>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -54,7 +53,7 @@ pub fn render<G>(
 
     let shared_frontier = Rc::clone(&storage_state.source_uppers[&src_id]);
 
-    let weak_token = Arc::downgrade(&token);
+    let weak_token = Rc::downgrade(&token);
 
     persist_op.build_async(
         scope.clone(),

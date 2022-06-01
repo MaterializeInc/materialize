@@ -10,6 +10,7 @@
 //! A source that reads from an a persist shard.
 
 use std::any::Any;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
@@ -42,7 +43,7 @@ pub fn persist_source<G>(
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
     Stream<G, (DataflowError, Timestamp, Diff)>,
-    Arc<dyn Any + Send + Sync>,
+    Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -172,7 +173,7 @@ where
         _ => panic!("decoding failed"),
     });
 
-    let token = Arc::new(token);
+    let token = Rc::new(token);
 
     (ok_stream, err_stream, token)
 }

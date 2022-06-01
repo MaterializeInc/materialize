@@ -11,7 +11,8 @@
 //!
 //! See [`render_source`] for more details.
 
-use std::sync::Arc;
+use std::any::Any;
+use std::rc::Rc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::consolidate::ConsolidateStream;
@@ -74,7 +75,7 @@ pub fn render_source<G>(
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
-    Arc<dyn std::any::Any + Send + Sync>,
+    Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
@@ -87,7 +88,7 @@ where
     }
 
     // Tokens that we should return from the method.
-    let mut needed_tokens: Vec<Arc<dyn std::any::Any + Send + Sync>> = Vec::new();
+    let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
     // Before proceeding, we may need to remediate sources with non-trivial relational
     // expressions that post-process the bare source. If the expression is trivial, a
@@ -242,7 +243,7 @@ where
                         schema_registry_config,
                         confluent_wire_format,
                     );
-                    needed_tokens.push(Arc::new(token));
+                    needed_tokens.push(Rc::new(token));
                     (oks, None)
                 } else {
                     // Depending on the type of _raw_ source produced for the given source
@@ -303,7 +304,7 @@ where
                         ),
                     };
                     if let Some(tok) = extra_token {
-                        needed_tokens.push(Arc::new(tok));
+                        needed_tokens.push(Rc::new(tok));
                     }
 
                     // render envelopes
@@ -476,12 +477,12 @@ where
             // Consolidate the results, as there may now be cancellations.
             collection = collection.consolidate_stream();
 
-            let source_token = Arc::new(capability);
+            let source_token = Rc::new(capability);
 
             needed_tokens.push(source_token);
 
             // Return the collections and any needed tokens.
-            ((collection, err_collection), Arc::new(needed_tokens))
+            ((collection, err_collection), Rc::new(needed_tokens))
         }
     }
 }
