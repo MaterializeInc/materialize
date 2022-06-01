@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use aws_arn::ARN;
 use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
@@ -51,28 +51,26 @@ use mz_postgres_util::TableInfo;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
-use mz_sql_parser::ast::{
-    CreateClusterReplicaStatement, CreateConnector, CreateConnectorStatement, CsrConnector,
-    QualifiedReplica, ReplicaDefinition, ReplicaOption, WithOptionValue,
-};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::visit::Visit;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
-    AvroSchema, ClusterOption, ColumnOption, Compression, CreateClusterStatement,
-    CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector, CreateSinkStatement,
-    CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CreateTableStatement,
-    CreateTypeAs, CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions,
-    CreateViewsSourceTarget, CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto,
-    CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, DropClusterReplicasStatement,
-    DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
-    DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
-    KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Select, SelectItem, SetExpr,
+    AvroSchema, ClusterOption, ColumnOption, Compression, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnector, CreateConnectorStatement, CreateDatabaseStatement,
+    CreateIndexStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnector, CreateSinkStatement, CreateSourceConnector,
+    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CreateViewsDefinitions, CreateViewsSourceTarget,
+    CreateViewsStatement, CsrConnector, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled,
+    CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, DbzTxMetadataOption,
+    DropClusterReplicasStatement, DropClustersStatement, DropDatabaseStatement,
+    DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope, Expr, Format, Ident,
+    IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
+    QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, Select, SelectItem, SetExpr,
     SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
     TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    Value, ViewDefinition, WithOption,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -303,7 +301,7 @@ pub fn describe_create_source(
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
-    mut depends_on: HashSet<GlobalId>,
+    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateSourceStatement {
         name,
@@ -322,7 +320,6 @@ pub fn plan_create_source(
 
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options_original)?;
-    let mut with_option_objects = normalize::option_objects(with_options_original);
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
         Some(val) => match val {
@@ -432,7 +429,7 @@ pub fn plan_create_source(
             }
 
             if !include_metadata.is_empty()
-                && matches!(envelope, Envelope::Debezium(DbzMode::Plain))
+                && matches!(envelope, Envelope::Debezium(DbzMode::Plain { .. }))
             {
                 for kind in include_metadata {
                     if !matches!(kind.ty, SourceIncludeMetadataType::Key) {
@@ -608,46 +605,59 @@ pub fn plan_create_source(
                 DbzMode::Upsert => {
                     UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx })
                 }
-                DbzMode::Plain => {
+                DbzMode::Plain { tx_metadata } => {
                     // TODO(#11668): Probably make this not a WITH option and integrate into the DBZ envelope?
-                    let tx_metadata = match with_option_objects.remove("tx_metadata") {
-                        Some(WithOptionValue::ObjectName(tx_metadata)) => {
-                            scx.require_experimental_mode("DEBEZIUM TX_METADATA")?;
-                            // `with_option_objects` and `with_options` should correspond.  We want
-                            // to keep the `ObjectName` information but we also need to remove the
-                            // key from `with_options` so pass our validation below that all keys
-                            // are used.
-                            with_options.remove("tx_metadata").unwrap();
-                            // This syntax needs to be changed before allowing without experimental flag!
-                            let data_collection_name =
-                                match with_options.remove("tx_metadata_collection_name") {
-                                    Some(Value::String(d)) => d,
-                                    Some(_) => bail!("tx_metadata_collection_name must be String"),
-                                    None => bail!(
-                                        "Require tx_metadata_collection_name with tx_metadata"
-                                    ),
-                                };
+                    let mut tx_metadata_source = None;
+                    let mut tx_metadata_collection = None;
 
-                            let item = scx
-                                .catalog
-                                .resolve_item(&normalize::unresolved_object_name(tx_metadata)?)?;
-                            let full_name = scx.catalog.resolve_full_name(item.name());
-                            let tx_value_desc = item
-                                .desc(&full_name)
-                                .context("tx_metadata must refer to a source")?;
+                    if !tx_metadata.is_empty() {
+                        scx.require_experimental_mode(
+                            "ENVELOPE DEBEZIUM ... TRANSACTION METADATA",
+                        )?;
+                    }
 
-                            depends_on.insert(item.id());
-                            depends_on.extend(item.uses());
+                    for option in tx_metadata {
+                        match option {
+                            DbzTxMetadataOption::Source(source) => {
+                                if tx_metadata_source.is_some() {
+                                    bail!("TRANSACTION METADATA SOURCE specified more than once")
+                                }
+                                let item = scx.get_item_by_resolved_name(source)?;
+                                if item.item_type() != CatalogItemType::Source {
+                                    bail!(
+                                        "provided TRANSACTION METADATA SOURCE {} is not a source",
+                                        source.full_name_str(),
+                                    );
+                                }
+                                tx_metadata_source = Some(item);
+                            }
+                            DbzTxMetadataOption::Collection(data_collection) => {
+                                if tx_metadata_collection.is_some() {
+                                    bail!(
+                                        "TRANSACTION METADATA COLLECTION specified more than once"
+                                    );
+                                }
+                                tx_metadata_collection =
+                                    Some(with_option_type!(Some(data_collection.clone()), String));
+                            }
+                        }
+                    }
 
+                    let tx_metadata = match (tx_metadata_source, tx_metadata_collection) {
+                        (None, None) => None,
+                        (Some(source), Some(collection)) => {
                             Some(typecheck_debezium_transaction_metadata(
-                                &tx_value_desc,
+                                scx,
+                                source,
                                 &value_desc,
-                                item.id(),
-                                data_collection_name,
+                                collection,
                             )?)
                         }
-                        Some(v) => bail!("tx_metadata must be an Object but found {:?}", v),
-                        None => None,
+                        _ => {
+                            bail!(
+                                "TRANSACTION METADATA requires both SOURCE and COLLECTION options"
+                            );
+                        }
                     };
 
                     let dedup_projection = typecheck_debezium_dedup(&value_desc, tx_metadata);
@@ -1053,11 +1063,13 @@ fn typecheck_debezium_dedup(
 }
 
 fn typecheck_debezium_transaction_metadata(
-    tx_value_desc: &RelationDesc,
+    scx: &StatementContext,
+    tx_metadata_source: &dyn CatalogItem,
     data_value_desc: &RelationDesc,
-    tx_metadata_global_id: GlobalId,
     tx_data_collection_name: String,
 ) -> Result<DebeziumTransactionMetadata, anyhow::Error> {
+    let tx_value_desc =
+        tx_metadata_source.desc(&scx.catalog.resolve_full_name(tx_metadata_source.name()))?;
     let (tx_status_idx, tx_status_ty) = tx_value_desc
         .get_by_name(&"status".into())
         .ok_or_else(|| anyhow!("'status' column missing from debezium transaction metadata"))?;
@@ -1139,7 +1151,7 @@ fn typecheck_debezium_transaction_metadata(
     };
 
     Ok(DebeziumTransactionMetadata {
-        tx_metadata_global_id,
+        tx_metadata_global_id: tx_metadata_source.id(),
         tx_status_idx,
         tx_transaction_id_idx,
         tx_data_collections_idx,
@@ -1153,7 +1165,7 @@ fn typecheck_debezium_transaction_metadata(
 fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
-    envelope: &Envelope,
+    envelope: &Envelope<Aug>,
     with_options: &Vec<WithOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
@@ -1402,7 +1414,7 @@ fn get_encoding_inner(
 /// Extract the key envelope, if it is requested
 fn get_key_envelope(
     included_items: &[SourceIncludeMetadata],
-    envelope: &Envelope,
+    envelope: &Envelope<Aug>,
     encoding: &SourceDataEncoding,
 ) -> Result<Option<KeyEnvelope>, anyhow::Error> {
     let key_definition = included_items
@@ -2151,7 +2163,11 @@ pub fn plan_create_sink(
         }
         Some(Envelope::DifferentialRow) => unreachable!("not expressable in SQL"),
         // Other sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
-        None | Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain)) => {
+        None => SinkEnvelope::Debezium,
+        Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain { tx_metadata })) => {
+            if !tx_metadata.is_empty() {
+                bail_unsupported!("ENVELOPE DEBEZIUM ... TRANSACTION METADATA");
+            }
             SinkEnvelope::Debezium
         }
         Some(Envelope::Upsert) => SinkEnvelope::Upsert,
