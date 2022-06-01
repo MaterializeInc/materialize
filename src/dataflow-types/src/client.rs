@@ -1105,6 +1105,7 @@ pub mod tcp {
                 return Err(anyhow::anyhow!("Sent into disconnected channel"));
             };
             if sender.send(cmd.into_proto()).is_err() {
+                self.state = GrpcComputedTcpConn::Disconnected;
                 Err(anyhow::anyhow!("Sent into disconnected channel"))
             } else {
                 Ok(())
