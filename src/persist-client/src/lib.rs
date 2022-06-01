@@ -33,7 +33,7 @@ use tracing::{debug, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::Machine;
+use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
 
@@ -92,14 +92,10 @@ impl PersistLocation {
             "Location::open blob={} consensus={}",
             self.blob_uri, self.consensus_uri,
         );
-        let blob = BlobMultiConfig::try_from(&self.blob_uri)
-            .await?
-            .open()
-            .await?;
-        let consensus = ConsensusConfig::try_from(&self.consensus_uri)
-            .await?
-            .open()
-            .await?;
+        let blob = BlobMultiConfig::try_from(&self.blob_uri).await?;
+        let blob = retry_external("blob::open", || blob.clone().open()).await;
+        let consensus = ConsensusConfig::try_from(&self.consensus_uri).await?;
+        let consensus = retry_external("consensus::open", || consensus.clone().open()).await;
         Ok((blob, consensus))
     }
 }

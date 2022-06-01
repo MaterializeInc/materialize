@@ -22,7 +22,7 @@ use crate::s3::{S3BlobConfig, S3BlobMulti};
 use crate::sqlite::SqliteConsensus;
 
 /// Config for an implementation of [BlobMulti].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BlobMultiConfig {
     /// Config for [FileBlobMulti].
     File(FileBlobConfig),
@@ -92,7 +92,7 @@ impl BlobMultiConfig {
 }
 
 /// Config for an implementation of [Consensus].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ConsensusConfig {
     /// Config for [SqliteConsensus].
     Sqlite(String),
