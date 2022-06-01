@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use enum_kinds::EnumKind;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -394,9 +394,9 @@ impl AstDisplay for SourceIncludeMetadata {
 impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Envelope {
+pub enum Envelope<T: AstInfo> {
     None,
-    Debezium(DbzMode),
+    Debezium(DbzMode<T>),
     Upsert,
     CdcV2,
     /// An envelope for sources that directly read differential Rows. This is internal and cannot
@@ -404,7 +404,7 @@ pub enum Envelope {
     DifferentialRow,
 }
 
-impl AstDisplay for Envelope {
+impl<T: AstInfo> AstDisplay for Envelope<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::None => {
@@ -427,7 +427,7 @@ impl AstDisplay for Envelope {
         }
     }
 }
-impl_display!(Envelope);
+impl_display_t!(Envelope);
 
 impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
@@ -480,22 +480,51 @@ impl AstDisplay for Compression {
 impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DbzMode {
-    /// `ENVELOPE DEBEZIUM` with no suffix
-    Plain,
+pub enum DbzMode<T: AstInfo> {
+    /// `ENVELOPE DEBEZIUM [TRANSACTION METADATA (...)]`
+    Plain {
+        tx_metadata: Vec<DbzTxMetadataOption<T>>,
+    },
     /// `ENVELOPE DEBEZIUM UPSERT`
     Upsert,
 }
 
-impl AstDisplay for DbzMode {
+impl<T: AstInfo> AstDisplay for DbzMode<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Plain => f.write_str(""),
+            Self::Plain { tx_metadata } => {
+                if !tx_metadata.is_empty() {
+                    f.write_str(" (TRANSACTION METADATA (");
+                    f.write_node(&display::comma_separated(tx_metadata));
+                    f.write_str("))");
+                }
+            }
             Self::Upsert => f.write_str(" UPSERT"),
         }
     }
 }
-impl_display!(DbzMode);
+impl_display_t!(DbzMode);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DbzTxMetadataOption<T: AstInfo> {
+    Source(T::ObjectName),
+    Collection(WithOptionValue<T>),
+}
+impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            DbzTxMetadataOption::Source(source) => {
+                f.write_str("SOURCE ");
+                f.write_node(source);
+            }
+            DbzTxMetadataOption::Collection(collection) => {
+                f.write_str("COLLECTION ");
+                f.write_node(collection);
+            }
+        }
+    }
+}
+impl_display_t!(DbzTxMetadataOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]

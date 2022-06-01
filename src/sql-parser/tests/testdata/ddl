@@ -491,14 +491,14 @@ CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SEKRET)
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = sekret)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(ObjectName(UnresolvedObjectName([Ident("sekret")]))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("sekret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
 ----
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(ObjectName(UnresolvedObjectName([Ident("secret")]))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("secret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
@@ -655,7 +655,7 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSIS
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Inline { url: "http://localhost:8081" }, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(ObjectName(UnresolvedObjectName([Ident("user")]))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Inline { url: "http://localhost:8081" }, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(Ident(Ident("user"))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
@@ -1379,7 +1379,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONF
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, materialized: false, key_constraint: None })
 
 
 parse-statement
@@ -1387,4 +1387,18 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT PROTOBUF USING 
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnectorProto { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnectorProto { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")]))), Collection(Value(String("foo")))] })), if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, materialized: false, key_constraint: None })

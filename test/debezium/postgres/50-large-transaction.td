@@ -34,15 +34,18 @@ $ schema-registry-wait-schema schema=postgres.public.large_same_rows-value
 
 > CREATE MATERIALIZED SOURCE large_distinct_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_distinct_rows'
-  WITH (tx_metadata = postgres_tx_metadata, tx_metadata_collection_name='public.large_distinct_rows')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM;
+  ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (SOURCE postgres_tx_metadata, COLLECTION 'public.large_distinct_rows')
+  );
 
 > CREATE MATERIALIZED SOURCE large_same_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_same_rows'
-  WITH (tx_metadata = postgres_tx_metadata, tx_metadata_collection_name='public.large_same_rows')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM;
+  ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (SOURCE postgres_tx_metadata, COLLECTION 'public.large_same_rows')
+  );
+
 
 > SELECT COUNT(*), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM large_distinct_rows
 10000 10000 1 10000

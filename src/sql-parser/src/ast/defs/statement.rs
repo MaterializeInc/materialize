@@ -415,7 +415,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub envelope: Option<Envelope>,
+    pub envelope: Option<Envelope<T>>,
     pub if_not_exists: bool,
     pub materialized: bool,
     pub key_constraint: Option<KeyConstraint>,
@@ -480,7 +480,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub connector: CreateSinkConnector<T>,
     pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
-    pub envelope: Option<Envelope>,
+    pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
     pub as_of: Option<AsOf<T>>,
     pub if_not_exists: bool,
@@ -1835,7 +1835,7 @@ impl_display_t!(WithOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
-    ObjectName(UnresolvedObjectName),
+    Ident(Ident),
     DataType(T::DataType),
     // Temporary variant until we have support for connectors, which will use
     // explicit fields for each secret reference.
@@ -1846,7 +1846,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             WithOptionValue::Value(value) => f.write_node(value),
-            WithOptionValue::ObjectName(name) => f.write_node(name),
+            WithOptionValue::Ident(id) => f.write_node(id),
             WithOptionValue::DataType(typ) => f.write_node(typ),
             WithOptionValue::Secret(name) => {
                 f.write_str("SECRET ");

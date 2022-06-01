@@ -120,9 +120,7 @@ pub fn options<T: AstInfo>(
     for option in options {
         let value = match &option.value {
             Some(WithOptionValue::Value(value)) => value.clone(),
-            Some(WithOptionValue::ObjectName(object_name)) => {
-                Value::String(object_name.to_ast_string())
-            }
+            Some(WithOptionValue::Ident(id)) => Value::String(ident(id.clone())),
             Some(WithOptionValue::DataType(data_type)) => Value::String(data_type.to_ast_string()),
             Some(WithOptionValue::Secret(_)) => {
                 bail!("secret references not yet supported");
@@ -321,7 +319,7 @@ pub fn create_statement(
             name,
             col_names: _,
             connector: _,
-            with_options,
+            with_options: _,
             format: _,
             include_metadata: _,
             envelope: _,
@@ -332,15 +330,6 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
-
-            for opt in with_options.iter_mut() {
-                if let Some(WithOptionValue::ObjectName(object_name)) = &mut opt.value {
-                    if ident_ref(&opt.key) == "tx_metadata" {
-                        // Use the catalog to resolve to a fully qualified name
-                        *object_name = allocate_name(object_name)?;
-                    }
-                }
-            }
         }
 
         Statement::CreateTable(CreateTableStatement {
@@ -483,22 +472,7 @@ macro_rules! with_option_type {
     ($name:expr, String) => {
         match $name {
             Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
-            Some(crate::ast::WithOptionValue::ObjectName(name)) => {
-                // TODO[btv]
-                //
-                // This is a hack to allow unquoted with options; e.g., `WITH foo=bar` instead of `WITH foo="bar"`.
-                // Despite it being an object name, it makes no sense for it to have more than one component.
-                //
-                // We would like to make this `WithOptionValue` variant take an ident,
-                // not an object name; the only reason we can't do that yet is because the "tx_metadata" WITH option
-                // actually genuinely needs an object name, but that is probably being promoted to syntax soon.
-                //
-                // Once we do that, we can simplify this code.
-                if name.0.len() != 1 {
-                    ::anyhow::bail!("expected String or bare identifier")
-                }
-                name.0.into_iter().next().unwrap().into_string()
-            }
+            Some(crate::ast::WithOptionValue::Ident(id)) => id.into_string(),
             _ => ::anyhow::bail!("expected String or bare identifier"),
         }
     };
