@@ -2757,7 +2757,7 @@ impl<'a> Parser<'a> {
         };
 
         let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(Parser::parse_raw_name)?;
+        let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),

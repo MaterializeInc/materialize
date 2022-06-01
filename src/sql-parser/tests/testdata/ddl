@@ -900,14 +900,14 @@ DROP TABLE foo
 ----
 DROP TABLE foo
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: false, names: [Name(UnresolvedObjectName([Ident("foo")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: false, names: [UnresolvedObjectName([Ident("foo")])], cascade: false })
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE
 ----
 DROP TABLE IF EXISTS foo, bar CASCADE
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: true, names: [Name(UnresolvedObjectName([Ident("foo")])), Name(UnresolvedObjectName([Ident("bar")]))], cascade: true })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: true, names: [UnresolvedObjectName([Ident("foo")]), UnresolvedObjectName([Ident("bar")])], cascade: true })
 
 parse-statement
 DROP TABLE
@@ -928,21 +928,21 @@ DROP VIEW myschema.myview
 ----
 DROP VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: View, if_exists: false, names: [Name(UnresolvedObjectName([Ident("myschema"), Ident("myview")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Source, if_exists: false, names: [Name(UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Source, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
 
 parse-statement
 DROP INDEX IF EXISTS myschema.myindex
 ----
 DROP INDEX IF EXISTS myschema.myindex
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Index, if_exists: true, names: [Name(UnresolvedObjectName([Ident("myschema"), Ident("myindex")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
 
 parse-statement
 TAIL foo.bar
@@ -1315,14 +1315,14 @@ DROP SECRET secret
 ----
 DROP SECRET secret
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: false, names: [Name(UnresolvedObjectName([Ident("secret")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: false, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
 
 parse-statement
 DROP SECRET IF EXISTS secret
 ----
 DROP SECRET IF EXISTS secret
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: true, names: [Name(UnresolvedObjectName([Ident("secret")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: true, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
 
 parse-statement
 SHOW SECRETS
@@ -1358,7 +1358,7 @@ DROP CONNECTOR conn1
 ----
 DROP CONNECTOR conn1
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [Name(UnresolvedObjectName([Ident("conn1")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES

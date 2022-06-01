@@ -22,7 +22,7 @@ use mz_sql_parser::ast::ShowCreateConnectorStatement;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
+    ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowSchemasStatement, ShowStatementFilter, Statement, Value,
@@ -38,7 +38,7 @@ use crate::plan::{Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
-    _: &ShowCreateViewStatement<Raw>,
+    _: ShowCreateViewStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -76,7 +76,7 @@ pub fn plan_show_create_view(
 
 pub fn describe_show_create_table(
     _: &StatementContext,
-    _: &ShowCreateTableStatement<Raw>,
+    _: ShowCreateTableStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -111,7 +111,7 @@ pub fn plan_show_create_table(
 
 pub fn describe_show_create_source(
     _: &StatementContext,
-    _: &ShowCreateSourceStatement<Raw>,
+    _: ShowCreateSourceStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -140,7 +140,7 @@ pub fn plan_show_create_source(
 
 pub fn describe_show_create_sink(
     _: &StatementContext,
-    _: &ShowCreateSinkStatement<Raw>,
+    _: ShowCreateSinkStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -169,7 +169,7 @@ pub fn plan_show_create_sink(
 
 pub fn describe_show_create_index(
     _: &StatementContext,
-    _: &ShowCreateIndexStatement<Raw>,
+    _: ShowCreateIndexStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -198,7 +198,7 @@ pub fn plan_show_create_index(
 
 pub fn describe_show_create_connector(
     _: &StatementContext,
-    _: &ShowCreateConnectorStatement<Raw>,
+    _: ShowCreateConnectorStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()

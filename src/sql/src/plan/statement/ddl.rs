@@ -78,9 +78,9 @@ use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetai
 use crate::connectors::populate_connectors;
 use crate::kafka_util;
 use crate::names::{
-    resolve_names_data_type, resolve_object_name, Aug, FullSchemaName, QualifiedObjectName,
-    RawDatabaseSpecifier, ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier,
-    ResolvedObjectName, SchemaSpecifier,
+    resolve_names_data_type, Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier,
+    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName,
+    SchemaSpecifier,
 };
 use crate::normalize;
 use crate::normalize::ident;
@@ -101,7 +101,7 @@ use crate::pure::Schema;
 
 pub fn describe_create_database(
     _: &StatementContext,
-    _: &CreateDatabaseStatement,
+    _: CreateDatabaseStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -121,7 +121,7 @@ pub fn plan_create_database(
 
 pub fn describe_create_schema(
     _: &StatementContext,
-    _: &CreateSchemaStatement,
+    _: CreateSchemaStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -160,7 +160,7 @@ pub fn plan_create_schema(
 
 pub fn describe_create_table(
     _: &StatementContext,
-    _: &CreateTableStatement<Raw>,
+    _: CreateTableStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -296,7 +296,7 @@ pub fn plan_create_table(
 
 pub fn describe_create_source(
     _: &StatementContext,
-    _: &CreateSourceStatement<Raw>,
+    _: CreateSourceStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -1473,7 +1473,7 @@ fn get_key_envelope(
 
 pub fn describe_create_view(
     _: &StatementContext,
-    _: &CreateViewStatement<Raw>,
+    _: CreateViewStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -1582,7 +1582,7 @@ pub fn plan_create_view(
 
 pub fn describe_create_views(
     _: &StatementContext,
-    _: &CreateViewsStatement<Raw>,
+    _: CreateViewsStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2132,7 +2132,7 @@ fn persist_sink_builder(
 
 pub fn describe_create_sink(
     _: &StatementContext,
-    _: &CreateSinkStatement<Raw>,
+    _: CreateSinkStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2394,7 +2394,7 @@ fn get_root_dependencies<'a>(
 
 pub fn describe_create_index(
     _: &StatementContext,
-    _: &CreateIndexStatement<Raw>,
+    _: CreateIndexStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2516,7 +2516,7 @@ pub fn plan_create_index(
 
 pub fn describe_create_type(
     _: &StatementContext,
-    _: &CreateTypeStatement<Raw>,
+    _: CreateTypeStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2667,7 +2667,7 @@ pub fn plan_create_type(
 
 pub fn describe_create_role(
     _: &StatementContext,
-    _: &CreateRoleStatement,
+    _: CreateRoleStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2712,7 +2712,7 @@ pub fn plan_create_role(
 
 pub fn describe_create_cluster(
     _: &StatementContext,
-    _: &CreateClusterStatement<Raw>,
+    _: CreateClusterStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2836,7 +2836,7 @@ fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig
 
 pub fn describe_create_cluster_replica(
     _: &StatementContext,
-    _: &CreateClusterReplicaStatement<Raw>,
+    _: CreateClusterReplicaStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2862,7 +2862,7 @@ pub fn plan_create_cluster_replica(
 
 pub fn describe_create_secret(
     _: &StatementContext,
-    _: &CreateSecretStatement<Raw>,
+    _: CreateSecretStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2898,9 +2898,9 @@ pub fn plan_create_secret(
     }))
 }
 
-pub fn describe_create_connector<T: mz_sql_parser::ast::AstInfo>(
+pub fn describe_create_connector(
     _: &StatementContext,
-    _: &CreateConnectorStatement<T>,
+    _: CreateConnectorStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2956,7 +2956,7 @@ pub fn plan_create_connector(
 
 pub fn describe_drop_database(
     _: &StatementContext,
-    _: &DropDatabaseStatement<Raw>,
+    _: DropDatabaseStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -2967,7 +2967,7 @@ pub fn plan_drop_database(
         name,
         restrict,
         if_exists,
-    }: DropDatabaseStatement<Raw>,
+    }: DropDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
     let id = match scx.resolve_database(&name) {
         Ok(database) => {
@@ -2988,7 +2988,7 @@ pub fn plan_drop_database(
 
 pub fn describe_drop_objects(
     _: &StatementContext,
-    _: &DropObjectsStatement<Raw>,
+    _: DropObjectsStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3001,7 +3001,7 @@ pub fn plan_drop_objects(
         names,
         cascade,
         if_exists,
-    }: DropObjectsStatement<Raw>,
+    }: DropObjectsStatement,
 ) -> Result<Plan, anyhow::Error> {
     if materialized {
         bail!(
@@ -3010,22 +3010,17 @@ pub fn plan_drop_objects(
         );
     }
 
-    let names: Vec<_> = names
-        .into_iter()
-        .map(|name| resolve_object_name(scx, name))
-        .collect();
-
-    let names = if !if_exists && names.iter().any(|res| res.is_err()) {
-        let error = names
-            .into_iter()
-            .filter_map(|res| res.err())
-            .next()
-            .expect("branch only taken if there are errors");
-        return Err(error.into());
-    } else {
-        // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
-        names.into_iter().filter_map(|res| res.ok()).collect()
-    };
+    let mut items = vec![];
+    for name in names {
+        let name = normalize::unresolved_object_name(name)?;
+        match scx.catalog.resolve_item(&name) {
+            Ok(item) => items.push(item),
+            Err(_) if if_exists => {
+                // TODO(benesch/jkosh44): generate a notice indicating items do not exist.
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 
     match object_type {
         ObjectType::Source
@@ -3035,7 +3030,7 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type
         | ObjectType::Secret
-        | ObjectType::Connector => plan_drop_items(scx, object_type, names, cascade),
+        | ObjectType::Connector => plan_drop_items(scx, object_type, items, cascade),
         ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
             unreachable!("handled through their respective plan_drop functions")
         }
@@ -3045,7 +3040,7 @@ pub fn plan_drop_objects(
 
 pub fn describe_drop_schema(
     _: &StatementContext,
-    _: &DropSchemaStatement<Raw>,
+    _: DropSchemaStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3056,7 +3051,7 @@ pub fn plan_drop_schema(
         name,
         cascade,
         if_exists,
-    }: DropSchemaStatement<Raw>,
+    }: DropSchemaStatement,
 ) -> Result<Plan, anyhow::Error> {
     match scx.resolve_schema(name) {
         Ok(schema) => {
@@ -3106,7 +3101,7 @@ pub fn plan_drop_schema(
 
 pub fn describe_drop_role(
     _: &StatementContext,
-    _: &DropRolesStatement,
+    _: DropRolesStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3139,7 +3134,7 @@ pub fn plan_drop_role(
 
 pub fn describe_drop_cluster(
     _: &StatementContext,
-    _: &DropClustersStatement,
+    _: DropClustersStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3182,7 +3177,7 @@ pub fn plan_drop_cluster(
 
 pub fn describe_drop_cluster_replica(
     _: &StatementContext,
-    _: &DropClusterReplicasStatement,
+    _: DropClusterReplicasStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3225,16 +3220,9 @@ pub fn plan_drop_cluster_replica(
 pub fn plan_drop_items(
     scx: &StatementContext,
     object_type: ObjectType,
-    names: Vec<ResolvedObjectName>,
+    items: Vec<&dyn CatalogItem>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
-    let items: Vec<_> = names
-        .iter()
-        .map(|name| {
-            scx.get_item_by_resolved_name(name)
-                .expect("can't parse a drop for non-user items")
-        })
-        .collect();
     let mut ids = vec![];
     for item in items {
         ids.extend(plan_drop_item(scx, object_type, item, cascade)?);
@@ -3304,7 +3292,7 @@ with_options! {
 
 pub fn describe_alter_index_options(
     _: &StatementContext,
-    _: &AlterIndexStatement<Raw>,
+    _: AlterIndexStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3381,7 +3369,7 @@ pub fn plan_alter_index_options(
 
 pub fn describe_alter_object_rename(
     _: &StatementContext,
-    _: &AlterObjectRenameStatement<Raw>,
+    _: AlterObjectRenameStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3431,7 +3419,7 @@ pub fn plan_alter_object_rename(
 
 pub fn describe_alter_secret_options(
     _: &StatementContext,
-    _: &AlterSecretStatement<Raw>,
+    _: AlterSecretStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
