@@ -33,10 +33,14 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::ChangeBatch;
 use tracing::warn;
 
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
 
 use crate::client::controller::storage::CollectionMetadata;
-use crate::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
+use crate::client::{
+    ComputeClient, ComputeCommand, ComputeResponse, GenericClient, TelemetriedComputeCommand,
+    TelemetriedComputeResponse,
+};
 use crate::{DataflowDescription, Plan};
 
 /// Reconcile commands targeted at a COMPUTE instance.
@@ -54,22 +58,23 @@ pub struct ComputeCommandReconcile<T, C> {
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashSet<uuid::Uuid>,
     /// Stash of responses to send back to the controller.
-    responses: VecDeque<ComputeResponse<T>>,
+    responses: VecDeque<TelemetriedComputeResponse<T>>,
     /// Upper frontiers for indexes, sources, and sinks.
     uppers: HashMap<GlobalId, MutableAntichain<T>>,
 }
 
 #[async_trait]
-impl<T, C> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ComputeCommandReconcile<T, C>
+impl<T, C> GenericClient<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
+    for ComputeCommandReconcile<T, C>
 where
     C: ComputeClient<T>,
     T: timely::progress::Timestamp + Copy,
 {
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    async fn send(&mut self, cmd: TelemetriedComputeCommand<T>) -> Result<(), anyhow::Error> {
         self.absorb_command(cmd).await
     }
 
-    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<TelemetriedComputeResponse<T>>, anyhow::Error> {
         if let Some(response) = self.responses.pop_front() {
             Ok(Some(response))
         } else {
@@ -113,8 +118,11 @@ where
                 // needs to be informed about the `upper`.
                 let mut change_batch = ChangeBatch::new_from(T::minimum(), -1);
                 change_batch.extend(entry.get().frontier().iter().copied().map(|t| (t, 1)));
-                self.responses
-                    .push_back(ComputeResponse::FrontierUppers(vec![(id, change_batch)]));
+                self.responses.push_back(TelemetriedComputeResponse {
+                    resp: ComputeResponse::FrontierUppers(vec![(id, change_batch)]),
+                    // TODO(guswynn): populate OpenTelemetryContext::empty()
+                    otel_ctx: OpenTelemetryContext::empty(),
+                });
             }
             Entry::Vacant(entry) => {
                 entry.insert(frontier);
@@ -133,8 +141,8 @@ where
     }
 
     /// Absorbs a response, and produces response that should be emitted.
-    pub fn absorb_response(&mut self, message: ComputeResponse<T>) {
-        match message {
+    pub fn absorb_response(&mut self, message: TelemetriedComputeResponse<T>) {
+        match message.resp {
             ComputeResponse::FrontierUppers(mut list) => {
                 for (id, changes) in list.iter_mut() {
                     if let Some(frontier) = self.uppers.get_mut(id) {
@@ -145,25 +153,34 @@ where
                     }
                 }
 
-                self.responses
-                    .push_back(ComputeResponse::FrontierUppers(list));
+                self.responses.push_back(TelemetriedComputeResponse {
+                    resp: ComputeResponse::FrontierUppers(list),
+                    otel_ctx: message.otel_ctx,
+                });
             }
-            ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
+            ComputeResponse::PeekResponse(uuid, response) => {
                 if self.peeks.remove(&uuid) {
-                    self.responses
-                        .push_back(ComputeResponse::PeekResponse(uuid, response, otel_ctx));
+                    self.responses.push_back(TelemetriedComputeResponse {
+                        resp: ComputeResponse::PeekResponse(uuid, response),
+                        otel_ctx: message.otel_ctx,
+                    });
                 }
             }
             ComputeResponse::TailResponse(id, response) => {
-                self.responses
-                    .push_back(ComputeResponse::TailResponse(id, response));
+                self.responses.push_back(TelemetriedComputeResponse {
+                    resp: ComputeResponse::TailResponse(id, response),
+                    otel_ctx: message.otel_ctx,
+                });
             }
         }
     }
 
-    async fn absorb_command(&mut self, command: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    async fn absorb_command(
+        &mut self,
+        command: TelemetriedComputeCommand<T>,
+    ) -> Result<(), anyhow::Error> {
         use ComputeCommand::*;
-        match command {
+        match command.cmd {
             CreateInstance(config) => {
                 // TODO: Handle `config.logging` correctly when reconnecting. We currently assume
                 // that the logging config stays the same.
@@ -175,7 +192,12 @@ where
                             }
                         }
                     }
-                    self.client.send(CreateInstance(config)).await?;
+                    self.client
+                        .send(TelemetriedComputeCommand {
+                            cmd: CreateInstance(config),
+                            otel_ctx: command.otel_ctx,
+                        })
+                        .await?;
                     self.created = true;
                 }
                 Ok(())
@@ -184,7 +206,12 @@ where
                 if self.created {
                     self.created = false;
                     self.uppers.clear();
-                    self.client.send(cmd).await
+                    self.client
+                        .send(TelemetriedComputeCommand {
+                            cmd,
+                            otel_ctx: command.otel_ctx,
+                        })
+                        .await
                 } else {
                     Ok(())
                 }
@@ -210,7 +237,12 @@ where
                     }
                 }
                 if !create.is_empty() {
-                    self.client.send(CreateDataflows(create)).await?
+                    self.client
+                        .send(TelemetriedComputeCommand {
+                            cmd: CreateDataflows(create),
+                            otel_ctx: command.otel_ctx,
+                        })
+                        .await?;
                 }
                 Ok(())
             }
@@ -220,17 +252,32 @@ where
                         self.stop_tracking(*id);
                     }
                 }
-                self.client.send(AllowCompaction(frontiers)).await
+                self.client
+                    .send(TelemetriedComputeCommand {
+                        cmd: AllowCompaction(frontiers),
+                        otel_ctx: command.otel_ctx,
+                    })
+                    .await
             }
             Peek(peek) => {
                 self.peeks.insert(peek.uuid);
-                self.client.send(ComputeCommand::Peek(peek)).await
+                self.client
+                    .send(TelemetriedComputeCommand {
+                        cmd: Peek(peek),
+                        otel_ctx: command.otel_ctx,
+                    })
+                    .await
             }
             CancelPeeks { uuids } => {
                 for uuid in &uuids {
                     self.peeks.remove(uuid);
                 }
-                self.client.send(CancelPeeks { uuids }).await
+                self.client
+                    .send(TelemetriedComputeCommand {
+                        cmd: CancelPeeks { uuids },
+                        otel_ctx: command.otel_ctx,
+                    })
+                    .await
             }
         }
     }

@@ -34,7 +34,10 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
+use crate::client::{
+    ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId,
+    TelemetriedComputeCommand,
+};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, SourceInstanceDesc};
@@ -162,10 +165,14 @@ where
         }
         let mut client = crate::client::replicated::ActiveReplication::default();
         client
-            .send(ComputeCommand::CreateInstance(InstanceConfig {
-                replica_id: Default::default(),
-                logging: logging.clone(),
-            }))
+            .send(TelemetriedComputeCommand {
+                cmd: ComputeCommand::CreateInstance(InstanceConfig {
+                    replica_id: Default::default(),
+                    logging: logging.clone(),
+                }),
+                // TODO(guswynn): populate OpenTelemetryContext::empty()
+                otel_ctx: OpenTelemetryContext::empty(),
+            })
             .await?;
 
         Ok(Self {
@@ -368,7 +375,11 @@ where
 
         self.compute
             .client
-            .send(ComputeCommand::CreateDataflows(augmented_dataflows))
+            .send(TelemetriedComputeCommand {
+                cmd: ComputeCommand::CreateDataflows(augmented_dataflows),
+                // TODO(guswynn): populate OpenTelemetryContext::empty()
+                otel_ctx: OpenTelemetryContext::empty(),
+            })
             .await
             .expect("Compute command failed; unrecoverable");
 
@@ -424,18 +435,20 @@ where
 
         self.compute
             .client
-            .send(ComputeCommand::Peek(Peek {
-                id,
-                key,
-                uuid,
-                timestamp,
-                finishing,
-                map_filter_project,
-                target_replica,
+            .send(TelemetriedComputeCommand {
+                cmd: ComputeCommand::Peek(Peek {
+                    id,
+                    key,
+                    uuid,
+                    timestamp,
+                    finishing,
+                    map_filter_project,
+                    target_replica,
+                }),
                 // Obtain an `OpenTelemetryContext` from the thread-local tracing
                 // tree to forward it on to the compute worker.
                 otel_ctx: OpenTelemetryContext::obtain(),
-            }))
+            })
             .await
             .map_err(ComputeError::from)
     }
@@ -455,8 +468,11 @@ where
         self.remove_peeks(uuids.iter().cloned()).await?;
         self.compute
             .client
-            .send(ComputeCommand::CancelPeeks {
-                uuids: uuids.clone(),
+            .send(TelemetriedComputeCommand {
+                cmd: ComputeCommand::CancelPeeks {
+                    uuids: uuids.clone(),
+                },
+                otel_ctx: OpenTelemetryContext::empty(),
             })
             .await
             .map_err(ComputeError::from)
@@ -643,7 +659,11 @@ where
         if !compaction_commands.is_empty() {
             self.compute
                 .client
-                .send(ComputeCommand::AllowCompaction(compaction_commands))
+                .send(TelemetriedComputeCommand {
+                    cmd: ComputeCommand::AllowCompaction(compaction_commands),
+                    // TODO(guswynn): populate OpenTelemetryContext::empty()
+                    otel_ctx: OpenTelemetryContext::empty(),
+                })
                 .await
                 .expect("Compute instance command failed; unrecoverable");
         }

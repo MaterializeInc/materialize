@@ -104,10 +104,6 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
     }
 }
 
-fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
-    (0..1).prop_map(|_| OpenTelemetryContext::empty())
-}
-
 /// Peek at an arrangement.
 ///
 /// This request elicits data from the worker, by naming an
@@ -142,11 +138,6 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// If `Some`, the peek is only handled by the given replica.
     /// If `None`, the peek is handled by all replicas.
     pub target_replica: Option<ReplicaId>,
-    /// An `OpenTelemetryContext` to forward trace information along
-    /// to the compute worker to allow associating traces between
-    /// the compute controller and the compute worker.
-    #[proptest(strategy = "empty_otel_ctx()")]
-    pub otel_ctx: OpenTelemetryContext,
 }
 
 impl RustType<ProtoPeek> for Peek {
@@ -159,7 +150,6 @@ impl RustType<ProtoPeek> for Peek {
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             target_replica: self.target_replica,
-            otel_ctx: self.otel_ctx.clone().into(),
         }
     }
 
@@ -174,9 +164,25 @@ impl RustType<ProtoPeek> for Peek {
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
             target_replica: x.target_replica,
-            otel_ctx: x.otel_ctx.into(),
         })
     }
+}
+
+/// A `ComputeCommand` enriched by an `OpenTelemetryContext`
+/// designed to be sent over the wire. This allow traces
+/// in the compute controller and the compute worker
+/// to be associated with each other
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TelemetriedComputeCommand<T = mz_repr::Timestamp> {
+    /// The underlying command
+    pub cmd: ComputeCommand<T>,
+    /// The `OpenTelemetryContext` that the `ComputeCommand`
+    /// sender wishes `cmd` to be associated with.
+    ///
+    /// This context represents a OpenTelemetry trace
+    /// that will be used as a parent in the controller,
+    /// and will be forwarded to the compute worker.
+    pub otel_ctx: OpenTelemetryContext,
 }
 
 /// Commands related to the computation and maintenance of views.
@@ -212,12 +218,12 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
 }
 
-impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
+impl RustType<ProtoComputeCommand> for TelemetriedComputeCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoComputeCommand {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         ProtoComputeCommand {
-            kind: Some(match self {
+            kind: Some(match &self.cmd {
                 ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
@@ -235,29 +241,39 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
                     uuids: uuids.into_proto(),
                 }),
             }),
+            otel_ctx: Some(ProtoOpenTelemetryContext {
+                ctx: self.otel_ctx.clone().into(),
+            }),
         }
     }
 
     fn from_proto(proto: ProtoComputeCommand) -> Result<Self, TryFromProtoError> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
-        match proto.kind {
-            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
-            Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
-            Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
-                Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
-            }
-            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
-                Ok(ComputeCommand::AllowCompaction(collections.into_rust()?))
-            }
-            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
-            Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
-                uuids: uuids.into_rust()?,
-            }),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoComputeCommand::kind",
-            )),
-        }
+        Ok(TelemetriedComputeCommand {
+            cmd: match proto.kind {
+                Some(CreateInstance(config)) => ComputeCommand::CreateInstance(config.into_rust()?),
+                Some(DropInstance(())) => ComputeCommand::DropInstance,
+                Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
+                    ComputeCommand::CreateDataflows(dataflows.into_rust()?)
+                }
+                Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
+                    ComputeCommand::AllowCompaction(collections.into_rust()?)
+                }
+                Some(Peek(peek)) => ComputeCommand::Peek(peek.into_rust()?),
+                Some(CancelPeeks(ProtoCancelPeeks { uuids })) => ComputeCommand::CancelPeeks {
+                    uuids: uuids.into_rust()?,
+                },
+                None => {
+                    return Err(TryFromProtoError::missing_field(
+                        "ProtoComputeCommand::kind",
+                    ))
+                }
+            },
+            otel_ctx: proto
+                .otel_ctx
+                .map_or(OpenTelemetryContext::empty(), |oc| oc.ctx.into()),
+        })
     }
 }
 
@@ -282,19 +298,30 @@ impl RustType<proto_compute_command::ProtoCompaction> for (GlobalId, Antichain<u
     }
 }
 
-impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
+impl Arbitrary for TelemetriedComputeCommand<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
-            Just(ComputeCommand::DropInstance),
+            any::<InstanceConfig>().prop_map(|inner| TelemetriedComputeCommand {
+                cmd: ComputeCommand::CreateInstance(inner),
+                otel_ctx: OpenTelemetryContext::empty(),
+            }),
+            Just(TelemetriedComputeCommand {
+                cmd: ComputeCommand::DropInstance,
+                otel_ctx: OpenTelemetryContext::empty(),
+            }),
             proptest::collection::vec(
                 any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
                 1..4
             )
-            .prop_map(ComputeCommand::CreateDataflows),
+            .prop_map(|cmds| {
+                TelemetriedComputeCommand {
+                    cmd: ComputeCommand::CreateDataflows(cmds),
+                    otel_ctx: OpenTelemetryContext::empty(),
+                }
+            }),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
@@ -302,16 +329,25 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
                 ),
                 1..4
             )
-            .prop_map(|collections| ComputeCommand::AllowCompaction(
-                collections
-                    .into_iter()
-                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
-                    .collect()
-            )),
-            any::<Peek>().prop_map(ComputeCommand::Peek),
+            .prop_map(|collections| TelemetriedComputeCommand {
+                cmd: ComputeCommand::AllowCompaction(
+                    collections
+                        .into_iter()
+                        .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
+                        .collect()
+                ),
+                otel_ctx: OpenTelemetryContext::empty(),
+            }),
+            any::<Peek>().prop_map(|peek| TelemetriedComputeCommand {
+                cmd: ComputeCommand::Peek(peek),
+                otel_ctx: OpenTelemetryContext::empty(),
+            }),
             proptest::collection::vec(any_uuid(), 1..6).prop_map(|uuids| {
-                ComputeCommand::CancelPeeks {
-                    uuids: BTreeSet::from_iter(uuids.into_iter()),
+                TelemetriedComputeCommand {
+                    cmd: ComputeCommand::CancelPeeks {
+                        uuids: BTreeSet::from_iter(uuids.into_iter()),
+                    },
+                    otel_ctx: OpenTelemetryContext::empty(),
                 }
             })
         ]
@@ -331,13 +367,13 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 }
 
-impl<T> ComputeCommand<T> {
+impl<T> TelemetriedComputeCommand<T> {
     /// Indicates which global ids should start and cease frontier tracking.
     ///
     /// Identifiers added to `start` will install frontier tracking, and identifiers
     /// added to `cease` will uninstall frontier tracking.
     pub fn frontier_tracking(&self, start: &mut Vec<GlobalId>, cease: &mut Vec<GlobalId>) {
-        match self {
+        match &self.cmd {
             ComputeCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
                     for (sink_id, _) in dataflow.sink_exports.iter() {
@@ -369,11 +405,11 @@ impl<T> ComputeCommand<T> {
 
 #[derive(Debug)]
 struct ComputeCommandHistory<T> {
-    commands: Vec<ComputeCommand<T>>,
+    commands: Vec<TelemetriedComputeCommand<T>>,
 }
 
 impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
-    pub fn push(&mut self, command: ComputeCommand<T>) {
+    pub fn push(&mut self, command: TelemetriedComputeCommand<T>) {
         self.commands.push(command);
     }
     /// Reduces `self.history` to a minimal form.
@@ -391,39 +427,71 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         // First determine what the final compacted frontiers will be for each collection.
         // These will determine for each collection whether the command that creates it is required,
         // and if required what `as_of` frontier should be used for its updated command.
+        //
+        //
+        // Note that when we reduce, we end up tracing the work under the `OpenTelemetryContext`
+        // of the final command
+        // TODO(guswynn): consider holding a durable log of just `ComputeCommand`'s
+        // and create new otel contexts
         let mut final_frontiers = std::collections::BTreeMap::new();
+        let mut final_frontiers_otel_ctx = OpenTelemetryContext::empty();
         let mut live_dataflows = Vec::new();
+        let mut live_dataflows_otel_ctx = OpenTelemetryContext::empty();
         let mut live_peeks = Vec::new();
+        let mut live_peeks_otel_ctx = OpenTelemetryContext::empty();
         let mut live_cancels = std::collections::BTreeSet::new();
+        let mut live_cancels_otel_ctx = OpenTelemetryContext::empty();
 
         let mut create_command = None;
         let mut drop_command = None;
 
         for command in self.commands.drain(..) {
             match command {
-                create @ ComputeCommand::CreateInstance(_) => {
+                create @ TelemetriedComputeCommand {
+                    cmd: ComputeCommand::CreateInstance(_),
+                    ..
+                } => {
                     // We should be able to handle this, should this client need to be restartable.
                     assert!(create_command.is_none());
                     create_command = Some(create);
                 }
-                cmd @ ComputeCommand::DropInstance => {
+                cmd @ TelemetriedComputeCommand {
+                    cmd: ComputeCommand::DropInstance,
+                    ..
+                } => {
                     assert!(drop_command.is_none());
                     drop_command = Some(cmd);
                 }
-                ComputeCommand::CreateDataflows(dataflows) => {
+                TelemetriedComputeCommand {
+                    cmd: ComputeCommand::CreateDataflows(dataflows),
+                    otel_ctx,
+                } => {
+                    live_dataflows_otel_ctx = otel_ctx;
                     live_dataflows.extend(dataflows);
                 }
-                ComputeCommand::AllowCompaction(frontiers) => {
+                TelemetriedComputeCommand {
+                    cmd: ComputeCommand::AllowCompaction(frontiers),
+                    otel_ctx,
+                } => {
+                    final_frontiers_otel_ctx = otel_ctx;
                     for (id, frontier) in frontiers {
                         final_frontiers.insert(id, frontier.clone());
                     }
                 }
-                ComputeCommand::Peek(peek) => {
+                TelemetriedComputeCommand {
+                    cmd: ComputeCommand::Peek(peek),
+                    otel_ctx,
+                } => {
+                    live_peeks_otel_ctx = otel_ctx;
                     // We could pre-filter here, but seems hard to access `uuid`
                     // and take ownership of `peek` at the same time.
                     live_peeks.push(peek);
                 }
-                ComputeCommand::CancelPeeks { mut uuids } => {
+                TelemetriedComputeCommand {
+                    cmd: ComputeCommand::CancelPeeks { mut uuids },
+                    otel_ctx,
+                } => {
+                    live_cancels_otel_ctx = otel_ctx;
                     uuids.retain(|uuid| peeks.contains_key(uuid));
                     live_cancels.extend(uuids);
                 }
@@ -475,19 +543,32 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
             self.commands.push(create_command);
         }
         if !live_dataflows.is_empty() {
-            self.commands
-                .push(ComputeCommand::CreateDataflows(live_dataflows));
+            self.commands.push(TelemetriedComputeCommand {
+                cmd: ComputeCommand::CreateDataflows(live_dataflows),
+                otel_ctx: live_dataflows_otel_ctx,
+            });
         }
         if !final_frontiers.is_empty() {
-            self.commands.push(ComputeCommand::AllowCompaction(
-                final_frontiers.into_iter().collect(),
-            ));
+            self.commands.push(TelemetriedComputeCommand {
+                cmd: ComputeCommand::AllowCompaction(final_frontiers.into_iter().collect()),
+                otel_ctx: final_frontiers_otel_ctx,
+            });
         }
-        self.commands
-            .extend(live_peeks.into_iter().map(ComputeCommand::Peek));
+        self.commands.extend(
+            live_peeks
+                .into_iter()
+                .map(|peek| TelemetriedComputeCommand {
+                    cmd: ComputeCommand::Peek(peek),
+                    // All peeks inherit the same context
+                    otel_ctx: live_peeks_otel_ctx.clone(),
+                }),
+        );
         if !live_cancels.is_empty() {
-            self.commands.push(ComputeCommand::CancelPeeks {
-                uuids: live_cancels,
+            self.commands.push(TelemetriedComputeCommand {
+                cmd: ComputeCommand::CancelPeeks {
+                    uuids: live_cancels,
+                },
+                otel_ctx: live_cancels_otel_ctx,
             });
         }
         if let Some(drop_command) = drop_command {
@@ -497,7 +578,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         command_count
     }
     /// Iterate through the contained commands.
-    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+    pub fn iter(&self) -> impl Iterator<Item = &TelemetriedComputeCommand<T>> {
         self.commands.iter()
     }
 
@@ -536,6 +617,10 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// Additionally, an `OpenTelemetryContext` to forward trace information
     /// back into coord. This allows coord traces to be children of work
     /// done in compute!
+    ///
+    // TODO(guswynn): lift the `OpenTelemetryContext`
+    // to a higher level as tracked in
+    // <https://github.com/MaterializeInc/materialize/issues/12878>
     PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
@@ -545,23 +630,30 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
 }
 
+/// Commands related to the computation and maintenance of views.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TelemetriedComputeResponse<T = mz_repr::Timestamp> {
+    pub resp: ComputeResponse<T>,
+    pub otel_ctx: OpenTelemetryContext,
+}
+
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
     /// The worker's response to a specified (by connection id) peek.
-    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
+    PeekResponse(Uuid, PeekResponse),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
 }
 
-impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
+impl RustType<ProtoComputeResponse> for TelemetriedComputeResponse<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoComputeResponse {
         use proto_compute_response::Kind::*;
         use proto_compute_response::*;
         ProtoComputeResponse {
-            kind: Some(match self {
+            kind: Some(match &self.resp {
                 ComputeResponse::FrontierUppers(traces) => {
                     FrontierUppers(ProtoFrontierUppersKind {
                         traces: traces
@@ -582,53 +674,59 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                             .collect(),
                     })
                 }
-                ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
-                    PeekResponse(ProtoPeekResponseKind {
-                        id: Some(id.into_proto()),
-                        resp: Some(resp.into_proto()),
-                        otel_ctx: otel_ctx.clone().into(),
-                    })
-                }
+                ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseKind {
+                    id: Some(id.into_proto()),
+                    resp: Some(resp.into_proto()),
+                }),
                 ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
                     id: Some(id.into_proto()),
                     resp: Some(resp.into_proto()),
                 }),
+            }),
+            otel_ctx: Some(ProtoOpenTelemetryContext {
+                ctx: self.otel_ctx.clone().into(),
             }),
         }
     }
 
     fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
-        match proto.kind {
-            Some(FrontierUppers(traces)) => Ok(ComputeResponse::FrontierUppers(
-                traces
-                    .traces
-                    .into_iter()
-                    .map(|trace| {
-                        let mut batch = ChangeBatch::new();
-                        batch.extend(
-                            trace
-                                .updates
-                                .into_iter()
-                                .map(|update| (update.timestamp, update.diff)),
-                        );
-                        Ok((trace.id.into_rust_if_some("ProtoTrace::id")?, batch))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
-            Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
-                resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
-                resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
-                resp.otel_ctx.into(),
-            )),
-            Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
-                resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
-                resp.resp.into_rust_if_some("ProtoTailResponseKind::resp")?,
-            )),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoComputeResponse::kind",
-            )),
-        }
+        Ok(TelemetriedComputeResponse {
+            resp: match proto.kind {
+                Some(FrontierUppers(traces)) => ComputeResponse::FrontierUppers(
+                    traces
+                        .traces
+                        .into_iter()
+                        .map(|trace| {
+                            let mut batch = ChangeBatch::new();
+                            batch.extend(
+                                trace
+                                    .updates
+                                    .into_iter()
+                                    .map(|update| (update.timestamp, update.diff)),
+                            );
+                            Ok((trace.id.into_rust_if_some("ProtoTrace::id")?, batch))
+                        })
+                        .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+                ),
+                Some(PeekResponse(resp)) => ComputeResponse::PeekResponse(
+                    resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
+                    resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
+                ),
+                Some(TailResponse(resp)) => ComputeResponse::TailResponse(
+                    resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
+                    resp.resp.into_rust_if_some("ProtoTailResponseKind::resp")?,
+                ),
+                None => {
+                    return Err(TryFromProtoError::missing_field(
+                        "ProtoComputeResponse::kind",
+                    ))
+                }
+            },
+            otel_ctx: proto
+                .otel_ctx
+                .map_or(OpenTelemetryContext::empty(), |oc| oc.ctx.into()),
+        })
     }
 }
 
@@ -642,19 +740,28 @@ fn any_change_batch() -> impl Strategy<Value = ChangeBatch<u64>> {
     )
 }
 
-impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
+impl Arbitrary for TelemetriedComputeResponse<mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
-                .prop_map(ComputeResponse::FrontierUppers),
-            (any_uuid(), any::<PeekResponse>()).prop_map(|(id, resp)| {
-                ComputeResponse::PeekResponse(id, resp, OpenTelemetryContext::empty())
+            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4).prop_map(
+                |f| TelemetriedComputeResponse {
+                    resp: ComputeResponse::FrontierUppers(f),
+                    otel_ctx: OpenTelemetryContext::empty()
+                }
+            ),
+            (any_uuid(), any::<PeekResponse>()).prop_map(|(id, resp)| TelemetriedComputeResponse {
+                resp: ComputeResponse::PeekResponse(id, resp),
+                otel_ctx: OpenTelemetryContext::empty()
             }),
-            (any::<GlobalId>(), any::<TailResponse>())
-                .prop_map(|(id, resp)| ComputeResponse::TailResponse(id, resp)),
+            (any::<GlobalId>(), any::<TailResponse>()).prop_map(|(id, resp)| {
+                TelemetriedComputeResponse {
+                    resp: ComputeResponse::TailResponse(id, resp),
+                    otel_ctx: OpenTelemetryContext::empty(),
+                }
+            }),
         ]
         .boxed()
     }
@@ -719,11 +826,14 @@ impl<C, T> StorageClient<T> for C where C: GenericClient<StorageCommand<T>, Stor
 
 /// A client to a compute server.
 pub trait ComputeClient<T = mz_repr::Timestamp>:
-    GenericClient<ComputeCommand<T>, ComputeResponse<T>>
+    GenericClient<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
 {
 }
 
-impl<C, T> ComputeClient<T> for C where C: GenericClient<ComputeCommand<T>, ComputeResponse<T>> {}
+impl<C, T> ComputeClient<T> for C where
+    C: GenericClient<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
+{
+}
 
 #[async_trait]
 impl<C, R> GenericClient<C, R> for Box<dyn GenericClient<C, R>>
@@ -739,11 +849,13 @@ where
 }
 
 #[async_trait]
-impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn ComputeClient<T>> {
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+impl<T: Send> GenericClient<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
+    for Box<dyn ComputeClient<T>>
+{
+    async fn send(&mut self, cmd: TelemetriedComputeCommand<T>) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
-    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<TelemetriedComputeResponse<T>>, anyhow::Error> {
         (**self).recv().await
     }
 }
@@ -815,7 +927,7 @@ where
 pub type LocalStorageClient = LocalClient<StorageCommand, StorageResponse>;
 
 /// A [`LocalClient`] for the compute layer.
-pub type LocalComputeClient = LocalClient<ComputeCommand, ComputeResponse>;
+pub type LocalComputeClient = LocalClient<TelemetriedComputeCommand, TelemetriedComputeResponse>;
 
 /// Trait for clients that can be disconnected and reconnected.
 #[async_trait]
@@ -841,8 +953,11 @@ where
     client: partitioned::Partitioned<G, C, R>,
 }
 
-pub type ComputedRemoteClient<T> =
-    RemoteClient<ComputeCommand<T>, ComputeResponse<T>, tcp::GrpcComputedClient>;
+pub type ComputedRemoteClient<T> = RemoteClient<
+    TelemetriedComputeCommand<T>,
+    TelemetriedComputeResponse<T>,
+    tcp::GrpcComputedClient,
+>;
 
 pub type StoragedRemoteClient<T> = RemoteClient<
     StorageCommand<T>,
@@ -1000,11 +1115,11 @@ pub mod tcp {
     use tonic::Streaming;
 
     use super::proto_compute_client::ProtoComputeClient;
-    use super::ComputeCommand;
-    use super::ComputeResponse;
     use super::FromAddr;
     use super::GenericClient;
     use super::Reconnect;
+    use super::TelemetriedComputeCommand;
+    use super::TelemetriedComputeResponse;
 
     /// A client to a remote dataflow server using gRPC and protobuf based communication.
     ///
@@ -1015,7 +1130,7 @@ pub mod tcp {
     /// `CommandResponseStream`. `CommandResponseStream` sets up two streams that persist after the
     /// RPC has returned: A command stream (backed by a unbounded mpsc queue) going from this
     /// instance to the server and a response stream coming back (represented directly as a
-    /// Streaming<ComputeResponse> instance). The recv and send functions interact with the two
+    /// Streaming<TelemetriedComputeResponse> instance). The recv and send functions interact with the two
     /// mpsc channel or the streaming instance respectively.
     #[derive(Debug)]
     pub struct GrpcComputedClient {
@@ -1035,10 +1150,8 @@ pub mod tcp {
 
         // Ready to go!
         Connected(
-            (
-                UnboundedSender<super::ProtoComputeCommand>,
-                Streaming<super::ProtoComputeResponse>,
-            ),
+            UnboundedSender<super::ProtoComputeCommand>,
+            Streaming<super::ProtoComputeResponse>,
         ),
 
         // Unable to connect, wait on next connect
@@ -1091,7 +1204,7 @@ pub mod tcp {
                             Ok(resp_rx_wrap) => {
                                 let resp_rx = resp_rx_wrap.into_inner();
                                 info!("GrpcComputedClient {}: connected", &self.addr);
-                                self.state = GrpcComputedTcpConn::Connected((tx, resp_rx));
+                                self.state = GrpcComputedTcpConn::Connected(tx, resp_rx);
                             }
                             Err(err) => {
                                 debug!(
@@ -1102,7 +1215,7 @@ pub mod tcp {
                             }
                         }
                     }
-                    GrpcComputedTcpConn::Connected(_) => break,
+                    GrpcComputedTcpConn::Connected(_, _) => break,
                     GrpcComputedTcpConn::Backoff(deadline) => {
                         time::sleep_until(*deadline).await;
                         self.state = GrpcComputedTcpConn::Disconnected;
@@ -1113,14 +1226,15 @@ pub mod tcp {
     }
 
     #[async_trait]
-    impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for GrpcComputedClient
+    impl<T> GenericClient<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
+        for GrpcComputedClient
     where
         T: 'static + std::fmt::Debug + Send,
-        ComputeCommand<T>: RustType<super::ProtoComputeCommand>,
-        ComputeResponse<T>: RustType<super::ProtoComputeResponse>,
+        TelemetriedComputeCommand<T>: RustType<super::ProtoComputeCommand>,
+        TelemetriedComputeResponse<T>: RustType<super::ProtoComputeResponse>,
     {
-        async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-            let sender = if let GrpcComputedTcpConn::Connected((sender, _)) = &self.state {
+        async fn send(&mut self, cmd: TelemetriedComputeCommand<T>) -> Result<(), anyhow::Error> {
+            let sender = if let GrpcComputedTcpConn::Connected(sender, _) = &self.state {
                 sender
             } else {
                 return Err(anyhow::anyhow!("Sent into disconnected channel"));
@@ -1133,9 +1247,9 @@ pub mod tcp {
             }
         }
 
-        async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-            if let GrpcComputedTcpConn::Connected(channels) = &mut self.state {
-                match channels.1.next().await {
+        async fn recv(&mut self) -> Result<Option<TelemetriedComputeResponse<T>>, anyhow::Error> {
+            if let GrpcComputedTcpConn::Connected(_, rx) = &mut self.state {
+                match rx.next().await {
                     Some(Ok(x)) => match x.into_rust() {
                         Ok(r) => return Ok(Some(r)),
                         Err(e) => {
@@ -1378,7 +1492,7 @@ pub mod tcp {
     }
 
     impl GrpcComputedServerInterface {
-        pub async fn send(&self, resp: ComputeResponse) -> Result<(), anyhow::Error> {
+        pub async fn send(&self, resp: TelemetriedComputeResponse) -> Result<(), anyhow::Error> {
             loop {
                 let res = match self.shared.queue.lock().await.as_ref() {
                     Some(x) => Some(x.1.send((&resp).into_proto()).map_err(Into::into)),
@@ -1415,7 +1529,7 @@ pub mod tcp {
         // internally a permit: If a notifier comes first, and this function calls notified().await,
         // it will immediately return (and clear the permit).
         // See https://docs.rs/tokio/0.2.12/tokio/sync/struct.Notify.html
-        pub async fn recv(&mut self) -> Result<ComputeCommand, anyhow::Error> {
+        pub async fn recv(&mut self) -> Result<TelemetriedComputeCommand, anyhow::Error> {
             loop {
                 let res = match self.shared.queue.lock().await.as_mut() {
                     Some(x) => {
@@ -1486,8 +1600,8 @@ pub mod tcp {
         }
     }
 
-    /// Creates a running gRPC based computed server that can receive ComputeCommands
-    /// and send ComputeResponses. Returns a a tuple of ComputedServerInterface that
+    /// Creates a running gRPC based computed server that can receive TelemetriedComputeCommands
+    /// and send TelemetriedComputeResponses. Returns a a tuple of ComputedServerInterface that
     /// can be used to recv and send from. As well as a shutdown signal, which should
     /// be used to terminate the mainloop if a message is sent.
     pub fn grpc_computed_server(listen_addr: String) -> GrpcComputedServerInterface {
@@ -1542,19 +1656,19 @@ mod tests {
         }
 
         #[test]
-        fn compute_command_protobuf_roundtrip(expect in any::<ComputeCommand<mz_repr::Timestamp>>() ) {
+        fn compute_command_protobuf_roundtrip(expect in any::<TelemetriedComputeCommand<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeCommand>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }
 
         #[test]
-        fn compute_response_protobuf_roundtrip(expect in any::<ComputeResponse<mz_repr::Timestamp>>() ) {
+        fn compute_response_protobuf_roundtrip(expect in any::<TelemetriedComputeResponse<mz_repr::Timestamp>>() ) {
             let actual = protobuf_roundtrip::<_, ProtoComputeResponse>(&expect);
             assert!(actual.is_ok());
             let actual = actual.unwrap();
-            if let ComputeResponse::FrontierUppers(expected_traces) = expect {
-                if let ComputeResponse::FrontierUppers(actual_traces) = actual {
+            if let ComputeResponse::FrontierUppers(expected_traces) = expect.resp {
+                if let ComputeResponse::FrontierUppers(actual_traces) = actual.resp {
                     assert_eq!(actual_traces.len(), expected_traces.len());
                     for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
                         assert_eq!(actual_id, expected_id);
@@ -1566,7 +1680,7 @@ mod tests {
                         assert_eq!(actual_changes, expected_changes);
                     }
                 } else {
-                    assert_eq!(actual, ComputeResponse::FrontierUppers(expected_traces));
+                    assert_eq!(actual.resp, ComputeResponse::FrontierUppers(expected_traces));
                 }
             } else {
                 assert_eq!(actual, expect);

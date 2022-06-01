@@ -27,6 +27,7 @@ use mz_repr::{Diff, GlobalId, Row};
 
 use crate::client::{
     ComputeCommand, ComputeResponse, GenericClient, PeekResponse, StorageCommand, StorageResponse,
+    TelemetriedComputeCommand, TelemetriedComputeResponse,
 };
 use crate::{DataflowDescription, TailResponse};
 
@@ -330,8 +331,8 @@ pub struct PartitionedComputeState<T> {
     pending_tails: HashMap<GlobalId, Option<(MutableAntichain<T>, Vec<(T, Row, Diff)>)>>,
 }
 
-impl<T> Partitionable<ComputeCommand<T>, ComputeResponse<T>>
-    for (ComputeCommand<T>, ComputeResponse<T>)
+impl<T> Partitionable<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
+    for (TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>)
 where
     T: timely::progress::Timestamp + Copy,
 {
@@ -366,8 +367,8 @@ where
     /// Observes commands that move past, and prepares state for responses.
     ///
     /// In particular, this method installs and removes upper frontier maintenance.
-    pub fn observe_command(&mut self, command: &ComputeCommand<T>) {
-        match command {
+    pub fn observe_command(&mut self, command: &TelemetriedComputeCommand<T>) {
+        match command.cmd {
             ComputeCommand::CreateInstance(_) | ComputeCommand::DropInstance => {
                 self.reset();
             }
@@ -394,14 +395,18 @@ where
     }
 }
 
-impl<T> PartitionedState<ComputeCommand<T>, ComputeResponse<T>> for PartitionedComputeState<T>
+impl<T> PartitionedState<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
+    for PartitionedComputeState<T>
 where
     T: timely::progress::Timestamp + Copy,
 {
-    fn split_command(&mut self, command: ComputeCommand<T>) -> Vec<ComputeCommand<T>> {
+    fn split_command(
+        &mut self,
+        command: TelemetriedComputeCommand<T>,
+    ) -> Vec<TelemetriedComputeCommand<T>> {
         self.observe_command(&command);
 
-        match command {
+        match command.cmd {
             ComputeCommand::CreateDataflows(dataflows) => {
                 let mut dataflows_parts = vec![Vec::new(); self.parts];
 
@@ -438,19 +443,23 @@ where
                 }
                 dataflows_parts
                     .into_iter()
-                    .map(ComputeCommand::CreateDataflows)
+                    .map(|cmd| TelemetriedComputeCommand {
+                        cmd: ComputeCommand::CreateDataflows(cmd),
+                        // The context is shared across all workers
+                        otel_ctx: command.otel_ctx.clone(),
+                    })
                     .collect()
             }
-            command => vec![command; self.parts],
+            _ => vec![command; self.parts],
         }
     }
 
     fn absorb_response(
         &mut self,
         shard_id: usize,
-        message: ComputeResponse<T>,
-    ) -> Option<Result<ComputeResponse<T>, anyhow::Error>> {
-        match message {
+        message: TelemetriedComputeResponse<T>,
+    ) -> Option<Result<TelemetriedComputeResponse<T>, anyhow::Error>> {
+        let resp = match message.resp {
             ComputeResponse::FrontierUppers(mut list) => {
                 for (id, changes) in list.iter_mut() {
                     if let Some(frontier) = self.uppers.get_mut(id) {
@@ -479,7 +488,7 @@ where
                     Some(Ok(ComputeResponse::FrontierUppers(list)))
                 }
             }
-            ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
+            ComputeResponse::PeekResponse(uuid, response) => {
                 // Incorporate new peek responses; awaiting all responses.
                 let entry = self
                     .peek_responses
@@ -504,7 +513,7 @@ where
                     }
                     self.peek_responses.remove(&uuid);
                     // We take the otel_ctx from the last peek, but they should all be the same
-                    Some(Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)))
+                    Some(Ok(ComputeResponse::PeekResponse(uuid, response)))
                 } else {
                     None
                 }
@@ -572,6 +581,15 @@ where
                     }
                 }
             }
-        }
+        };
+
+        resp.map(|val| {
+            val.map(|val| TelemetriedComputeResponse {
+                resp: val,
+                // The context from the last message wins; However, the same
+                // context should have been sent to all the clients
+                otel_ctx: message.otel_ctx,
+            })
+        })
     }
 }

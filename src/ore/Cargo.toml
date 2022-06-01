@@ -80,6 +80,7 @@ tracing_ = [
   "opentelemetry",
   "opentelemetry-otlp",
   "tonic",
+  "serde",
 ]
 tokio-console = ["console-subscriber", "tokio", "tokio/tracing"]
 cli = ["clap"]

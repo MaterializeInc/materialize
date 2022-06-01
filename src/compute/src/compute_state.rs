@@ -25,7 +25,10 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId};
+use mz_dataflow_types::client::{
+    ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId, TelemetriedComputeCommand,
+    TelemetriedComputeResponse,
+};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{
     ConnectorContext, DataflowDescription, DataflowError, PeekResponse, Plan, TailResponse,
@@ -80,24 +83,22 @@ pub struct ActiveComputeState<'a, A: Allocate> {
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
-    pub response_tx: &'a mut mpsc::UnboundedSender<ComputeResponse>,
+    pub response_tx: &'a mut mpsc::UnboundedSender<TelemetriedComputeResponse>,
 }
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
     #[tracing::instrument(level = "debug", skip(self))]
-    pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
+    pub fn handle_compute_command(&mut self, cmd: TelemetriedComputeCommand) {
         use ComputeCommand::*;
 
-        match cmd {
+        cmd.otel_ctx.attach_as_parent();
+        match cmd.cmd {
             CreateInstance(config) => self.handle_create_instance(config),
             DropInstance => (),
             CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
             AllowCompaction(list) => self.handle_allow_compaction(list),
-            Peek(peek) => {
-                peek.otel_ctx.attach_as_parent();
-                self.handle_peek(peek)
-            }
+            Peek(peek) => self.handle_peek(peek),
             CancelPeeks { uuids } => self.handle_cancel_peeks(uuids),
         }
     }
@@ -576,7 +577,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
 
         if !progress.is_empty() {
-            self.send_compute_response(ComputeResponse::FrontierUppers(progress));
+            self.send_compute_response(TelemetriedComputeResponse {
+                resp: ComputeResponse::FrontierUppers(progress),
+                // TODO(guswynn): populate OpenTelemetryContext::empty()
+                otel_ctx: OpenTelemetryContext::empty(),
+            });
         }
     }
 
@@ -607,11 +612,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
         let log_event = peek.as_log_event();
         // Respond with the response.
-        self.send_compute_response(ComputeResponse::PeekResponse(
-            peek.peek.uuid,
-            response,
-            OpenTelemetryContext::obtain(),
-        ));
+        self.send_compute_response(TelemetriedComputeResponse {
+            resp: ComputeResponse::PeekResponse(peek.peek.uuid, response),
+            // TODO(guswynn): populate OpenTelemetryContext::empty() (Peek)
+            otel_ctx: OpenTelemetryContext::obtain(),
+        });
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
@@ -623,12 +628,16 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     pub fn process_tails(&mut self) {
         let mut tail_responses = self.compute_state.tail_response_buffer.borrow_mut();
         for (sink_id, response) in tail_responses.drain(..) {
-            self.send_compute_response(ComputeResponse::TailResponse(sink_id, response));
+            self.send_compute_response(TelemetriedComputeResponse {
+                resp: ComputeResponse::TailResponse(sink_id, response),
+                // TODO(guswynn): populate OpenTelemetryContext::empty()
+                otel_ctx: OpenTelemetryContext::empty(),
+            });
         }
     }
 
     /// Send a response to the coordinator.
-    fn send_compute_response(&self, response: ComputeResponse) {
+    fn send_compute_response(&self, response: TelemetriedComputeResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = self.response_tx.send(response);

@@ -21,7 +21,10 @@ use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::sync::mpsc;
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
+use mz_dataflow_types::client::{
+    ComputeCommand, LocalClient, LocalComputeClient, TelemetriedComputeCommand,
+    TelemetriedComputeResponse,
+};
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -143,11 +146,11 @@ struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel from which commands are drawn.
-    command_rx: crossbeam_channel::Receiver<ComputeCommand>,
+    command_rx: crossbeam_channel::Receiver<TelemetriedComputeCommand>,
     /// The state associated with rendering dataflows.
     compute_state: Option<ComputeState>,
     /// The channel over which compute responses are reported.
-    compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
+    compute_response_tx: mpsc::UnboundedSender<TelemetriedComputeResponse>,
     /// Metrics bundle.
     metrics_bundle: (SinkBaseMetrics, TraceMetrics),
     /// Configuration for sink connectors.
@@ -191,7 +194,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
             for cmd in cmds {
                 let mut should_drop_compute = false;
-                match &cmd {
+                match &cmd.cmd {
                     ComputeCommand::CreateInstance(config) => {
                         self.compute_state = Some(ComputeState {
                             replica_id: config.replica_id,

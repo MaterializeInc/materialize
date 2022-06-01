@@ -290,7 +290,7 @@ where
 /// Allows associating [`tracing`] spans across task or thread boundaries.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OpenTelemetryContext {
-    inner: HashMap<String, String>,
+    ctx: HashMap<String, String>,
 }
 
 impl OpenTelemetryContext {
@@ -300,51 +300,51 @@ impl OpenTelemetryContext {
     /// to create a context, then the current thread's `Context` is used
     /// defaulting to the default `Context`.
     pub fn attach_as_parent(&self) {
-        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(&self.inner));
+        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(&self.ctx));
         tracing::Span::current().set_parent(parent_cx);
     }
 
     /// Obtains a `Context` from the current [`tracing`] span.
     pub fn obtain() -> Self {
-        let mut map = std::collections::HashMap::new();
+        let mut ctx = std::collections::HashMap::new();
         global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(&tracing::Span::current().context(), &mut map)
+            propagator.inject_context(&tracing::Span::current().context(), &mut ctx)
         });
 
-        Self { inner: map }
+        Self { ctx }
     }
 
     /// Obtains an empty `Context`.
     pub fn empty() -> Self {
         Self {
-            inner: HashMap::new(),
+            ctx: HashMap::new(),
         }
     }
 }
 
-impl Extractor for OpenTelemetryContext {
-    fn get(&self, key: &str) -> Option<&str> {
-        Extractor::get(&self.inner, key)
-    }
-    fn keys(&self) -> Vec<&str> {
-        Extractor::keys(&self.inner)
-    }
-}
-
-impl Injector for OpenTelemetryContext {
-    fn set(&mut self, key: &str, value: String) {
-        Injector::set(&mut self.inner, key, value)
+impl From<HashMap<String, String>> for OpenTelemetryContext {
+    fn from(ctx: HashMap<String, String>) -> Self {
+        OpenTelemetryContext { ctx }
     }
 }
 
 impl From<OpenTelemetryContext> for HashMap<String, String> {
     fn from(ctx: OpenTelemetryContext) -> Self {
-        ctx.inner
+        ctx.ctx
     }
 }
 
-impl From<HashMap<String, String>> for OpenTelemetryContext {
-    fn from(map: HashMap<String, String>) -> Self {
-        Self { inner: map }
+impl Extractor for OpenTelemetryContext {
+    fn get(&self, key: &str) -> Option<&str> {
+        Extractor::get(&self.ctx, key)
+    }
+    fn keys(&self) -> Vec<&str> {
+        Extractor::keys(&self.ctx)
+    }
+}
+
+impl Injector for OpenTelemetryContext {
+    fn set(&mut self, key: &str, value: String) {
+        Injector::set(&mut self.ctx, key, value)
     }
 }

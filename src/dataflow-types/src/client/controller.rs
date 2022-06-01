@@ -35,11 +35,13 @@ use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServicePort};
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::Codec64;
 
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
     ConcreteComputeInstanceReplicaConfig, ControllerResponse, ReplicaId, StorageResponse,
+    TelemetriedComputeCommand, TelemetriedComputeResponse,
 };
 use crate::client::{ComputedRemoteClient, GenericClient};
 use crate::logging::LoggingConfig;
@@ -137,7 +139,7 @@ fn generate_replica_service_name(instance_id: ComputeInstanceId, replica_id: Rep
 
 enum UnderlyingControllerResponse<T> {
     Storage(StorageResponse<T>),
-    Compute(ComputeInstanceId, ComputeResponse<T>),
+    Compute(ComputeInstanceId, TelemetriedComputeResponse<T>),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -155,8 +157,8 @@ pub struct Controller<T = mz_repr::Timestamp> {
 impl<T> Controller<T>
 where
     T: Timestamp + Lattice + Codec64 + Copy + Unpin,
-    ComputeCommand<T>: RustType<super::ProtoComputeCommand>,
-    ComputeResponse<T>: RustType<super::ProtoComputeResponse>,
+    TelemetriedComputeCommand<T>: RustType<super::ProtoComputeCommand>,
+    TelemetriedComputeResponse<T>: RustType<super::ProtoComputeResponse>,
 {
     pub async fn create_instance(
         &mut self,
@@ -318,7 +320,14 @@ where
                 .namespace("compute")
                 .drop_service(&format!("cluster-{instance}"))
                 .await?;
-            compute.client.send(ComputeCommand::DropInstance).await?;
+            compute
+                .client
+                .send(TelemetriedComputeCommand {
+                    cmd: ComputeCommand::DropInstance,
+                    // TODO(guswynn): populate OpenTelemetryContext::empty()
+                    otel_ctx: OpenTelemetryContext::empty(),
+                })
+                .await?;
         }
         Ok(())
     }
@@ -424,7 +433,7 @@ where
                 }
             },
             UnderlyingControllerResponse::Compute(instance, response) => {
-                match response {
+                match response.resp {
                     ComputeResponse::FrontierUppers(updates) => {
                         self.compute_mut(instance)
                             // TODO: determine if this is an error, or perhaps just a late
@@ -434,7 +443,7 @@ where
                             .await?;
                         Ok(None)
                     }
-                    ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
+                    ComputeResponse::PeekResponse(uuid, peek_response) => {
                         self.compute_mut(instance)
                             .expect("Reference to absent instance")
                             .remove_peeks(std::iter::once(uuid))
@@ -442,7 +451,7 @@ where
                         Ok(Some(ControllerResponse::PeekResponse(
                             uuid,
                             peek_response,
-                            otel_ctx,
+                            response.otel_ctx,
                         )))
                     }
                     ComputeResponse::TailResponse(global_id, response) => {

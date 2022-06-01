@@ -34,7 +34,9 @@ use mz_repr::GlobalId;
 
 use super::ReplicaId;
 use super::{ComputeClient, GenericClient};
-use super::{ComputeCommand, ComputeResponse};
+use super::{
+    ComputeCommand, ComputeResponse, TelemetriedComputeCommand, TelemetriedComputeResponse,
+};
 use super::{Peek, PeekResponse};
 
 /// Spawns a task that repeatedly sends messages back and forth
@@ -102,8 +104,8 @@ pub struct ActiveReplication<T> {
     replicas: HashMap<
         ReplicaId,
         (
-            UnboundedSender<ComputeCommand<T>>,
-            UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
+            UnboundedSender<TelemetriedComputeCommand<T>>,
+            UnboundedReceiverStream<Result<TelemetriedComputeResponse<T>, anyhow::Error>>,
         ),
     >,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
@@ -120,7 +122,7 @@ pub struct ActiveReplication<T> {
     ///
     /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
     /// responding with the response itself, which allows us to compact away the peek in `self.history`.
-    pending_response: VecDeque<ComputeResponse<T>>,
+    pending_response: VecDeque<TelemetriedComputeResponse<T>>,
 }
 
 impl<T> Default for ActiveReplication<T> {
@@ -198,7 +200,8 @@ where
 }
 
 #[async_trait::async_trait]
-impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ActiveReplication<T>
+impl<T> GenericClient<TelemetriedComputeCommand<T>, TelemetriedComputeResponse<T>>
+    for ActiveReplication<T>
 where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
@@ -209,16 +212,16 @@ where
     ///
     /// If this function every become blocking (e.g. making networking calls),
     /// the ADAPTER must amend its contract with COMPUTE.
-    async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+    async fn send(&mut self, cmd: TelemetriedComputeCommand<T>) -> Result<(), anyhow::Error> {
         // Update our tracking of peek commands.
-        match &cmd {
-            ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {
+        match &cmd.cmd {
+            ComputeCommand::Peek(Peek { uuid, .. }) => {
                 self.peeks.insert(
                     *uuid,
                     PendingPeek {
                         // TODO(guswynn): can we just hold the `tracing::Span`
                         // here instead?
-                        otel_ctx: otel_ctx.clone(),
+                        otel_ctx: cmd.otel_ctx.clone(),
                     },
                 );
             }
@@ -234,7 +237,10 @@ where
                             tracing::warn!("did not find pending peek for {}", uuid);
                             OpenTelemetryContext::empty()
                         });
-                    ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
+                    TelemetriedComputeResponse {
+                        resp: ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled),
+                        otel_ctx,
+                    }
                 }));
             }
             _ => {}
@@ -290,7 +296,7 @@ where
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<TelemetriedComputeResponse<T>>, anyhow::Error> {
         // If we have a pending response, we should send it immediately.
         if let Some(response) = self.pending_response.pop_front() {
             return Ok(Some(response));
@@ -315,7 +321,10 @@ where
                 use futures::StreamExt;
                 while let Some((replica_id, message)) = stream.next().await {
                     match message {
-                        Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)) => {
+                        Ok(TelemetriedComputeResponse {
+                            resp: ComputeResponse::PeekResponse(uuid, response),
+                            otel_ctx,
+                        }) => {
                             // If this is the first response, forward it; otherwise do not.
                             // TODO: we could collect the other responses to assert equivalence?
                             // Trades resources (memory) for reassurances; idk which is best.
@@ -327,12 +336,16 @@ where
                             // Additionally, we just use the `otel_ctx` from the first worker to
                             // respond.
                             if self.peeks.remove(&uuid).is_some() {
-                                return Ok(Some(ComputeResponse::PeekResponse(
-                                    uuid, response, otel_ctx,
-                                )));
+                                return Ok(Some(TelemetriedComputeResponse {
+                                    resp: ComputeResponse::PeekResponse(uuid, response),
+                                    otel_ctx,
+                                }));
                             }
                         }
-                        Ok(ComputeResponse::FrontierUppers(mut list)) => {
+                        Ok(TelemetriedComputeResponse {
+                            resp: ComputeResponse::FrontierUppers(mut list),
+                            otel_ctx,
+                        }) => {
                             for (id, changes) in list.iter_mut() {
                                 if let Some((frontier, frontiers)) = self.uppers.get_mut(id) {
                                     // Apply changes to replica `replica_id`
@@ -354,10 +367,16 @@ where
                                 }
                             }
                             if !list.is_empty() {
-                                return Ok(Some(ComputeResponse::FrontierUppers(list)));
+                                return Ok(Some(TelemetriedComputeResponse {
+                                    resp: ComputeResponse::FrontierUppers(list),
+                                    otel_ctx,
+                                }));
                             }
                         }
-                        Ok(ComputeResponse::TailResponse(id, response)) => {
+                        Ok(TelemetriedComputeResponse {
+                            resp: ComputeResponse::TailResponse(id, response),
+                            otel_ctx,
+                        }) => {
                             use crate::{TailBatch, TailResponse};
                             match response {
                                 TailResponse::Batch(TailBatch {
@@ -386,14 +405,17 @@ where
                                         updates.retain(|(time, _data, _diff)| {
                                             new_lower.less_equal(time)
                                         });
-                                        return Ok(Some(ComputeResponse::TailResponse(
-                                            id,
-                                            TailResponse::Batch(TailBatch {
-                                                lower: new_lower,
-                                                upper: new_upper,
-                                                updates,
-                                            }),
-                                        )));
+                                        return Ok(Some(TelemetriedComputeResponse {
+                                            resp: ComputeResponse::TailResponse(
+                                                id,
+                                                TailResponse::Batch(TailBatch {
+                                                    lower: new_lower,
+                                                    upper: new_upper,
+                                                    updates,
+                                                }),
+                                            ),
+                                            otel_ctx,
+                                        }));
                                     }
                                 }
                                 TailResponse::DroppedAt(frontier) => {
@@ -402,10 +424,13 @@ where
                                     // to observed responses; if we pre-load the entries in response to commands we can
                                     // clean up the state here.
                                     self.tails.insert(id, Antichain::new());
-                                    return Ok(Some(ComputeResponse::TailResponse(
-                                        id,
-                                        TailResponse::DroppedAt(frontier),
-                                    )));
+                                    return Ok(Some(TelemetriedComputeResponse {
+                                        resp: ComputeResponse::TailResponse(
+                                            id,
+                                            TailResponse::DroppedAt(frontier),
+                                        ),
+                                        otel_ctx,
+                                    }));
                                 }
                             }
                         }
@@ -432,16 +457,16 @@ where
 
 /// Specialize a command for the given `ReplicaId`.
 ///
-/// Most `ComputeCommand`s are independent of the target replica, but some
+/// Most `TelemetriedComputeCommand`s are independent of the target replica, but some
 /// contain replica-specific fields that must be adjusted before sending.
-fn specialize_command<T>(command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+fn specialize_command<T>(command: &mut TelemetriedComputeCommand<T>, replica_id: ReplicaId) {
     // Tell new instances their replica ID.
-    if let ComputeCommand::CreateInstance(config) = command {
+    if let ComputeCommand::CreateInstance(config) = &mut command.cmd {
         config.replica_id = replica_id;
     }
 
     // Replace dataflow identifiers with new unique ids.
-    if let ComputeCommand::CreateDataflows(dataflows) = command {
+    if let ComputeCommand::CreateDataflows(dataflows) = &mut command.cmd {
         for dataflow in dataflows.iter_mut() {
             dataflow.id = uuid::Uuid::new_v4();
         }

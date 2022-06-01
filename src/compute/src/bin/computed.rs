@@ -18,7 +18,9 @@ use tokio::select;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
+use mz_dataflow_types::client::{
+    ComputeClient, GenericClient, TelemetriedComputeCommand, TelemetriedComputeResponse,
+};
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
 use mz_dataflow_types::ConnectorContext;
 use mz_orchestrator_tracing::TracingCliArgs;
@@ -189,7 +191,7 @@ struct ServeConfig {
 
 async fn serve<G>(config: ServeConfig, mut client: G) -> Result<(), anyhow::Error>
 where
-    G: GenericClient<ComputeCommand, ComputeResponse>,
+    G: GenericClient<TelemetriedComputeCommand, TelemetriedComputeResponse>,
 {
     let mut grpc_serve = mz_dataflow_types::client::tcp::grpc_computed_server(config.listen_addr);
 

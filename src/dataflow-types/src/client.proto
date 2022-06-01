@@ -39,7 +39,6 @@ message ProtoPeek {
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
     optional int64 target_replica = 7;
-    map<string, string> otel_ctx = 8;
 }
 
 message ProtoComputeCommand {
@@ -60,6 +59,10 @@ message ProtoComputeCommand {
         repeated mz_repr.proto.ProtoU128 uuids = 1;
     }
 
+    message ProtoOpenTelemetryContext {
+        map<string, string> ctx = 1;
+    }
+
     oneof kind {
         ProtoInstanceConfig create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
@@ -68,6 +71,8 @@ message ProtoComputeCommand {
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
     }
+
+    ProtoOpenTelemetryContext otel_ctx = 50;
 }
 
 message ProtoComputeResponse {
@@ -88,7 +93,6 @@ message ProtoComputeResponse {
     message ProtoPeekResponseKind {
         mz_repr.proto.ProtoU128 id = 1;
         mz_dataflow_types.types.ProtoPeekResponse resp = 2;
-    map<string, string> otel_ctx = 3;
     }
 
     message ProtoTailResponseKind {
@@ -96,9 +100,16 @@ message ProtoComputeResponse {
         mz_dataflow_types.types.ProtoTailResponse resp = 2;
     }
 
+    message ProtoOpenTelemetryContext {
+        map<string, string> ctx = 1;
+    }
+
+
     oneof kind {
         ProtoFrontierUppersKind frontier_uppers = 1;
         ProtoPeekResponseKind peek_response = 2;
         ProtoTailResponseKind tail_response = 3;
     }
+
+    ProtoOpenTelemetryContext otel_ctx = 50;
 }
