@@ -442,7 +442,7 @@ where
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
     /// a handle to the batch.
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
-    async fn batch<SB, KB, VB, TB, DB, I>(
+    pub async fn batch<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
         lower: Antichain<T>,
