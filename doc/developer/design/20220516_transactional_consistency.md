@@ -178,8 +178,8 @@ Property 1 alone is still a useful property, because property 1 allows us to pro
 client is using synchronous replication with an upstream source. When their transaction commits in the upstream source,
 they are guaranteed to also be able to see the transaction in Materialize. However, they may actually see the
 transaction in Materialize before their transaction commits in the upstream source. This is still a powerful and useful
-guarantee to provide. Therefore, we should remove the second bullet point from the correctness property and instead add
-the following correctness property:
+guarantee to provide. Therefore, we should break the second bullet point into the two properties described above and
+indicate that we only plan to support the first property.
 > Any write from an upstream source that has been acknowledged by Materialize will be visible in all future queries.
 
 Proposal: When STORAGE wants to acknowledge some data that has a timestamp `ts`, it must wait until it knows that the
