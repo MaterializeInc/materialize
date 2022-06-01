@@ -106,7 +106,8 @@ use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
-use mz_dataflow_types::client::CreateSourceCommand;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+use mz_dataflow_types::sources::IngestionDescription;
 
 use crate::storage_state::StorageState;
 
@@ -123,7 +124,7 @@ pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     debug_name: &str,
-    source: CreateSourceCommand<mz_repr::Timestamp>,
+    ingestion: IngestionDescription<CollectionMetadata, mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
@@ -138,10 +139,7 @@ pub fn build_storage_dataflow<A: Allocate>(
             let ((ok, err), token) = crate::render::sources::render_source(
                 region,
                 &debug_name,
-                &source.since,
-                source.id,
-                source.desc.clone(),
-                source.storage_metadata.clone(),
+                ingestion.clone(),
                 // NOTE: For now sources never have LinearOperators but might have in the future
                 None,
                 storage_state,
@@ -151,14 +149,14 @@ pub fn build_storage_dataflow<A: Allocate>(
 
             crate::render::persist_sink::render(
                 region,
-                source.id,
-                source.storage_metadata,
+                ingestion.id,
+                ingestion.storage_metadata,
                 source_data,
                 storage_state,
                 Arc::clone(&token),
             );
 
-            storage_state.source_tokens.insert(source.id, token);
+            storage_state.source_tokens.insert(ingestion.id, token);
         })
     });
 }

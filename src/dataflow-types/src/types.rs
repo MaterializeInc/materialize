@@ -285,6 +285,8 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceDesc<M> {
     /// A description of the source to construct.
+    //TODO(petrosagg): COMPUTE doesn't need the full description of the source, only the metadata to
+    // read a storage collection. Remove this field
     pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
     pub arguments: SourceInstanceArguments,
@@ -1100,22 +1102,22 @@ pub mod sources {
     use chrono::NaiveDateTime;
     use differential_dataflow::lattice::Lattice;
     use globset::{Glob, GlobBuilder};
-    use mz_persist_client::read::ReadHandle;
-    use mz_persist_client::{PersistLocation, ShardId};
-    use mz_persist_types::Codec64;
-    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
     use proptest::prelude::{any, Arbitrary, BoxedStrategy, Just, Strategy};
     use proptest::prop_oneof;
     use proptest_derive::Arbitrary;
     use prost::Message;
     use serde::{Deserialize, Serialize};
-    use timely::progress::Timestamp;
+    use timely::progress::{Antichain, Timestamp};
     use uuid::Uuid;
 
     use mz_kafka_util::KafkaAddrs;
+    use mz_persist_client::read::ReadHandle;
+    use mz_persist_client::{PersistLocation, ShardId};
     use mz_persist_types::Codec;
+    use mz_persist_types::Codec64;
     use mz_repr::chrono::any_naive_datetime;
     use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError};
+    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
     use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
     use crate::aws::AwsConfig;
@@ -1529,6 +1531,21 @@ pub mod sources {
                 })
             }
         }
+    }
+
+    /// A description of a source ingestion
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct IngestionDescription<S = (), T = mz_repr::Timestamp> {
+        /// Source collections made available to this ingestion.
+        pub source_imports: BTreeMap<GlobalId, S>,
+        /// The source identifier
+        pub id: GlobalId,
+        /// The source description
+        pub desc: SourceDesc,
+        /// The initial `since` frontier
+        pub since: Antichain<T>,
+        /// Additional storage controller metadata needed to ingest this source
+        pub storage_metadata: S,
     }
 
     /// Universal language for describing message positions in Materialize, in a source independent
