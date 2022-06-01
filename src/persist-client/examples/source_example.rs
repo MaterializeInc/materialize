@@ -32,7 +32,7 @@ use mz_ore::metrics::MetricsRegistry;
 use tracing::{error, trace};
 
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist::location::{BlobMulti, Consensus, ExternalError};
+use mz_persist::location::{BlobMulti, Consensus, ExternalError, Indeterminate};
 use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, PersistLocation};
 
@@ -62,7 +62,7 @@ pub struct Args {
 
 async fn retry_mut<F, I, T>(name: &str, input: &mut I, mut action: F) -> T
 where
-    F: for<'a> FnMut(&'a mut I) -> BoxFuture<'a, Result<T, ExternalError>>,
+    F: for<'a> FnMut(&'a mut I) -> BoxFuture<'a, Result<T, Indeterminate>>,
 {
     let mut i = 0;
     loop {
