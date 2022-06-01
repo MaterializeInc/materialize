@@ -1117,8 +1117,11 @@ pub mod tcp {
             } else {
                 return Err(anyhow::anyhow!("Sent into disconnected channel"));
             };
-            sender.send(cmd.into_proto()).expect("Ok");
-            Ok(())
+            if sender.send(cmd.into_proto()).is_err() {
+                Err(anyhow::anyhow!("Sent into disconnected channel"))
+            } else {
+                Ok(())
+            }
         }
 
         async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
