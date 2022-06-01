@@ -7,51 +7,43 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Methods common to servers listening for TCP connections.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
-use tokio::io::{self, AsyncWriteExt};
+use tokio::io::{self};
 use tokio::net::TcpStream;
-use tracing::{debug, error};
+use tracing::error;
 
-use mz_ore::netio::{self, SniffedStream, SniffingStream};
 use mz_ore::task;
 
 use crate::http;
 
-type Handlers = Vec<Box<dyn ConnectionHandler + Send + Sync>>;
-
-/// A mux routes incoming TCP connections to a dynamic set of connection
-/// handlers. It enables serving multiple protocols over the same port.
-///
-/// Connections are routed by sniffing the first several bytes sent over the
-/// wire and matching them against each handler, in order. The first handler
-/// to match the connection will be invoked.
-pub struct Mux {
-    handlers: Handlers,
+async fn handle_connection<S: ConnectionHandler>(server_ref: Arc<S>, conn: TcpStream) {
+    if let Err(e) = server_ref.handle_connection(conn).await {
+        error!(
+            "error handling connection in {}: {:#}",
+            server_ref.name(),
+            e
+        );
+    }
 }
 
-impl Mux {
-    /// Constructs a new `Mux`.
-    pub fn new() -> Mux {
-        Mux { handlers: vec![] }
-    }
-
-    /// Adds a new connection handler to this mux.
-    pub fn add_handler<H>(&mut self, handler: H)
-    where
-        H: ConnectionHandler + Send + Sync + 'static,
-    {
-        self.handlers.push(Box::new(handler));
-    }
+/// A connection handler manages an incoming network connection.
+#[async_trait]
+pub trait ConnectionHandler {
+    /// Returns the name of the connection handler for use in e.g. log messages.
+    fn name(&self) -> &str;
 
     /// Serves incoming TCP traffic from `listener`.
-    pub async fn serve<S>(self, mut incoming: S)
+    async fn serve<S>(self, mut incoming: S)
     where
-        S: Stream<Item = io::Result<TcpStream>> + Unpin,
+        S: Stream<Item = io::Result<TcpStream>> + Unpin + Send,
+        Self: Sized + Sync + 'static,
     {
-        let handlers = Arc::new(self.handlers);
+        let self_ref = Arc::new(self);
         while let Some(conn) = incoming.next().await {
             let conn = match conn {
                 Ok(conn) => conn,
@@ -74,58 +66,13 @@ impl Mux {
             conn.set_nodelay(true).expect("set_nodelay failed");
             task::spawn(
                 || "mux_serve",
-                handle_connection(Arc::clone(&handlers), conn),
+                handle_connection(Arc::clone(&self_ref), conn),
             );
         }
     }
-}
-
-async fn handle_connection(handlers: Arc<Handlers>, conn: TcpStream) {
-    // Sniff out what protocol we've received. Choosing how many bytes to
-    // sniff is a delicate business. Read too many bytes and you'll stall
-    // out protocols with small handshakes, like pgwire. Read too few bytes
-    // and you won't be able to tell what protocol you have. For now, eight
-    // bytes is the magic number, but this may need to change if we learn to
-    // speak new protocols.
-    let mut ss = SniffingStream::new(conn);
-    let mut buf = [0; 8];
-    let nread = match netio::read_exact_or_eof(&mut ss, &mut buf).await {
-        Ok(nread) => nread,
-        Err(err) => {
-            error!("error handling request: {}", err);
-            return;
-        }
-    };
-    let buf = &buf[..nread];
-
-    for handler in &*handlers {
-        if handler.match_handshake(buf) {
-            if let Err(e) = handler.handle_connection(ss.into_sniffed()).await {
-                error!("error handling connection in {}: {:#}", handler.name(), e);
-            }
-            return;
-        }
-    }
-
-    debug!(
-        "dropped connection using unknown protocol (sniffed: 0x{})",
-        hex::encode(buf)
-    );
-    let _ = ss.into_sniffed().write_all(b"unknown protocol\n").await;
-}
-
-/// A connection handler manages an incoming network connection.
-#[async_trait]
-pub trait ConnectionHandler {
-    /// Returns the name of the connection handler for use in e.g. log messages.
-    fn name(&self) -> &str;
-
-    /// Determines whether this handler can accept the connection based on the
-    /// first several bytes in the stream.
-    fn match_handshake(&self, buf: &[u8]) -> bool;
 
     /// Handles the connection.
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error>;
+    async fn handle_connection(&self, conn: TcpStream) -> Result<(), anyhow::Error>;
 }
 
 #[async_trait]
@@ -134,14 +81,10 @@ impl ConnectionHandler for mz_pgwire::Server {
         "pgwire server"
     }
 
-    fn match_handshake(&self, buf: &[u8]) -> bool {
-        mz_pgwire::match_handshake(buf)
-    }
-
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
+    async fn handle_connection(&self, conn: TcpStream) -> Result<(), anyhow::Error> {
         // Using fully-qualified syntax means we won't accidentally call
         // ourselves (i.e., silently infinitely recurse) if the name or type of
-        // `pgwire::Server::handle_connection` changes.
+        // `mz_pgwire::Server::handle_connection` changes.
         mz_pgwire::Server::handle_connection(self, conn).await
     }
 }
@@ -152,11 +95,7 @@ impl ConnectionHandler for http::Server {
         "http server"
     }
 
-    fn match_handshake(&self, buf: &[u8]) -> bool {
-        self.match_handshake(buf)
-    }
-
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
+    async fn handle_connection(&self, conn: TcpStream) -> Result<(), anyhow::Error> {
         // Using fully-qualified syntax means we won't accidentally call
         // ourselves (i.e., silently infinitely recurse) if the name or type of
         // `http::Server::handle_connection` changes.

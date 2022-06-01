@@ -47,6 +47,8 @@ use mz_secrets::{SecretsController, SecretsReader, SecretsReaderConfig};
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
 
+use crate::mux::ConnectionHandler;
+
 pub mod http;
 pub mod mux;
 
@@ -384,6 +386,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         });
     }
 
+    // TODO(benesch): replace both `TCPListenerStream`s below with
+    // `<type>_listener.incoming()` if that is
+    // restored when the `Stream` trait stabilizes.
+
     // Launch task to serve connections.
     //
     // The lifetime of this task is controlled by a trigger that activates on
@@ -400,8 +406,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         });
 
         async move {
-            // TODO(benesch): replace with `sql_listener.incoming()` if that is
-            // restored when the `Stream` trait stabilizes.
             let mut incoming = TcpListenerStream::new(sql_listener);
             pgwire_server
                 .serve(incoming.by_ref().take_until(sql_drain_tripwire))
@@ -418,8 +422,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
                 coord_client,
                 allowed_origin: config.cors_allowed_origin,
             });
-            // TODO(benesch): replace with `sql_listener.incoming()` if that is
-            // restored when the `Stream` trait stabilizes.
             let mut incoming = TcpListenerStream::new(http_listener);
             http_server
                 .serve(incoming.by_ref().take_until(http_drain_tripwire))

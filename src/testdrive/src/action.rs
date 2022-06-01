@@ -96,7 +96,8 @@ pub struct Config {
     /// The pgwire connection parameters for the materialized instance that testdrive
     /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
-    /// The http port for the materialized instance that testdrive will connect to.
+    /// The port for the public endpoints of the materialized instance that
+    /// testdrive will connect to via HTTP.
     pub materialized_http_port: u16,
     /// Session parameters to set after connecting to materialized.
     pub materialized_params: Vec<(String, String)>,

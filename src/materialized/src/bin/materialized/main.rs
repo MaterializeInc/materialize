@@ -10,7 +10,7 @@
 //! The main Materialize server.
 //!
 //! The name is pronounced "materialize-dee." It listens for pgwire connections
-//! on port 6875 (MTRL) and HTTP connections on port 6876.
+//! on port 6875 (MTRL) and for HTTP connections on port 6876.
 //!
 //! The design and implementation of materialized is very much in flux. See the
 //! draft architecture doc for the most up-to-date plan [0]. Access is limited
@@ -693,8 +693,7 @@ max log level: {max_log_level}",
     }))?;
 
     println!(
-        "materialized {} listening for pgwire connections on {}
-        for HTTP connections on {}...",
+        "materialized {} listening for pgwire connections on {} and for HTTP connections on {}...",
         materialized::BUILD_INFO.human_version(),
         server.sql_local_addr(),
         server.http_local_addr(),

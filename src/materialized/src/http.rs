@@ -27,7 +27,6 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::{routing, Extension, Router};
 use futures::future::TryFutureExt;
-use futures::stream::{Stream, StreamExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -39,7 +38,7 @@ use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
 use thiserror::Error;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -47,8 +46,7 @@ use tracing::{error, warn};
 
 use mz_coord::session::Session;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
-use mz_ore::netio::{SniffedStream, SniffingStream};
-use mz_ore::task;
+use mz_ore::netio::SniffingStream;
 
 use crate::BUILD_INFO;
 
@@ -59,10 +57,6 @@ mod root;
 mod sql;
 
 const SYSTEM_USER: &str = "mz_system";
-
-const METHODS: &[&[u8]] = &[
-    b"OPTIONS", b"GET", b"HEAD", b"POST", b"PUT", b"DELETE", b"TRACE", b"CONNECT",
-];
 
 const TLS_HANDSHAKE_START: u8 = 22;
 
@@ -148,53 +142,34 @@ impl Server {
         }
     }
 
-    /// Serves incoming TCP traffic from `listener`.
-    pub async fn serve<S>(self, mut incoming: S)
-    where
-        S: Stream<Item = io::Result<TcpStream>> + Unpin,
-    {
-        let self_ref = Arc::new(self);
-        while let Some(conn) = incoming.next().await {
-            let conn = match conn {
-                Ok(conn) => conn,
-                Err(err) => {
-                    error!("error accepting connection: {}", err);
-                    continue;
-                }
-            };
-            // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-            // algorithm), which forces a 40ms delay between each query
-            // on linux. According to John Nagle [0], the true problem
-            // is delayed acks, but disabling those is a receive-side
-            // operation (TCP_QUICKACK), and we can't always control the
-            // client. PostgreSQL sets TCP_NODELAY on both sides of its
-            // sockets, so it seems sane to just do the same.
-            //
-            // If set_nodelay fails, it's a programming error, so panic.
-            //
-            // [0]: https://news.ycombinator.com/item?id=10608356
-            conn.set_nodelay(true).expect("set_nodelay failed");
-            task::spawn(
-                || "http_serve",
-                handle_connection(Arc::clone(&self_ref), conn),
-            );
-        }
-    }
-
     fn tls_context(&self) -> Option<&SslContext> {
         self.tls.as_ref().map(|tls| &tls.context)
     }
 
-    pub fn match_handshake(&self, buf: &[u8]) -> bool {
-        if self.tls.is_some() && sniff_tls(buf) {
-            return true;
-        }
-        let buf = if let Some(pos) = buf.iter().position(|&b| b == b' ') {
-            &buf[..pos]
-        } else {
-            &buf[..]
+    pub async fn handle_connection(&self, conn: TcpStream) -> Result<(), anyhow::Error> {
+        let mut ss = SniffingStream::new(conn);
+        let mut buf = [0; 1];
+        ss.read_exact(&mut buf).await?;
+        let conn = ss.into_sniffed();
+        let (conn, conn_protocol) = match (&self.tls_context(), sniff_tls(&buf)) {
+            (Some(tls_context), true) => {
+                let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
+                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                    let _ = ssl_stream.get_mut().shutdown().await;
+                    return Err(e.into());
+                }
+                let client_cert = ssl_stream.ssl().peer_certificate();
+                (
+                    MaybeHttpsStream::Https(ssl_stream),
+                    ConnProtocol::Https { client_cert },
+                )
+            }
+            _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
         };
-        METHODS.contains(&buf)
+        let router = self.router.lock().expect("lock poisoned").clone();
+        let svc = router.layer(Extension(conn_protocol));
+        let http = hyper::server::conn::Http::new();
+        http.serve_connection(conn, svc).err_into().await
     }
 
     // Handler functions are attached by various submodules. They all have a
@@ -204,32 +179,6 @@ impl Server {
     //
     // If you add a new handler, please add it to the most appropriate
     // submodule, or create a new submodule if necessary. Don't add it here!
-}
-
-async fn handle_connection(server: Arc<Server>, conn: TcpStream) -> Result<(), anyhow::Error> {
-    let mut ss = SniffingStream::new(conn);
-    let mut buf = [0; 1];
-    ss.read_exact(&mut buf).await?;
-    let conn = ss.into_sniffed();
-    let (conn, conn_protocol) = match (&server.tls_context(), sniff_tls(&buf)) {
-        (Some(tls_context), true) => {
-            let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
-            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                let _ = ssl_stream.get_mut().shutdown().await;
-                return Err(e.into());
-            }
-            let client_cert = ssl_stream.ssl().peer_certificate();
-            (
-                MaybeHttpsStream::Https(ssl_stream),
-                ConnProtocol::Https { client_cert },
-            )
-        }
-        _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
-    };
-    let router = server.router.lock().expect("lock poisoned").clone();
-    let svc = router.layer(Extension(conn_protocol));
-    let http = hyper::server::conn::Http::new();
-    http.serve_connection(conn, svc).err_into().await
 }
 
 #[derive(Clone)]

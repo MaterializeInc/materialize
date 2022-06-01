@@ -97,8 +97,10 @@ class Materialized(Service):
         ]
 
         config_ports = [sql_port, 5432, *extra_ports]
-        default_port_commands = [ f"--sql-listen-addr 0.0.0.0:{guest_sql_port}",
-            f"--http-listen-addr 0.0.0.0:{guest_http_port}",]
+        default_port_commands = [
+            f"--sql-listen-addr 0.0.0.0:{guest_sql_port}",
+            f"--http-listen-addr 0.0.0.0:{guest_http_port}",
+        ]
 
         if isinstance(image, str) and ":v" in image:
             version = image.split(":v")[1]
@@ -111,7 +113,7 @@ class Materialized(Service):
         else:
             config_ports.append(http_port)
             command_list.extend(default_port_commands)
-        
+
         if options:
             if isinstance(options, str):
                 command_list.append(options)
@@ -139,8 +141,6 @@ class Materialized(Service):
                 "volumes": volumes,
             }
         )
-
-        print(config)
 
         super().__init__(name=name, config=config)
 

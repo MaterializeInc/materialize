@@ -9,20 +9,16 @@
 
 use std::fmt;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
-use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
-use tracing::{error, trace};
+use tracing::trace;
 
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::netio::AsyncReady;
-use mz_ore::task;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
@@ -82,108 +78,75 @@ impl Server {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
-    /// Serves incoming TCP traffic from `listener`.
-    pub async fn serve<S>(self, mut incoming: S)
+    pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
-        S: Stream<Item = io::Result<TcpStream>> + Unpin,
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
-        let self_ref = Arc::new(self);
-        while let Some(conn) = incoming.next().await {
-            let conn = match conn {
-                Ok(conn) => conn,
-                Err(err) => {
-                    error!("error accepting connection: {}", err);
-                    continue;
+        let mut coord_client = self.coord_client.new_conn()?;
+        let conn_id = coord_client.conn_id();
+        let mut conn = Conn::Unencrypted(conn);
+        loop {
+            let message = codec::decode_startup(&mut conn).await?;
+
+            match &message {
+                Some(message) => trace!("cid={} recv={:?}", conn_id, message),
+                None => trace!("cid={} recv=<eof>", conn_id),
+            }
+
+            conn = match message {
+                // Clients sometimes hang up during the startup sequence, e.g.
+                // because they receive an unacceptable response to an
+                // `SslRequest`. This is considered a graceful termination.
+                None => return Ok(()),
+
+                Some(FrontendStartupMessage::Startup { version, params }) => {
+                    let mut conn = FramedConn::new(conn_id, conn);
+                    protocol::run(protocol::RunParams {
+                        tls_mode: self.tls.as_ref().map(|tls| tls.mode),
+                        coord_client,
+                        conn: &mut conn,
+                        version,
+                        params,
+                        frontegg: self.frontegg.as_ref(),
+                    })
+                    .await?;
+                    conn.flush().await?;
+                    return Ok(());
                 }
-            };
-            // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-            // algorithm), which forces a 40ms delay between each query
-            // on linux. According to John Nagle [0], the true problem
-            // is delayed acks, but disabling those is a receive-side
-            // operation (TCP_QUICKACK), and we can't always control the
-            // client. PostgreSQL sets TCP_NODELAY on both sides of its
-            // sockets, so it seems sane to just do the same.
-            //
-            // If set_nodelay fails, it's a programming error, so panic.
-            //
-            // [0]: https://news.ycombinator.com/item?id=10608356
-            conn.set_nodelay(true).expect("set_nodelay failed");
-            task::spawn(
-                || "sql_serve",
-                handle_connection(Arc::clone(&self_ref), conn),
-            );
-        }
-    }
-}
 
-async fn handle_connection<A>(server: Arc<Server>, conn: A) -> Result<(), anyhow::Error>
-where
-    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
-{
-    let mut coord_client = server.coord_client.new_conn()?;
-    let conn_id = coord_client.conn_id();
-    let mut conn = Conn::Unencrypted(conn);
-    loop {
-        let message = codec::decode_startup(&mut conn).await?;
+                Some(FrontendStartupMessage::CancelRequest {
+                    conn_id,
+                    secret_key,
+                }) => {
+                    coord_client.cancel_request(conn_id, secret_key).await;
+                    // For security, the client is not told whether the cancel
+                    // request succeeds or fails.
+                    return Ok(());
+                }
 
-        match &message {
-            Some(message) => trace!("cid={} recv={:?}", conn_id, message),
-            None => trace!("cid={} recv=<eof>", conn_id),
-        }
-
-        conn = match message {
-            // Clients sometimes hang up during the startup sequence, e.g.
-            // because they receive an unacceptable response to an
-            // `SslRequest`. This is considered a graceful termination.
-            None => return Ok(()),
-
-            Some(FrontendStartupMessage::Startup { version, params }) => {
-                let mut conn = FramedConn::new(conn_id, conn);
-                protocol::run(protocol::RunParams {
-                    tls_mode: server.tls.as_ref().map(|tls| tls.mode),
-                    coord_client,
-                    conn: &mut conn,
-                    version,
-                    params,
-                    frontegg: server.frontegg.as_ref(),
-                })
-                .await?;
-                conn.flush().await?;
-                return Ok(());
-            }
-            Some(FrontendStartupMessage::CancelRequest {
-                conn_id,
-                secret_key,
-            }) => {
-                coord_client.cancel_request(conn_id, secret_key).await;
-                // For security, the client is not told whether the cancel
-                // request succeeds or fails.
-                return Ok(());
-            }
-
-            Some(FrontendStartupMessage::SslRequest) => match (conn, &server.tls) {
-                (Conn::Unencrypted(mut conn), Some(tls)) => {
-                    trace!("cid={} send=AcceptSsl", conn_id);
-                    conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                    let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
-                    if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                        let _ = ssl_stream.get_mut().shutdown().await;
-                        return Err(e.into());
+                Some(FrontendStartupMessage::SslRequest) => match (conn, &self.tls) {
+                    (Conn::Unencrypted(mut conn), Some(tls)) => {
+                        trace!("cid={} send=AcceptSsl", conn_id);
+                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
+                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
+                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            let _ = ssl_stream.get_mut().shutdown().await;
+                            return Err(e.into());
+                        }
+                        Conn::Ssl(ssl_stream)
                     }
-                    Conn::Ssl(ssl_stream)
-                }
-                (mut conn, _) => {
-                    trace!("cid={} send=RejectSsl", conn_id);
+                    (mut conn, _) => {
+                        trace!("cid={} send=RejectSsl", conn_id);
+                        conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                        conn
+                    }
+                },
+
+                Some(FrontendStartupMessage::GssEncRequest) => {
+                    trace!("cid={} send=RejectGssEnc", conn_id);
                     conn.write_all(&[REJECT_ENCRYPTION]).await?;
                     conn
                 }
-            },
-
-            Some(FrontendStartupMessage::GssEncRequest) => {
-                trace!("cid={} send=RejectGssEnc", conn_id);
-                conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                conn
             }
         }
     }

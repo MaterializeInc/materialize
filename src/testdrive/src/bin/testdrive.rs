@@ -111,13 +111,14 @@ struct Args {
     globs: Vec<String>,
 
     // === Materialize options. ===
-    /// materialized connection string.
+    /// materialized pgwire connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6875",
         value_name = "URL"
     )]
     materialized_url: tokio_postgres::Config,
+    /// HTTP port for public endpoints
     #[clap(long, default_value = "6876", value_name = "PORT")]
     materialized_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
