@@ -186,7 +186,6 @@ pub async fn purify_create_source(
             *details = Some(hex::encode(details_proto.encode_to_vec()));
         }
         CreateSourceConnector::PubNub { .. } => (),
-        CreateSourceConnector::Persist { .. } => (),
     }
 
     purify_source_format(format, connector, &envelope, &config_options, with_options).await?;
@@ -196,7 +195,7 @@ pub async fn purify_create_source(
 
 async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut CreateSourceConnector<Raw>,
+    connector: &mut CreateSourceConnector,
     envelope: &Option<Envelope>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
@@ -252,7 +251,7 @@ async fn purify_source_format(
 
 async fn purify_source_format_single(
     format: &mut Format<Raw>,
-    connector: &mut CreateSourceConnector<Raw>,
+    connector: &mut CreateSourceConnector,
     envelope: &Option<Envelope>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
@@ -327,7 +326,7 @@ async fn purify_source_format_single(
 }
 
 async fn purify_csr_connector_proto(
-    connector: &mut CreateSourceConnector<Raw>,
+    connector: &mut CreateSourceConnector,
     csr_connector: &mut CsrConnectorProto<Raw>,
     envelope: &Option<Envelope>,
     with_options: &Vec<WithOption<Raw>>,
@@ -385,7 +384,7 @@ async fn purify_csr_connector_proto(
 }
 
 async fn purify_csr_connector_avro(
-    connector: &mut CreateSourceConnector<Raw>,
+    connector: &mut CreateSourceConnector,
     csr_connector: &mut CsrConnectorAvro<Raw>,
     envelope: &Option<Envelope>,
     connector_options: &BTreeMap<String, String>,

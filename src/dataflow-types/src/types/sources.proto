@@ -190,7 +190,6 @@ message ProtoExternalSourceConnector {
         ProtoS3SourceConnector s3 = 3;
         ProtoPostgresSourceConnector postgres = 4;
         ProtoPubNubSourceConnector pubnub = 5;
-        ProtoPersistSourceConnector persist = 6;
     }
 }
 
@@ -216,12 +215,6 @@ message ProtoPostgresSourceConnector {
 message ProtoPubNubSourceConnector {
     string subscribe_key = 1;
     string channel = 2;
-}
-
-message ProtoPersistSourceConnector {
-    string consensus_uri = 1;
-    string blob_uri = 2;
-    string shard_id = 3;
 }
 
 message ProtoS3SourceConnector {

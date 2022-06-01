@@ -567,7 +567,7 @@ pub struct KafkaSourceConnector {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
-pub enum CreateSourceConnector<T: AstInfo> {
+pub enum CreateSourceConnector {
     Kafka(KafkaSourceConnector),
     Kinesis {
         arn: String,
@@ -595,15 +595,9 @@ pub enum CreateSourceConnector<T: AstInfo> {
         /// The PubNub channel to subscribe to
         channel: String,
     },
-    Persist {
-        consensus_uri: String,
-        blob_uri: String,
-        collection_id: String,
-        columns: Vec<ColumnDef<T>>,
-    },
 }
 
-impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
+impl AstDisplay for CreateSourceConnector {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             CreateSourceConnector::Kafka(KafkaSourceConnector {
@@ -683,28 +677,10 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
                 f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
             }
-            CreateSourceConnector::Persist {
-                consensus_uri,
-                blob_uri,
-                collection_id,
-                columns,
-            } => {
-                f.write_str("PERSIST CONSENSUS '");
-                f.write_node(&display::escape_single_quote_string(consensus_uri));
-                f.write_str("' BLOB '");
-                f.write_node(&display::escape_single_quote_string(blob_uri));
-                f.write_str("' SHARD '");
-                f.write_node(&display::escape_single_quote_string(collection_id));
-                f.write_str("'");
-
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(columns));
-                f.write_str(")");
-            }
         }
     }
 }
-impl_display_t!(CreateSourceConnector);
+impl_display!(CreateSourceConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(CreateSinkConnectorKind)]

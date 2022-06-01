@@ -2077,8 +2077,8 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, PERSIST, POSTGRES, PUBNUB])? {
+    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector, ParserError> {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2111,25 +2111,6 @@ impl<'a> Parser<'a> {
                     publication,
                     slot,
                     details,
-                })
-            }
-            PERSIST => {
-                self.expect_keyword(CONSENSUS)?;
-                let consensus_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(BLOB)?;
-                let blob_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(SHARD)?;
-                let shard_id = self.parse_literal_string()?;
-
-                // TODO: fail if/when we have constraints
-                let (columns, _constraints) = self.parse_columns(Mandatory)?;
-                Ok(CreateSourceConnector::Persist {
-                    consensus_uri,
-                    blob_uri,
-                    collection_id: shard_id,
-                    columns,
                 })
             }
             KAFKA => {

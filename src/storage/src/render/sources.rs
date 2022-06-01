@@ -200,9 +200,6 @@ where
                     );
                     ((SourceType::Row(ok), err), cap)
                 }
-                ExternalSourceConnector::Persist(_) => {
-                    unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
-                }
             };
 
             // Include any source errors.

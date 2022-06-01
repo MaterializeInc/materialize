@@ -40,8 +40,8 @@ use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
     IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
-    PersistSourceConnector, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector,
-    SourceConnector, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
+    SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -320,17 +320,7 @@ pub fn plan_create_source(
         include_metadata,
     } = &stmt;
 
-    let envelope = match envelope.as_ref() {
-        // Persist sources cannot use Envelope::None because that comes with the guarantee that the
-        // produced updates are monotonic (we only ever add data, never remove). The persist source
-        // does not guarantee that because we simply read differential row updates, which can be
-        // retractions (negative `diff`).
-        None if matches!(connector, CreateSourceConnector::Persist { .. }) => {
-            Envelope::DifferentialRow
-        }
-        None => Envelope::None,
-        Some(envelope) => envelope.clone(),
-    };
+    let envelope = envelope.clone().unwrap_or(Envelope::None);
 
     let with_options_original = with_options;
     let mut with_options = normalize::options(with_options_original);
@@ -600,79 +590,6 @@ pub fn plan_create_source(
                 channel: channel.clone(),
             });
             (connector, SourceDataEncoding::Single(DataEncoding::Text))
-        }
-        CreateSourceConnector::Persist {
-            consensus_uri,
-            blob_uri,
-            collection_id,
-            columns,
-        } => {
-            if envelope != Envelope::DifferentialRow {
-                bail!("CREATE SOURCE ... PERSIST does not allow specifying an ENVELOPE");
-            }
-
-            // TODO(aljoscha): Instead of taking a blob and consensus parameters, these should be
-            // picked up from the STORAGE configuration.
-            // TODO(aljoscha): Users should not have to manually specify the columns. Instead, we
-            // should keep track of STORAGE collections (including their schema) and resolve the
-            // types by talking to STORAGE.
-
-            let names: Vec<_> = columns
-                .iter()
-                .map(|c| normalize::column_name(c.name.clone()))
-                .collect();
-
-            // Build initial relation type that handles declared data types
-            // and NOT NULL constraints.
-            let mut column_types = Vec::with_capacity(columns.len());
-            let mut defaults = Vec::with_capacity(columns.len());
-            let mut keys = Vec::new();
-
-            for (i, c) in columns.into_iter().enumerate() {
-                let aug_data_type = &c.data_type;
-                let ty = query::scalar_type_from_sql(scx, &aug_data_type)?;
-                let mut nullable = true;
-                let mut default = Expr::null();
-                for option in &c.options {
-                    match &option.option {
-                        ColumnOption::NotNull => nullable = false,
-                        ColumnOption::Default(expr) => {
-                            // Ensure expression can be planned and yields the correct
-                            // type.
-                            let _ = query::plan_default_expr(scx, expr, &ty)?;
-                            default = expr.clone();
-                        }
-                        ColumnOption::Unique { is_primary } => {
-                            keys.push(vec![i]);
-                            if *is_primary {
-                                nullable = false;
-                            }
-                        }
-                        other => {
-                            bail_unsupported!(format!(
-                                "CREATE TABLE with column constraint: {}",
-                                other
-                            ))
-                        }
-                    }
-                }
-                column_types.push(ty.nullable(nullable));
-                defaults.push(default);
-            }
-
-            let typ = RelationType::new(column_types);
-            let desc = RelationDesc::new(typ, names);
-
-            let connector = ExternalSourceConnector::Persist(PersistSourceConnector {
-                consensus_uri: consensus_uri.clone(),
-                blob_uri: blob_uri.clone(),
-                shard_id: collection_id.parse().map_err(anyhow::Error::msg)?,
-            });
-
-            (
-                connector,
-                SourceDataEncoding::Single(DataEncoding::RowCodec(desc)),
-            )
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;

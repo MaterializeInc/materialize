@@ -20,11 +20,11 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{StorageCommand, StorageResponse};
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::sources::SourceConnector;
 use mz_dataflow_types::ConnectorContext;
 use mz_ore::now::NowFn;
-use mz_persist_client::{write::WriteHandle, PersistLocation};
-use mz_repr::{GlobalId, Row, Timestamp};
+
+use mz_repr::{GlobalId, Timestamp};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
@@ -53,9 +53,6 @@ pub struct StorageState {
     /// module would eventually provide one source of truth on this rather than multiple,
     /// and we should aim for that but are not there yet.
     pub source_uppers: HashMap<GlobalId, Rc<RefCell<Antichain<mz_repr::Timestamp>>>>,
-    /// Persist handles for all sources that deal with persist collections/shards.
-    pub persist_handles:
-        HashMap<GlobalId, WriteHandle<Row, Row, mz_repr::Timestamp, mz_repr::Diff>>,
     /// Handles to created sources, keyed by ID
     pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
     /// Decoding metrics reported by all dataflows.
@@ -117,29 +114,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             // enforce this statically.
                             unreachable!("local sources are handled entirely by controller");
                         }
-                        SourceConnector::External {
-                            connector: ExternalSourceConnector::Persist(persist_connector),
-                            ..
-                        } => {
-                            let location = PersistLocation {
-                                blob_uri: persist_connector.blob_uri.clone(),
-                                consensus_uri: persist_connector.consensus_uri.clone(),
-                            };
-
-                            // TODO: Make these parts async aware?
-                            let persist_client =
-                                futures_executor::block_on(location.open()).unwrap();
-
-                            let write = futures_executor::block_on(
-                                persist_client
-                                    .open_writer::<Row, Row, mz_repr::Timestamp, mz_repr::Diff>(
-                                        persist_connector.shard_id,
-                                    ),
-                            )
-                            .unwrap();
-
-                            self.storage_state.persist_handles.insert(source.id, write);
-                        }
                         SourceConnector::External { .. } => {
                             // Initialize shared frontier tracking.
                             self.storage_state.source_uppers.insert(
@@ -173,7 +147,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.source_tokens.remove(&id);
-                        self.storage_state.persist_handles.remove(&id);
                     }
                 }
             }
@@ -202,33 +175,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 .expect("Reported frontier missing!");
 
             let observed_frontier = frontier.borrow();
-
-            // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
-            // This is protection against `frontier` lagging behind what we have conditionally reported.
-            if <_ as PartialOrder>::less_than(reported_frontier, &observed_frontier) {
-                let mut change_batch = ChangeBatch::new();
-                for time in reported_frontier.elements().iter() {
-                    change_batch.update(time.clone(), -1);
-                }
-                for time in observed_frontier.elements().iter() {
-                    change_batch.update(time.clone(), 1);
-                }
-                if !change_batch.is_empty() {
-                    changes.push((*id, change_batch));
-                }
-                reported_frontier.clone_from(&observed_frontier);
-            }
-        }
-
-        for (id, write_handle) in self.storage_state.persist_handles.iter_mut() {
-            let reported_frontier = self
-                .storage_state
-                .reported_frontiers
-                .get_mut(&id)
-                .expect("Reported frontier missing!");
-
-            // TODO: Make these parts of the code async?
-            let observed_frontier = futures_executor::block_on(write_handle.fetch_recent_upper());
 
             // Only do a thing if it *advances* the frontier, not just *changes* the frontier.
             // This is protection against `frontier` lagging behind what we have conditionally reported.
