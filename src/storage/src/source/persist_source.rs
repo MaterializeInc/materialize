@@ -68,6 +68,7 @@ where
             return;
         }
 
+        warn!("[btv] storage metadata: {storage_metadata:#?}");
         let mut read =
             crate::persist_cache::open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
                 storage_metadata.persist_location,
