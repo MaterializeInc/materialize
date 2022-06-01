@@ -18,7 +18,7 @@ use crate::plan::{Plan, RaisePlan};
 
 pub fn describe_raise(
     _: &StatementContext,
-    _: &RaiseStatement,
+    _: RaiseStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }

@@ -55,9 +55,9 @@ pub enum Statement<T: AstInfo> {
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     Discard(DiscardStatement),
-    DropDatabase(DropDatabaseStatement<T>),
-    DropSchema(DropSchemaStatement<T>),
-    DropObjects(DropObjectsStatement<T>),
+    DropDatabase(DropDatabaseStatement),
+    DropSchema(DropSchemaStatement),
+    DropObjects(DropObjectsStatement),
     DropRoles(DropRolesStatement),
     DropClusters(DropClustersStatement),
     DropClusterReplicas(DropClusterReplicasStatement),
@@ -1145,13 +1145,13 @@ impl AstDisplay for DiscardTarget {
 impl_display!(DiscardTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropDatabaseStatement<T: AstInfo> {
-    pub name: T::DatabaseName,
+pub struct DropDatabaseStatement {
+    pub name: UnresolvedDatabaseName,
     pub if_exists: bool,
     pub restrict: bool,
 }
 
-impl<T: AstInfo> AstDisplay for DropDatabaseStatement<T> {
+impl AstDisplay for DropDatabaseStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP DATABASE ");
         if self.if_exists {
@@ -1163,16 +1163,16 @@ impl<T: AstInfo> AstDisplay for DropDatabaseStatement<T> {
         }
     }
 }
-impl_display_t!(DropDatabaseStatement);
+impl_display!(DropDatabaseStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropSchemaStatement<T: AstInfo> {
-    pub name: T::SchemaName,
+pub struct DropSchemaStatement {
+    pub name: UnresolvedSchemaName,
     pub if_exists: bool,
     pub cascade: bool,
 }
 
-impl<T: AstInfo> AstDisplay for DropSchemaStatement<T> {
+impl AstDisplay for DropSchemaStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP SCHEMA ");
         if self.if_exists {
@@ -1184,11 +1184,11 @@ impl<T: AstInfo> AstDisplay for DropSchemaStatement<T> {
         }
     }
 }
-impl_display_t!(DropSchemaStatement);
+impl_display!(DropSchemaStatement);
 
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropObjectsStatement<T: AstInfo> {
+pub struct DropObjectsStatement {
     /// If this was constructed as `DROP MATERIALIZED <type>`
     pub materialized: bool,
     /// The type of the object to drop: TABLE, VIEW, etc.
@@ -1196,13 +1196,13 @@ pub struct DropObjectsStatement<T: AstInfo> {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<T::ObjectName>,
+    pub names: Vec<UnresolvedObjectName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
 }
 
-impl<T: AstInfo> AstDisplay for DropObjectsStatement<T> {
+impl AstDisplay for DropObjectsStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP ");
         f.write_node(&self.object_type);
@@ -1216,7 +1216,7 @@ impl<T: AstInfo> AstDisplay for DropObjectsStatement<T> {
         }
     }
 }
-impl_display_t!(DropObjectsStatement);
+impl_display!(DropObjectsStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropRolesStatement {
