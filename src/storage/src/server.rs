@@ -107,7 +107,6 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
                 persist_handles: HashMap::new(),
                 collection_metadata: HashMap::new(),
                 source_tokens: HashMap::new(),
-                ts_source_mapping: HashMap::new(),
                 decode_metrics,
                 reported_frontiers: HashMap::new(),
                 last_bindings_feedback: Instant::now(),
