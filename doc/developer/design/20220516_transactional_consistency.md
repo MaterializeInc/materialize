@@ -68,9 +68,6 @@ timeline. There can only be at most a single Coordinator thread assigning timest
 timelines can share a thread if they want). All the properties discussed below need to happen on a per-timeline basis,
 and require no communication across timelines (except maybe to serialize access to the catalog).
 
-Currently, The most common timeline is the `EpochMillisecond` timeline, which uses the system clock to track real time.
-This document will mention that one specifically to provide examples occasionally.
-
 The document also allows user tables to exist in any timeline.
 
 ### Global Timestamp
@@ -91,9 +88,9 @@ being assigned to data from upstream sources. All reads are given a timestamp eq
 to user tables are given a timestamp larger than the global timestamp, and when the write completes then the timestamp
 should be advanced to the timestamp of that write.
 
-As an example, the `EpochMilliseconds` timeline's timestamp can be initialized to the current system time and be
-advanced periodically to the current value of a monotonically increasing system clock. All other global timestamps can
-be initialized to the timeline's minimum value and can be periodically advanced in the following
+As an example, a timeline's timestamp can be initialized to the current system time and be advanced periodically to the
+current value of a monotonically increasing system clock. Another example is that a timeline's timestamps can be
+initialized to the timestamp's minimum value and can be periodically advanced in the following
 way: `global_timestamp = max(min(uppers) - 1, global_timestamp)`, where `uppers` is the list of all `upper`s in the
 timeline. These are just potential implementations and not the only correct implementations.
 
@@ -153,8 +150,8 @@ NOTE: This would also fix the problem discussed in [#12198](https://github.com/M
 
 ### Read Capabilities on Global Timestamp
 
-Proposal: Explicitly hold read capabilities for the global timestamp for all sources. All reads are assigned a timestamp
-equal to the global timestamp.
+Proposal: Explicitly hold read capabilities for a timestamp less than or equal to the global timestamp for all sources.
+All reads are assigned a timestamp equal to the global timestamp.
 
 This approach guarantees that when a read completes, the global timestamp is equal to or larger than the timestamp of
 that read.
