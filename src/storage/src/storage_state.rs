@@ -75,18 +75,6 @@ pub struct StorageState {
     pub connector_context: ConnectorContext,
 }
 
-/// State about a single table.
-pub struct TableState<T> {
-    /// The since frontier for the table.
-    pub since: Antichain<T>,
-    /// The upper frontier for the table.
-    pub upper: T,
-    /// The data in the table.
-    pub data: Vec<(Row, T, Diff)>,
-    /// The size of `data` after the last consolidation.
-    pub last_consolidated_size: usize,
-}
-
 /// A wrapper around [StorageState] with a live timely worker and response channel.
 pub struct ActiveStorageState<'a, A: Allocate> {
     /// The underlying Timely worker.
