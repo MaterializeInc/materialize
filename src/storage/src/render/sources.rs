@@ -495,14 +495,6 @@ where
 
             let source_token = Arc::new(capability);
 
-            // We also need to keep track of this mapping globally to activate sources
-            // on timestamp advancement queries
-            storage_state
-                .ts_source_mapping
-                .entry(src_id)
-                .or_insert_with(Vec::new)
-                .push(Arc::downgrade(&source_token));
-
             needed_tokens.push(source_token);
 
             // Return the collections and any needed tokens.

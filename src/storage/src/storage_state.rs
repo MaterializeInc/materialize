@@ -9,7 +9,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use timely::communication::Allocate;
@@ -29,7 +29,6 @@ use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::decode::metrics::DecodeMetrics;
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::SourceToken;
 
 /// How frequently each dataflow worker sends timestamp binding updates
 /// back to the coordinator.
@@ -58,9 +57,6 @@ pub struct StorageState {
     pub collection_metadata: HashMap<GlobalId, CollectionMetadata>,
     /// Handles to created sources, keyed by ID
     pub source_tokens: HashMap<GlobalId, Arc<dyn Any + Send + Sync>>,
-    /// Handles to external sources, keyed by ID.
-    // TODO(guswynn): determine if this field is needed
-    pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Decoding metrics reported by all dataflows.
     pub decode_metrics: DecodeMetrics,
     /// Tracks the conditional write frontiers we have reported.
@@ -178,7 +174,6 @@ impl<'a, A: Allocate> ActiveStorageState<'a, A> {
                         self.storage_state.source_uppers.remove(&id);
                         self.storage_state.reported_frontiers.remove(&id);
                         self.storage_state.source_tokens.remove(&id);
-                        self.storage_state.ts_source_mapping.remove(&id);
                         self.storage_state.persist_handles.remove(&id);
                     }
                 }
