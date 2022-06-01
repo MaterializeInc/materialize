@@ -488,7 +488,9 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
 
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
     thread::sleep(Duration::from_secs(85));
-    pg_test_inner(dir)
+    let res = pg_test_inner(dir);
+    println!("MADE IT TO THE END OF THE TEST!!!");
+    res
 }
 
 #[test]
