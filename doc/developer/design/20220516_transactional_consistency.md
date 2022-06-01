@@ -92,7 +92,7 @@ Materialize (i.e. not between restarts).
 - [X] With strict increases for writes following reads: the global timestamp explicitly increases after all writes (
   See [Group Commit/Write Coalesce](#Group Commit/Write Coalesce)).
 - [X] Each timestamp is assigned to an event at some real-time moment within the event's bounds: For any two events e1
-  and e2, if e2 starts after e1 finished, then e2's timestamp will be larger or equal timestamp than e1's timestamp.
+  and e2, if e2 starts after e1 finished, then e2's timestamp will be larger or equal timestamp to e1's timestamp.
 - [X] Each timestamp transition is made durable before any subsequent response is issued: writes wait for an `append`
   command to be processed before returning a response to the client.
     - NOTE: There is ongoing work to ensure that an `append` command doesn't return until it is durable.
@@ -111,8 +111,8 @@ Strict Serializability across restarts.
 
 ### Group Commit/Write Coalesce
 
-NOTE: This section refers only to user tables and the `EpochMillis` timeline. We do not provide any consistency
-guarantees with respect to writes from upstream sources.
+NOTE: This section refers only to user tables and the `EpochMillis` timeline. We do not dicuss any consistency
+guarantees with respect to writes from upstream sources in this document.
 
 Write read cycles (write followed by read followed by write followed by read etc) and consecutive writes can cause the
 global timestamp to increase in an unbounded fashion.
