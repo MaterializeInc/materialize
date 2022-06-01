@@ -126,10 +126,25 @@ impl Transactor {
         let ts_min = u64::minimum();
         let initial_upper = Antichain::from_elem(ts_min);
         let new_upper = Antichain::from_elem(ts_min + 1);
-        let cas_res = write
-            .compare_and_append(EMPTY_UPDATES, initial_upper.clone(), new_upper)
-            .await??;
-        let read_ts = match cas_res {
+        // Unreliable, if selected, is hooked up at this point so we need to
+        // retry ExternalError here. No point in having a backoff since it's
+        // also happy to use the frontier of an expected upper mismatch.
+        let cas_res = loop {
+            let res = write
+                .compare_and_append(EMPTY_UPDATES, initial_upper.clone(), new_upper.clone())
+                .await;
+            match res {
+                Ok(x) => break x,
+                Err(err) => {
+                    info!(
+                        "external operation maybe_init_shard::caa failed, retrying: {}",
+                        err
+                    );
+                    continue;
+                }
+            }
+        };
+        let read_ts = match cas_res? {
             Ok(()) => 0,
             Err(current) => Self::extract_ts(&current.0)? - 1,
         };

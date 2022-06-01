@@ -9,14 +9,19 @@
 
 //! Test utilities for injecting latency and errors.
 
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, UNIX_EPOCH};
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
+use tracing::trace;
 
-use crate::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
+use crate::location::{
+    Atomicity, BlobMulti, Consensus, Determinate, ExternalError, SeqNo, VersionedData,
+};
 
 #[derive(Debug)]
 struct UnreliableCore {
@@ -90,6 +95,36 @@ impl UnreliableHandle {
         let should_timeout = core.should_timeout;
         core.rng.gen_bool(should_timeout)
     }
+
+    async fn run_op<R, F, WorkFn>(
+        &self,
+        deadline: Instant,
+        name: &str,
+        work_fn: WorkFn,
+    ) -> Result<R, ExternalError>
+    where
+        F: Future<Output = Result<R, ExternalError>>,
+        WorkFn: FnOnce() -> F,
+    {
+        let (should_happen, should_timeout) = (self.should_happen(), self.should_timeout());
+        trace!(
+            "unreliable {} should_happen={} should_timeout={}",
+            name,
+            should_happen,
+            should_timeout,
+        );
+        match (should_happen, should_timeout) {
+            (true, true) => {
+                let _res = work_fn().await;
+                Err(ExternalError::new_timeout(deadline))
+            }
+            (true, false) => work_fn().await,
+            (false, true) => Err(ExternalError::new_timeout(deadline)),
+            (false, false) => Err(ExternalError::Determinate(Determinate::new(anyhow!(
+                "unreliable"
+            )))),
+        }
+    }
 }
 
 /// An unreliable delegate to [BlobMulti].
@@ -109,23 +144,15 @@ impl UnreliableBlobMulti {
 #[async_trait]
 impl BlobMulti for UnreliableBlobMulti {
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        if self.handle.should_happen() {
-            let res = self.blob.get(deadline, key).await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "get", || self.blob.get(deadline, key))
+            .await
     }
 
     async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
-        if self.handle.should_happen() {
-            let res = self.blob.list_keys(deadline).await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "list_keys", || self.blob.list_keys(deadline))
+            .await
     }
 
     async fn set(
@@ -135,23 +162,17 @@ impl BlobMulti for UnreliableBlobMulti {
         value: Vec<u8>,
         atomic: Atomicity,
     ) -> Result<(), ExternalError> {
-        if self.handle.should_happen() {
-            let res = self.blob.set(deadline, key, value, atomic).await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "set", || {
+                self.blob.set(deadline, key, value, atomic)
+            })
+            .await
     }
 
     async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
-        if self.handle.should_happen() {
-            let res = self.blob.delete(deadline, key).await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "delete", || self.blob.delete(deadline, key))
+            .await
     }
 }
 
@@ -176,13 +197,9 @@ impl Consensus for UnreliableConsensus {
         deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        if self.handle.should_happen() {
-            let res = self.consensus.head(deadline, key).await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "head", || self.consensus.head(deadline, key))
+            .await
     }
 
     async fn compare_and_set(
@@ -192,16 +209,11 @@ impl Consensus for UnreliableConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<Result<(), Option<VersionedData>>, ExternalError> {
-        if self.handle.should_happen() {
-            let res = self
-                .consensus
-                .compare_and_set(deadline, key, expected, new)
-                .await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "compare_and_set", || {
+                self.consensus.compare_and_set(deadline, key, expected, new)
+            })
+            .await
     }
 
     async fn scan(
@@ -210,13 +222,11 @@ impl Consensus for UnreliableConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        if self.handle.should_happen() {
-            let res = self.consensus.scan(deadline, key, from).await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "scan", || {
+                self.consensus.scan(deadline, key, from)
+            })
+            .await
     }
 
     async fn truncate(
@@ -225,13 +235,11 @@ impl Consensus for UnreliableConsensus {
         key: &str,
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
-        if self.handle.should_happen() {
-            let res = self.consensus.truncate(deadline, key, seqno).await;
-            if !self.handle.should_timeout() {
-                return res;
-            }
-        }
-        Err(ExternalError::new_timeout(deadline))
+        self.handle
+            .run_op(deadline, "truncate", || {
+                self.consensus.truncate(deadline, key, seqno)
+            })
+            .await
     }
 }
 

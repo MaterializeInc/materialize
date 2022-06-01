@@ -65,7 +65,7 @@ impl SeqNo {
 /// that the operation _definitely did NOT succeed_ (e.g. permission denied).
 #[derive(Debug)]
 pub struct Determinate {
-    pub(crate) inner: anyhow::Error,
+    inner: anyhow::Error,
 }
 
 impl std::fmt::Display for Determinate {
@@ -75,6 +75,15 @@ impl std::fmt::Display for Determinate {
 }
 
 impl std::error::Error for Determinate {}
+
+impl Determinate {
+    /// Return a new Determinate wrapping the given error.
+    ///
+    /// Exposed for testing via [crate::unreliable].
+    pub(crate) fn new(inner: anyhow::Error) -> Self {
+        Determinate { inner }
+    }
+}
 
 /// An error coming from an underlying durability system (e.g. s3) indicating
 /// that the operation _might have succeeded_ (e.g. timeout).
