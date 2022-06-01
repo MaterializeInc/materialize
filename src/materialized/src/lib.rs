@@ -280,7 +280,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         mz_coord::catalog::storage::Connection::open(stash, Some(config.experimental_mode)).await?;
 
     // Initialize orchestrator.
-    let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
+    let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend.clone() {
         OrchestratorBackend::Kubernetes(config) => Box::new(
             KubernetesOrchestrator::new(config)
                 .await
@@ -433,6 +433,15 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         });
     }
 
+    if let OrchestratorBackend::Kubernetes(config) = config.orchestrator.backend {
+        let orchestrator = KubernetesOrchestrator::new(config)
+            .await
+            .context("connecting to kubernetes")?;
+        task::spawn(|| "pod_watcher", async move {
+            watch_kubernetes_pods(orchestrator).await
+        });
+    }
+
     // Launch task to serve connections.
     //
     // The lifetime of this task is controlled by a trigger that activates on
@@ -487,4 +496,8 @@ impl Server {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
+}
+
+async fn watch_kubernetes_pods(orchestrator: KubernetesOrchestrator) {
+    orchestrator.watch_pods().await
 }

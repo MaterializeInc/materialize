@@ -15,6 +15,7 @@ use std::sync::Arc;
 use anyhow::bail;
 use async_trait::async_trait;
 use clap::ArgEnum;
+use futures::StreamExt;
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
@@ -26,6 +27,7 @@ use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::config::{Config, KubeConfigOptions};
 use kube::error::Error;
+use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
@@ -112,6 +114,16 @@ impl KubernetesOrchestrator {
             kubernetes_namespace,
             config,
         })
+    }
+
+    pub async fn watch_pods(&self) {
+        let pods = Api::<Pod>::default_namespaced(self.client.clone());
+        watcher(pods, ListParams::default())
+            .touched_objects()
+            .for_each(|o| async {
+                dbg!(o);
+            })
+            .await;
     }
 }
 
