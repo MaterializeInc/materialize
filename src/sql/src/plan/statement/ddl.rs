@@ -2775,6 +2775,9 @@ fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig
     for option in options {
         match option {
             ReplicaOption::Remote { hosts } => {
+                if !remote_replicas.is_empty() {
+                    bail!("REMOTE specified more than once");
+                }
                 for host in hosts {
                     remote_replicas.insert(with_option_type!(Some(host), String));
                 }
