@@ -24,6 +24,7 @@ use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
+use crate::communication::execute_acking_connections;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
 use crate::SinkBaseMetrics;
@@ -82,7 +83,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
 
     let tokio_executor = tokio::runtime::Handle::current();
 
-    let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
+    let worker_guards = execute_acking_connections(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
         let _tokio_guard = tokio_executor.enter();
         let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
