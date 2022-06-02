@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
-use tracing::trace;
+use tracing::{info, trace};
 
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::cast::CastFrom;
