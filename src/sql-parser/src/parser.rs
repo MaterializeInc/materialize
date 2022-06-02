@@ -2377,40 +2377,30 @@ impl<'a> Parser<'a> {
             if_exists = IfExistsBehavior::Skip;
         }
 
-        let definitions = if self.parse_keywords(&[FROM, SOURCE]) {
-            let name = self.parse_raw_name()?;
-            let targets = if self.consume_token(&Token::LParen) {
-                let targets = self.parse_comma_separated(|parser| {
-                    let name = parser.parse_object_name()?;
-                    let alias = if parser.parse_keyword(AS) {
-                        Some(parser.parse_object_name()?)
-                    } else {
-                        None
-                    };
-                    Ok(CreateViewsSourceTarget { name, alias })
-                })?;
-                self.expect_token(&Token::RParen)?;
-                Some(targets)
-            } else {
-                None
-            };
-            CreateViewsDefinitions::Source { name, targets }
-        } else {
-            let views = self.parse_comma_separated(|parser| {
-                parser.expect_token(&Token::LParen)?;
-                let view = parser.parse_view_definition()?;
-                parser.expect_token(&Token::RParen)?;
-                Ok(view)
+        self.expect_keywords(&[FROM, SOURCE])?;
+        let source = self.parse_raw_name()?;
+        let targets = if self.consume_token(&Token::LParen) {
+            let targets = self.parse_comma_separated(|parser| {
+                let name = parser.parse_object_name()?;
+                let alias = if parser.parse_keyword(AS) {
+                    Some(parser.parse_object_name()?)
+                } else {
+                    None
+                };
+                Ok(CreateViewsSourceTarget { name, alias })
             })?;
-
-            CreateViewsDefinitions::Literal(views)
+            self.expect_token(&Token::RParen)?;
+            Some(targets)
+        } else {
+            None
         };
 
         Ok(Statement::CreateViews(CreateViewsStatement {
             temporary,
             materialized,
             if_exists,
-            definitions,
+            source,
+            targets,
         }))
     }
 

@@ -115,6 +115,7 @@ async fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
     let catalog = catalog.for_system_session();
     for (sql, types) in test_cases {
         let stmt = mz_sql::parse::parse(sql)?.into_element();
+        let (stmt, _) = mz_sql::names::resolve(&catalog, stmt)?;
         let desc = mz_sql::plan::describe(&PlanContext::zero(), &catalog, stmt, &[])?;
         assert_eq!(desc.param_types, types);
     }

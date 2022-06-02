@@ -18,6 +18,7 @@ use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::NotNullViolation;
+use mz_sql::plan::PlanError;
 use mz_sql::query_model::QGMError;
 use mz_transform::TransformError;
 
@@ -90,6 +91,8 @@ pub enum CoordError {
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
+    /// An error occurred while planning the statement.
+    PlanError(PlanError),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// An error occurred in the QGM stage of the optimizer.
@@ -354,6 +357,7 @@ impl fmt::Display for CoordError {
             CoordError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            CoordError::PlanError(e) => e.fmt(f),
             CoordError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
@@ -453,6 +457,12 @@ impl From<EvalError> for CoordError {
 impl From<mz_sql::catalog::CatalogError> for CoordError {
     fn from(e: mz_sql::catalog::CatalogError) -> CoordError {
         CoordError::SqlCatalog(e)
+    }
+}
+
+impl From<PlanError> for CoordError {
+    fn from(e: PlanError) -> CoordError {
+        CoordError::PlanError(e)
     }
 }
 

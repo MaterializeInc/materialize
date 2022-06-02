@@ -23,7 +23,7 @@ use crate::ast::{
     ExecuteStatement, FetchStatement, PrepareStatement, ResetVariableStatement,
     SetVariableStatement, ShowVariableStatement, Value,
 };
-use crate::names::Aug;
+use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
@@ -205,7 +205,8 @@ pub fn plan_prepare(
 ) -> Result<Plan, anyhow::Error> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
-    let desc = describe(scx.pcx()?, scx.catalog, *stmt.clone(), &param_types)?;
+    let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt.clone())?;
+    let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, &param_types)?;
     Ok(Plan::Prepare(PreparePlan {
         name: name.to_string(),
         stmt: *stmt,

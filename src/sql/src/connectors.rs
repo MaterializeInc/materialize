@@ -10,19 +10,19 @@
 use mz_sql_parser::ast::{
     AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CsrConnector,
     CsrConnectorAvro, CsrConnectorProto, Format, KafkaConnector, KafkaSourceConnector,
-    ProtobufSchema, Raw, RawObjectName,
+    ProtobufSchema,
 };
 
 use crate::catalog::SessionCatalog;
-use crate::names;
+use crate::names::{Aug, ResolvedObjectName};
 use crate::plan::StatementContext;
 
 /// Uses the provided catalog to populate all Connector references with the values of the connector
 /// it references allowing it to be used as if there was no indirection
 pub fn populate_connectors(
-    mut stmt: CreateSourceStatement<Raw>,
+    mut stmt: CreateSourceStatement<Aug>,
     catalog: &dyn SessionCatalog,
-) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
+) -> Result<CreateSourceStatement<Aug>, anyhow::Error> {
     let scx = StatementContext::new(None, catalog);
 
     if let CreateSourceStatement {
@@ -41,8 +41,7 @@ pub fn populate_connectors(
             KafkaConnector::Reference { connector, .. } => connector,
             _ => unreachable!(),
         };
-        let (resolved_name, _) = names::resolve(scx.catalog, name.clone())?;
-        let conn = scx.get_item_by_resolved_name(&resolved_name)?;
+        let conn = scx.get_item_by_resolved_name(&name)?;
         let resolved_source_connector = conn.catalog_connector()?;
         *kafka_connector = KafkaConnector::Reference {
             connector: name.to_owned(),
@@ -73,7 +72,7 @@ pub fn populate_connectors(
 /// Helper function which reifies any connectors in a single [`Format`]
 fn populate_connector_for_format(
     scx: &StatementContext,
-    format: &mut Format<Raw>,
+    format: &mut Format<Aug>,
 ) -> Result<(), anyhow::Error> {
     Ok(match format {
         Format::Avro(avro_schema) => match avro_schema {
@@ -115,10 +114,9 @@ fn populate_connector_for_format(
 /// Helper function which reifies individual [`CsrConnector::Reference`] instances
 fn populate_csr_connector(
     scx: &StatementContext,
-    name: RawObjectName,
-) -> Result<CsrConnector<Raw>, anyhow::Error> {
-    let (resolved_name, _) = names::resolve(scx.catalog, name.clone())?;
-    let conn = scx.get_item_by_resolved_name(&resolved_name)?;
+    name: ResolvedObjectName,
+) -> Result<CsrConnector<Aug>, anyhow::Error> {
+    let conn = scx.get_item_by_resolved_name(&name)?;
     let resolved_csr_connector = conn.catalog_connector()?;
     Ok(CsrConnector::Reference {
         connector: name,

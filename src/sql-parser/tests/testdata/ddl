@@ -351,14 +351,14 @@ CREATE VIEWS FROM SOURCE "foobar"
 ----
 CREATE VIEWS FROM SOURCE foobar
 =>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, definitions: Source { name: Name(UnresolvedObjectName([Ident("foobar")])), targets: None } })
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
 
 parse-statement
 CREATE OR REPLACE VIEWS FROM SOURCE "foobar"
 ----
 CREATE OR REPLACE VIEWS FROM SOURCE foobar
 =>
-CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, materialized: false, definitions: Source { name: Name(UnresolvedObjectName([Ident("foobar")])), targets: None } })
+CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, materialized: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
 
 parse-statement
 CREATE VIEWS FROM SOURCE "foobar" ();
@@ -368,18 +368,11 @@ CREATE VIEWS FROM SOURCE "foobar" ();
                                    ^
 
 parse-statement
-CREATE VIEWS (myschema.myview AS SELECT foo FROM bar), (v (has, cols) AS SELECT 1, 2)
-----
-CREATE VIEWS (myschema.myview AS SELECT foo FROM bar), (v (has, cols) AS SELECT 1, 2)
-=>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, definitions: Literal([ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }, ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]) })
-
-parse-statement
 CREATE MATERIALIZED VIEWS FROM SOURCE "foobar" (t1, "t2" AS t3);
 ----
 CREATE MATERIALIZED VIEWS FROM SOURCE foobar (t1, t2 AS t3)
 =>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, definitions: Source { name: Name(UnresolvedObjectName([Ident("foobar")])), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) } })
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE

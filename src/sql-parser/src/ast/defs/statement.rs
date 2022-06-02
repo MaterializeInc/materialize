@@ -610,49 +610,14 @@ impl AstDisplay for CreateViewsSourceTarget {
 }
 impl_display!(CreateViewsSourceTarget);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateViewsDefinitions<T: AstInfo> {
-    Source {
-        name: T::ObjectName,
-        targets: Option<Vec<CreateViewsSourceTarget>>,
-    },
-    Literal(Vec<ViewDefinition<T>>),
-}
-
-impl<T: AstInfo> AstDisplay for CreateViewsDefinitions<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Source { name, targets } => {
-                f.write_str(" FROM SOURCE ");
-                f.write_node(name);
-                if let Some(targets) = targets {
-                    f.write_str(" (");
-                    f.write_node(&display::comma_separated(&targets));
-                    f.write_str(")");
-                }
-            }
-            Self::Literal(defs) => {
-                let mut delim = " ";
-                for def in defs {
-                    f.write_str(delim);
-                    delim = ", ";
-                    f.write_str('(');
-                    f.write_node(def);
-                    f.write_str(')');
-                }
-            }
-        }
-    }
-}
-impl_display_t!(CreateViewsDefinitions);
-
 /// `CREATE VIEWS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateViewsStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub temporary: bool,
     pub materialized: bool,
-    pub definitions: CreateViewsDefinitions<T>,
+    pub source: T::ObjectName,
+    pub targets: Option<Vec<CreateViewsSourceTarget>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
@@ -674,7 +639,13 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
             f.write_str(" IF NOT EXISTS");
         }
 
-        f.write_node(&self.definitions);
+        f.write_str(" FROM SOURCE ");
+        f.write_node(&self.source);
+        if let Some(targets) = &self.targets {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&targets));
+            f.write_str(")");
+        }
     }
 }
 impl_display_t!(CreateViewsStatement);
