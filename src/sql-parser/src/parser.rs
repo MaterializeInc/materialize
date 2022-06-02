@@ -73,7 +73,7 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
 }
 
 /// Parses a SQL string containing a single data type.
-pub fn parse_data_type(sql: &str) -> Result<UnresolvedDataType, ParserError> {
+pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     let tokens = lexer::lex(sql)?;
     let mut parser = Parser::new(sql, tokens);
     let data_type = parser.parse_data_type()?;
@@ -3363,8 +3363,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<UnresolvedDataType, ParserError> {
-        let other = |name: &str| UnresolvedDataType::Other {
+    fn parse_data_type(&mut self) -> Result<RawDataType, ParserError> {
+        let other = |name: &str| RawDataType::Other {
             name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
@@ -3378,16 +3378,16 @@ impl<'a> Parser<'a> {
                     } else {
                         "bpchar"
                     };
-                    UnresolvedDataType::Other {
+                    RawDataType::Other {
                         name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
-                BPCHAR => UnresolvedDataType::Other {
+                BPCHAR => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("bpchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
-                VARCHAR => UnresolvedDataType::Other {
+                VARCHAR => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -3396,7 +3396,7 @@ impl<'a> Parser<'a> {
                 // Number-like types
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
-                DEC | DECIMAL => UnresolvedDataType::Other {
+                DEC | DECIMAL => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -3452,7 +3452,7 @@ impl<'a> Parser<'a> {
                 JSON => other("jsonb"),
                 _ => {
                     self.prev_token();
-                    UnresolvedDataType::Other {
+                    RawDataType::Other {
                         name: RawObjectName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
@@ -3460,7 +3460,7 @@ impl<'a> Parser<'a> {
             },
             Some(Token::Ident(_) | Token::LBracket) => {
                 self.prev_token();
-                UnresolvedDataType::Other {
+                RawDataType::Other {
                     name: self.parse_raw_name()?,
                     typ_mod: self.parse_typ_mod()?,
                 }
@@ -3472,7 +3472,7 @@ impl<'a> Parser<'a> {
             match self.peek_token() {
                 Some(Token::Keyword(LIST)) => {
                     self.next_token();
-                    data_type = UnresolvedDataType::List(Box::new(data_type));
+                    data_type = RawDataType::List(Box::new(data_type));
                 }
                 Some(Token::LBracket) => {
                     // Handle array suffixes. Note that `int[]`, `int[][][]`,
@@ -3480,8 +3480,8 @@ impl<'a> Parser<'a> {
                     self.next_token();
                     let _ = self.maybe_parse(|parser| parser.parse_number_value());
                     self.expect_token(&Token::RBracket)?;
-                    if !matches!(data_type, UnresolvedDataType::Array(_)) {
-                        data_type = UnresolvedDataType::Array(Box::new(data_type));
+                    if !matches!(data_type, RawDataType::Array(_)) {
+                        data_type = RawDataType::Array(Box::new(data_type));
                     }
                 }
                 _ => break,
@@ -3704,13 +3704,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<UnresolvedDataType, ParserError> {
+    fn parse_map(&mut self) -> Result<RawDataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
         let value_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::RBracket)?;
-        Ok(UnresolvedDataType::Map {
+        Ok(RawDataType::Map {
             key_type,
             value_type,
         })
