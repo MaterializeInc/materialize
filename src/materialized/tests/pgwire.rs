@@ -39,7 +39,7 @@ pub mod util;
 fn test_bind_params() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    let config = util::Config::default().experimental_mode();
+    let config = util::Config::default().unsafe_mode();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
 
@@ -374,7 +374,7 @@ fn test_copy() -> Result<(), Box<dyn Error>> {
 fn test_arrays() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    let server = util::start_server(util::Config::default().experimental_mode())?;
+    let server = util::start_server(util::Config::default().unsafe_mode())?;
     let mut client = server.connect(postgres::NoTls)?;
 
     let row = client.query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])?;
@@ -464,7 +464,7 @@ fn test_record_types() -> Result<(), Box<dyn Error>> {
 fn pg_test_inner(dir: PathBuf) -> Result<(), Box<dyn Error>> {
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
-        let server = util::start_server(util::Config::default().experimental_mode()).unwrap();
+        let server = util::start_server(util::Config::default().unsafe_mode()).unwrap();
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {

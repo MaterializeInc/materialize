@@ -80,7 +80,7 @@ class Materialized(Service):
         command_list = [
             f"--data-directory={data_directory}",
             f"--listen-addr 0.0.0.0:{guest_port}",
-            "--experimental",
+            "--unsafe-mode",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 

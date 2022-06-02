@@ -3394,7 +3394,7 @@ fn plan_array_subquery(
     ecx: &ExprContext,
     query: &Query<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    ecx.require_experimental_mode("array subquery")?;
+    ecx.require_unsafe_mode("array subquery")?;
     plan_vector_like_subquery(
         ecx,
         query,
@@ -4949,8 +4949,8 @@ impl<'a> ExprContext<'a> {
         self.qcx.derived_context(scope, self.relation_type.clone())
     }
 
-    pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
-        self.qcx.scx.require_experimental_mode(feature_name)
+    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+        self.qcx.scx.require_unsafe_mode(feature_name)
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {

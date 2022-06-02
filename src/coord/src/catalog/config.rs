@@ -19,8 +19,8 @@ use crate::catalog::storage;
 pub struct Config<'a, S> {
     /// The connection to the stash.
     pub storage: storage::Connection<S>,
-    /// Whether to enable experimental mode.
-    pub experimental_mode: Option<bool>,
+    /// Whether to enable unsafe mode.
+    pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// Timestamp frequency to use for CREATE SOURCE

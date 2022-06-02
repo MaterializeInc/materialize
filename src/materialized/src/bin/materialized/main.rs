@@ -95,9 +95,15 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
     long_version = LONG_VERSION.as_str(),
 )]
 pub struct Args {
-    /// [DANGEROUS] Enable experimental features.
-    #[clap(long, env = "EXPERIMENTAL")]
-    experimental: bool,
+    /// [DANGEROUS] Enable unsafe features.
+    ///
+    /// Unsafe features fall into two categories:
+    ///
+    ///   * In development features that are not yet ready for production use.
+    ///   * Features useful for development and testing that would pose a
+    ///     legitimate security risk if used in Materialize Cloud.
+    #[clap(long, env = "UNSAFE")]
+    unsafe_mode: bool,
 
     /// The address on which Prometheus metrics get exposed.
     ///
@@ -647,7 +653,7 @@ max log level: {max_log_level}",
         catalog_postgres_stash,
         orchestrator,
         secrets_controller: Some(secrets_controller),
-        experimental_mode: args.experimental,
+        unsafe_mode: args.unsafe_mode,
         metrics_registry,
         now: SYSTEM_TIME.clone(),
         replica_sizes,
@@ -657,44 +663,6 @@ max log level: {max_log_level}",
             args.aws_external_id_prefix,
         ),
     }))?;
-
-    eprintln!(
-        "=======================================================================
-Thank you for trying Materialize!
-
-We are interested in any and all feedback you have, which may be able
-to improve both our software and your queries! Please reach out at:
-
-    Web: https://materialize.com
-    GitHub issues: https://github.com/MaterializeInc/materialize/issues
-    Email: support@materialize.com
-    Twitter: @MaterializeInc
-=======================================================================
-"
-    );
-
-    if args.experimental {
-        eprintln!(
-            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                                WARNING!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-Starting Materialize in experimental mode means:
-
-- This node's catalog of views and sources are unstable.
-
-If you use any version of Materialize besides this one, you might
-not be able to start the Materialize node. To fix this, you'll have
-to remove all of Materialize's data (e.g. rm -rf mzdata) and start
-the node anew.
-
-- You must always start this node in experimental mode; it can no
-longer be started in non-experimental/regular mode.
-
-For more details, see https://materialize.com/docs/cli#experimental-mode
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-"
-        );
-    }
 
     println!(
         "materialized {} listening on {}...",

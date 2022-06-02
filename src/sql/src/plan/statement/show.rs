@@ -696,8 +696,6 @@ pub fn show_secrets<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    scx.require_experimental_mode("SHOW SECRETS")?;
-
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(

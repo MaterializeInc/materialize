@@ -234,7 +234,7 @@ pub struct Config<S> {
     pub storage: storage::Connection<S>,
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
-    pub experimental_mode: bool,
+    pub unsafe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
@@ -4951,7 +4951,7 @@ pub async fn serve<S: Append + 'static>(
         storage,
         timestamp_frequency,
         logical_compaction_window,
-        experimental_mode,
+        unsafe_mode,
         build_info,
         metrics_registry,
         now,
@@ -4967,7 +4967,7 @@ pub async fn serve<S: Append + 'static>(
 
     let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
         storage,
-        experimental_mode: Some(experimental_mode),
+        unsafe_mode,
         build_info,
         timestamp_frequency,
         now: now.clone(),

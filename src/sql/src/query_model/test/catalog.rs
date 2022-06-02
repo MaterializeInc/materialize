@@ -43,7 +43,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     nonce: 0,
     cluster_id: Uuid::from_u128(0),
     session_id: Uuid::from_u128(0),
-    experimental_mode: false,
+    unsafe_mode: false,
     build_info: &DUMMY_BUILD_INFO,
     timestamp_frequency: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
