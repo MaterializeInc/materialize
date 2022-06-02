@@ -80,6 +80,13 @@ pub fn gen_fold_root(ir: &Ir) -> String {
     }
     buf.end_block();
 
+    buf.start_block(format!("pub trait FoldNode<{trait_generics_and_bounds}>"));
+    buf.writeln(format!("type Folded;"));
+    buf.writeln(format!(
+        "fn fold<F: Fold<{trait_generics}>>(self, folder: &mut F) -> Self::Folded;"
+    ));
+    buf.end_block();
+
     for (name, item) in &ir.items {
         if let Item::Abstract = item {
             continue;
@@ -87,6 +94,16 @@ pub fn gen_fold_root(ir: &Ir) -> String {
         let generics = item_generics(item, "");
         let generics2 = item_generics(item, "2");
         let fn_name = fold_fn_name(name);
+        buf.start_block(format!(
+            "impl<{trait_generics_and_bounds}> FoldNode<{trait_generics}> for {name}{generics}"
+        ));
+        buf.writeln(format!("type Folded = {name}{generics2};"));
+        buf.start_block(format!(
+            "fn fold<F: Fold<{trait_generics}>>(self, folder: &mut F) -> Self::Folded"
+        ));
+        buf.writeln(format!("folder.{fn_name}(self)"));
+        buf.end_block();
+        buf.end_block();
         buf.writeln(format!(
             "pub fn {fn_name}<F, {trait_generics_and_bounds}>(folder: &mut F, node: {name}{generics}) -> {name}{generics2}"
         ));
@@ -190,6 +207,7 @@ struct VisitConfig {
 
 fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
     let trait_name = if c.mutable { "VisitMut" } else { "Visit" };
+    let fn_name_base = if c.mutable { "visit_mut" } else { "visit" };
     let muta = if c.mutable { "mut " } else { "" };
     let trait_generics = trait_generics(&ir.generics);
     let trait_generics_and_bounds = trait_generics_and_bounds(&ir.generics);
@@ -210,9 +228,28 @@ fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
     }
     buf.end_block();
 
+    buf.start_block(format!(
+        "pub trait {trait_name}Node<'ast, {trait_generics_and_bounds}>"
+    ));
+    buf.writeln(format!(
+        "fn {fn_name_base}<V: {trait_name}<'ast, {trait_generics}>>(&'ast {muta}self, visitor: &mut V);"
+    ));
+    buf.end_block();
+
     for (name, item) in &ir.items {
         let generics = item_generics(item, "");
         let fn_name = visit_fn_name(c, name);
+        if !matches!(item, Item::Abstract) {
+            buf.start_block(format!(
+                "impl<'ast, {trait_generics_and_bounds}> {trait_name}Node<'ast, {trait_generics}> for {name}{generics}"
+            ));
+            buf.start_block(format!(
+                "fn {fn_name_base}<V: {trait_name}<'ast, {trait_generics}>>(&'ast {muta}self, visitor: &mut V)"
+            ));
+            buf.writeln(format!("visitor.{fn_name}(self)"));
+            buf.end_block();
+            buf.end_block();
+        }
         buf.writeln(format!(
             "pub fn {fn_name}<'ast, V, {trait_generics_and_bounds}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
         ));
