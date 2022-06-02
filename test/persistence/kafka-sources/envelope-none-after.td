@@ -18,8 +18,8 @@ $ set schema={
 > SELECT COUNT(*) FROM envelope_none;
 10000
 
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-envelope-none-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 0 FROM mz_kafka_source_statistics;
-true
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-envelope-none-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
+0
 
 $ kafka-ingest format=avro topic=envelope-none schema=${schema} publish=true repeat=5000
 {"f1": ${kafka-ingest.iteration}}

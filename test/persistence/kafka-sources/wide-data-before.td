@@ -59,5 +59,5 @@ $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keys
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 
-> SELECT COUNT(*) = 10 FROM wide_data_source;
-true
+> SELECT COUNT(*) FROM wide_data_source;
+10

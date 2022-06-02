@@ -43,11 +43,11 @@ $ kafka-ingest format=avro topic=fetch-concurrent-two-sources schema=${int} time
 $ kafka-ingest format=avro topic=fetch-concurrent-two-sources schema=${int} timestamp=3
 {"f1": 34}
 
-> SELECT COUNT(*) = 3 FROM fetch_concurrent_two_sources1_view;
-true
+> SELECT COUNT(*) FROM fetch_concurrent_two_sources1_view;
+3
 
-> SELECT COUNT(*) = 3 FROM fetch_concurrent_two_sources2_view;
-true
+> SELECT COUNT(*) FROM fetch_concurrent_two_sources2_view;
+3
 
 > BEGIN
 
