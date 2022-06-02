@@ -322,7 +322,6 @@ pub enum TailFrom {
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
-        depends_on: Vec<GlobalId>,
     },
 }
 
@@ -447,7 +446,6 @@ pub struct Table {
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -455,7 +453,6 @@ pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
     pub desc: RelationDesc,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -476,7 +473,6 @@ pub struct Sink {
     pub from: GlobalId,
     pub connector_builder: SinkConnectorBuilder,
     pub envelope: SinkEnvelope,
-    pub depends_on: Vec<GlobalId>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -486,7 +482,6 @@ pub struct View {
     pub expr: mz_expr::MirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -494,7 +489,6 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
-    pub depends_on: Vec<GlobalId>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -502,7 +496,6 @@ pub struct Index {
 pub struct Type {
     pub create_sql: String,
     pub inner: CatalogType<IdReference>,
-    pub depends_on: Vec<GlobalId>,
 }
 
 /// Specifies when a `Peek` or `Tail` should occur.

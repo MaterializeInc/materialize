@@ -19,13 +19,13 @@ use anyhow::bail;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{RawObjectName, UnresolvedDatabaseName, UnresolvedSchemaName};
 
-use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
+use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
 use crate::catalog::{
     CatalogComputeInstance, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema,
     SessionCatalog,
 };
 use crate::names::{
-    self, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+    Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
     RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName, ResolvedSchemaName,
     SchemaSpecifier,
 };
@@ -88,7 +88,7 @@ impl StatementDesc {
 pub fn describe(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    stmt: Statement<Raw>,
+    stmt: Statement<Aug>,
     param_types_in: &[Option<ScalarType>],
 ) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
@@ -103,8 +103,6 @@ pub fn describe(
         catalog,
         param_types: RefCell::new(param_types),
     };
-
-    let (stmt, _depends_on) = names::resolve(scx.catalog, stmt)?;
 
     let desc = match stmt {
         // DDL statements.
@@ -193,7 +191,7 @@ pub fn describe(
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
-    stmt: Statement<Raw>,
+    stmt: Statement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let param_types = params
@@ -209,8 +207,6 @@ pub fn plan(
         param_types: RefCell::new(param_types),
     };
 
-    let (stmt, depends_on) = names::resolve(scx.catalog, stmt)?;
-
     match stmt {
         // DDL statements.
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
@@ -220,15 +216,15 @@ pub fn plan(
         Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
         Statement::CreateConnector(stmt) => ddl::plan_create_connector(scx, stmt),
         Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),
-        Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt, depends_on),
+        Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
-        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt, depends_on),
-        Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt, depends_on),
-        Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt, depends_on),
+        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
+        Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
-        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params, depends_on),
+        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
         Statement::CreateViews(stmt) => ddl::plan_create_views(scx, stmt),
         Statement::DropClusterReplicas(stmt) => ddl::plan_drop_cluster_replica(scx, stmt),
         Statement::DropClusters(stmt) => ddl::plan_drop_cluster(scx, stmt),
@@ -238,12 +234,12 @@ pub fn plan(
         Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),
 
         // DML statements.
-        Statement::Copy(stmt) => dml::plan_copy(scx, stmt, depends_on),
+        Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::Explain(stmt) => dml::plan_explain(scx, stmt, params),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
-        Statement::Tail(stmt) => dml::plan_tail(scx, stmt, None, depends_on),
+        Statement::Tail(stmt) => dml::plan_tail(scx, stmt, None),
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.

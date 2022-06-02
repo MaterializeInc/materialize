@@ -392,6 +392,7 @@ impl ErrorResponse {
             CoordError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
+            CoordError::PlanError(_) => SqlState::INTERNAL_ERROR,
             CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             CoordError::QGM(_) => SqlState::INTERNAL_ERROR,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
