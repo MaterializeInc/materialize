@@ -20,3 +20,5 @@ pub(crate) mod sink;
 
 pub use arrangement::manager::{TraceManager, TraceMetrics};
 pub use sink::SinkBaseMetrics;
+
+pub mod communication;
