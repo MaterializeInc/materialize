@@ -29,8 +29,7 @@ use crate::ast::{
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{
-    resolve_names_stmt, resolve_names_stmt_show, Aug, NameSimplifier, ResolvedClusterName,
-    ResolvedDatabaseName, ResolvedSchemaName,
+    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
@@ -57,7 +56,7 @@ pub fn plan_show_create_view(
         let view_sql = view.create_sql();
         let parsed = parse::parse(view_sql)?;
         let parsed = parsed[0].clone();
-        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
@@ -93,7 +92,7 @@ pub fn plan_show_create_table(
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
         let parsed = parse::parse(table.create_sql())?.into_element();
-        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
@@ -751,11 +750,8 @@ impl<'a> ShowSelect<'a> {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
         };
-        let stmt = resolve_names_stmt_show(scx, Statement::Select(stmt))?;
-        if let Statement::Select(stmt) = stmt {
-            return Ok(ShowSelect { scx, stmt });
-        }
-        unreachable!()
+        let (stmt, _) = names::resolve(scx.catalog, stmt)?;
+        Ok(ShowSelect { scx, stmt })
     }
 
     /// Computes the shape of this `ShowSelect`.

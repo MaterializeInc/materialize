@@ -75,9 +75,8 @@ use crate::ast::{
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
 use crate::names::{
-    resolve_names_data_type, Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier,
-    ResolvedClusterName, ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName,
-    SchemaSpecifier,
+    self, Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
+    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
 use crate::normalize;
 use crate::normalize::ident;
@@ -1697,7 +1696,7 @@ pub fn plan_create_views(
                                 ty = "pg_catalog.jsonb".into();
                             }
                             let data_type = mz_sql_parser::parser::parse_data_type(&ty)?;
-                            let (data_type, _) = resolve_names_data_type(scx, data_type)?;
+                            let (data_type, _) = names::resolve(scx.catalog, data_type)?;
                             projection.push(SelectItem::Expr {
                                 expr: Expr::Cast {
                                     expr: Box::new(Expr::Subscript {

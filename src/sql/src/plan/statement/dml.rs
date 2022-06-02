@@ -28,7 +28,7 @@ use crate::ast::{
     Statement, TailRelation, TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
-use crate::names::{resolve_names, Aug, ResolvedObjectName};
+use crate::names::{self, Aug, ResolvedObjectName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{query, QueryContext};
@@ -220,8 +220,8 @@ pub fn plan_explain(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let mut qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-            resolve_names(&mut qcx, query)?
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            names::resolve(qcx.scx.catalog, query)?.0
         }
         Explainee::Query(query) => query,
     };

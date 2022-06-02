@@ -22,15 +22,15 @@ use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
-use crate::ast::fold::Fold;
+use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawClusterName, RawDataType, RawObjectName,
-    Statement, UnresolvedObjectName,
+    self, AstInfo, Cte, Ident, Query, Raw, RawClusterName, RawDataType, RawObjectName, Statement,
+    UnresolvedObjectName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
-use crate::plan::{PlanError, QueryContext, StatementContext};
+use crate::plan::PlanError;
 
 /// A fully-qualified human readable name of an item in the catalog.
 ///
@@ -660,7 +660,7 @@ pub struct NameResolver<'a> {
 }
 
 impl<'a> NameResolver<'a> {
-    pub fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
+    fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
         NameResolver {
             catalog,
             ctes: HashMap::new(),
@@ -1006,87 +1006,18 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     }
 }
 
-pub fn resolve_names_stmt(
-    scx: &mut StatementContext,
-    stmt: Statement<Raw>,
-) -> Result<(Statement<Aug>, HashSet<GlobalId>), PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_statement(stmt);
-    n.status?;
-    Ok((result, n.ids))
-}
-
-pub fn resolve_names_stmt_show(
-    scx: &StatementContext,
-    stmt: Statement<Raw>,
-) -> Result<Statement<Aug>, PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_statement(stmt);
-    n.status?;
-    Ok(result)
-}
-
-// Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
-// resolving names and (aspirationally) performing semantic analysis such as
-// type-checking.
-pub fn resolve_names(qcx: &mut QueryContext, query: Query<Raw>) -> Result<Query<Aug>, PlanError> {
-    let mut n = NameResolver::new(qcx.scx.catalog);
-    let result = n.fold_query(query);
-    n.status?;
-    Ok(result)
-}
-
-pub fn resolve_names_expr(qcx: &mut QueryContext, expr: Expr<Raw>) -> Result<Expr<Aug>, PlanError> {
-    let mut n = NameResolver::new(qcx.scx.catalog);
-    let result = n.fold_expr(expr);
-    n.status?;
-    Ok(result)
-}
-
-pub fn resolve_names_data_type(
-    scx: &StatementContext,
-    data_type: RawDataType,
-) -> Result<(ResolvedDataType, HashSet<GlobalId>), PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_data_type(data_type);
-    n.status?;
-    Ok((result, n.ids))
-}
-
-pub fn resolve_names_cluster(
-    scx: &StatementContext,
-    cluster_name: RawClusterName,
-) -> Result<ResolvedClusterName, PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_cluster_name(cluster_name);
-    n.status?;
-    Ok(result)
-}
-
-pub fn resolve_object_name(
-    scx: &StatementContext,
-    object_name: <Raw as AstInfo>::ObjectName,
-) -> Result<<Aug as AstInfo>::ObjectName, PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_object_name(object_name);
-    n.status?;
-    Ok(result)
-}
-
-/// A general implementation for name resolution on AST elements.
-///
-/// This implementation is appropriate Whenever:
-/// - You don't need to export the name resolution outside the `sql` crate and
-///   the extra typing isn't too onerous.
-/// - Discovered dependencies should extend `qcx.ids`.
-pub fn resolve_names_extend_qcx_ids<F, T>(qcx: &mut QueryContext, f: F) -> Result<T, PlanError>
+/// Resolves names in an AST node using the provided catalog.
+pub fn resolve<N>(
+    catalog: &dyn SessionCatalog,
+    node: N,
+) -> Result<(N::Folded, HashSet<GlobalId>), PlanError>
 where
-    F: FnOnce(&mut NameResolver) -> T,
+    N: FoldNode<Raw, Aug>,
 {
-    let mut n = NameResolver::new(qcx.scx.catalog);
-    let result = f(&mut n);
-    n.status?;
-    Ok(result)
+    let mut resolver = NameResolver::new(catalog);
+    let result = node.fold(&mut resolver);
+    resolver.status?;
+    Ok((result, resolver.ids))
 }
 
 // Used when displaying a view's source for human creation. If the name
