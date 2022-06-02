@@ -381,7 +381,6 @@ where
                 .iter_mut()
                 .map(|(id, compute)| (*id, compute.client.as_stream()))
                 .collect();
-            let mut storage_alive = true;
             loop {
                 tokio::select! {
                     Some((instance, response)) = compute_stream.next() => {
@@ -390,13 +389,11 @@ where
                         self.stashed_response = Some(UnderlyingControllerResponse::Compute(instance, response));
                         return Ok(());
                     }
-                    response = self.storage_controller.recv(), if storage_alive => {
+                    response = self.storage_controller.recv() => {
                         if let Some(response) = response? {
                             assert!(self.stashed_response.is_none());
                             self.stashed_response = Some(UnderlyingControllerResponse::Storage(response));
                             return Ok(());
-                        } else {
-                            storage_alive = false;
                         }
                     }
                 }
