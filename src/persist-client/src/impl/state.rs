@@ -544,6 +544,10 @@ mod tests {
         let mut state = State::<(), (), u64, i64>::new(ShardId::new());
         let reader = ReaderId::new();
         let _ = state.collections.register(SeqNo::minimum(), &reader);
+
+        // The shard global since == 0 initially.
+        assert_eq!(state.collections.since, Antichain::from_elem(0));
+
         // Greater
         assert_eq!(
             state
@@ -551,13 +555,15 @@ mod tests {
                 .downgrade_since(&reader, &Antichain::from_elem(2)),
             Continue(Since(Antichain::from_elem(2)))
         );
-        // Equal
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+        // Equal (no-op)
         assert_eq!(
             state
                 .collections
                 .downgrade_since(&reader, &Antichain::from_elem(2)),
             Continue(Since(Antichain::from_elem(2)))
         );
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
         // Less (no-op)
         assert_eq!(
             state
@@ -565,6 +571,53 @@ mod tests {
                 .downgrade_since(&reader, &Antichain::from_elem(1)),
             Continue(Since(Antichain::from_elem(2)))
         );
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+
+        // Create a second reader.
+        let reader2 = ReaderId::new();
+        let _ = state.collections.register(SeqNo::minimum(), &reader2);
+
+        // Shard since doesn't change until the meet (min) of all reader sinces changes.
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader2, &Antichain::from_elem(3)),
+            Continue(Since(Antichain::from_elem(3)))
+        );
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+        // Shard since == 3 when all readers have since >= 3.
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader, &Antichain::from_elem(5)),
+            Continue(Since(Antichain::from_elem(5)))
+        );
+        assert_eq!(state.collections.since, Antichain::from_elem(3));
+
+        // Shard since unaffected readers with since > shard since expiring.
+        assert_eq!(state.collections.expire_reader(&reader), Continue(true));
+        assert_eq!(state.collections.since, Antichain::from_elem(3));
+
+        // Create a third reader.
+        let reader3 = ReaderId::new();
+        let _ = state.collections.register(SeqNo::minimum(), &reader3);
+
+        // Shard since doesn't change until the meet (min) of all reader sinces changes.
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader3, &Antichain::from_elem(10)),
+            Continue(Since(Antichain::from_elem(10)))
+        );
+        assert_eq!(state.collections.since, Antichain::from_elem(3));
+
+        // Shard since advances when reader with the minimal since expires.
+        assert_eq!(state.collections.expire_reader(&reader2), Continue(true));
+        assert_eq!(state.collections.since, Antichain::from_elem(10));
+
+        // Shard since unaffected when all readers are expired.
+        assert_eq!(state.collections.expire_reader(&reader3), Continue(true));
+        assert_eq!(state.collections.since, Antichain::from_elem(10));
     }
 
     #[test]
