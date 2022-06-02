@@ -27,7 +27,7 @@ use mz_ore::fmt::FormatBuffer;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
-use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawObjectName, UnresolvedDataType};
+use mz_sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawDataType, RawObjectName};
 use mz_sql_parser::parser::{self, ParserError};
 
 #[test]
@@ -186,7 +186,7 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
             }
         }
         fn visit_data_type(&mut self, data_type: &'a <Raw as AstInfo>::DataType) {
-            if let UnresolvedDataType::Other { name, .. } = data_type {
+            if let RawDataType::Other { name, .. } = data_type {
                 self.visit_object_name(name)
             }
         }

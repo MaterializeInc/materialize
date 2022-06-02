@@ -25,8 +25,8 @@ use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::Fold;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawIdent, RawObjectName, Statement,
-    UnresolvedDataType, UnresolvedObjectName,
+    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawDataType, RawIdent, RawObjectName, Statement,
+    UnresolvedObjectName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
@@ -674,7 +674,7 @@ impl<'a> NameResolver<'a> {
         data_type: <Raw as AstInfo>::DataType,
     ) -> Result<<Aug as AstInfo>::DataType, PlanError> {
         match data_type {
-            UnresolvedDataType::Array(elem_type) => {
+            RawDataType::Array(elem_type) => {
                 let name = elem_type.to_string();
                 match self.fold_data_type_internal(*elem_type)? {
                     ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => {
@@ -707,11 +707,11 @@ impl<'a> NameResolver<'a> {
                     ResolvedDataType::Error => sql_bail!("type \"{}[]\" does not exist", name),
                 }
             }
-            UnresolvedDataType::List(elem_type) => {
+            RawDataType::List(elem_type) => {
                 let elem_type = self.fold_data_type_internal(*elem_type)?;
                 Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
             }
-            UnresolvedDataType::Map {
+            RawDataType::Map {
                 key_type,
                 value_type,
             } => {
@@ -722,7 +722,7 @@ impl<'a> NameResolver<'a> {
                     value_type: Box::new(value_type),
                 })
             }
-            UnresolvedDataType::Other { name, typ_mod } => {
+            RawDataType::Other { name, typ_mod } => {
                 let (full_name, item) = match name {
                     RawObjectName::Name(name) => {
                         let name = normalize::unresolved_object_name(name)?;
@@ -1045,7 +1045,7 @@ pub fn resolve_names_expr(qcx: &mut QueryContext, expr: Expr<Raw>) -> Result<Exp
 
 pub fn resolve_names_data_type(
     scx: &StatementContext,
-    data_type: UnresolvedDataType,
+    data_type: RawDataType,
 ) -> Result<(ResolvedDataType, HashSet<GlobalId>), PlanError> {
     let mut n = NameResolver::new(scx.catalog);
     let result = n.fold_data_type(data_type);
