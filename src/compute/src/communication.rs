@@ -90,7 +90,7 @@ where
                     Ok((stuff, guard)) => Ok((
                         stuff
                             .into_iter()
-                            .map(|x| GenericBuilder::ZeroCopy(x))
+                            .map(GenericBuilder::ZeroCopy)
                             .collect(),
                         Box::new(guard),
                     )),
@@ -141,7 +141,7 @@ fn create_sockets(
     noisy: bool,
 ) -> IoResult<Vec<Option<TcpStream>>> {
     let hosts1 = Arc::new(addresses);
-    let hosts2 = hosts1.clone();
+    let hosts2 = Arc::clone(&hosts1);
 
     let start_task = thread::spawn(move || start_connections(hosts1, my_index, noisy));
     let await_task = thread::spawn(move || await_connections(hosts2, my_index, noisy));
