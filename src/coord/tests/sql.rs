@@ -28,9 +28,7 @@ use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
 use mz_sql::catalog::CatalogDatabase;
-use mz_sql::names::{
-    resolve_names, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier,
-};
+use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
 use tokio::sync::Mutex;
@@ -109,16 +107,16 @@ async fn datadriven() {
                         let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
                         let pcx = &PlanContext::zero();
                         let scx = StatementContext::new(Some(pcx), &catalog);
-                        let mut qcx =
+                        let qcx =
                             QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
                         let q = parsed[0].clone();
                         let q = match q {
                             Statement::Select(s) => s.query,
                             _ => unreachable!(),
                         };
-                        let resolved = resolve_names(&mut qcx, q);
+                        let resolved = names::resolve(qcx.scx.catalog, q);
                         match resolved {
-                            Ok(q) => format!("{}\n", q),
+                            Ok((q, _depends_on)) => format!("{}\n", q),
                             Err(e) => format!("error: {}\n", e),
                         }
                     }

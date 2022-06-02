@@ -24,7 +24,7 @@ use mz_repr::{ColumnName, ColumnType, Datum, RelationType, Row, ScalarBaseType, 
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
-use crate::names::{resolve_names, resolve_names_expr, PartialObjectName};
+use crate::names::{self, PartialObjectName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
@@ -322,9 +322,9 @@ pub fn sql_impl(
                 .map(|(i, ty)| (i + 1, ty))
                 .collect(),
         );
-        let mut qcx = QueryContext::root(&scx, qcx.lifetime);
+        let qcx = QueryContext::root(&scx, qcx.lifetime);
 
-        let mut expr = resolve_names_expr(&mut qcx, expr.clone())?;
+        let (mut expr, _) = names::resolve(qcx.scx.catalog, expr.clone())?;
         // Desugar the expression
         transform_ast::transform_expr(&scx, &mut expr)?;
 
@@ -403,7 +403,7 @@ fn sql_impl_table_func_inner(
         let mut qcx = QueryContext::root(&scx, qcx.lifetime);
 
         let query = query.clone();
-        let mut query = resolve_names(&mut qcx, query)?;
+        let (mut query, _) = names::resolve(qcx.scx.catalog, query)?;
         transform_ast::transform_query(&scx, &mut query)?;
 
         query::plan_nested_query(&mut qcx, &query)

@@ -25,9 +25,9 @@ use crate::catalog::{
     SessionCatalog,
 };
 use crate::names::{
-    resolve_names_stmt, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
-    QualifiedObjectName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName,
-    ResolvedSchemaName, SchemaSpecifier,
+    self, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+    RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName, ResolvedSchemaName,
+    SchemaSpecifier,
 };
 use crate::plan::error::PlanError;
 use crate::plan::query;
@@ -98,13 +98,13 @@ pub fn describe(
         }
     }
 
-    let mut scx = StatementContext {
+    let scx = StatementContext {
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
     };
 
-    let (stmt, _depends_on) = resolve_names_stmt(&mut scx, stmt)?;
+    let (stmt, _depends_on) = names::resolve(scx.catalog, stmt)?;
 
     let desc = match stmt {
         // DDL statements.
@@ -209,7 +209,7 @@ pub fn plan(
         param_types: RefCell::new(param_types),
     };
 
-    let (stmt, depends_on) = resolve_names_stmt(scx, stmt)?;
+    let (stmt, depends_on) = names::resolve(scx.catalog, stmt)?;
 
     match stmt {
         // DDL statements.

@@ -41,7 +41,7 @@ pub fn populate_connectors(
             KafkaConnector::Reference { connector, .. } => connector,
             _ => unreachable!(),
         };
-        let resolved_name = names::resolve_object_name(&scx, name.clone())?;
+        let (resolved_name, _) = names::resolve(scx.catalog, name.clone())?;
         let conn = scx.get_item_by_resolved_name(&resolved_name)?;
         let resolved_source_connector = conn.catalog_connector()?;
         *kafka_connector = KafkaConnector::Reference {
@@ -117,7 +117,7 @@ fn populate_csr_connector(
     scx: &StatementContext,
     name: RawObjectName,
 ) -> Result<CsrConnector<Raw>, anyhow::Error> {
-    let resolved_name = names::resolve_object_name(&scx, name.clone())?;
+    let (resolved_name, _) = names::resolve(scx.catalog, name.clone())?;
     let conn = scx.get_item_by_resolved_name(&resolved_name)?;
     let resolved_csr_connector = conn.catalog_connector()?;
     Ok(CsrConnector::Reference {

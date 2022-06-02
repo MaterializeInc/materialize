@@ -662,7 +662,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
-    use crate::names::resolve_names_stmt;
+    use crate::names;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
@@ -673,7 +673,7 @@ mod tests {
         )?
         .into_element();
 
-        let (stmt, _) = resolve_names_stmt(scx, parsed)?;
+        let (stmt, _) = names::resolve(scx.catalog, parsed)?;
 
         // Ensure that all identifiers are quoted.
         assert_eq!(
