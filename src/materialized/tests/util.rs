@@ -23,6 +23,7 @@ use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tower_http::cors::AllowOrigin;
+use tracing::info;
 
 use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
@@ -121,7 +122,9 @@ impl Config {
 }
 
 pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
+    info!("START SERVER");
     let runtime = Arc::new(Runtime::new()?);
+    info!("RUNTIME CREATED");
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
             // If no data directory is provided, we create a temporary
@@ -133,7 +136,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         }
         Some(data_directory) => (data_directory, None),
     };
+    info!("DATA DIRECTORY CREATED");
     let metrics_registry = MetricsRegistry::new();
+    info!("METRICS REGISTRY CREATED");
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
@@ -176,12 +181,14 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         availability_zones: Default::default(),
         connector_context: Default::default(),
     }))?;
+    info!("SERVED");
     let server = Server {
         inner,
         runtime,
         metrics_registry,
         _temp_dir: temp_dir,
     };
+    info!("SERVER CREATED");
     Ok(server)
 }
 
