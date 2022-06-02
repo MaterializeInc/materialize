@@ -34,6 +34,9 @@ CREATE CLUSTER foo REPLICAS (r1 (REMOTE ('localhost:1234')))
 statement error cannot create multiple replicas named 'r1' on cluster 'bar'
 CREATE CLUSTER bar REPLICAS (r1 (REMOTE ('localhost:1234')), r1 (REMOTE ('localhost:1234')))
 
+statement error REMOTE specified more than once
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ('localhost:1234'), REMOTE ('localhost:1234')))
+
 statement ok
 CREATE CLUSTER bar REPLICAS (r1 (REMOTE ('localhost:1235')), r2 (REMOTE ('localhost:1236')))
 
