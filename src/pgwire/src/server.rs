@@ -92,6 +92,7 @@ impl Server {
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
         let mut coord_client = self.coord_client.new_conn()?;
+        info!("COORD CLIENT CREATED");
         let conn_id = coord_client.conn_id();
         let mut conn = Conn::Unencrypted(MeteredConn {
             metrics: &self.metrics,

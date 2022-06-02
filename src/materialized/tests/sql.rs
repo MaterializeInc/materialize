@@ -43,7 +43,7 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
-    mz_ore::test::timeout(Duration::from_secs(30), || {
+    mz_ore::test::timeout(Duration::from_secs(180), || {
         // Create a listener that will simulate a slow Confluent Schema Registry.
         info!("test_no_block: creating listener");
         let listener = TcpListener::bind("localhost:0")?;
@@ -350,6 +350,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[test]
+#[ignore]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -432,6 +433,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 // Verifies that tailing non-nullable columns with progress information
 // turns them into nullable columns. See #6304.
 #[test]
+#[ignore]
 fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 

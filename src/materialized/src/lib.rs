@@ -204,11 +204,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(s)?)?;
             let stash = mz_stash::Postgres::new(s.to_string(), None, tls).await?;
             let stash = mz_stash::Memory::new(stash);
+            info!("STASH CREATED");
             serve_stash(config, stash).await
         }
         None => {
             info!("SQLITE STASH");
             let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
+            info!("STASH CREATED");
             serve_stash(config, stash).await
         }
     }
@@ -255,6 +257,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             (Some(pgwire_tls), Some(http_tls))
         }
     };
+    info!("TLS VALIDATED");
 
     // Attempt to acquire PID file lock.
     let pid_file =
@@ -271,13 +274,17 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             e => e.into(),
         })?;
 
+    info!("PID FILE CREATED");
+
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
+    info!("LISTENING FOR TCP CONNECTIONS");
     let local_addr = listener.local_addr()?;
 
     // Load the coordinator catalog from disk.
     let coord_storage =
         mz_coord::catalog::storage::Connection::open(stash, Some(config.experimental_mode)).await?;
+    info!("STORAGE LOADED");
 
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
@@ -288,6 +295,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
+    info!("ORCHESTRATOR CREATED");
     let orchestrator = mz_dataflow_types::client::controller::OrchestratorConfig {
         orchestrator: Box::new(TracingOrchestrator::new(
             orchestrator,
@@ -399,12 +407,14 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             metrics_registry: &config.metrics_registry,
             frontegg: config.frontegg.clone(),
         });
+        info!("PG SERVER CREATED");
         let http_server = http::Server::new(http::Config {
             tls: http_tls,
             frontegg: config.frontegg,
             coord_client,
             allowed_origin: config.cors_allowed_origin,
         });
+        info!("HTTP SERVER CREATED");
         let mut mux = Mux::new();
         mux.add_handler(pgwire_server);
         mux.add_handler(http_server);

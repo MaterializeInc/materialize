@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use tokio::io::{self, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tracing::log::info;
 use tracing::{debug, error};
 
 use mz_ore::netio::{self, SniffedStream, SniffingStream};
@@ -51,6 +52,7 @@ impl Mux {
     where
         S: Stream<Item = io::Result<TcpStream>> + Unpin,
     {
+        info!("TCP SERVER");
         let handlers = Arc::new(self.handlers);
         while let Some(conn) = incoming.next().await {
             let conn = match conn {
@@ -60,6 +62,7 @@ impl Mux {
                     continue;
                 }
             };
+            info!("CONNECTION RECEIVED");
             // Set TCP_NODELAY to disable tinygram prevention (Nagle's
             // algorithm), which forces a 40ms delay between each query
             // on linux. According to John Nagle [0], the true problem
@@ -87,6 +90,7 @@ async fn handle_connection(handlers: Arc<Handlers>, conn: TcpStream) {
     // and you won't be able to tell what protocol you have. For now, eight
     // bytes is the magic number, but this may need to change if we learn to
     // speak new protocols.
+    info!("HANDLE CONNECTION");
     let mut ss = SniffingStream::new(conn);
     let mut buf = [0; 8];
     let nread = match netio::read_exact_or_eof(&mut ss, &mut buf).await {
@@ -142,6 +146,7 @@ impl ConnectionHandler for mz_pgwire::Server {
         // Using fully-qualified syntax means we won't accidentally call
         // ourselves (i.e., silently infinitely recurse) if the name or type of
         // `pgwire::Server::handle_connection` changes.
+        info!("PG HANDLE CONNECTION");
         mz_pgwire::Server::handle_connection(self, conn).await
     }
 }
