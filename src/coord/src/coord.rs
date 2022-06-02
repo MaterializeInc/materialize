@@ -86,7 +86,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::warn;
+use tracing::{trace, warn};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -834,7 +834,13 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             if let Some(timestamp) = self.global_timeline.should_advance_to() {
+                let start = Instant::now();
                 self.advance_local_inputs(timestamp).await;
+                trace!(
+                    "advancing table frontiers to {} took: {} ms",
+                    timestamp,
+                    start.elapsed().as_millis()
+                );
             }
         }
     }
