@@ -144,7 +144,7 @@ impl ConsensusConfig {
                 err
             )
         })?;
-        let mut query_params = url.query_pairs().collect::<HashMap<_, _>>();
+        let query_params = url.query_pairs().collect::<HashMap<_, _>>();
 
         let config = match url.scheme() {
             "sqlite" => {
@@ -165,10 +165,7 @@ impl ConsensusConfig {
                 PostgresConsensusConfig::new(value).await?,
             )),
             #[cfg(any(test, debug_assertions))]
-            "mem" => {
-                query_params.clear();
-                Ok(ConsensusConfig::Mem)
-            }
+            "mem" => Ok(ConsensusConfig::Mem),
             p => Err(anyhow!(
                 "unknown persist consensus scheme {}: {}",
                 p,
