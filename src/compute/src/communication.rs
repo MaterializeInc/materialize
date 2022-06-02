@@ -101,12 +101,15 @@ fn start_connections(
                     stream.write_all(my_index.to_ne_bytes().as_slice()).expect("failed to send worker index");
                     let mut buffer = [0u8; 8];
                     let _ = stream.read_exact(&mut buffer);
+                    // TODO [btv] - We can remove this once we have more reliable
+                    // network connections (possibly after linkerd is torn out)
                     let peer_ack = u64::from_ne_bytes(buffer);
                     if peer_ack != ACK_MAGIC {
                         println!("worker {my_index} failed computed handshake with worker {index}; retrying");
                         sleep(Duration::from_secs(1));
                         continue;
                     };
+                    // TODO [btv] - end of the region that can be removed (see above comment)
                     if noisy { println!("worker {}:\tconnection to worker {}", my_index, index); }
                     break Some(stream);
                 },
@@ -144,10 +147,13 @@ pub fn await_connections(
                 "received incorrect timely handshake",
             ));
         }
+        // TODO [btv] - We can remove this once we have more reliable
+        // network connections (possibly after linkerd is torn out)
         let identifier = u64::from_ne_bytes((&buffer[8..16]).try_into().unwrap());
         stream
             .write_all(ACK_MAGIC.to_ne_bytes().as_slice())
             .expect("failed to send ack magic");
+        // TODO [btv] - end of the region that can be removed (see above comment)
         results[identifier as usize - my_index - 1] = Some(stream);
         if noisy {
             println!(
