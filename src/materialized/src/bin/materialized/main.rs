@@ -174,16 +174,6 @@ pub struct Args {
     #[structopt(long, default_value = "2100")]
     base_service_port: u16,
 
-    // === Timely worker configuration. ===
-    /// Address of a storage process that the controller should connect to.
-    #[clap(
-        long,
-        env = "STORAGE_CONTROLLER_ADDR",
-        value_name = "HOST:ADDR",
-        conflicts_with = "orchestrator"
-    )]
-    storage_controller_addr: Option<String>,
-
     // === Performance tuning parameters. ===
     /// How much historical detail to maintain in arrangements.
     ///
