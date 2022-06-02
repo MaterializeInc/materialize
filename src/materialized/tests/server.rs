@@ -97,65 +97,6 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// Ensures that once a node is started with `--experimental`, it requires
-// `--experimental` on reboot.
-#[test]
-fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
-    let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default().data_directory(data_dir.path());
-
-    {
-        let _ = util::start_server(config.clone().experimental_mode())?;
-    }
-
-    {
-        match util::start_server(config.clone()) {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => {
-                if !e
-                    .to_string()
-                    .contains("Materialize previously started with --experimental")
-                {
-                    return Err(e.into());
-                }
-            }
-        }
-    }
-
-    {
-        let _ = util::start_server(config.experimental_mode())?;
-    }
-
-    Ok(())
-}
-
-// Ensures that only new nodes can start in experimental mode.
-#[test]
-fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
-    let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default().data_directory(data_dir.path());
-
-    {
-        let _ = util::start_server(config.clone())?;
-    }
-
-    {
-        match util::start_server(config.experimental_mode()) {
-            Ok(_) => panic!("unexpected success"),
-            Err(e) => {
-                if !e
-                    .to_string()
-                    .contains("Experimental mode is only available on new nodes")
-                {
-                    return Err(e.into());
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[test]
 fn test_pid_file() -> Result<(), Box<dyn Error>> {
     let data_dir = tempfile::tempdir()?;

@@ -152,7 +152,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let config = mz_compute::server::Config {
         workers: args.workers,
         comm_config,
-        experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
         connector_context: ConnectorContext::from_cli_args(

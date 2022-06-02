@@ -380,7 +380,7 @@ fn sql_impl_func(expr: &'static str) -> Operation<HirScalarExpr> {
 // aliased if needed.
 fn sql_impl_table_func_inner(
     sql: &'static str,
-    experimental: Option<&'static str>,
+    unsafe_mode: Option<&'static str>,
 ) -> Operation<TableFuncPlan> {
     let query = match mz_sql_parser::parser::parse_statements(sql)
         .expect("static function definition failed to parse")
@@ -410,8 +410,8 @@ fn sql_impl_table_func_inner(
     };
 
     Operation::variadic(move |ecx, args| {
-        if let Some(feature_name) = experimental {
-            ecx.require_experimental_mode(feature_name)?;
+        if let Some(feature_name) = unsafe_mode {
+            ecx.require_unsafe_mode(feature_name)?;
         }
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
         let (mut expr, scope) = invoke(&ecx.qcx, types)?;
@@ -1859,11 +1859,11 @@ pub static PG_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "date_bin" => Scalar {
             params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
-                ecx.require_experimental_mode("binary date_bin")?;
+                ecx.require_unsafe_mode("binary date_bin")?;
                 Ok(stride.call_binary(source, BinaryFunc::DateBinTimestamp))
             }), oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID;
             params!(Interval, TimestampTz) => Operation::binary(|ecx, stride, source| {
-                ecx.require_experimental_mode("binary date_bin")?;
+                ecx.require_unsafe_mode("binary date_bin")?;
                 Ok(stride.call_binary(source, BinaryFunc::DateBinTimestampTz))
             }), oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID;
             params!(Interval, Timestamp, Timestamp) => VariadicFunc::DateBinTimestamp, 6177;
@@ -2811,7 +2811,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "list_n_layers" => Scalar {
             vec![ListAny] => Operation::unary(|ecx, e| {
-                ecx.require_experimental_mode("list_n_layers")?;
+                ecx.require_unsafe_mode("list_n_layers")?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                 Ok(HirScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
             }) => Int32, oid::FUNC_LIST_N_LAYERS_OID;
@@ -2821,7 +2821,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "list_length_max" => Scalar {
             vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_experimental_mode("list_length_max")?;
+                ecx.require_unsafe_mode("list_length_max")?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
@@ -2831,7 +2831,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "list_remove" => Scalar {
             vec![ListAnyCompatible, ListElementAnyCompatible] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_experimental_mode("list_remove")?;
+                ecx.require_unsafe_mode("list_remove")?;
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
             }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
         },
@@ -2873,7 +2873,7 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         },
         "repeat_row" => Table {
             params!(Int64) => Operation::unary(move |ecx, n| {
-                ecx.require_experimental_mode("repeat_row")?;
+                ecx.require_unsafe_mode("repeat_row")?;
                 Ok(TableFuncPlan {
                     expr: HirRelationExpr::CallTable {
                         func: TableFunc::Repeat,

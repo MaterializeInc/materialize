@@ -248,21 +248,21 @@ pub fn plan_create_table(
             }
             TableConstraint::ForeignKey { .. } => {
                 // Foreign key constraints are not presently enforced. We allow
-                // them in experimental mode for sqllogictest's sake.
-                scx.require_experimental_mode("CREATE TABLE with a foreign key")?
+                // them in unsafe mode for sqllogictest's sake.
+                scx.require_unsafe_mode("CREATE TABLE with a foreign key")?
             }
             TableConstraint::Check { .. } => {
                 // Check constraints are not presently enforced. We allow them
-                // in experimental mode for sqllogictest's sake.
-                scx.require_experimental_mode("CREATE TABLE with a check constraint")?
+                // in unsafe mode for sqllogictest's sake.
+                scx.require_unsafe_mode("CREATE TABLE with a check constraint")?
             }
         }
     }
 
     if !keys.is_empty() {
         // Unique constraints are not presently enforced. We allow them in
-        // experimental mode for sqllogictest's sake.
-        scx.require_experimental_mode("CREATE TABLE with a primary key or unique constraint")?;
+        // unsafe mode for sqllogictest's sake.
+        scx.require_unsafe_mode("CREATE TABLE with a primary key or unique constraint")?;
     }
 
     let typ = RelationType::new(column_types).with_keys(keys);
@@ -611,9 +611,7 @@ pub fn plan_create_source(
                     let mut tx_metadata_collection = None;
 
                     if !tx_metadata.is_empty() {
-                        scx.require_experimental_mode(
-                            "ENVELOPE DEBEZIUM ... TRANSACTION METADATA",
-                        )?;
+                        scx.require_unsafe_mode("ENVELOPE DEBEZIUM ... TRANSACTION METADATA")?;
                     }
 
                     for option in tx_metadata {
@@ -2716,7 +2714,7 @@ pub fn describe_create_cluster(
 }
 
 pub fn plan_create_cluster(
-    _: &StatementContext,
+    scx: &StatementContext,
     CreateClusterStatement { name, options }: CreateClusterStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     let mut replicas_definitions = None;
@@ -2745,7 +2743,7 @@ pub fn plan_create_cluster(
 
                 let mut defs = Vec::with_capacity(replicas.len());
                 for ReplicaDefinition { name, options } in replicas {
-                    defs.push((normalize::ident(name), plan_replica_config(options)?));
+                    defs.push((normalize::ident(name), plan_replica_config(scx, options)?));
                 }
                 replicas_definitions = Some(defs);
             }
@@ -2783,7 +2781,10 @@ const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
     days: 0,
 };
 
-fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig, anyhow::Error> {
+fn plan_replica_config(
+    scx: &StatementContext,
+    options: Vec<ReplicaOption<Aug>>,
+) -> Result<ReplicaConfig, anyhow::Error> {
     let mut remote_replicas = BTreeSet::new();
     let mut size = None;
     let mut availability_zone = None;
@@ -2791,6 +2792,7 @@ fn plan_replica_config(options: Vec<ReplicaOption<Aug>>) -> Result<ReplicaConfig
     for option in options {
         match option {
             ReplicaOption::Remote { hosts } => {
+                scx.require_unsafe_mode("REMOTE cluster replica option")?;
                 if !remote_replicas.is_empty() {
                     bail!("REMOTE specified more than once");
                 }
@@ -2856,7 +2858,7 @@ pub fn plan_create_cluster_replica(
         CreateComputeInstanceReplicaPlan {
             name: normalize::ident(name),
             of_cluster: of_cluster.to_string(),
-            config: plan_replica_config(options)?,
+            config: plan_replica_config(scx, options)?,
         },
     ))
 }
@@ -2872,8 +2874,6 @@ pub fn plan_create_secret(
     scx: &StatementContext,
     stmt: CreateSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("CREATE SECRET")?;
-
     let CreateSecretStatement {
         name,
         if_not_exists,
@@ -2910,7 +2910,7 @@ pub fn plan_create_connector(
     scx: &StatementContext,
     stmt: CreateConnectorStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("CREATE CONNECTOR")?;
+    scx.require_unsafe_mode("CREATE CONNECTOR")?;
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
     let CreateConnectorStatement {
@@ -3431,8 +3431,6 @@ pub fn plan_alter_secret(
     scx: &StatementContext,
     stmt: AlterSecretStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("ALTER SECRET")?;
-
     let AlterSecretStatement {
         name,
         if_exists,

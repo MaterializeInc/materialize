@@ -48,8 +48,6 @@ pub struct Config {
     pub workers: usize,
     /// Configuration for the communication mesh
     pub comm_config: CommunicationConfig,
-    /// Whether the server is running in experimental mode.
-    pub experimental_mode: bool,
     /// Function to get wall time now.
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.

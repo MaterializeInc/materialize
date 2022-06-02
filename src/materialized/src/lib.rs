@@ -110,8 +110,8 @@ pub struct Config {
     pub secrets_controller: Option<SecretsControllerConfig>,
 
     // === Mode switches. ===
-    /// Whether to permit usage of experimental features.
-    pub experimental_mode: bool,
+    /// Whether to permit usage of unsafe features.
+    pub unsafe_mode: bool,
     /// The place where the server's metrics will be reported from.
     pub metrics_registry: MetricsRegistry,
     /// Now generation function.
@@ -272,8 +272,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     let local_addr = listener.local_addr()?;
 
     // Load the coordinator catalog from disk.
-    let coord_storage =
-        mz_coord::catalog::storage::Connection::open(stash, Some(config.experimental_mode)).await?;
+    let coord_storage = mz_coord::catalog::storage::Connection::open(stash).await?;
 
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
@@ -357,7 +356,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
-        experimental_mode: config.experimental_mode,
+        unsafe_mode: config.unsafe_mode,
         build_info: &BUILD_INFO,
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,

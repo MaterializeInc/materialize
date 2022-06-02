@@ -204,15 +204,11 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
 #[derive(Debug)]
 pub struct Connection<S> {
     stash: S,
-    experimental_mode: bool,
     cluster_id: Uuid,
 }
 
 impl<S: Append> Connection<S> {
-    pub async fn open(
-        mut stash: S,
-        experimental_mode: Option<bool>,
-    ) -> Result<Connection<S>, Error> {
+    pub async fn open(mut stash: S) -> Result<Connection<S>, Error> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.
@@ -233,8 +229,6 @@ impl<S: Append> Connection<S> {
         migrate(&mut stash, skip).await?;
 
         let conn = Connection {
-            experimental_mode: Self::set_or_get_experimental_mode(&mut stash, experimental_mode)
-                .await?,
             cluster_id: Self::set_or_get_cluster_id(&mut stash).await?,
             stash,
         };
@@ -244,59 +238,6 @@ impl<S: Append> Connection<S> {
 }
 
 impl<S: Append> Connection<S> {
-    /// Sets catalog's `experimental_mode` setting on initialization or gets
-    /// that value.
-    ///
-    /// Note that using `None` for `experimental_mode` is appropriate when
-    /// reading the catalog outside the context of starting the server.
-    ///
-    /// # Errors
-    ///
-    /// - If server was initialized and `experimental_mode.unwrap()` does not
-    ///   match the initialized value.
-    ///
-    ///   This means that experimental mode:
-    ///   - Can only be enabled on initialization
-    ///   - Cannot be disabled once enabled
-    ///
-    /// # Panics
-    ///
-    /// - If server has not been initialized and `experimental_mode.is_none()`.
-    async fn set_or_get_experimental_mode(
-        stash: &mut impl Append,
-        experimental_mode: Option<bool>,
-    ) -> Result<bool, Error> {
-        let current_setting = Self::get_setting_stash(stash, "experimental_mode")
-            .await?
-            .map(|cs| cs.parse::<bool>().unwrap());
-
-        let res = match (current_setting, experimental_mode) {
-            // Server init
-            (None, Some(experimental_mode)) => {
-                Self::set_setting_stash(stash, "experimental_mode", experimental_mode.to_string())
-                    .await?;
-                Ok(experimental_mode)
-            }
-            // Server reboot
-            (Some(current_setting), Some(experimental_mode)) => {
-                if current_setting && !experimental_mode {
-                    // Setting is true but was not given `--experimental` flag.
-                    Err(Error::new(ErrorKind::ExperimentalModeRequired))
-                } else if !current_setting && experimental_mode {
-                    // Setting is false but was given `--experimental` flag.
-                    Err(Error::new(ErrorKind::ExperimentalModeUnavailable))
-                } else {
-                    Ok(experimental_mode)
-                }
-            }
-            // Reading existing catalog
-            (Some(cs), None) => Ok(cs),
-            // Test code that doesn't care. Just disable experimental mode.
-            (None, None) => Ok(false),
-        };
-        res
-    }
-
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
         Self::get_setting_stash(&mut self.stash, key).await
     }
@@ -612,10 +553,6 @@ impl<S: Append> Connection<S> {
 
     pub fn cluster_id(&self) -> Uuid {
         self.cluster_id
-    }
-
-    pub fn experimental_mode(&self) -> bool {
-        self.experimental_mode
     }
 }
 

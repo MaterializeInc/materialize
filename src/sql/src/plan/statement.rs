@@ -541,17 +541,13 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_compute_instance(name)?)
     }
 
-    pub fn experimental_mode(&self) -> bool {
-        self.catalog.config().experimental_mode
+    pub fn unsafe_mode(&self) -> bool {
+        self.catalog.config().unsafe_mode
     }
 
-    pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
-        if !self.experimental_mode() {
-            bail!(
-                "{} requires experimental mode; see \
-                https://materialize.com/docs/cli/#experimental-mode",
-                feature_name
-            )
+    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+        if !self.unsafe_mode() {
+            bail!("{} is unsupported", feature_name)
         }
         Ok(())
     }

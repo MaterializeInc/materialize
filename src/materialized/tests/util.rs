@@ -48,7 +48,7 @@ pub struct Config {
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     frontegg: Option<FronteggAuthentication>,
-    experimental_mode: bool,
+    unsafe_mode: bool,
     workers: usize,
     logical_compaction_window: Option<Duration>,
     now: NowFn,
@@ -61,7 +61,7 @@ impl Default for Config {
             logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
             frontegg: None,
-            experimental_mode: false,
+            unsafe_mode: false,
             workers: 1,
             logical_compaction_window: None,
             now: SYSTEM_TIME.clone(),
@@ -94,8 +94,8 @@ impl Config {
         self
     }
 
-    pub fn experimental_mode(mut self) -> Self {
-        self.experimental_mode = true;
+    pub fn unsafe_mode(mut self) -> Self {
+        self.unsafe_mode = true;
         self
     }
 
@@ -167,7 +167,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
         frontegg: config.frontegg,
-        experimental_mode: config.experimental_mode,
+        unsafe_mode: config.unsafe_mode,
         metrics_registry: metrics_registry.clone(),
         metrics_listen_addr: None,
         now: config.now,

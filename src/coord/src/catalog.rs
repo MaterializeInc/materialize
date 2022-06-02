@@ -1417,7 +1417,7 @@ impl<S: Append> Catalog<S> {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
                     nonce: rand::random(),
-                    experimental_mode: config.storage.experimental_mode(),
+                    unsafe_mode: config.unsafe_mode,
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -1940,12 +1940,11 @@ impl<S: Append> Catalog<S> {
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
     pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
-        let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(stash, experimental_mode).await?;
+        let storage = storage::Connection::open(stash).await?;
         let (catalog, _) = Catalog::open(Config {
             storage,
-            experimental_mode,
+            unsafe_mode: true,
             build_info: &DUMMY_BUILD_INFO,
             timestamp_frequency: Duration::from_secs(1),
             now,

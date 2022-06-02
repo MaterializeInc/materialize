@@ -161,7 +161,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let config = mz_storage::Config {
         workers: args.workers,
         timely_config,
-        experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
         connector_context: ConnectorContext::from_cli_args(

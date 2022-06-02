@@ -24,7 +24,7 @@ pub fn describe_raise(
 }
 
 pub fn plan_raise(scx: &StatementContext, r: RaiseStatement) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("RAISE statement")?;
+    scx.require_unsafe_mode("RAISE statement")?;
     Ok(Plan::Raise(RaisePlan {
         severity: r.severity,
     }))

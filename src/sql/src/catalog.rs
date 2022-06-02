@@ -204,8 +204,8 @@ pub struct CatalogConfig {
     pub cluster_id: Uuid,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
-    /// Whether the server is running in experimental mode.
-    pub experimental_mode: bool,
+    /// Whether the server is running in unsafe mode.
+    pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
     /// Default timestamp frequency for CREATE SOURCE
@@ -598,7 +598,7 @@ static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
     nonce: 0,
     cluster_id: Uuid::from_u128(0),
     session_id: Uuid::from_u128(0),
-    experimental_mode: true,
+    unsafe_mode: true,
     build_info: &DUMMY_BUILD_INFO,
     timestamp_frequency: Duration::from_secs(1),
     now: NOW_ZERO.clone(),
