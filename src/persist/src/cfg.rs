@@ -165,9 +165,7 @@ impl ConsensusConfig {
                 PostgresConsensusConfig::new(value).await?,
             )),
             #[cfg(any(test, debug_assertions))]
-            "mem" => {
-                Ok(ConsensusConfig::Mem)
-            }
+            "mem" => Ok(ConsensusConfig::Mem),
             p => Err(anyhow!(
                 "unknown persist consensus scheme {}: {}",
                 p,
