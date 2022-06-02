@@ -3053,7 +3053,7 @@ impl<'a> Parser<'a> {
             };
 
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         self.expect_keywords(&[RENAME, TO])?;
         let to_item_name = self.parse_identifier()?;
@@ -3068,7 +3068,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
             RESET => {
@@ -3107,7 +3107,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         Ok(match self.expect_one_of_keywords(&[AS, RENAME])? {
             AS => {

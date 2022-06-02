@@ -24,8 +24,8 @@ use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    Expr, FunctionArgs, Ident, UnresolvedDataType, UnresolvedDatabaseName, UnresolvedObjectName,
-    UnresolvedSchemaName, WithOption,
+    Expr, FunctionArgs, Ident, Statement, UnresolvedDataType, UnresolvedDatabaseName,
+    UnresolvedObjectName, UnresolvedSchemaName, WithOption,
 };
 
 /// This represents the metadata that lives next to an AST, as we take it through
@@ -44,6 +44,8 @@ use crate::ast::{
 /// Currently this process brings an Ast<Raw> to Ast<Aug>, and lives in
 /// sql/src/names.rs:resolve_names.
 pub trait AstInfo: Clone {
+    /// The type used for nested statements.
+    type NestedStatement: AstDisplay + Clone + Hash + Debug + Eq;
     /// The type used for table references.
     type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
     /// The type used for schema names.
@@ -116,6 +118,7 @@ impl AstDisplay for RawIdent {
 impl_display!(RawIdent);
 
 impl AstInfo for Raw {
+    type NestedStatement = Statement<Raw>;
     type ObjectName = RawObjectName;
     type SchemaName = UnresolvedSchemaName;
     type DatabaseName = UnresolvedDatabaseName;

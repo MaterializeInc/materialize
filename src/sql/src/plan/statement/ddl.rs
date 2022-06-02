@@ -69,7 +69,7 @@ use crate::ast::{
     CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, DropClusterReplicasStatement,
     DropClustersStatement, DropDatabaseStatement, DropObjectsStatement, DropRolesStatement,
     DropSchemaStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, KafkaConsistency,
-    KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Raw, Select, SelectItem, SetExpr,
+    KeyConstraint, ObjectType, Op, ProtobufSchema, Query, Select, SelectItem, SetExpr,
     SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
     TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
     Value, ViewDefinition, WithOption,
@@ -3303,7 +3303,8 @@ pub fn plan_alter_index_options(
         action: actions,
     }: AlterIndexStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let entry = match scx.get_item_by_resolved_name(&index_name) {
+    let index_name = normalize::unresolved_object_name(index_name)?;
+    let entry = match scx.catalog.resolve_item(&index_name) {
         Ok(index) => index,
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this index does not
@@ -3312,12 +3313,12 @@ pub fn plan_alter_index_options(
                 object_type: ObjectType::Index,
             }));
         }
-        Err(e) => return Err(e),
+        Err(e) => return Err(e.into()),
     };
     if entry.item_type() != CatalogItemType::Index {
         bail!(
             "{} is a {} not a index",
-            index_name.full_name_str(),
+            scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
     }
@@ -3351,7 +3352,7 @@ pub fn plan_alter_index_options(
 
 pub fn describe_alter_object_rename(
     _: &StatementContext,
-    _: AlterObjectRenameStatement<Aug>,
+    _: AlterObjectRenameStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -3363,9 +3364,10 @@ pub fn plan_alter_object_rename(
         object_type,
         to_item_name,
         if_exists,
-    }: AlterObjectRenameStatement<Raw>,
+    }: AlterObjectRenameStatement,
 ) -> Result<Plan, anyhow::Error> {
-    match scx.resolve_item(name) {
+    let name = normalize::unresolved_object_name(name)?;
+    match scx.catalog.resolve_item(&name) {
         Ok(entry) => {
             let full_name = scx.catalog.resolve_full_name(entry.name());
             if entry.item_type() != object_type {
@@ -3416,28 +3418,28 @@ pub fn plan_alter_secret(
         name,
         if_exists,
         value,
-    } = &stmt;
-
-    let entry = match scx.get_item_by_resolved_name(&name) {
+    } = stmt;
+    let name = normalize::unresolved_object_name(name)?;
+    let entry = match scx.catalog.resolve_item(&name) {
         Ok(secret) => secret,
-        Err(_) if *if_exists => {
+        Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this secret does not
             // exist.
             return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Secret,
             }));
         }
-        Err(e) => return Err(e),
+        Err(e) => return Err(e.into()),
     };
     if entry.item_type() != CatalogItemType::Secret {
         bail!(
             "{} is a {} not a SECRET",
-            name.full_name_str(),
+            scx.catalog.resolve_full_name(entry.name()),
             entry.item_type()
         )
     }
     let id = entry.id();
-    let secret_as = query::plan_secret_as(scx, value.clone())?;
+    let secret_as = query::plan_secret_as(scx, value)?;
 
     Ok(Plan::AlterSecret(AlterSecretPlan { id, secret_as }))
 }

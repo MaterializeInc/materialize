@@ -588,6 +588,7 @@ impl ResolvedDataType {
 }
 
 impl AstInfo for Aug {
+    type NestedStatement = Statement<Raw>;
     type ObjectName = ResolvedObjectName;
     type SchemaName = ResolvedSchemaName;
     type DatabaseName = ResolvedDatabaseName;
@@ -750,6 +751,13 @@ impl<'a> NameResolver<'a> {
 }
 
 impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
+    fn fold_nested_statement(
+        &mut self,
+        stmt: <Raw as AstInfo>::NestedStatement,
+    ) -> <Aug as AstInfo>::NestedStatement {
+        stmt
+    }
+
     fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {
         // Retain the old values of various CTE names so that we can restore them after we're done
         // planning this SELECT.
