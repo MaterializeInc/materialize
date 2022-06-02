@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use futures::future;
 use futures::stream::TryStreamExt as _;
 use futures::stream::{FuturesUnordered, StreamExt};
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
@@ -695,6 +696,14 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
+        if self.state.clients.is_empty() {
+            // If there are no clients, block forever. This signals that there
+            // may be more work to do (e.g., if this future is dropped and
+            // `create_sources` is called). Awaiting the stream map would
+            // return `None`, which would incorrectly indicate the completion
+            // of the stream.
+            return future::pending().await;
+        }
         let mut clients = self
             .state
             .clients
