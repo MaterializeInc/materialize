@@ -13,7 +13,6 @@ use std::error::Error;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::thread;
 use std::time::Duration;
 
 use bytes::BytesMut;
