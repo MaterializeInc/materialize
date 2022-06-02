@@ -142,13 +142,18 @@ pub fn bench_blob_get(
     if throughput {
         g.throughput(Throughput::Bytes(data.goodput_bytes()));
     }
-    let payload = workload::flat_blob(&data);
+    let payload = Bytes::from(workload::flat_blob(&data));
 
     bench_all_blob(&mut g, runtime, data, |b, blob| {
         let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
         let key = ShardId::new().to_string();
         runtime
-            .block_on(blob.set(deadline, &key, payload.to_owned(), Atomicity::RequireAtomic))
+            .block_on(blob.set(
+                deadline,
+                &key,
+                Bytes::clone(&payload),
+                Atomicity::RequireAtomic,
+            ))
             .expect("failed to set blob");
         b.iter(|| {
             runtime
@@ -176,7 +181,7 @@ pub fn bench_blob_set(
     if throughput {
         g.throughput(Throughput::Bytes(data.goodput_bytes()));
     }
-    let payload = workload::flat_blob(&data);
+    let payload = Bytes::from(workload::flat_blob(&data));
 
     bench_all_blob(&mut g, runtime, data, |b, blob| {
         b.iter(|| {
@@ -189,12 +194,17 @@ pub fn bench_blob_set(
 
 async fn bench_blob_set_one_iter(
     blob: &dyn BlobMulti,
-    payload: &[u8],
+    payload: &Bytes,
 ) -> Result<(), ExternalError> {
     let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
     let key = ShardId::new().to_string();
-    blob.set(deadline, &key, payload.to_owned(), Atomicity::RequireAtomic)
-        .await
+    blob.set(
+        deadline,
+        &key,
+        Bytes::clone(payload),
+        Atomicity::RequireAtomic,
+    )
+    .await
 }
 
 pub fn bench_encode_batch(name: &str, throughput: bool, c: &mut Criterion, data: &DataGenerator) {

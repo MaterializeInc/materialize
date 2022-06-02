@@ -217,12 +217,12 @@ impl BlobMulti for MaelstromBlobMulti {
         &self,
         _deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         _atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // lin_kv_write is always atomic, so we're free to ignore the atomic
         // param.
-        let value = serde_json::to_string(&value).expect("failed to serialize value");
+        let value = serde_json::to_string(value.as_ref()).expect("failed to serialize value");
         self.handle
             .lin_kv_write(Value::from(format!("blob/{}", key)), Value::from(value))
             .await
@@ -293,12 +293,12 @@ impl BlobMulti for CachingBlobMulti {
         &self,
         deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // Intentionally don't put this in the cache on set, so that this blob
         // gets fetched at least once (exercising those code paths).
-        self.blob.set(deadline, key, value.clone(), atomic).await
+        self.blob.set(deadline, key, value, atomic).await
     }
 
     async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {

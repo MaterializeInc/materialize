@@ -363,7 +363,7 @@ pub trait BlobMulti: std::fmt::Debug {
         &self,
         deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         atomic: Atomicity,
     ) -> Result<(), ExternalError>;
 
@@ -422,14 +422,14 @@ pub mod tests {
 
         // Set a key with AllowNonAtomic and get it back.
         blob0
-            .set(no_timeout, "k0", values[0].clone(), AllowNonAtomic)
+            .set(no_timeout, "k0", values[0].clone().into(), AllowNonAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[0].clone()));
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[0].clone()));
 
         // Set a key with RequireAtomic and get it back.
         blob0
-            .set(no_timeout, "k0a", values[0].clone(), RequireAtomic)
+            .set(no_timeout, "k0a", values[0].clone().into(), RequireAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[0].clone()));
         assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[0].clone()));
@@ -444,13 +444,13 @@ pub mod tests {
 
         // Can overwrite a key with AllowNonAtomic.
         blob0
-            .set(no_timeout, "k0", values[1].clone(), AllowNonAtomic)
+            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
         // Can overwrite a key with RequireAtomic.
         blob0
-            .set(no_timeout, "k0a", values[1].clone(), RequireAtomic)
+            .set(no_timeout, "k0a", values[1].clone().into(), RequireAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[1].clone()));
         assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[1].clone()));
@@ -475,7 +475,7 @@ pub mod tests {
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
         blob0
-            .set(no_timeout, "k0", values[1].clone(), AllowNonAtomic)
+            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
             .await?;
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
@@ -486,7 +486,7 @@ pub mod tests {
         for i in 1..=5 {
             let key = format!("k{}", i);
             blob0
-                .set(no_timeout, &key, values[0].clone(), AllowNonAtomic)
+                .set(no_timeout, &key, values[0].clone().into(), AllowNonAtomic)
                 .await?;
             expected_keys.push(key);
         }

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::Codec;
 
@@ -157,6 +158,7 @@ impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
 
         let mut val = Vec::new();
         batch.encode(&mut val);
+        let val = Bytes::from(val);
         let val_len = u64::cast_from(val.len());
 
         let write_start = Instant::now();
