@@ -30,6 +30,7 @@ use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{
     ConnectorContext, DataflowDescription, DataflowError, PeekResponse, Plan, TailResponse,
 };
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
@@ -84,6 +85,7 @@ pub struct ActiveComputeState<'a, A: Allocate> {
 
 impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
         use ComputeCommand::*;
 
@@ -92,7 +94,10 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             DropInstance => (),
             CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
             AllowCompaction(list) => self.handle_allow_compaction(list),
-            Peek(peek) => self.handle_peek(peek),
+            Peek(peek) => {
+                peek.otel_ctx.attach_as_parent();
+                self.handle_peek(peek)
+            }
             CancelPeeks { uuids } => self.handle_cancel_peeks(uuids),
         }
     }
@@ -178,6 +183,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     fn handle_peek(&mut self, peek: Peek) {
         // Only handle peeks that are not targeted at a different replica.
         if let Some(target) = peek.target_replica {
@@ -203,7 +209,11 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             .errs_mut()
             .set_physical_compaction(empty_frontier.borrow());
         // Prepare a description of the peek work to do.
-        let mut peek = PendingPeek { peek, trace_bundle };
+        let mut peek = PendingPeek {
+            peek,
+            trace_bundle,
+            otel_ctx: OpenTelemetryContext::obtain(),
+        };
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
             logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
@@ -580,6 +590,8 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         );
         for mut peek in pending_peeks.drain(..) {
             if let Some(response) = peek.seek_fulfillment(&mut upper) {
+                let _span = tracing::info_span!("process_peek").entered();
+                peek.otel_ctx.attach_as_parent();
                 self.send_peek_response(peek, response);
             } else {
                 self.compute_state.pending_peeks.push(peek);
@@ -591,13 +603,19 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     ///
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
+    #[tracing::instrument(level = "debug", skip(self, peek))]
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
+        let log_event = peek.as_log_event();
         // Respond with the response.
-        self.send_compute_response(ComputeResponse::PeekResponse(peek.peek.uuid, response));
+        self.send_compute_response(ComputeResponse::PeekResponse(
+            peek.peek.uuid,
+            response,
+            OpenTelemetryContext::obtain(),
+        ));
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-            logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
+            logger.log(ComputeEvent::Peek(log_event, false));
         }
     }
 
@@ -625,6 +643,8 @@ pub struct PendingPeek {
     peek: mz_dataflow_types::client::Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
+    /// The OpenTelemetry context for this peek.
+    otel_ctx: OpenTelemetryContext,
 }
 
 impl PendingPeek {

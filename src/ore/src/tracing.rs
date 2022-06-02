@@ -281,13 +281,17 @@ where
 /// An OpenTelemetry context.
 ///
 /// Allows associating [`tracing`] spans across task or thread boundaries.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OpenTelemetryContext {
     inner: HashMap<String, String>,
 }
 
 impl OpenTelemetryContext {
     /// Attaches this `Context` to the current [`tracing`] span.
+    ///
+    /// If there is not enough information in this `OpenTelemetryContext`
+    /// to create a context, then the current thread's `Context` is used
+    /// defaulting to the default `Context`.
     pub fn attach_as_parent(&self) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(&self.inner));
         tracing::Span::current().set_parent(parent_cx);
@@ -323,5 +327,17 @@ impl Extractor for OpenTelemetryContext {
 impl Injector for OpenTelemetryContext {
     fn set(&mut self, key: &str, value: String) {
         Injector::set(&mut self.inner, key, value)
+    }
+}
+
+impl From<OpenTelemetryContext> for HashMap<String, String> {
+    fn from(ctx: OpenTelemetryContext) -> Self {
+        ctx.inner
+    }
+}
+
+impl From<HashMap<String, String>> for OpenTelemetryContext {
+    fn from(map: HashMap<String, String>) -> Self {
+        Self { inner: map }
     }
 }

@@ -249,7 +249,6 @@ pub struct Config<S> {
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
-    otel_ctx: OpenTelemetryContext,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -870,13 +869,12 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn message_controller(&mut self, message: ControllerResponse) {
         match message {
-            ControllerResponse::PeekResponse(uuid, response) => {
+            ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
                 if let Some(PendingPeek {
                     sender: rows_tx,
                     conn_id,
-                    otel_ctx,
                 }) = self.pending_peeks.remove(&uuid)
                 {
                     otel_ctx.attach_as_parent();
@@ -1587,7 +1585,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     if let Some(PendingPeek {
                         sender: rows_tx,
                         conn_id: _,
-                        otel_ctx: _,
                     }) = self.pending_peeks.remove(&uuid)
                     {
                         rows_tx
@@ -5448,7 +5445,6 @@ pub mod fast_path_peek {
                 uuid = Uuid::new_v4();
             }
 
-            let otel_ctx = OpenTelemetryContext::obtain();
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks.insert(
@@ -5456,7 +5452,6 @@ pub mod fast_path_peek {
                 PendingPeek {
                     sender: rows_tx,
                     conn_id,
-                    otel_ctx: otel_ctx.clone(),
                 },
             );
             self.client_pending_peeks
@@ -5511,6 +5506,7 @@ pub mod fast_path_peek {
                 self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
+            let otel_ctx = OpenTelemetryContext::obtain();
             Ok(crate::ExecuteResponse::SendingRows {
                 future: Box::pin(rows_rx),
                 otel_ctx,

@@ -33,6 +33,7 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::proto::any_uuid;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
@@ -103,6 +104,10 @@ impl RustType<ProtoInstanceConfig> for InstanceConfig {
     }
 }
 
+fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
+    (0..1).prop_map(|_| OpenTelemetryContext::empty())
+}
+
 /// Peek at an arrangement.
 ///
 /// This request elicits data from the worker, by naming an
@@ -137,6 +142,11 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// If `Some`, the peek is only handled by the given replica.
     /// If `None`, the peek is handled by all replicas.
     pub target_replica: Option<ReplicaId>,
+    /// An `OpenTelemetryContext` to forward trace information along
+    /// to the compute worker to allow associating traces between
+    /// the compute controller and the compute worker.
+    #[proptest(strategy = "empty_otel_ctx()")]
+    pub otel_ctx: OpenTelemetryContext,
 }
 
 impl RustType<ProtoPeek> for Peek {
@@ -149,6 +159,7 @@ impl RustType<ProtoPeek> for Peek {
             finishing: Some(self.finishing.into_proto()),
             map_filter_project: Some(self.map_filter_project.into_proto()),
             target_replica: self.target_replica,
+            otel_ctx: self.otel_ctx.clone().into(),
         }
     }
 
@@ -163,6 +174,7 @@ impl RustType<ProtoPeek> for Peek {
                 .map_filter_project
                 .into_rust_if_some("ProtoPeek::map_filter_project")?,
             target_replica: x.target_replica,
+            otel_ctx: x.otel_ctx.into(),
         })
     }
 }
@@ -375,7 +387,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     /// response or cancellation.
     ///
     /// Returns the number of distinct commands that remain.
-    pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) -> usize {
+    pub fn reduce<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) -> usize {
         // First determine what the final compacted frontiers will be for each collection.
         // These will determine for each collection whether the command that creates it is required,
         // and if required what `as_of` frontier should be used for its updated command.
@@ -412,7 +424,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                     live_peeks.push(peek);
                 }
                 ComputeCommand::CancelPeeks { mut uuids } => {
-                    uuids.retain(|uuid| peeks.contains(uuid));
+                    uuids.retain(|uuid| peeks.contains_key(uuid));
                     live_cancels.extend(uuids);
                 }
             }
@@ -446,7 +458,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
 
         // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| peeks.contains(&peek.uuid));
+        live_peeks.retain(|peek| peeks.contains_key(&peek.uuid));
 
         // Record the volume of post-compaction commands.
         let mut command_count = 1;
@@ -520,7 +532,11 @@ pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// The worker's response to a specified (by connection id) peek.
-    PeekResponse(Uuid, PeekResponse),
+    ///
+    /// Additionally, an `OpenTelemetryContext` to forward trace information
+    /// back into coord. This allows coord traces to be children of work
+    /// done in compute!
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
     /// Data about timestamp bindings, sent to the coordinator, in service
@@ -535,7 +551,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
     /// The worker's response to a specified (by connection id) peek.
-    PeekResponse(Uuid, PeekResponse),
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
 }
@@ -566,10 +582,13 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                             .collect(),
                     })
                 }
-                ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseKind {
-                    id: Some(id.into_proto()),
-                    resp: Some(resp.into_proto()),
-                }),
+                ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
+                    PeekResponse(ProtoPeekResponseKind {
+                        id: Some(id.into_proto()),
+                        resp: Some(resp.into_proto()),
+                        otel_ctx: otel_ctx.clone().into(),
+                    })
+                }
                 ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
                     id: Some(id.into_proto()),
                     resp: Some(resp.into_proto()),
@@ -600,6 +619,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
+                resp.otel_ctx.into(),
             )),
             Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
                 resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
@@ -630,8 +650,9 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
         prop_oneof![
             proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
                 .prop_map(ComputeResponse::FrontierUppers),
-            (any_uuid(), any::<PeekResponse>())
-                .prop_map(|(id, resp)| ComputeResponse::PeekResponse(id, resp)),
+            (any_uuid(), any::<PeekResponse>()).prop_map(|(id, resp)| {
+                ComputeResponse::PeekResponse(id, resp, OpenTelemetryContext::empty())
+            }),
             (any::<GlobalId>(), any::<TailResponse>())
                 .prop_map(|(id, resp)| ComputeResponse::TailResponse(id, resp)),
         ]

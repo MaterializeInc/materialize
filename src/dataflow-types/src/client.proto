@@ -39,6 +39,7 @@ message ProtoPeek {
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
     optional int64 target_replica = 7;
+    map<string, string> otel_ctx = 8;
 }
 
 message ProtoComputeCommand {
@@ -87,6 +88,7 @@ message ProtoComputeResponse {
     message ProtoPeekResponseKind {
         mz_repr.proto.ProtoU128 id = 1;
         mz_dataflow_types.types.ProtoPeekResponse resp = 2;
+    map<string, string> otel_ctx = 3;
     }
 
     message ProtoTailResponseKind {

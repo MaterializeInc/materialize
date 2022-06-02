@@ -3511,6 +3511,7 @@ dependencies = [
  "paste",
  "pin-project",
  "prometheus",
+ "serde",
  "smallvec",
  "stacker",
  "tokio",
