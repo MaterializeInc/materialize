@@ -20,7 +20,7 @@ use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
-    ExecuteStatement, FetchStatement, PrepareStatement, Raw, ResetVariableStatement,
+    ExecuteStatement, FetchStatement, PrepareStatement, ResetVariableStatement,
     SetVariableStatement, ShowVariableStatement, Value,
 };
 use crate::names::Aug;
@@ -124,7 +124,7 @@ pub fn describe_declare(
 
 pub fn plan_declare(
     _: &StatementContext,
-    DeclareStatement { name, stmt }: DeclareStatement<Raw>,
+    DeclareStatement { name, stmt }: DeclareStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
@@ -201,7 +201,7 @@ pub fn describe_prepare(
 
 pub fn plan_prepare(
     scx: &StatementContext,
-    PrepareStatement { name, stmt }: PrepareStatement<Raw>,
+    PrepareStatement { name, stmt }: PrepareStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];

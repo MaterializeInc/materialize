@@ -51,7 +51,7 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
-    AlterObjectRename(AlterObjectRenameStatement<T>),
+    AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     Discard(DiscardStatement),
@@ -1027,14 +1027,14 @@ impl_display_t!(CreateTypeAs);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterObjectRenameStatement<T: AstInfo> {
+pub struct AlterObjectRenameStatement {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: T::ObjectName,
+    pub name: UnresolvedObjectName,
     pub to_item_name: Ident,
 }
 
-impl<T: AstInfo> AstDisplay for AlterObjectRenameStatement<T> {
+impl AstDisplay for AlterObjectRenameStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ");
         f.write_node(&self.object_type);
@@ -1047,7 +1047,7 @@ impl<T: AstInfo> AstDisplay for AlterObjectRenameStatement<T> {
         f.write_node(&self.to_item_name);
     }
 }
-impl_display_t!(AlterObjectRenameStatement);
+impl_display!(AlterObjectRenameStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterIndexAction<T: AstInfo> {
@@ -1058,7 +1058,7 @@ pub enum AlterIndexAction<T: AstInfo> {
 /// `ALTER INDEX ... {RESET, SET}`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterIndexStatement<T: AstInfo> {
-    pub index_name: T::ObjectName,
+    pub index_name: UnresolvedObjectName,
     pub if_exists: bool,
     pub action: AlterIndexAction<T>,
 }
@@ -1092,7 +1092,7 @@ impl_display_t!(AlterIndexStatement);
 /// `ALTER SECRET ... AS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSecretStatement<T: AstInfo> {
-    pub name: T::ObjectName,
+    pub name: UnresolvedObjectName,
     pub if_exists: bool,
     pub value: Expr<T>,
 }
@@ -2020,7 +2020,7 @@ pub enum IfExistsBehavior {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeclareStatement<T: AstInfo> {
     pub name: Ident,
-    pub stmt: Box<Statement<T>>,
+    pub stmt: Box<T::NestedStatement>,
 }
 
 impl<T: AstInfo> AstDisplay for DeclareStatement<T> {
@@ -2091,7 +2091,7 @@ impl_display!(FetchDirection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrepareStatement<T: AstInfo> {
     pub name: Ident,
-    pub stmt: Box<Statement<T>>,
+    pub stmt: Box<T::NestedStatement>,
 }
 
 impl<T: AstInfo> AstDisplay for PrepareStatement<T> {
