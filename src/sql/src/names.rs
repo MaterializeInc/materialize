@@ -25,8 +25,8 @@ use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::Fold;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawDataType, RawIdent, RawObjectName, Statement,
-    UnresolvedObjectName,
+    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawClusterName, RawDataType, RawObjectName,
+    Statement, UnresolvedObjectName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
@@ -986,7 +986,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         cluster_name: <Raw as AstInfo>::ClusterName,
     ) -> <Aug as AstInfo>::ClusterName {
         match cluster_name {
-            RawIdent::Unresolved(ident) => {
+            RawClusterName::Unresolved(ident) => {
                 match self.catalog.resolve_compute_instance(Some(ident.as_str())) {
                     Ok(cluster) => ResolvedClusterName(cluster.id()),
                     Err(e) => {
@@ -995,7 +995,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     }
                 }
             }
-            RawIdent::Resolved(ident) => match ident.parse() {
+            RawClusterName::Resolved(ident) => match ident.parse() {
                 Ok(id) => ResolvedClusterName(id),
                 Err(e) => {
                     self.status = Err(e.into());
@@ -1055,7 +1055,7 @@ pub fn resolve_names_data_type(
 
 pub fn resolve_names_cluster(
     scx: &StatementContext,
-    cluster_name: RawIdent,
+    cluster_name: RawClusterName,
 ) -> Result<ResolvedClusterName, PlanError> {
     let mut n = NameResolver::new(scx.catalog);
     let result = n.fold_cluster_name(cluster_name);

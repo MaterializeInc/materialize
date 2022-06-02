@@ -2465,7 +2465,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_raw_ident(&mut self) -> Result<RawIdent, ParserError> {
+    fn parse_raw_ident(&mut self) -> Result<RawClusterName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
                 Some(Token::Ident(id)) => id,
@@ -2473,13 +2473,13 @@ impl<'a> Parser<'a> {
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
             self.expect_token(&Token::RBracket)?;
-            Ok(RawIdent::Resolved(id))
+            Ok(RawClusterName::Resolved(id))
         } else {
-            Ok(RawIdent::Unresolved(self.parse_identifier()?))
+            Ok(RawClusterName::Unresolved(self.parse_identifier()?))
         }
     }
 
-    fn parse_optional_in_cluster(&mut self) -> Result<Option<RawIdent>, ParserError> {
+    fn parse_optional_in_cluster(&mut self) -> Result<Option<RawClusterName>, ParserError> {
         if self.parse_keywords(&[IN, CLUSTER]) {
             Ok(Some(self.parse_raw_ident()?))
         } else {
