@@ -437,12 +437,16 @@ where
                             .await?;
                         Ok(None)
                     }
-                    ComputeResponse::PeekResponse(uuid, response) => {
+                    ComputeResponse::PeekResponse(uuid, peek_response, otel_ctx) => {
                         self.compute_mut(instance)
                             .expect("Reference to absent instance")
                             .remove_peeks(std::iter::once(uuid))
                             .await?;
-                        Ok(Some(ControllerResponse::PeekResponse(uuid, response)))
+                        Ok(Some(ControllerResponse::PeekResponse(
+                            uuid,
+                            peek_response,
+                            otel_ctx,
+                        )))
                     }
                     ComputeResponse::TailResponse(global_id, response) => {
                         let mut changes = timely::progress::ChangeBatch::new();

@@ -22,13 +22,14 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::Antichain;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::GlobalId;
 
 use super::ReplicaId;
@@ -87,6 +88,13 @@ pub fn spawn_client_task<
     (cmd_tx, response_rx)
 }
 
+/// Additional information to store with pening peeks.
+#[derive(Debug)]
+pub struct PendingPeek {
+    /// The OpenTelemetry context for this peek.
+    otel_ctx: OpenTelemetryContext,
+}
+
 /// A client backed by multiple replicas.
 #[derive(Debug)]
 pub struct ActiveReplication<T> {
@@ -99,7 +107,7 @@ pub struct ActiveReplication<T> {
         ),
     >,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
-    peeks: HashSet<uuid::Uuid>,
+    peeks: HashMap<uuid::Uuid, PendingPeek>,
     /// Reported frontier of each in-progress tail.
     tails: HashMap<GlobalId, Antichain<T>>,
     /// Frontier information, both unioned across all replicas and from each individual replica.
@@ -204,20 +212,30 @@ where
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
         // Update our tracking of peek commands.
         match &cmd {
-            ComputeCommand::Peek(Peek { uuid, .. }) => {
-                self.peeks.insert(*uuid);
+            ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {
+                self.peeks.insert(
+                    *uuid,
+                    PendingPeek {
+                        // TODO(guswynn): can we just hold the `tracing::Span`
+                        // here instead?
+                        otel_ctx: otel_ctx.clone(),
+                    },
+                );
             }
             ComputeCommand::CancelPeeks { uuids } => {
-                // Canceled peeks should not be further responded to.
-                for uuid in uuids.iter() {
-                    self.peeks.remove(uuid);
-                }
                 // Enqueue the response to the cancelation.
-                self.pending_response.extend(
-                    uuids
-                        .iter()
-                        .map(|uuid| ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled)),
-                );
+                self.pending_response.extend(uuids.iter().map(|uuid| {
+                    // Canceled peeks should not be further responded to.
+                    let otel_ctx = self
+                        .peeks
+                        .remove(uuid)
+                        .map(|pending| pending.otel_ctx)
+                        .unwrap_or_else(|| {
+                            tracing::warn!("did not find pending peek for {}", uuid);
+                            OpenTelemetryContext::empty()
+                        });
+                    ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
+                }));
             }
             _ => {}
         }
@@ -297,12 +315,21 @@ where
                 use futures::StreamExt;
                 while let Some((replica_id, message)) = stream.next().await {
                     match message {
-                        Ok(ComputeResponse::PeekResponse(uuid, response)) => {
+                        Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)) => {
                             // If this is the first response, forward it; otherwise do not.
                             // TODO: we could collect the other responses to assert equivalence?
                             // Trades resources (memory) for reassurances; idk which is best.
-                            if self.peeks.remove(&uuid) {
-                                return Ok(Some(ComputeResponse::PeekResponse(uuid, response)));
+                            //
+                            // NOTE: we use the `otel_ctx` from the response, not the
+                            // pending peek, because we currently want the parent
+                            // to be whatever the compute worker did with this peek.
+                            //
+                            // Additionally, we just use the `otel_ctx` from the first worker to
+                            // respond.
+                            if self.peeks.remove(&uuid).is_some() {
+                                return Ok(Some(ComputeResponse::PeekResponse(
+                                    uuid, response, otel_ctx,
+                                )));
                             }
                         }
                         Ok(ComputeResponse::FrontierUppers(mut list)) => {
