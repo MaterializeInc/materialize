@@ -62,6 +62,10 @@ members = [
 # See: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#cargos-new-feature-resolver
 resolver = "2"
 
+[profile.dev]
+# TODO(gusywnn|benesch): remove this when incremental ice's are improved
+incremental = false
+
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
 # in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
