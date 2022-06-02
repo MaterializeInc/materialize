@@ -102,9 +102,7 @@ async fn main() {
 
 fn create_communication_config(args: &Args) -> Result<CommunicationConfig, anyhow::Error> {
     let process = match args.process {
-        None => {
-            bail!("--process argument must be specified when more than one address is specified");
-        }
+        None => 0,
         Some(process) if process >= args.addresses.len() => {
             bail!(
                 "process index {process} out of range [0, {})",
