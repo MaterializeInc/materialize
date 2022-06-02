@@ -28,6 +28,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
+use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
@@ -196,14 +197,17 @@ pub enum SecretsControllerConfig {
 
 /// Start a `materialized` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
+    info!("SERVER");
     match &config.catalog_postgres_stash {
         Some(s) => {
+            info!("POSTGRES STASH");
             let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(s)?)?;
             let stash = mz_stash::Postgres::new(s.to_string(), None, tls).await?;
             let stash = mz_stash::Memory::new(stash);
             serve_stash(config, stash).await
         }
         None => {
+            info!("SQLITE STASH");
             let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
             serve_stash(config, stash).await
         }

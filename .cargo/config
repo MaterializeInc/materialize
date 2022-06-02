@@ -5,4 +5,4 @@
 #
 # See: https://github.com/rust-lang/rust/issues/56068
 # See: https://reviews.llvm.org/D74169#1990180
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+rustflags = ["-C", "link-arg=-Wl,--compress-debug-sections=zlib-gabi"]
