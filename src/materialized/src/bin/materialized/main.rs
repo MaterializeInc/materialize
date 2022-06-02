@@ -518,7 +518,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     port_allocator: Arc::new(PortAllocator::new(
                         args.base_service_port,
                         args.base_service_port
-                            .checked_add(100)
+                            .checked_add(1000)
                             .expect("Port number overflow, base-service-port too large."),
                     )),
                     suppress_output: false,
