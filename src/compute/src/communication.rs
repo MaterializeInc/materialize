@@ -88,10 +88,7 @@ where
                     initialize_networking_from_sockets(sockets, process, threads, log_fn)
                 }) {
                     Ok((stuff, guard)) => Ok((
-                        stuff
-                            .into_iter()
-                            .map(GenericBuilder::ZeroCopy)
-                            .collect(),
+                        stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
                         Box::new(guard),
                     )),
                     Err(err) => Err(format!("failed to initialize networking: {}", err)),
