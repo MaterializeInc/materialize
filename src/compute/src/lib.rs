@@ -12,6 +12,7 @@
 //! Driver for timely/differential dataflow.
 
 pub(crate) mod arrangement;
+pub mod communication;
 pub mod compute_state;
 pub(crate) mod logging;
 pub(crate) mod render;
@@ -20,4 +21,3 @@ pub(crate) mod sink;
 
 pub use arrangement::manager::{TraceManager, TraceMetrics};
 pub use sink::SinkBaseMetrics;
-pub mod communication;
