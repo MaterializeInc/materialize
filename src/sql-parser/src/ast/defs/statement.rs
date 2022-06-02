@@ -1828,6 +1828,28 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
 }
 impl_display_t!(WithOptionValue);
 
+impl<T: AstInfo> TryFrom<WithOptionValue<T>> for String {
+    type Error = anyhow::Error;
+
+    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
+        match v {
+            WithOptionValue::Value(v) => v.try_into(),
+            _ => anyhow::bail!("cannot use value as string"),
+        }
+    }
+}
+
+impl<T: AstInfo> TryFrom<WithOptionValue<T>> for bool {
+    type Error = anyhow::Error;
+
+    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
+        match v {
+            WithOptionValue::Value(v) => v.try_into(),
+            _ => anyhow::bail!("cannot use value as boolean"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionMode {
     AccessMode(TransactionAccessMode),

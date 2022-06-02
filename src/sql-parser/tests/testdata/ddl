@@ -1164,6 +1164,20 @@ CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
 
 parse-statement
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = 0
+----
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY 0
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Number("0")))] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = NULL
+----
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY NULL
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Null))] })
+
+parse-statement
 CREATE CLUSTER cluster REPLICAS (), BADOPT
 ----
 error: Expected one of REPLICAS or INTROSPECTION, found identifier "badopt"
