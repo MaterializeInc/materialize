@@ -339,6 +339,8 @@ class CargoTest(CargoPreImage):
         output = spawn.capture(args + ["--message-format=json"], cwd=self.rd.root)
 
         tests = []
+        target_dir = str(self.rd.cargo_target_dir().absolute())
+        ci_builder_target_dir = "/mnt/build/" + xcompile.target(self.rd.arch)
         for line in output.split("\n"):
             if line.strip() == "":
                 continue
@@ -359,7 +361,10 @@ class CargoTest(CargoPreImage):
                 crate_path = Path(crate_path_match.group(1)).relative_to(
                     self.rd.root.resolve()
                 )
-                tests.append((message["executable"], slug, crate_path))
+                executable = message["executable"]
+                if executable.startswith(ci_builder_target_dir):
+                    executable = target_dir + executable[len(ci_builder_target_dir) :]
+                tests.append((executable, slug, crate_path))
 
         os.makedirs(self.path / "tests" / "examples")
         with open(self.path / "tests" / "manifest", "w") as manifest:
