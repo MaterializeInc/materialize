@@ -61,7 +61,7 @@ impl AstInfo for Raw {
     type ObjectName = RawObjectName;
     type SchemaName = UnresolvedSchemaName;
     type DatabaseName = UnresolvedDatabaseName;
-    type ClusterName = RawIdent;
+    type ClusterName = RawClusterName;
     type DataType = RawDataType;
     type CteId = ();
 }
@@ -103,22 +103,22 @@ impl AstDisplay for RawObjectName {
 impl_display!(RawObjectName);
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum RawIdent {
+pub enum RawClusterName {
     Unresolved(Ident),
     Resolved(String),
 }
 
-impl AstDisplay for RawIdent {
+impl AstDisplay for RawClusterName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            RawIdent::Unresolved(id) => f.write_node(id),
-            RawIdent::Resolved(id) => {
+            RawClusterName::Unresolved(id) => f.write_node(id),
+            RawClusterName::Resolved(id) => {
                 f.write_str(format!("[{}]", id));
             }
         }
     }
 }
-impl_display!(RawIdent);
+impl_display!(RawClusterName);
 
 /// SQL data types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

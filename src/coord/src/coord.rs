@@ -125,7 +125,7 @@ use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident, InsertSource,
-    ObjectType, Query, Raw, RawIdent, SetExpr, Statement,
+    ObjectType, Query, Raw, RawClusterName, SetExpr, Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
@@ -5087,7 +5087,7 @@ pub fn index_sql(
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: RawObjectName::Name(mz_sql::normalize::unresolve(view_name)),
-        in_cluster: Some(RawIdent::Resolved(compute_instance.to_string())),
+        in_cluster: Some(RawClusterName::Resolved(compute_instance.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
