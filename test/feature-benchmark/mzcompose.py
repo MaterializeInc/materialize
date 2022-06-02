@@ -143,9 +143,9 @@ def start_services(
 
             c.sql("DROP CLUSTER default")
             c.sql(
-                "CREATE CLUSTER default REPLICA replica1 (REMOTE ("
+                "CREATE CLUSTER default REPLICAS (replica1 (REMOTE ("
                 + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
-                + "));"
+                + ")));"
             )
 
     c.up("testdrive", persistent=True)
