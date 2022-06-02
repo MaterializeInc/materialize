@@ -245,8 +245,8 @@ pub fn plan(
             ddl::plan_create_table(scx, stmt, depends_on)
         }
         stmt @ Statement::CreateSource(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateSource, scx, stmt);
-            ddl::plan_create_source(scx, stmt)
+            let (stmt, depends_on) = resolve_stmt!(Statement::CreateSource, scx, stmt);
+            ddl::plan_create_source(scx, stmt, depends_on)
         }
         stmt @ Statement::CreateView(_) => {
             let (stmt, depends_on) = resolve_stmt!(Statement::CreateView, scx, stmt);

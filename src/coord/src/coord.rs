@@ -1494,15 +1494,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
                 let catalog = self.catalog.for_session(&session);
-                let purify_fut =
-                    match mz_sql::connectors::populate_connectors(stmt, &catalog, &mut vec![]) {
-                        Ok(stmt) => mz_sql::pure::purify_create_source(
-                            self.now(),
-                            stmt,
-                            self.connector_context.clone(),
-                        ),
-                        Err(e) => return tx.send(Err(e.into()), session),
-                    };
+                let purify_fut = match mz_sql::connectors::populate_connectors(stmt, &catalog) {
+                    Ok(stmt) => mz_sql::pure::purify_create_source(
+                        self.now(),
+                        stmt,
+                        self.connector_context.clone(),
+                    ),
+                    Err(e) => return tx.send(Err(e.into()), session),
+                };
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx

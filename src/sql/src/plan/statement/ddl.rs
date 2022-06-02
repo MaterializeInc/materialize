@@ -75,7 +75,6 @@ use crate::ast::{
     Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
-use crate::connectors::populate_connectors;
 use crate::kafka_util;
 use crate::names::{
     resolve_names_data_type, Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier,
@@ -304,9 +303,8 @@ pub fn describe_create_source(
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
+    mut depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
-    let mut depends_on = vec![];
-    let stmt = populate_connectors(stmt, scx.catalog, &mut depends_on)?;
     let CreateSourceStatement {
         name,
         col_names,
@@ -353,21 +351,10 @@ pub fn plan_create_source(
         CreateSourceConnector::Kafka(kafka) => {
             let (broker, options) = match &kafka.connector {
                 mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker.to_owned(), None),
-                mz_sql_parser::ast::KafkaConnector::Reference {
-                    broker,
-                    with_options,
-                    connector,
-                } => {
-                    let broker_addr = broker.to_owned().expect("connector should be populated");
-                    let options = with_options
-                        .to_owned()
-                        .expect("connector should be populated");
-                    depends_on.push(
-                        scx.catalog
-                            .resolve_item(&normalize::unresolved_object_name(connector.clone())?)?
-                            .id(),
-                    );
-                    (broker_addr, Some(options))
+                mz_sql_parser::ast::KafkaConnector::Reference { connector, .. } => {
+                    let item = scx.get_item_by_resolved_name(&connector)?;
+                    let connector = item.catalog_connector()?;
+                    (connector.uri(), Some(connector.options()))
                 }
             };
 
@@ -410,7 +397,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
+            let encoding = get_encoding(scx, format, &envelope, with_options_original)?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -506,7 +493,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
+            let encoding = get_encoding(scx, format, &envelope, with_options_original)?;
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -548,7 +535,7 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(format, &envelope, with_options_original)?;
+            let encoding = get_encoding(scx, format, &envelope, with_options_original)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -649,7 +636,7 @@ pub fn plan_create_source(
                                 .desc(&full_name)
                                 .context("tx_metadata must refer to a source")?;
 
-                            depends_on.push(item.id());
+                            depends_on.insert(item.id());
                             depends_on.extend(item.uses());
 
                             Some(typecheck_debezium_transaction_metadata(
@@ -906,7 +893,7 @@ pub fn plan_create_source(
             timeline,
         },
         desc,
-        depends_on,
+        depends_on: depends_on.into_iter().collect(),
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SOURCE")?;
@@ -1164,19 +1151,20 @@ fn typecheck_debezium_transaction_metadata(
 }
 
 fn get_encoding(
+    scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope,
     with_options: &Vec<WithOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
-        CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options)?,
+        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format, with_options)?,
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(key, with_options)? {
+            let key = match get_encoding_inner(scx, key, with_options)? {
                 SourceDataEncoding::Single(key) => key,
                 SourceDataEncoding::KeyValue { key, .. } => key,
             };
-            let value = match get_encoding_inner(value, with_options)? {
+            let value = match get_encoding_inner(scx, value, with_options)? {
                 SourceDataEncoding::Single(value) => value,
                 SourceDataEncoding::KeyValue { value, .. } => value,
             };
@@ -1197,6 +1185,7 @@ fn get_encoding(
 }
 
 fn get_encoding_inner(
+    scx: &StatementContext,
     format: &Format<Aug>,
     with_options: &Vec<WithOption<Aug>>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
@@ -1246,22 +1235,18 @@ fn get_encoding_inner(
                         },
                 } => {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options)?, url),
-                        CsrConnector::Reference {
-                            url, with_options, ..
-                        } => {
-                            let registry_url = match url {
-                                Some(url) => url,
-                                None => unreachable!("connector must already be populated"),
-                            };
-                            let client_options = match with_options {
-                                Some(opts) => BTreeMap::from_iter(
-                                    opts.iter()
-                                        .map(|(k, v)| (k.to_owned(), Value::String(v.to_string()))),
-                                ),
-                                None => BTreeMap::new(),
-                            };
-                            (client_options, registry_url)
+                        CsrConnector::Inline { url } => {
+                            (normalize::options(&ccsr_options)?, url.into())
+                        }
+                        CsrConnector::Reference { connector, .. } => {
+                            let item = scx.get_item_by_resolved_name(&connector)?;
+                            let connector = item.catalog_connector()?;
+                            let options = connector
+                                .options()
+                                .into_iter()
+                                .map(|(k, v)| (k, Value::String(v)))
+                                .collect();
+                            (options, connector.uri())
                         }
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -1320,21 +1305,18 @@ fn get_encoding_inner(
                     seed
                 {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (normalize::options(&ccsr_options)?, url),
-                        CsrConnector::Reference {
-                            url, with_options, ..
-                        } => {
-                            let registry_url = match url {
-                                Some(url) => url,
-                                None => unreachable!("connector must already be populated"),
-                            };
-                            let client_options = match with_options {
-                                Some(opts) => BTreeMap::from_iter(opts.iter().map(|(k, v)| {
-                                    (k.to_owned(), crate::ast::Value::String(v.to_owned()))
-                                })),
-                                None => BTreeMap::new(),
-                            };
-                            (client_options, registry_url)
+                        CsrConnector::Inline { url } => {
+                            (normalize::options(&ccsr_options)?, url.to_string())
+                        }
+                        CsrConnector::Reference { connector, .. } => {
+                            let item = scx.get_item_by_resolved_name(&connector)?;
+                            let connector = item.catalog_connector()?;
+                            let options = connector
+                                .options()
+                                .into_iter()
+                                .map(|(k, v)| (k, Value::String(v)))
+                                .collect();
+                            (options, connector.uri())
                         }
                     };
                     // We validate here instead of in purification, to match the behavior of avro

@@ -1365,7 +1365,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'l
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username='user', password='word')
@@ -1379,7 +1379,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONF
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Reference { connector: UnresolvedObjectName([Ident("conn2")]), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
 
 
 parse-statement
@@ -1387,4 +1387,4 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT PROTOBUF USING 
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnectorProto { connector: Reference { connector: UnresolvedObjectName([Ident("conn2")]), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnectorProto { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
