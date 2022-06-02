@@ -187,15 +187,7 @@ What you can do instead is spin up a scratch EC2 instance based on the same AMI
 as CI. Run this command from your PR that is failing on CI:
 
 ```
-$ bin/scratch create <<EOF
-{
-    "name": "ci-agent-alike",
-    "instance_type": "c5.2xlarge",
-    "ami": "ami-00abe272e96e4c11e",
-    "ami_user": "ec2-user",
-    "size_gb": 200
-}
-EOF
+$ bin/scratch create ci
 Launched instances:
 +-------------------------+---------------------+-------------------+--------------------+-------------------------+---------------------+---------+
 |           Name          |     Instance ID     | Public IP Address | Private IP Address |       Launched By       |     Delete After    |  State  |
@@ -203,9 +195,6 @@ Launched instances:
 | dd5ef155-ci-agent-alike | i-0b03bb914c74f9e69 |     3.17.4.234    |     10.1.27.14     | benesch@materialize.com | 2022-01-03 19:30:23 | running |
 +-------------------------+---------------------+-------------------+--------------------+-------------------------+---------------------+---------+
 ```
-
-<small>* You may need to update the instance type and AMI above as we upgrade our Buildkite agents. The latest Buildkite AMI is available [here][elastic-yml] under
-the `AWSRegion2AMI` heading. Use the AMI for `us-east-2` and `linuxamd64`.</small>
 
 This will create an EC2 instance that looks like a CI agent and push your local
 copy of the repository to it. You can SSH in to the agent using the instance ID

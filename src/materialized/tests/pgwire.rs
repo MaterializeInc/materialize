@@ -487,10 +487,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    thread::sleep(Duration::from_secs(85));
-    let res = pg_test_inner(dir);
-    println!("MADE IT TO THE END OF THE TEST!!!");
-    res
+    pg_test_inner(dir);
 }
 
 #[test]
