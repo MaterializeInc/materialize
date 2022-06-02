@@ -122,14 +122,14 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrConnector {
+pub enum CsrConnector<T: AstInfo> {
     Inline {
         url: String,
     },
     // The reference variant needs to be creatable by the parser with just a name
     // but also must allow populating the values for use in purification and planning
     Reference {
-        connector: UnresolvedObjectName,
+        connector: T::ObjectName,
         url: Option<String>,
         with_options: Option<BTreeMap<String, String>>,
     },
@@ -137,7 +137,7 @@ pub enum CsrConnector {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorAvro<T: AstInfo> {
-    pub connector: CsrConnector,
+    pub connector: CsrConnector<T>,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<WithOption<T>>,
 }
@@ -171,7 +171,7 @@ impl_display_t!(CsrConnectorAvro);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorProto<T: AstInfo> {
-    pub connector: CsrConnector,
+    pub connector: CsrConnector<T>,
     pub seed: Option<CsrSeedCompiledOrLegacy>,
     pub with_options: Vec<WithOption<T>>,
 }
@@ -545,30 +545,47 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
 impl_display_t!(CreateConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KafkaConnector {
+pub enum KafkaConnector<T: AstInfo> {
     Inline {
         broker: String,
     },
     // The reference variant needs to be creatable by the parser with just a name
     // but also must allow populating the values for use in purification and planning
     Reference {
-        connector: UnresolvedObjectName,
+        connector: T::ObjectName,
         broker: Option<String>,
         with_options: Option<BTreeMap<String, String>>,
     },
 }
 
+impl<T: AstInfo> AstDisplay for KafkaConnector<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            KafkaConnector::Inline { broker } => {
+                f.write_str("BROKER '");
+                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("'");
+            }
+            KafkaConnector::Reference { connector, .. } => {
+                f.write_str("CONNECTOR ");
+                f.write_node(connector);
+            }
+        }
+    }
+}
+impl_display_t!(KafkaConnector);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaSourceConnector {
-    pub connector: KafkaConnector,
+pub struct KafkaSourceConnector<T: AstInfo> {
+    pub connector: KafkaConnector<T>,
     pub topic: String,
     pub key: Option<Vec<Ident>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
-pub enum CreateSourceConnector {
-    Kafka(KafkaSourceConnector),
+pub enum CreateSourceConnector<T: AstInfo> {
+    Kafka(KafkaSourceConnector<T>),
     Kinesis {
         arn: String,
     },
@@ -597,26 +614,16 @@ pub enum CreateSourceConnector {
     },
 }
 
-impl AstDisplay for CreateSourceConnector {
+impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             CreateSourceConnector::Kafka(KafkaSourceConnector {
-                connector: broker,
+                connector,
                 topic,
                 key,
             }) => {
                 f.write_str("KAFKA ");
-                match broker {
-                    KafkaConnector::Inline { broker } => {
-                        f.write_str("BROKER '");
-                        f.write_node(&display::escape_single_quote_string(broker));
-                        f.write_str("'");
-                    }
-                    KafkaConnector::Reference { connector, .. } => {
-                        f.write_str("CONNECTOR ");
-                        f.write_node(connector);
-                    }
-                }
+                f.write_node(connector);
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
@@ -680,7 +687,7 @@ impl AstDisplay for CreateSourceConnector {
         }
     }
 }
-impl_display!(CreateSourceConnector);
+impl_display_t!(CreateSourceConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(CreateSinkConnectorKind)]

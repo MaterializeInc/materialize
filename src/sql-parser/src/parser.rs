@@ -1728,10 +1728,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
-        let connector = if self.peek_keyword(CONNECTOR) {
-            let _ = self.expect_keyword(CONNECTOR);
+        let connector = if self.parse_keyword(CONNECTOR) {
             CsrConnector::Reference {
-                connector: self.parse_object_name()?,
+                connector: self.parse_raw_name()?,
                 url: None,
                 with_options: None,
             }
@@ -1772,10 +1771,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
-        let connector = if self.peek_keyword(CONNECTOR) {
-            let _ = self.expect_keyword(CONNECTOR);
+        let connector = if self.parse_keyword(CONNECTOR) {
             CsrConnector::Reference {
-                connector: self.parse_object_name()?,
+                connector: self.parse_raw_name()?,
                 url: None,
                 with_options: None,
             }
@@ -2077,7 +2075,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector, ParserError> {
+    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -2119,7 +2117,7 @@ impl<'a> Parser<'a> {
                         broker: self.parse_literal_string()?,
                     },
                     CONNECTOR => KafkaConnector::Reference {
-                        connector: self.parse_object_name()?,
+                        connector: self.parse_raw_name()?,
                         broker: None,
                         with_options: None,
                     },

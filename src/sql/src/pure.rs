@@ -195,7 +195,7 @@ pub async fn purify_create_source(
 
 async fn purify_source_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     envelope: &Option<Envelope>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
@@ -251,7 +251,7 @@ async fn purify_source_format(
 
 async fn purify_source_format_single(
     format: &mut Format<Raw>,
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     envelope: &Option<Envelope>,
     connector_options: &BTreeMap<String, String>,
     with_options: &Vec<WithOption<Raw>>,
@@ -326,7 +326,7 @@ async fn purify_source_format_single(
 }
 
 async fn purify_csr_connector_proto(
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     csr_connector: &mut CsrConnectorProto<Raw>,
     envelope: &Option<Envelope>,
     with_options: &Vec<WithOption<Raw>>,
@@ -384,7 +384,7 @@ async fn purify_csr_connector_proto(
 }
 
 async fn purify_csr_connector_avro(
-    connector: &mut CreateSourceConnector,
+    connector: &mut CreateSourceConnector<Raw>,
     csr_connector: &mut CsrConnectorAvro<Raw>,
     envelope: &Option<Envelope>,
     connector_options: &BTreeMap<String, String>,
