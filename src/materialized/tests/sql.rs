@@ -38,7 +38,6 @@ use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 pub mod util;
 
 #[test]
-#[ignore]
 fn test_no_block() -> Result<(), anyhow::Error> {
     mz_ore::test::init_logging();
 

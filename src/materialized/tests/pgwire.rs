@@ -487,7 +487,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
     let dir: PathBuf = ["..", "..", "test", "pgtest"].iter().collect();
-    pg_test_inner(dir);
+    pg_test_inner(dir)
 }
 
 #[test]
