@@ -25,9 +25,8 @@ use std::time::Duration;
 
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::allocator::GenericBuilder;
-use timely::communication::{initialize_from, WorkerGuards};
-use timely::worker::Worker;
-use timely::{CommunicationConfig, Config};
+
+use crate::server::CommunicationConfig;
 
 // This constant is sent along immediately after establishing a TCP stream, so
 // that it is easy to sniff out Timely traffic when it is multiplexed with
@@ -39,93 +38,25 @@ const HANDSHAKE_MAGIC: u64 = 0xc2f1fb770118add9;
 // successfully established.
 const ACK_MAGIC: u64 = 0x68656c6f77726c64;
 
-/// Fork of timely::execute::execute that calls into our fork of create_sockets
-pub fn execute_acking_connections<T, F>(
-    mut config: Config,
-    func: F,
-) -> Result<WorkerGuards<T>, String>
-where
-    T: Send + 'static,
-    F: Fn(&mut Worker<timely::communication::Allocator>) -> T + Send + Sync + 'static,
-{
-    if let CommunicationConfig::Cluster { ref mut log_fn, .. } = config.communication {
-        *log_fn = Box::new(|events_setup| {
-            let mut result = None;
-            if let Ok(addr) = ::std::env::var("TIMELY_COMM_LOG_ADDR") {
-                use timely::dataflow::operators::capture::EventWriterCore;
-                use timely::logging::BatchLogger;
-
-                eprintln!("enabled COMM logging to {}", addr);
-
-                if let Ok(stream) = TcpStream::connect(&addr) {
-                    let writer = EventWriterCore::new(stream);
-                    let mut logger = BatchLogger::new(writer);
-                    result = Some(timely::logging_core::Logger::new(
-                        ::std::time::Instant::now(),
-                        ::std::time::Duration::default(),
-                        events_setup,
-                        move |time, data| logger.publish_batch(time, data),
-                    ));
-                } else {
-                    panic!("Could not connect to communication log address: {:?}", addr);
-                }
-            }
-            result
-        });
+/// Creates communication mesh from cluster config
+pub fn initialize_networking(
+    config: CommunicationConfig,
+) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), String> {
+    let CommunicationConfig {
+        threads,
+        process,
+        addresses,
+    } = config;
+    let sockets_result = create_sockets(addresses, process, true);
+    match sockets_result.and_then(|sockets| {
+        initialize_networking_from_sockets(sockets, process, threads, Box::new(|_| None))
+    }) {
+        Ok((stuff, guard)) => Ok((
+            stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
+            Box::new(guard),
+        )),
+        Err(err) => Err(format!("failed to initialize networking: {err}")),
     }
-
-    let (allocators, other) = match config.communication {
-        timely::CommunicationConfig::Cluster {
-            threads,
-            process,
-            addresses,
-            report,
-            log_fn,
-        } => {
-            let sockets_result = create_sockets(addresses, process, report);
-            let result: Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), String> =
-                match sockets_result.and_then(|sockets| {
-                    initialize_networking_from_sockets(sockets, process, threads, log_fn)
-                }) {
-                    Ok((stuff, guard)) => Ok((
-                        stuff.into_iter().map(GenericBuilder::ZeroCopy).collect(),
-                        Box::new(guard),
-                    )),
-                    Err(err) => Err(format!("failed to initialize networking: {}", err)),
-                };
-            result
-        }
-        _ => config.communication.try_build(),
-    }?;
-
-    let worker_config = config.worker;
-    initialize_from(allocators, other, move |allocator| {
-        let mut worker = Worker::new(worker_config.clone(), allocator);
-
-        // If an environment variable is set, use it as the default timely logging.
-        if let Ok(addr) = ::std::env::var("TIMELY_WORKER_LOG_ADDR") {
-            use timely::dataflow::operators::capture::EventWriterCore;
-            use timely::logging::{BatchLogger, TimelyEvent};
-
-            if let Ok(stream) = TcpStream::connect(&addr) {
-                let writer = EventWriterCore::new(stream);
-                let mut logger = BatchLogger::new(writer);
-                worker
-                    .log_register()
-                    .insert::<TimelyEvent, _>("timely", move |time, data| {
-                        logger.publish_batch(time, data)
-                    });
-            } else {
-                panic!("Could not connect logging stream to: {:?}", addr);
-            }
-        }
-
-        let result = func(&mut worker);
-        while worker.has_dataflows() {
-            worker.step_or_park(None);
-        }
-        result
-    })
 }
 
 /// Creates socket connections from a list of host addresses.
