@@ -123,7 +123,7 @@ DROP CLUSTER test CASCADE
 statement ok
 CREATE CLUSTER test
   REPLICAS (replica_a (SIZE '1')),
-  INTROSPECTION GRANULARITY 'off'
+  INTROSPECTION GRANULARITY 0
 
 query error cannot read log sources on cluster with disabled introspection
 SELECT * FROM mz_materializations

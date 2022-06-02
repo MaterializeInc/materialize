@@ -31,6 +31,7 @@ mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["bytes", "smallvec"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
+mz-sql-parser = { path = "../sql-parser" }
 num-traits = "0.2.15"
 num_enum = "0.5.7"
 ordered-float = { version = "3.0.0", features = ["serde"] }

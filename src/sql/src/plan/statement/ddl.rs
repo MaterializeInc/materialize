@@ -48,7 +48,7 @@ use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::TableInfo;
-use mz_repr::adt::interval::Interval;
+use mz_repr::adt::interval::{Interval, OptionalInterval};
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 
@@ -2655,7 +2655,7 @@ pub fn plan_create_cluster(
 ) -> Result<Plan, anyhow::Error> {
     let mut replicas_definitions = None;
     let mut introspection_debugging = None;
-    let mut introspection_granularity = None;
+    let mut introspection_granularity: Option<Option<Interval>> = None;
 
     for option in options {
         match option {
@@ -2663,14 +2663,21 @@ pub fn plan_create_cluster(
                 if introspection_debugging.is_some() {
                     bail!("INTROSPECTION DEBUGGING specified more than once");
                 }
-                introspection_debugging = Some(with_option_type!(Some(enabled), bool));
+                introspection_debugging = Some(
+                    enabled
+                        .try_into()
+                        .map_err(|e| anyhow!("invalid INTROSPECTION DEBUGGING: {}", e))?,
+                );
             }
             ClusterOption::IntrospectionGranularity(interval) => {
                 if introspection_granularity.is_some() {
                     bail!("INTROSPECTION GRANULARITY specified more than once");
                 }
-                introspection_granularity =
-                    Some(with_option_type!(Some(interval), OptionalInterval));
+                introspection_granularity = Some(
+                    OptionalInterval::try_from(interval)
+                        .map_err(|e| anyhow!("invalid INTROSPECTION GRANULARITY: {}", e))?
+                        .0,
+                );
             }
             ClusterOption::Replicas(replicas) => {
                 if replicas_definitions.is_some() {
@@ -2733,20 +2740,26 @@ fn plan_replica_config(
                     bail!("REMOTE specified more than once");
                 }
                 for host in hosts {
-                    remote_replicas.insert(with_option_type!(Some(host), String));
+                    remote_replicas.insert(
+                        host.try_into()
+                            .map_err(|e| anyhow!("invalid REMOTE host: {}", e))?,
+                    );
                 }
             }
             ReplicaOption::Size(s) => {
                 if size.is_some() {
                     bail!("SIZE specified more than once");
                 }
-                size = Some(with_option_type!(Some(s), String));
+                size = Some(s.try_into().map_err(|e| anyhow!("invalid SIZE: {}", e))?);
             }
             ReplicaOption::AvailabilityZone(s) => {
                 if availability_zone.is_some() {
                     bail!("AVAILABILITY ZONE specified more than once");
                 }
-                availability_zone = Some(with_option_type!(Some(s), String));
+                availability_zone = Some(
+                    s.try_into()
+                        .map_err(|e| anyhow!("invalid AVAILABILITY ZONE: {}", e))?,
+                );
             }
         }
     }

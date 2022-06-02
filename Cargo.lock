@@ -3751,6 +3751,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
+ "mz-sql-parser",
  "num-traits",
  "num_enum",
  "once_cell",

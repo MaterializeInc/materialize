@@ -495,21 +495,6 @@ macro_rules! with_option_type {
             _ => ::anyhow::bail!("expected Interval"),
         }
     };
-    ($name:expr, OptionalInterval) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                if value.as_str() == "off" {
-                    None
-                } else {
-                    Some(mz_repr::strconv::parse_interval(&value)?)
-                }
-            }
-            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                Some(mz_repr::strconv::parse_interval(&interval.value)?)
-            }
-            _ => ::anyhow::bail!("expected Interval or 'off'"),
-        }
-    };
 }
 
 /// Ensures that the given set of options are empty, useful for validating that
