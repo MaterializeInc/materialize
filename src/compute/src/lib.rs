@@ -12,6 +12,7 @@
 //! Driver for timely/differential dataflow.
 
 pub(crate) mod arrangement;
+pub mod communication;
 pub mod compute_state;
 pub(crate) mod logging;
 pub(crate) mod render;

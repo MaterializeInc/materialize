@@ -16,7 +16,9 @@ use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
+use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
+use timely::WorkerConfig;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
@@ -24,17 +26,28 @@ use mz_dataflow_types::ConnectorContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
+use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
 use crate::SinkBaseMetrics;
 use crate::{TraceManager, TraceMetrics};
 
+/// Configuration of the cluster we will spin up
+pub struct CommunicationConfig {
+    /// Number of per-process worker threads
+    pub threads: usize,
+    /// Identity of this process
+    pub process: usize,
+    /// Addresses of all processes
+    pub addresses: Vec<String>,
+}
+
 /// Configures a dataflow server.
 pub struct Config {
     /// The number of worker threads to spawn.
     pub workers: usize,
-    /// The Timely configuration
-    pub timely_config: timely::Config,
+    /// Configuration for the communication mesh
+    pub comm_config: CommunicationConfig,
     /// Whether the server is running in experimental mode.
     pub experimental_mode: bool,
     /// Function to get wall time now.
@@ -82,28 +95,36 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
 
     let tokio_executor = tokio::runtime::Handle::current();
 
-    let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
-        let timely_worker_index = timely_worker.index();
-        let _tokio_guard = tokio_executor.enter();
-        let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
-            .take()
-            .unwrap();
-        let compute_response_tx = compute_response_channels.lock().unwrap()
-            [timely_worker_index % config.workers]
-            .take()
-            .unwrap();
-        let (_sink_metrics, _trace_metrics) = metrics_bundle.clone();
-        Worker {
-            timely_worker,
-            command_rx,
-            compute_state: None,
-            compute_response_tx,
-            metrics_bundle: metrics_bundle.clone(),
-            connector_context: config.connector_context.clone(),
-        }
-        .run()
-    })
-    .map_err(|e| anyhow!("{}", e))?;
+    let (builders, other) =
+        initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
+
+    let worker_guards = execute_from(
+        builders,
+        other,
+        WorkerConfig::default(),
+        move |timely_worker| {
+            let timely_worker_index = timely_worker.index();
+            let _tokio_guard = tokio_executor.enter();
+            let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
+                .take()
+                .unwrap();
+            let compute_response_tx = compute_response_channels.lock().unwrap()
+                [timely_worker_index % config.workers]
+                .take()
+                .unwrap();
+            let (_sink_metrics, _trace_metrics) = metrics_bundle.clone();
+            Worker {
+                timely_worker,
+                command_rx,
+                compute_state: None,
+                compute_response_tx,
+                metrics_bundle: metrics_bundle.clone(),
+                connector_context: config.connector_context.clone(),
+            }
+            .run()
+        },
+    )
+    .map_err(|e| anyhow!("{e}"))?;
     let worker_threads = worker_guards
         .guards()
         .iter()

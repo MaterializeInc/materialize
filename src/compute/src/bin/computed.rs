@@ -12,6 +12,7 @@ use std::process;
 
 use anyhow::bail;
 use axum::routing;
+use mz_compute::server::CommunicationConfig;
 use once_cell::sync::Lazy;
 use tokio::select;
 use tracing::info;
@@ -99,48 +100,21 @@ async fn main() {
     }
 }
 
-fn create_communication_config(args: &Args) -> Result<timely::CommunicationConfig, anyhow::Error> {
-    if args.addresses.len() > 1 {
-        let process = match args.process {
-            None => {
-                bail!(
-                    "--process argument must be specified when more than one address is specified"
-                );
-            }
-            Some(process) if process >= args.addresses.len() => {
-                bail!(
-                    "process index {process} out of range [0, {})",
-                    args.addresses.len()
-                );
-            }
-            Some(process) => process,
-        };
-        Ok(timely::CommunicationConfig::Cluster {
-            threads: args.workers,
-            process,
-            addresses: args.addresses.clone(),
-            report: true,
-            log_fn: Box::new(|_| None),
-        })
-    } else {
-        match args.process {
-            Some(process) if process > 1 => {
-                bail!("process index {process} out of range [0, 1)");
-            }
-            _ => (),
+fn create_communication_config(args: &Args) -> Result<CommunicationConfig, anyhow::Error> {
+    let process = match args.process {
+        None => 0,
+        Some(process) if process >= args.addresses.len() => {
+            bail!(
+                "process index {process} out of range [0, {})",
+                args.addresses.len()
+            );
         }
-        if args.workers > 1 {
-            Ok(timely::CommunicationConfig::Process(args.workers))
-        } else {
-            Ok(timely::CommunicationConfig::Thread)
-        }
-    }
-}
-
-fn create_timely_config(args: &Args) -> Result<timely::Config, anyhow::Error> {
-    Ok(timely::Config {
-        worker: timely::WorkerConfig::default(),
-        communication: create_communication_config(args)?,
+        Some(process) => process,
+    };
+    Ok(CommunicationConfig {
+        threads: args.workers,
+        process,
+        addresses: args.addresses.clone(),
     })
 }
 
@@ -156,7 +130,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     if args.workers == 0 {
         bail!("--workers must be greater than 0");
     }
-    let timely_config = create_timely_config(&args)?;
+    let comm_config = create_communication_config(&args)?;
 
     info!("about to bind to {:?}", args.listen_addr);
 
@@ -177,7 +151,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let config = mz_compute::server::Config {
         workers: args.workers,
-        timely_config,
+        comm_config,
         experimental_mode: false,
         metrics_registry: MetricsRegistry::new(),
         now: SYSTEM_TIME.clone(),
