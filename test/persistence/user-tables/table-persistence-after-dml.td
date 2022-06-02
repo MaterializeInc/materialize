@@ -32,8 +32,8 @@
 9
 10
 
-> SELECT COUNT(*) = 0 FROM insert_rollback;
-true
+> SELECT COUNT(*) FROM insert_rollback;
+0
 
 > SELECT * FROM insert_select;
 1

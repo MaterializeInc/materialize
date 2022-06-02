@@ -163,8 +163,8 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 
-> SELECT COUNT(*) = 8 FROM kafka_ingest_no_partition;
-true
+> SELECT COUNT(*) FROM kafka_ingest_no_partition;
+8
 
 # kafka-verify with regexp (the set-regexp from above is used)
 
@@ -189,12 +189,12 @@ BEGIN;
 INSERT INTO postgres_connect VALUES (1);
 
 # Table is still empty, the transaction we just started is not committed yet
-> SELECT COUNT(*) = 0 FROM postgres_connect;
-true
+> SELECT COUNT(*) FROM postgres_connect;
+0
 
 $ postgres-execute connection=conn1
 INSERT INTO postgres_connect VALUES (2);
 COMMIT;
 
-> SELECT COUNT(*) = 2 FROM postgres_connect;
-true
+> SELECT COUNT(*) FROM postgres_connect;
+2

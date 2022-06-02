@@ -64,23 +64,23 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
-> SELECT COUNT(*) = 1 FROM mz_source;
-true
+> SELECT COUNT(*) FROM mz_source;
+1
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE t2 (f1 INTEGER);
 ALTER TABLE t2 REPLICA IDENTITY FULL;
 INSERT INTO t2 VALUES (2);
 
-> SELECT COUNT(*) = 1 FROM mz_source;
-true
+> SELECT COUNT(*) FROM mz_source;
+1
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE t2 ADD COLUMN f2 varchar(1);
 INSERT INTO t2 VALUES (3, 'c');
 
-> SELECT COUNT(*) = 1 FROM mz_source;
-true
+> SELECT COUNT(*) FROM mz_source;
+1
 
 > CREATE VIEWS FROM SOURCE mz_source;
 

@@ -9,11 +9,11 @@
 
 # Run parts of repeated-source-rendering-before.td post-restart
 
-> SELECT COUNT(*) = 10 FROM a_view;
-true
+> SELECT COUNT(*) FROM a_view;
+10
 
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 0 FROM mz_kafka_source_statistics;
-true
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
+0
 
 # Verify that we cannot create multiple materializations of a persisted source, even after restart.
 ! CREATE MATERIALIZED VIEW a_view_second_materialization AS SELECT * FROM re_created;
@@ -23,12 +23,12 @@ contains:Cannot re-materialize source re_created
 
 > CREATE MATERIALIZED VIEW a_view AS SELECT * FROM re_created;
 
-> SELECT COUNT(*) = 10 FROM a_view;
-true
+> SELECT COUNT(*) FROM a_view;
+10
 
 # Re-creating the source should result in no messages being read from Kafka, because we still have the persisted data and offsets.
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 0 FROM mz_kafka_source_statistics;
-true
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
+0
 
 # Same with DROP INDEX
 
@@ -36,8 +36,8 @@ true
 
 > CREATE DEFAULT INDEX ON a_view;
 
-> SELECT COUNT(*) = 10 FROM a_view;
-true
+> SELECT COUNT(*) FROM a_view;
+10
 
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 0 FROM mz_kafka_source_statistics;
-true
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
+0

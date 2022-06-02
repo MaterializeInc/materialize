@@ -41,5 +41,5 @@ $ kafka-ingest format=avro topic=multipart-key key-format=avro key-schema=${keys
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 
-> SELECT COUNT(*) = 20000 FROM multipart_key;
-true
+> SELECT COUNT(*) FROM multipart_key;
+20000

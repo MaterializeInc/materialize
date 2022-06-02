@@ -37,8 +37,8 @@ $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) = 10000 FROM upsert_modification;
-true
+> SELECT COUNT(*) FROM upsert_modification;
+10000
 
 $ kafka-create-topic topic=textbytes
 
