@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -38,13 +39,13 @@ pub fn bench_consensus_compare_and_set(
     num_shards: usize,
 ) {
     let mut g = c.benchmark_group(name);
-    let blob_val = workload::flat_blob(&data);
+    let payload = Bytes::from(workload::flat_blob(&data));
 
     bench_all_consensus(&mut g, runtime, data, |b, consensus| {
         bench_consensus_compare_and_set_all_iters(
             &runtime,
             Arc::clone(&consensus),
-            blob_val.clone(),
+            &payload,
             b,
             concurrency,
             num_shards,
@@ -55,7 +56,7 @@ pub fn bench_consensus_compare_and_set(
 fn bench_consensus_compare_and_set_all_iters(
     runtime: &Runtime,
     consensus: Arc<dyn Consensus + Send + Sync>,
-    data: Vec<u8>,
+    data: &Bytes,
     b: &mut Bencher,
     concurrency: usize,
     num_shards: usize,
@@ -81,7 +82,7 @@ fn bench_consensus_compare_and_set_all_iters(
         let mut handles = Vec::new();
         for (idx, shard_keys) in keys.into_iter() {
             let consensus = Arc::clone(&consensus);
-            let data = data.clone();
+            let data = Bytes::clone(&data);
             let handle = runtime.handle().spawn_named(
                 || format!("bench_compare_and_set-{}", idx),
                 async move {
@@ -102,7 +103,7 @@ fn bench_consensus_compare_and_set_all_iters(
                                 current_seqno,
                                 VersionedData {
                                     seqno: next_seqno,
-                                    data: data.clone(),
+                                    data: Bytes::clone(&data),
                                 },
                             );
                             futs.push(fut);

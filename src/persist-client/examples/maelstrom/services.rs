@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -70,7 +71,7 @@ impl MaelstromConsensus {
         if let Some(data) = self.cache.lock().await.get(&(key.to_string(), expected)) {
             let value = VersionedData {
                 seqno: expected.clone(),
-                data: data.clone(),
+                data: Bytes::from(data.clone()),
             };
             return Ok(Ok(value));
         }
@@ -104,7 +105,7 @@ impl Consensus for MaelstromConsensus {
         self.cache
             .lock()
             .await
-            .insert((key.to_string(), value.seqno), value.data.clone());
+            .insert((key.to_string(), value.seqno), value.data.to_vec());
         Ok(Some(value))
     }
 
@@ -307,6 +308,7 @@ impl BlobMulti for CachingBlobMulti {
 }
 
 mod from_impls {
+    use bytes::Bytes;
     use mz_persist::location::{ExternalError, SeqNo, VersionedData};
     use serde_json::Value;
 
@@ -316,7 +318,7 @@ mod from_impls {
         fn from(x: VersionedData) -> Self {
             MaelstromVersionedData {
                 seqno: x.seqno.0,
-                data: x.data,
+                data: x.data.to_vec(),
             }
         }
     }
@@ -325,7 +327,7 @@ mod from_impls {
         fn from(x: MaelstromVersionedData) -> Self {
             VersionedData {
                 seqno: SeqNo(x.seqno),
-                data: x.data,
+                data: Bytes::from(x.data),
             }
         }
     }

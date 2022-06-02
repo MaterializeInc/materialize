@@ -284,8 +284,6 @@ where
             // retry even indeterminate errors. See
             // [Self::apply_unbatched_idempotent_cmd].
             let cas_res = retry_determinate("apply_unbatched_cmd::cas", || async {
-                // If Consensus::compare_and_set took new as a ref, then we
-                // wouldn't have to clone here.
                 self.consensus
                     .compare_and_set(
                         Instant::now() + FOREVER,
@@ -369,8 +367,6 @@ where
                 state
             );
             let cas_res = retry_external("maybe_init_state::cas", || async {
-                // If Consensus::compare_and_set took new as a ref, then we
-                // wouldn't have to clone here.
                 consensus
                     .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
                     .await
