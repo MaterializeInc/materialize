@@ -14,7 +14,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use fstrings::{f, format_args_f};
 use itertools::Itertools;
 
 use mz_ore::codegen::CodegenBuf;
@@ -49,14 +48,14 @@ pub fn gen_fold_root(ir: &Ir) -> String {
     let mut generics = BTreeMap::new();
     for (name, bounds) in &ir.generics {
         generics.insert(name.clone(), bounds.clone());
-        generics.insert(f!("{name}2"), bounds.clone());
+        generics.insert(format!("{name}2"), bounds.clone());
     }
     let trait_generics = trait_generics(&generics);
     let trait_generics_and_bounds = trait_generics_and_bounds(&generics);
 
     let mut buf = CodegenBuf::new();
 
-    buf.start_block(f!("pub trait Fold<{trait_generics_and_bounds}>"));
+    buf.start_block(format!("pub trait Fold<{trait_generics_and_bounds}>"));
     for (name, item) in &ir.items {
         match item {
             Item::Abstract => {
@@ -65,16 +64,16 @@ pub fn gen_fold_root(ir: &Ir) -> String {
                 // simpler than trying to use a structured type for `name`.
                 let name2 = name.replacen("::", "2::", 1);
                 let fn_name = fold_fn_name(name);
-                buf.writeln(f!("fn {fn_name}(&mut self, node: {name}) -> {name2};"))
+                buf.writeln(format!("fn {fn_name}(&mut self, node: {name}) -> {name2};"))
             }
             Item::Struct(_) | Item::Enum(_) => {
                 let generics = item_generics(item, "");
                 let generics2 = item_generics(item, "2");
                 let fn_name = fold_fn_name(name);
-                buf.start_block(f!(
+                buf.start_block(format!(
                     "fn {fn_name}(&mut self, node: {name}{generics}) -> {name}{generics2}"
                 ));
-                buf.writeln(f!("{fn_name}(self, node)"));
+                buf.writeln(format!("{fn_name}(self, node)"));
                 buf.end_block();
             }
         }
@@ -88,11 +87,11 @@ pub fn gen_fold_root(ir: &Ir) -> String {
         let generics = item_generics(item, "");
         let generics2 = item_generics(item, "2");
         let fn_name = fold_fn_name(name);
-        buf.writeln(f!(
+        buf.writeln(format!(
             "pub fn {fn_name}<F, {trait_generics_and_bounds}>(folder: &mut F, node: {name}{generics}) -> {name}{generics2}"
         ));
-        buf.writeln(f!("where"));
-        buf.writeln(f!("    F: Fold<{trait_generics}> + ?Sized,"));
+        buf.writeln(format!("where"));
+        buf.writeln(format!("    F: Fold<{trait_generics}> + ?Sized,"));
         buf.start_block("");
         match item {
             Item::Struct(s) => {
@@ -102,9 +101,9 @@ pub fn gen_fold_root(ir: &Ir) -> String {
                         Some(name) => name.clone(),
                         None => i.to_string(),
                     };
-                    let binding = f!("node.{field_name}");
+                    let binding = format!("node.{field_name}");
                     buf.start_line();
-                    buf.write(f!("{field_name}: "));
+                    buf.write(format!("{field_name}: "));
                     gen_fold_element(&mut buf, &binding, &f.ty);
                     buf.write(",");
                     buf.end_line();
@@ -114,22 +113,22 @@ pub fn gen_fold_root(ir: &Ir) -> String {
             Item::Enum(e) => {
                 buf.start_block("match node");
                 for v in &e.variants {
-                    buf.start_block(f!("{name}::{v.name}"));
+                    let vname = &v.name;
+                    buf.start_block(format!("{name}::{vname}"));
                     for (i, f) in v.fields.iter().enumerate() {
                         let name = f.name.clone().unwrap_or_else(|| i.to_string());
-                        let binding = format!("binding{}", i);
-                        buf.writeln(f!("{}: {},", name, binding));
+                        buf.writeln(format!("{name}: binding{i},"));
                     }
                     buf.restart_block("=>");
-                    buf.start_block(f!("{name}::{v.name}"));
+                    buf.start_block(format!("{name}::{vname}"));
                     for (i, f) in v.fields.iter().enumerate() {
                         let field_name = match &f.name {
                             Some(name) => name.clone(),
                             None => i.to_string(),
                         };
-                        let binding = format!("binding{}", i);
+                        let binding = format!("binding{i}");
                         buf.start_line();
-                        buf.write(f!("{field_name}: "));
+                        buf.write(format!("{field_name}: "));
                         gen_fold_element(&mut buf, &binding, &f.ty);
                         buf.write(",");
                         buf.end_line();
@@ -152,29 +151,29 @@ fn gen_fold_element(buf: &mut CodegenBuf, binding: &str, ty: &Type) {
         Type::Primitive => buf.write(binding),
         Type::Abstract(ty) => {
             let fn_name = fold_fn_name(ty);
-            buf.write(f!("folder.{fn_name}({binding})"));
+            buf.write(format!("folder.{fn_name}({binding})"));
         }
         Type::Option(ty) => {
-            buf.write(f!("{binding}.map(|v| "));
+            buf.write(format!("{binding}.map(|v| "));
             gen_fold_element(buf, "v", ty);
             buf.write(")")
         }
         Type::Vec(ty) => {
-            buf.write(f!("{binding}.into_iter().map(|v| "));
+            buf.write(format!("{binding}.into_iter().map(|v| "));
             gen_fold_element(buf, "v", ty);
             buf.write(").collect()");
         }
         Type::Box(ty) => {
             buf.write("Box::new(");
-            gen_fold_element(buf, &f!("*{binding}"), ty);
+            gen_fold_element(buf, &format!("*{binding}"), ty);
             buf.write(")");
         }
         Type::Local(s) => {
             let fn_name = fold_fn_name(s);
-            buf.write(f!("folder.{fn_name}({binding})"));
+            buf.write(format!("folder.{fn_name}({binding})"));
         }
         Type::Map { key, value } => {
-            buf.write(f!(
+            buf.write(format!(
                 "{{ std::collections::BTreeMap::from_iter({binding}.iter().map(|(k, v)| {{("
             ));
             gen_fold_element(buf, "k", key);
@@ -197,16 +196,16 @@ fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
 
     let mut buf = CodegenBuf::new();
 
-    buf.start_block(f!(
+    buf.start_block(format!(
         "pub trait {trait_name}<'ast, {trait_generics_and_bounds}>"
     ));
     for (name, item) in &ir.items {
         let generics = item_generics(item, "");
         let fn_name = visit_fn_name(c, name);
-        buf.start_block(f!(
+        buf.start_block(format!(
             "fn {fn_name}(&mut self, node: &'ast {muta}{name}{generics})"
         ));
-        buf.writeln(f!("{fn_name}(self, node)"));
+        buf.writeln(format!("{fn_name}(self, node)"));
         buf.end_block();
     }
     buf.end_block();
@@ -214,18 +213,20 @@ fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
     for (name, item) in &ir.items {
         let generics = item_generics(item, "");
         let fn_name = visit_fn_name(c, name);
-        buf.writeln(f!(
+        buf.writeln(format!(
             "pub fn {fn_name}<'ast, V, {trait_generics_and_bounds}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
         ));
-        buf.writeln(f!("where"));
-        buf.writeln(f!("    V: {trait_name}<'ast, {trait_generics}> + ?Sized,"));
+        buf.writeln(format!("where"));
+        buf.writeln(format!(
+            "    V: {trait_name}<'ast, {trait_generics}> + ?Sized,"
+        ));
         buf.start_block("");
         match item {
             Item::Struct(s) => {
                 for (i, f) in s.fields.iter().enumerate() {
                     let binding = match &f.name {
-                        Some(name) => f!("&{muta}node.{name}"),
-                        None => f!("&{muta}node.{i}"),
+                        Some(name) => format!("&{muta}node.{name}"),
+                        None => format!("&{muta}node.{i}"),
                     };
                     gen_visit_element(c, &mut buf, &binding, &f.ty);
                 }
@@ -233,15 +234,15 @@ fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
             Item::Enum(e) => {
                 buf.start_block("match node");
                 for v in &e.variants {
-                    buf.start_block(f!("{name}::{v.name}"));
+                    let vname = &v.name;
+                    buf.start_block(format!("{name}::{vname}"));
                     for (i, f) in v.fields.iter().enumerate() {
                         let name = f.name.clone().unwrap_or_else(|| i.to_string());
-                        let binding = format!("binding{}", i);
-                        buf.writeln(f!("{}: {},", name, binding));
+                        buf.writeln(format!("{name}: binding{i},"));
                     }
                     buf.restart_block("=>");
                     for (i, f) in v.fields.iter().enumerate() {
-                        let binding = format!("binding{}", i);
+                        let binding = format!("binding{i}");
                         gen_visit_element(c, &mut buf, &binding, &f.ty);
                     }
                     buf.end_block();
@@ -261,31 +262,31 @@ fn gen_visit_element(c: &VisitConfig, buf: &mut CodegenBuf, binding: &str, ty: &
         Type::Primitive => (),
         Type::Abstract(ty) => {
             let fn_name = visit_fn_name(c, ty);
-            buf.writeln(f!("visitor.{fn_name}({binding});"));
+            buf.writeln(format!("visitor.{fn_name}({binding});"));
         }
         Type::Option(ty) => {
-            buf.start_block(f!("if let Some(v) = {binding}"));
+            buf.start_block(format!("if let Some(v) = {binding}"));
             gen_visit_element(c, buf, "v", ty);
             buf.end_block();
         }
         Type::Vec(ty) => {
-            buf.start_block(f!("for v in {binding}"));
+            buf.start_block(format!("for v in {binding}"));
             gen_visit_element(c, buf, "v", ty);
             buf.end_block();
         }
         Type::Box(ty) => {
             let binding = match c.mutable {
-                true => format!("&mut *{}", binding),
-                false => format!("&*{}", binding),
+                true => format!("&mut *{binding}"),
+                false => format!("&*{binding}"),
             };
             gen_visit_element(c, buf, &binding, ty);
         }
         Type::Local(s) => {
             let fn_name = visit_fn_name(c, s);
-            buf.writeln(f!("visitor.{fn_name}({binding});"));
+            buf.writeln(format!("visitor.{fn_name}({binding});"));
         }
         Type::Map { value, .. } => {
-            buf.start_block(f!("for (_, value) in {binding}"));
+            buf.start_block(format!("for (_, value) in {binding}"));
             gen_visit_element(c, buf, "value", value);
             buf.end_block();
         }
@@ -322,7 +323,7 @@ fn write_fn_name(out: &mut String, s: &str) {
 }
 
 fn trait_generics(generics: &BTreeMap<String, BTreeSet<String>>) -> String {
-    generics.keys().map(|id| format!("{}, ", id)).join("")
+    generics.keys().map(|id| format!("{id}, ")).join("")
 }
 
 fn trait_generics_and_bounds(generics: &BTreeMap<String, BTreeSet<String>>) -> String {
@@ -330,9 +331,9 @@ fn trait_generics_and_bounds(generics: &BTreeMap<String, BTreeSet<String>>) -> S
         .iter()
         .map(|(ident, bounds)| {
             if bounds.len() == 0 {
-                format!("{}, ", ident)
+                format!("{ident}, ")
             } else {
-                format!("{}: {}, ", ident, bounds.iter().join("+"))
+                format!("{ident}: {}, ", bounds.iter().join("+"))
             }
         })
         .join("")
@@ -345,8 +346,8 @@ fn item_generics(item: &Item, suffix: &str) -> String {
         let generics = item
             .generics()
             .iter()
-            .map(|g| f!("{g.name}{suffix}"))
+            .map(|g| format!("{}{suffix}", g.name))
             .join(", ");
-        format!("<{}>", generics)
+        format!("<{generics}>")
     }
 }
