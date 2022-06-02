@@ -17,6 +17,7 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
+use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::{
     Ident, Statement, UnresolvedDatabaseName, UnresolvedObjectName, UnresolvedSchemaName,
 };
@@ -102,6 +103,20 @@ impl AstDisplay for RawObjectName {
 }
 impl_display!(RawObjectName);
 
+impl<T> FoldNode<Raw, T> for RawObjectName
+where
+    T: AstInfo,
+{
+    type Folded = T::ObjectName;
+
+    fn fold<F>(self, f: &mut F) -> Self::Folded
+    where
+        F: Fold<Raw, T>,
+    {
+        f.fold_object_name(self)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RawClusterName {
     Unresolved(Ident),
@@ -119,6 +134,20 @@ impl AstDisplay for RawClusterName {
     }
 }
 impl_display!(RawClusterName);
+
+impl<T> FoldNode<Raw, T> for RawClusterName
+where
+    T: AstInfo,
+{
+    type Folded = T::ClusterName;
+
+    fn fold<F>(self, f: &mut F) -> Self::Folded
+    where
+        F: Fold<Raw, T>,
+    {
+        f.fold_cluster_name(self)
+    }
+}
 
 /// SQL data types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -173,3 +202,17 @@ impl AstDisplay for RawDataType {
     }
 }
 impl_display!(RawDataType);
+
+impl<T> FoldNode<Raw, T> for RawDataType
+where
+    T: AstInfo,
+{
+    type Folded = T::DataType;
+
+    fn fold<F>(self, f: &mut F) -> Self::Folded
+    where
+        F: Fold<Raw, T>,
+    {
+        f.fold_data_type(self)
+    }
+}
