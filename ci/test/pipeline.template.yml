@@ -298,7 +298,7 @@ steps:
   - id: debezium-postgres
     label: Debezium Postgres tests
     depends_on: build-x86_64
-    timeout_in_minutes: 30
+    timeout_in_minutes: 90
     inputs: [test/debezium]
     artifact_paths: junit_mzcompose_*.xml
     plugins:
