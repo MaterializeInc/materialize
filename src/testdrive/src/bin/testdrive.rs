@@ -25,6 +25,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use time::Instant;
+use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
@@ -232,7 +233,7 @@ async fn main() {
         }
     };
 
-    eprintln!(
+    info!(
         "Configuration parameters:
     Kafka address: {}
     Schema registry URL: {}
