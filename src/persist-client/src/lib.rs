@@ -50,6 +50,7 @@ pub(crate) mod r#impl {
     pub mod machine;
     pub mod metrics;
     pub mod state;
+    pub mod trace;
 }
 
 // TODO: Remove this in favor of making it possible for all PersistClients to be
