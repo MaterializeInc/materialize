@@ -10,7 +10,8 @@
 //! Types and traits related to the introduction of changing collections into `dataflow`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::ops::{Add, AddAssign, Deref, DerefMut, Sub};
+use std::num::TryFromIntError;
+use std::ops::{Add, AddAssign, Deref, DerefMut};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -63,10 +64,51 @@ pub struct IngestionDescription<S = (), T = mz_repr::Timestamp> {
 /// way. Individual sources like Kafka or File sources should explicitly implement their own offset
 /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
 #[derive(
-    Copy, Clone, Default, Debug, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize,
+    Copy,
+    Clone,
+    Default,
+    Debug,
+    PartialEq,
+    PartialOrd,
+    Eq,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary,
 )]
 pub struct MzOffset {
-    pub offset: i64,
+    pub offset: u64,
+}
+
+impl RustType<ProtoMzOffset> for MzOffset {
+    fn into_proto(&self) -> ProtoMzOffset {
+        ProtoMzOffset {
+            offset: self.offset,
+        }
+    }
+
+    fn from_proto(proto: ProtoMzOffset) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            offset: proto.offset,
+        })
+    }
+}
+
+impl MzOffset {
+    pub fn checked_sub(self, other: Self) -> Option<Self> {
+        self.offset
+            .checked_sub(other.offset)
+            .map(|offset| Self { offset })
+    }
+}
+
+/// Convert from MzOffset to Kafka::Offset as long as
+/// the offset is not negative
+impl From<u64> for MzOffset {
+    fn from(offset: u64) -> Self {
+        Self { offset }
+    }
 }
 
 impl std::fmt::Display for MzOffset {
@@ -75,16 +117,16 @@ impl std::fmt::Display for MzOffset {
     }
 }
 
-impl Add<i64> for MzOffset {
+// Assume overflow does not occur for addition
+impl Add<u64> for MzOffset {
     type Output = MzOffset;
 
-    fn add(self, x: i64) -> MzOffset {
+    fn add(self, x: u64) -> MzOffset {
         MzOffset {
             offset: self.offset + x,
         }
     }
 }
-
 impl Add<Self> for MzOffset {
     type Output = Self;
 
@@ -94,25 +136,14 @@ impl Add<Self> for MzOffset {
         }
     }
 }
-
-impl AddAssign<i64> for MzOffset {
-    fn add_assign(&mut self, x: i64) {
+impl AddAssign<u64> for MzOffset {
+    fn add_assign(&mut self, x: u64) {
         self.offset += x;
     }
 }
-
 impl AddAssign<Self> for MzOffset {
     fn add_assign(&mut self, x: Self) {
         self.offset += x.offset;
-    }
-}
-
-// Output is a diff but not itself an MzOffset
-impl Sub<Self> for MzOffset {
-    type Output = i64;
-
-    fn sub(self, other: Self) -> i64 {
-        self.offset - other.offset
     }
 }
 
@@ -121,32 +152,23 @@ pub struct KafkaOffset {
     pub offset: i64,
 }
 
-/// Convert from KafkaOffset to MzOffset (1-indexed)
-impl From<KafkaOffset> for MzOffset {
-    fn from(kafka_offset: KafkaOffset) -> Self {
-        MzOffset {
-            offset: kafka_offset.offset + 1,
-        }
-    }
-}
-
-/// Convert from MzOffset to Kafka::Offset as long as
-/// the offset is not negative
-impl From<MzOffset> for KafkaOffset {
-    fn from(offset: MzOffset) -> Self {
-        KafkaOffset {
-            offset: offset.offset - 1,
-        }
+/// Convert from KafkaOffset to MzOffset (1-indexed), failing if the offset
+/// is negative.
+impl TryFrom<KafkaOffset> for MzOffset {
+    type Error = TryFromIntError;
+    fn try_from(kafka_offset: KafkaOffset) -> Result<Self, Self::Error> {
+        Ok(MzOffset {
+            // If the offset is negative, or +1 overflows, then this
+            // fails
+            offset: (kafka_offset.offset + 1).try_into()?,
+        })
     }
 }
 
 /// Convert from `PgLsn` to MzOffset
 impl From<tokio_postgres::types::PgLsn> for MzOffset {
     fn from(lsn: tokio_postgres::types::PgLsn) -> Self {
-        let lsn_as_u64: u64 = lsn.into();
-        MzOffset {
-            offset: lsn_as_u64.try_into().unwrap(),
-        }
+        MzOffset { offset: lsn.into() }
     }
 }
 
@@ -995,7 +1017,7 @@ pub struct KafkaSourceConnector {
     // security settings.
     pub config_options: BTreeMap<String, String>,
     // Map from partition -> starting offset
-    pub start_offsets: HashMap<i32, i64>,
+    pub start_offsets: HashMap<i32, MzOffset>,
     pub group_id_prefix: Option<String>,
     pub cluster_id: Uuid,
     /// If present, include the timestamp as an output column of the source with the given name
@@ -1018,7 +1040,7 @@ impl Arbitrary for KafkaSourceConnector {
             any::<KafkaAddrs>(),
             any::<String>(),
             any::<BTreeMap<String, String>>(),
-            any::<HashMap<i32, i64>>(),
+            any::<HashMap<i32, MzOffset>>(),
             any::<Option<String>>(),
             any_uuid(),
             any::<Option<IncludedColumnPos>>(),
@@ -1064,7 +1086,11 @@ impl RustType<ProtoKafkaSourceConnector> for KafkaSourceConnector {
             addrs: Some((&self.addrs).into_proto()),
             topic: self.topic.clone(),
             config_options: self.config_options.clone().into_iter().collect(),
-            start_offsets: self.start_offsets.clone(),
+            start_offsets: self
+                .start_offsets
+                .iter()
+                .map(|(k, v)| (*k, v.into_proto()))
+                .collect(),
             group_id_prefix: self.group_id_prefix.clone(),
             cluster_id: Some(self.cluster_id.into_proto()),
             include_timestamp: self.include_timestamp.into_proto(),
@@ -1076,13 +1102,18 @@ impl RustType<ProtoKafkaSourceConnector> for KafkaSourceConnector {
     }
 
     fn from_proto(proto: ProtoKafkaSourceConnector) -> Result<Self, TryFromProtoError> {
+        let start_offsets: Result<_, TryFromProtoError> = proto
+            .start_offsets
+            .into_iter()
+            .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
+            .collect();
         Ok(KafkaSourceConnector {
             addrs: proto
                 .addrs
                 .into_rust_if_some("ProtoKafkaSourceConnector::addrs")?,
             topic: proto.topic,
             config_options: proto.config_options.into_iter().collect(),
-            start_offsets: proto.start_offsets,
+            start_offsets: start_offsets?,
             group_id_prefix: proto.group_id_prefix,
             cluster_id: proto
                 .cluster_id

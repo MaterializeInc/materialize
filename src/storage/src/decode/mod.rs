@@ -38,7 +38,7 @@ use timely::scheduling::SyncActivator;
 use mz_dataflow_types::{
     sources::{
         encoding::{AvroEncoding, DataEncoding, RegexEncoding},
-        IncludedColumnSource,
+        IncludedColumnSource, MzOffset,
     },
     DecodeError, LinearOperator,
 };
@@ -521,7 +521,7 @@ where
                                     let metadata = to_metadata_row(
                                         &metadata_items,
                                         partition.clone(),
-                                        position,
+                                        position.into(),
                                         *upstream_time_millis,
                                         headers.as_deref(),
                                     );
@@ -529,7 +529,7 @@ where
                                     session.give(DecodeResult {
                                         key: None,
                                         value: Some(value.map(|r| (r, 1))),
-                                        position,
+                                        position: position.into(),
                                         upstream_time_millis: *upstream_time_millis,
                                         partition: partition.clone(),
                                         metadata,
@@ -582,7 +582,7 @@ where
                         let metadata = to_metadata_row(
                             &metadata_items,
                             partition.clone(),
-                            position,
+                            position.into(),
                             *upstream_time_millis,
                             headers.as_deref(),
                         );
@@ -591,7 +591,7 @@ where
                             session.give(DecodeResult {
                                 key: None,
                                 value: Some(value.map(|r| (r, 1))),
-                                position,
+                                position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
@@ -602,7 +602,7 @@ where
                             session.give(DecodeResult {
                                 key: None,
                                 value: Some(value.map(|r| (r, 1))),
-                                position,
+                                position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
@@ -631,10 +631,11 @@ where
 fn to_metadata_row(
     metadata_items: &[IncludedColumnSource],
     partition: PartitionId,
-    position: i64,
+    position: MzOffset,
     upstream_time_millis: Option<i64>,
     headers: Option<&[(String, Option<Vec<u8>>)]>,
 ) -> Row {
+    let position = position.offset;
     let mut row = Row::default();
     let mut packer = row.packer();
     match partition {
@@ -643,7 +644,11 @@ fn to_metadata_row(
                 match item {
                     IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
                     IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => {
-                        packer.push(Datum::from(position))
+                        // note this is bitwise cast, so offsets > i64::MAX will be
+                        // rendered as negative
+                        // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
+                        // is resolved.
+                        packer.push(Datum::from(position as i64))
                     }
                     IncludedColumnSource::Timestamp => {
                         let ts =
@@ -688,7 +693,13 @@ fn to_metadata_row(
         PartitionId::None => {
             for item in metadata_items.iter() {
                 match item {
-                    IncludedColumnSource::DefaultPosition => packer.push(Datum::from(position)),
+                    IncludedColumnSource::DefaultPosition => {
+                        // note this is bitwise cast, so offsets > i64::MAX will be
+                        // rendered as negative
+                        // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
+                        // is resolved.
+                        packer.push(Datum::from(position as i64))
+                    }
                     _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
                 }
             }

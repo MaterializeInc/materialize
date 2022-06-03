@@ -39,7 +39,7 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MzOffset,
     PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
     SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
@@ -362,14 +362,20 @@ pub fn plan_create_source(
             };
 
             let parse_offset = |s: &str| match s.parse::<i64>() {
-                Ok(n) if n >= 0 => Ok(n),
+                // we parse an i64 here, because we don't yet support u64's in sql,
+                // but put it into an internal MzOffset that holds a u64
+                // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
+                // is resolved.
+                Ok(n) if n >= 0 => Ok(MzOffset {
+                    offset: n.try_into().unwrap(),
+                }),
                 _ => bail!("start_offset must be a nonnegative integer"),
             };
 
             let mut start_offsets = HashMap::new();
             match with_options.remove("start_offset") {
                 None => {
-                    start_offsets.insert(0, 0);
+                    start_offsets.insert(0, MzOffset::from(0));
                 }
                 Some(Value::Number(n)) => {
                     start_offsets.insert(0, parse_offset(&n)?);

@@ -133,7 +133,7 @@ where
     /// The position in the partition described by the `partition` in the source
     /// (e.g., Kafka offset, file line number, monotonic increasing
     /// number, etc.)
-    pub position: i64,
+    pub position: MzOffset,
     /// The time the record was created in the upstream system, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition of this message, present iff the partition comes from Kafka
@@ -245,7 +245,7 @@ pub struct DecodeResult {
     /// is present and not and error.
     pub value: Option<Result<(Row, Diff), DecodeError>>,
     /// The index of the decoded value in the stream
-    pub position: i64,
+    pub position: MzOffset,
     /// The time the record was created in the upstream system, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition this record came from
@@ -276,7 +276,7 @@ where
     pub fn new(
         key: K,
         value: V,
-        position: i64,
+        position: MzOffset,
         upstream_time_millis: Option<i64>,
         partition: PartitionId,
         headers: Option<Vec<(String, Option<Vec<u8>>)>>,
@@ -630,14 +630,14 @@ impl SourceMetrics {
 /// Partition-specific metrics, recorded to both Prometheus and a system table
 pub struct PartitionMetrics {
     /// Highest offset that has been received by the source and timestamped
-    offset_ingested: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    offset_ingested: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Highest offset that has been received by the source
-    offset_received: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    offset_received: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Value of the highest timestamp that is closed (for which all messages have been ingested)
     closed_ts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
-    last_offset: i64,
+    last_offset: u64,
     last_timestamp: i64,
 }
 
@@ -648,7 +648,7 @@ impl PartitionMetrics {
         _source_name: &str,
         _source_id: GlobalId,
         _partition_id: &PartitionId,
-        offset: i64,
+        offset: u64,
         timestamp: i64,
     ) {
         self.offset_received.set(offset);
@@ -983,7 +983,7 @@ fn handle_message<S: SourceReader>(
     output.session(&ts_cap).give(Ok(SourceOutput::new(
         key,
         out,
-        offset.offset,
+        offset,
         message.upstream_time_millis,
         message.partition,
         message.headers,

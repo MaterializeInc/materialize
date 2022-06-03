@@ -64,7 +64,7 @@ impl ReclockOperator {
             .with_context(|| "error creating persist client")?;
 
         let (write_handle, read_handle) = persist_client
-            .open(timestamp_shard_id)
+            .open::<_, _, _, i64>(timestamp_shard_id)
             .await
             .expect("persist handles open err");
 
@@ -112,7 +112,10 @@ impl ReclockOperator {
                     let (current_ts, current_offset) = snapshot_map
                         .entry(partition)
                         .or_insert((0, MzOffset::default()));
-                    *current_offset += diff;
+
+                    let pos_diff: u64 =
+                        diff.try_into().expect("reclock offset diff to be positive");
+                    *current_offset += pos_diff;
                     *current_ts = timestamp;
                 }
             }
@@ -279,12 +282,9 @@ impl ReclockOperator {
                         .map(|v| v.back().map(|(_ts, offset)| *offset))
                         .flatten()
                         .unwrap_or_default();
-                    let diff = *new_max_offset - current_offset;
-                    assert!(
-                        diff > 0,
-                        "Diff previously validated to be positive: {:?}",
-                        diff
-                    );
+                    let diff = new_max_offset
+                        .checked_sub(current_offset)
+                        .expect("Diff previously validated to be positive");
                     (partition, diff)
                 })
                 .collect();
@@ -370,9 +370,13 @@ impl ReclockOperator {
             let compare_and_append_result = self
                 .write_handle
                 .compare_and_append(
-                    new_bindings
-                        .iter()
-                        .map(|(partition, diff)| ((&(), *partition), &new_ts, diff)),
+                    new_bindings.iter().map(|(partition, diff)| {
+                        let diff: i64 = diff
+                            .offset
+                            .try_into()
+                            .expect("reclock offset diff to be positive and < u64::MAX");
+                        ((&(), *partition), &new_ts, diff)
+                    }),
                     self.write_upper.clone(),
                     new_upper.clone(),
                 )
@@ -410,7 +414,14 @@ impl ReclockOperator {
                             self.persisted_timestamp_bindings
                                 .entry(partition)
                                 .or_insert_with(VecDeque::new)
-                                .push_back((timestamp, MzOffset { offset: diff }));
+                                .push_back((
+                                    timestamp,
+                                    MzOffset {
+                                        offset: diff
+                                            .try_into()
+                                            .expect("reclock offset diff to be positive"),
+                                    },
+                                ));
                         }
                     }
                 }
