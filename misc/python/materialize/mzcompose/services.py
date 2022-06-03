@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import os
+from packaging import version
 import random
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -103,9 +104,8 @@ class Materialized(Service):
         ]
 
         if isinstance(image, str) and ":v" in image:
-            version = image.split(":v")[1]
-            version_nums = version.split(".")
-            if int(version_nums[0]) == 0 and int(version_nums[1]) <= 26:
+            requested_version = image.split(":v")[1]
+            if version.parse(requested_version) < version.parse("0.27.0"):
                 command_list.append(f"--listen-addr 0.0.0.0:{guest_sql_port}")
             else:
                 config_ports.append(http_port)

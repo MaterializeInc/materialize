@@ -607,6 +607,8 @@ impl Runner {
                 tracing: TracingCliArgs::default(),
             },
             secrets_controller: None,
+            // Setting the port to 0 means that the OS will automatically
+            // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,

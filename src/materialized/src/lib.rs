@@ -47,10 +47,10 @@ use mz_secrets::{SecretsController, SecretsReader, SecretsReaderConfig};
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
 
-use crate::mux::ConnectionHandler;
+use crate::tcp_connection::ConnectionHandler;
 
 pub mod http;
-pub mod mux;
+pub mod tcp_connection;
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 
@@ -375,13 +375,29 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     })
     .await?;
 
-    // Listen on the third-party metrics port if we are configured for it.
+    // Listen on the internal HTTP API port if we are configured for it.
     if let Some(addr) = config.internal_http_listen_addr {
         let metrics_registry = config.metrics_registry.clone();
         task::spawn(|| "internal_http_server", {
             let server = http::MetricsServer::new(metrics_registry);
             async move {
                 server.serve(addr).await;
+            }
+        });
+    }
+
+    // Listen on the internal SQL port if we are configured for it.
+    if let Some(addr) = config.internal_sql_listen_addr {
+        let internal_sql_listener = TcpListener::bind(&addr).await?;
+        task::spawn(|| "internal_pgwire_server", {
+            let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                tls: None,
+                coord_client: coord_client.clone(),
+                metrics_registry: &config.metrics_registry,
+                frontegg: None,
+            });
+            async move {
+                internal_pgwire_server.serve(addr).await
             }
         });
     }
