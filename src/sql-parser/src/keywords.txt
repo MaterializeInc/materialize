@@ -64,6 +64,7 @@ Collection
 Columns
 Commit
 Committed
+Compaction
 Compiled
 Compression
 Confluent
@@ -173,6 +174,7 @@ Limit
 List
 Local
 Log
+Logical
 Login
 Map
 Matching
@@ -319,6 +321,7 @@ Views
 Warning
 When
 Where
+Window
 With
 Without
 Work

@@ -122,8 +122,9 @@ use mz_repr::{
 use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
-    CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident, InsertSource,
-    ObjectType, Query, Raw, RawClusterName, SetExpr, Statement,
+    CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident,
+    IndexOptionName, InsertSource, ObjectType, Query, Raw, RawClusterName, RawObjectName, SetExpr,
+    Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
@@ -138,12 +139,10 @@ use mz_sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
     DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    HirRelationExpr, IndexOption, IndexOptionName, InsertPlan, MutationKind, OptimizerConfig,
-    Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig,
-    ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom,
-    TailPlan, View,
+    HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
+    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
-use mz_sql_parser::ast::RawObjectName;
 use mz_stash::Append;
 use mz_transform::Optimizer;
 
@@ -4671,16 +4670,17 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let options = plan
-            .options
-            .into_iter()
-            .map(|o| match o {
+        let mut options = Vec::with_capacity(plan.options.len());
+        for o in plan.options {
+            options.push(match o {
                 IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
                     self.logical_compaction_window_ms.map(Duration::from_millis),
                 ),
-            })
-            .collect();
+            });
+        }
+
         self.set_index_options(plan.id, options).await?;
+
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 

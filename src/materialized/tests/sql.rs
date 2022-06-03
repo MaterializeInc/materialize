@@ -315,7 +315,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // view derived from the index. This previously selected an invalid
     // `AS OF` timestamp (#5391).
     client_writes
-        .batch_execute("ALTER INDEX t_primary_idx SET (logical_compaction_window = '1ms')")?;
+        .batch_execute("ALTER INDEX t_primary_idx SET (LOGICAL COMPACTION WINDOW = '1ms')")?;
     client_writes.batch_execute("CREATE VIEW v AS SELECT * FROM t")?;
     client_reads.batch_execute(
         "COMMIT; BEGIN;

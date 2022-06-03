@@ -702,7 +702,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
-    pub with_options: Vec<WithOption<T>>,
+    pub with_options: Vec<IndexOptions<T>>,
     pub if_not_exists: bool,
 }
 
@@ -740,6 +740,37 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
     }
 }
 impl_display_t!(CreateIndexStatement);
+
+/// An option in a `CREATE CLUSTER` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IndexOptionName {
+    // The `LOGICAL COMPACTION WINDOW` option
+    LogicalCompactionWindow,
+}
+
+impl AstDisplay for IndexOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            IndexOptionName::LogicalCompactionWindow => {
+                f.write_str("LOGICAL COMPACTION WINDOW");
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IndexOptions<T: AstInfo> {
+    pub name: IndexOptionName,
+    pub value: WithOptionValue<T>,
+}
+
+impl<T: AstInfo> AstDisplay for IndexOptions<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" = ");
+        f.write_node(&self.value);
+    }
+}
 
 /// A `CREATE ROLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1022,8 +1053,8 @@ impl_display!(AlterObjectRenameStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterIndexAction<T: AstInfo> {
-    SetOptions(Vec<WithOption<T>>),
-    ResetOptions(Vec<Ident>),
+    SetOptions(Vec<IndexOptions<T>>),
+    ResetOptions(Vec<IndexOptionName>),
 }
 
 /// `ALTER INDEX ... {RESET, SET}`
