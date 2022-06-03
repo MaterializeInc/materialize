@@ -391,7 +391,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
-            metrics_registry: &config.metrics_registry,
             frontegg: config.frontegg.clone(),
         });
         let http_server = http::Server::new(http::Config {
