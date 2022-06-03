@@ -83,7 +83,6 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
-use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{trace, warn};
 use uuid::Uuid;
@@ -761,7 +760,7 @@ impl<S: Append + 'static> Coordinator<S> {
     ///
     /// You must call `bootstrap` before calling this method.
     async fn serve(
-        mut self,
+        self,
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
@@ -785,67 +784,128 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         }
 
-        loop {
-            let msg = select! {
-                // Order matters here. We want to process internal commands
-                // before processing external commands.
-                biased;
+        use std::cell::RefCell;
+        use tokio::sync::Mutex;
+        use tracing::info_span;
+        use tracing::instrument::Instrument;
+        let shared = Mutex::new(self);
 
-                Some(m) = internal_cmd_rx.recv() => m,
-                m = self.dataflow_client.ready() => {
-                    let () = m.unwrap();
-                    Message::ControllerReady
-                }
-                m = cmd_rx.recv() => match m {
-                    None => break,
-                    Some(m) => Message::Command(m),
-                },
-            };
-
-            match msg {
-                Message::Command(cmd) => self.message_command(cmd).await,
-                Message::ControllerReady => {
-                    if let Some(m) = self.dataflow_client.process().await.unwrap() {
-                        self.message_controller(m).await
+        moro::async_scope!(|scope| {
+            let _ = scope.spawn(async {
+                loop {
+                    let _s = info_span!("internal_cmd_rx").entered();
+                    println!("before internal_cmd_rx::recv");
+                    let m = internal_cmd_rx
+                        .recv()
+                        .instrument(info_span!("internal_cmd_rx,recv"))
+                        .await;
+                    println!("after internal_cmd_rx::recv");
+                    match m {
+                        Some(m) => {
+                            println!("before internal_cmd_rx,lock");
+                            let mut lock = shared
+                                .lock()
+                                .instrument(info_span!("internal_cmd_rx,lock"))
+                                .await;
+                            println!("before internal_cmd_rx,handle");
+                            lock.handle_msg(m).await;
+                            println!("after internal_cmd_rx,handle");
+                        }
+                        None => {}
                     }
                 }
-                Message::CreateSourceStatementReady(ready) => {
-                    self.message_create_source_statement_ready(ready).await
+            });
+            let _ = scope.spawn(async {
+                loop {
+                    let _s = info_span!("dataflow_client").entered();
+                    println!("before dataflow_client,lock");
+                    let mut lock = shared
+                        .lock()
+                        .instrument(info_span!("dataflow_client,lock"))
+                        .await;
+                    println!("before dataflow_client,ready");
+                    lock.dataflow_client
+                        .ready()
+                        .instrument(info_span!("dataflow_client,ready"))
+                        .await
+                        .unwrap();
+                    println!("after dataflow_client,ready");
+                    // drop(lock);
+                    //let mut lock = shared.lock().await;
+                    println!("before dataflow_client,handle");
+                    lock.handle_msg(Message::ControllerReady).await;
+                    println!("after dataflow_client,handle");
                 }
-                Message::SinkConnectorReady(ready) => {
-                    self.message_sink_connector_ready(ready).await
-                }
-                Message::WriteLockGrant(write_lock_guard) => {
-                    // It's possible to have more incoming write lock grants
-                    // than pending writes because of cancellations.
-                    if let Some(mut ready) = self.write_lock_wait_group.pop_front() {
-                        ready.session.grant_write_lock(write_lock_guard);
-                        // Write statements never need to track catalog
-                        // dependencies.
-                        let depends_on = vec![];
-                        self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
-                            .await;
+            });
+            let _ = scope.spawn(async {
+                loop {
+                    let _s = info_span!("cmd_rx").entered();
+                    println!("before cmd_rx::recv");
+                    let m = cmd_rx.recv().instrument(info_span!("cmd_rx,recv")).await;
+                    println!("after cmd_rx::recv");
+                    match m {
+                        Some(m) => {
+                            println!("before cmd_rx,lock");
+                            let mut lock =
+                                shared.lock().instrument(info_span!("cmd_rx,lock")).await;
+                            println!("before cmd_rx,handle");
+                            lock.handle_msg(Message::Command(m)).await;
+                            println!("after cmd_rx,handle");
+                        }
+                        None => {
+                            let _ = scope.cancel::<()>(());
+                        }
                     }
-                    // N.B. if no deferred plans, write lock is released by drop
-                    // here.
                 }
-                Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
-                Message::AdvanceLocalInputs => {
-                    // Convince the coordinator it needs to open a new timestamp
-                    // and advance inputs.
-                    self.global_timeline.fast_forward(self.now());
-                }
-            }
+            });
+        })
+        .await
+        .unwrap();
+    }
 
-            if let Some(timestamp) = self.global_timeline.should_advance_to() {
-                let start = Instant::now();
-                self.advance_local_inputs(timestamp).await;
-                trace!(
-                    "advancing table frontiers to {} took: {} ms",
-                    timestamp,
-                    start.elapsed().as_millis()
-                );
+    #[tracing::instrument(skip(self))]
+    async fn handle_msg(&mut self, msg: Message) {
+        match msg {
+            Message::Command(cmd) => self.message_command(cmd).await,
+            Message::ControllerReady => {
+                if let Some(m) = self.dataflow_client.process().await.unwrap() {
+                    self.message_controller(m).await
+                }
             }
+            Message::CreateSourceStatementReady(ready) => {
+                self.message_create_source_statement_ready(ready).await
+            }
+            Message::SinkConnectorReady(ready) => self.message_sink_connector_ready(ready).await,
+            Message::WriteLockGrant(write_lock_guard) => {
+                // It's possible to have more incoming write lock grants
+                // than pending writes because of cancellations.
+                if let Some(mut ready) = self.write_lock_wait_group.pop_front() {
+                    ready.session.grant_write_lock(write_lock_guard);
+                    // Write statements never need to track catalog
+                    // dependencies.
+                    let depends_on = vec![];
+                    self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
+                        .await;
+                }
+                // N.B. if no deferred plans, write lock is released by drop
+                // here.
+            }
+            Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
+            Message::AdvanceLocalInputs => {
+                // Convince the coordinator it needs to open a new timestamp
+                // and advance inputs.
+                self.global_timeline.fast_forward(self.now());
+            }
+        }
+
+        if let Some(timestamp) = self.global_timeline.should_advance_to() {
+            let start = Instant::now();
+            self.advance_local_inputs(timestamp).await;
+            trace!(
+                "advancing table frontiers to {} took: {} ms",
+                timestamp,
+                start.elapsed().as_millis()
+            );
         }
     }
 
@@ -5025,6 +5085,7 @@ pub async fn serve<S: Append + 'static>(
 
     let thread = thread::Builder::new()
         .name("coordinator".to_string())
+        .stack_size(60_000_000)
         .spawn(move || {
             let mut coord = Coordinator {
                 dataflow_client,
