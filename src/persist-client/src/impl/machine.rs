@@ -456,14 +456,14 @@ where
             Err(err) => {
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
-                        "external operation {} failed, retrying in {:?}: {}",
+                        "external operation {} failed, retrying in {:?}: {:#}",
                         name,
                         retry.next_sleep(),
                         err
                     );
                 } else {
                     debug!(
-                        "external operation {} failed, retrying in {:?}: {}",
+                        "external operation {} failed, retrying in {:?}: {:#}",
                         name,
                         retry.next_sleep(),
                         err
@@ -498,14 +498,14 @@ where
             Err(ExternalError::Determinate(err)) => {
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
-                        "external operation {} failed, retrying in {:?}: {}",
+                        "external operation {} failed, retrying in {:?}: {:#}",
                         name,
                         retry.next_sleep(),
                         err
                     );
                 } else {
                     debug!(
-                        "external operation {} failed, retrying in {:?}: {}",
+                        "external operation {} failed, retrying in {:?}: {:#}",
                         name,
                         retry.next_sleep(),
                         err
