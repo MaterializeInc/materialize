@@ -728,11 +728,11 @@ CREATE INDEX foo ON myschema.bar (a, b)
 CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
-CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
+CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 ----
-CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
+CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [WithOption { key: Ident("baz"), value: Some(Value(String("raz"))) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Value(Number("0")) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
@@ -1040,51 +1040,51 @@ CREATE TABLE IF NOT EXISTS foo (bar int4)
 parse-statement
 ALTER INDEX name SET (property = true)
 ----
+error: Expected LOGICAL, found identifier "property"
 ALTER INDEX name SET (property = true)
-=>
-AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+                      ^
 
 parse-statement
 ALTER INDEX name RESET (property)
 ----
+error: Expected LOGICAL, found identifier "property"
 ALTER INDEX name RESET (property)
-=>
-AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Ident("property")]) })
+                        ^
 
 parse-statement
 ALTER INDEX IF EXISTS name SET (property = true)
 ----
+error: Expected LOGICAL, found identifier "property"
 ALTER INDEX IF EXISTS name SET (property = true)
-=>
-AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+                                ^
 
 parse-statement
 ALTER INDEX name SET ()
 ----
-error: Expected identifier, found right parenthesis
+error: Expected LOGICAL, found right parenthesis
 ALTER INDEX name SET ()
                       ^
 
 parse-statement
 ALTER INDEX name RESET ()
 ----
-error: Expected identifier, found right parenthesis
+error: Expected LOGICAL, found right parenthesis
 ALTER INDEX name RESET ()
                         ^
 
 parse-statement
 ALTER INDEX name SET (property)
 ----
+error: Expected LOGICAL, found identifier "property"
 ALTER INDEX name SET (property)
-=>
-AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: None }]) })
+                      ^
 
 parse-statement
 ALTER INDEX name RESET (property = true)
 ----
-error: Expected right parenthesis, found equals sign
+error: Expected LOGICAL, found identifier "property"
 ALTER INDEX name RESET (property = true)
-                                 ^
+                        ^
 
 parse-statement
 ALTER SOURCE name SET (property = true)
@@ -1159,9 +1159,9 @@ CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replica
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION GRANULARITY = '1s'
 ----
-CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
-=>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
+error: Expected one of REPLICAS or INTROSPECTION, found WITH
+CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION GRANULARITY = '1s'
+                       ^
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = 0
@@ -1189,7 +1189,7 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')))
 ----
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }] }])] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
@@ -1203,7 +1203,7 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1'), SIZE '1'))
 ----
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1'), SIZE '1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }, Size(Value(String("1")))] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }, ReplicaOption { name: Size, value: Value(String("1")) }] }])] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ('host1')
@@ -1231,28 +1231,28 @@ CREATE CLUSTER REPLICA default.replica SIZE 'small'
 ----
 CREATE CLUSTER REPLICA default.replica SIZE 'small'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [Size(Value(String("small")))] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Value(String("small")) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 ----
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [Size(Value(String("small"))), AvailabilityZone(Value(String("a")))] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Value(String("small")) }, ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 ----
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [AvailabilityZone(Value(String("a"))), AvailabilityZone(Value(String("b")))] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }, ReplicaOption { name: AvailabilityZone, value: Value(String("b")) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
 ----
 CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [Remote { hosts: [Value(String("host1"))] }, AvailabilityZone(Value(String("a")))] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }, ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }] } })
 
 parse-statement
 DROP CLUSTER cluster

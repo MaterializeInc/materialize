@@ -26,11 +26,10 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
@@ -41,8 +40,8 @@ use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw,
-    SetVariableValue, Statement, TransactionAccessMode,
+    ExplainOptions, ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity,
+    ObjectType, Raw, SetVariableValue, Statement, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -382,7 +381,7 @@ pub struct AlterIndexSetOptionsPlan {
 #[derive(Debug)]
 pub struct AlterIndexResetOptionsPlan {
     pub id: GlobalId,
-    pub options: Vec<IndexOptionName>,
+    pub options: HashSet<IndexOptionName>,
 }
 
 #[derive(Debug)]
@@ -576,8 +575,7 @@ pub enum ExecuteTimeout {
     WaitOnce,
 }
 
-#[derive(Clone, Debug, EnumKind)]
-#[enum_kind(IndexOptionName)]
+#[derive(Clone, Debug)]
 pub enum IndexOption {
     /// Configures the logical compaction window for an index. `None` disables
     /// logical compaction entirely.
