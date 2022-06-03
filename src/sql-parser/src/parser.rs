@@ -2437,7 +2437,18 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let with_options = self.parse_opt_with_options()?;
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let o = if matches!(self.peek_token(), Some(Token::RParen)) {
+                vec![]
+            } else {
+                self.parse_comma_separated(Parser::parse_index_option)?
+            };
+            self.expect_token(&Token::RParen)?;
+            o
+        } else {
+            vec![]
+        };
 
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
@@ -2447,6 +2458,18 @@ impl<'a> Parser<'a> {
             with_options,
             if_not_exists,
         }))
+    }
+
+    fn parse_index_option_name(&mut self) -> Result<IndexOptionName, ParserError> {
+        self.expect_keywords(&[LOGICAL, COMPACTION, WINDOW])?;
+        Ok(IndexOptionName::LogicalCompactionWindow)
+    }
+
+    fn parse_index_option(&mut self) -> Result<IndexOptions<Raw>, ParserError> {
+        let name = self.parse_index_option_name()?;
+        let _ = self.consume_token(&Token::Eq);
+        let value = self.parse_with_option_value()?;
+        Ok(IndexOptions { name, value })
     }
 
     fn parse_raw_ident(&mut self) -> Result<RawClusterName, ParserError> {
@@ -2552,7 +2575,6 @@ impl<'a> Parser<'a> {
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
 
-        let _ = self.parse_keyword(WITH);
         let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
             vec![]
         } else {
@@ -3079,7 +3101,7 @@ impl<'a> Parser<'a> {
         Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
             RESET => {
                 self.expect_token(&Token::LParen)?;
-                let reset_options = self.parse_comma_separated(Parser::parse_identifier)?;
+                let reset_options = self.parse_comma_separated(Parser::parse_index_option_name)?;
                 self.expect_token(&Token::RParen)?;
 
                 Statement::AlterIndex(AlterIndexStatement {
@@ -3089,7 +3111,9 @@ impl<'a> Parser<'a> {
                 })
             }
             SET => {
-                let set_options = self.parse_with_options(true)?;
+                self.expect_token(&Token::LParen)?;
+                let set_options = self.parse_comma_separated(Parser::parse_index_option)?;
+                self.expect_token(&Token::RParen)?;
                 Statement::AlterIndex(AlterIndexStatement {
                     index_name: name,
                     if_exists,

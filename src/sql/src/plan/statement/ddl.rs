@@ -64,11 +64,12 @@ use crate::ast::{
     CsrConnector, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
     CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, Op,
-    ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, Select, SelectItem,
-    SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
-    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    Value, ViewDefinition, WithOption, WithOptionValue,
+    Expr, Format, Ident, IfExistsBehavior, IndexOptionName, IndexOptions, KafkaConsistency,
+    KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
+    ReplicaOption, Select, SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType,
+    Statement, SubscriptPosition, TableConstraint, TableFactor, TableWithJoins,
+    UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -88,8 +89,8 @@ use crate::plan::{
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption, IndexOptionName, Params,
-    Plan, ReplicaConfig, Secret, Sink, Source, Table, Type, View,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption, Params, Plan, ReplicaConfig,
+    Secret, Sink, Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -3268,18 +3269,28 @@ pub fn describe_alter_index_options(
     Ok(StatementDesc::new(None))
 }
 
-fn plan_index_options(with_opts: Vec<WithOption<Aug>>) -> Result<Vec<IndexOption>, anyhow::Error> {
-    let with_opts = IndexWithOptions::try_from(with_opts)?;
-    let mut out = vec![];
+fn plan_index_options(
+    with_opts: Vec<IndexOptions<Aug>>,
+) -> Result<Vec<IndexOption>, anyhow::Error> {
+    let mut seen = HashSet::with_capacity(with_opts.len());
+    let mut out = Vec::with_capacity(with_opts.len());
 
-    match with_opts.logical_compaction_window.as_deref() {
-        None => (),
-        Some("off") => out.push(IndexOption::LogicalCompactionWindow(None)),
-        Some(s) => {
-            let window = Some(mz_repr::util::parse_duration(s)?);
-            out.push(IndexOption::LogicalCompactionWindow(window))
+    for IndexOptions { name, value } in with_opts {
+        if !seen.insert(name.clone()) {
+            bail!("cannot set {} twice", name.to_ast_string());
         }
-    };
+        out.push(match name {
+            IndexOptionName::LogicalCompactionWindow => {
+                let lcw = OptionalInterval::try_from(value)
+                    .map_err(|e| anyhow!("invalid LOGICAL COMPACTION WINDOW: {}", e))?
+                    .0;
+                IndexOption::LogicalCompactionWindow(match lcw {
+                    Some(interval) => Some(interval.duration()?),
+                    None => None,
+                })
+            }
+        });
+    }
 
     Ok(out)
 }
@@ -3315,25 +3326,15 @@ pub fn plan_alter_index_options(
 
     match actions {
         AlterIndexAction::ResetOptions(options) => {
-            let options = options
-                .into_iter()
-                .filter_map(|o| match normalize::ident(o).as_str() {
-                    "logical_compaction_window" => Some(IndexOptionName::LogicalCompactionWindow),
-                    // Follow Postgres and don't complain if unknown parameters
-                    // are passed into `ALTER INDEX ... RESET`.
-                    _ => None,
-                })
-                .collect();
             Ok(Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan {
                 id,
-                options,
+                options: options.into_iter().collect::<HashSet<IndexOptionName>>(),
             }))
         }
         AlterIndexAction::SetOptions(options) => {
-            let options = plan_index_options(options)?;
             Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
                 id,
-                options,
+                options: plan_index_options(options)?,
             }))
         }
     }
