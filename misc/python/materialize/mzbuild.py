@@ -223,6 +223,8 @@ class CargoBuild(CargoPreImage):
         super().__init__(rd, path)
         bin = config.pop("bin", [])
         self.bins = bin if isinstance(bin, list) else [bin]
+        example = config.pop("example", [])
+        self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
         self.rustflags = config.pop("rustflags", [])
@@ -237,7 +239,7 @@ class CargoBuild(CargoPreImage):
                 "-Clink-arg=-Wl,--warn-unresolved-symbols",
             ]
             self.channel = "nightly"
-        if len(self.bins) == 0:
+        if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
 
     def build(self) -> None:
@@ -247,14 +249,19 @@ class CargoBuild(CargoPreImage):
 
         for bin in self.bins:
             cargo_build.extend(["--bin", bin])
+        for example in self.examples:
+            cargo_build.extend(["--example", example])
 
         if self.rd.release_mode:
             cargo_build.append("--release")
         spawn.runv(cargo_build, cwd=self.rd.root)
         cargo_profile = "release" if self.rd.release_mode else "debug"
 
-        for bin in self.bins:
-            shutil.copy(self.rd.cargo_target_dir() / cargo_profile / bin, self.path)
+        def copy(exe: Path) -> None:
+            (self.path / exe).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(
+                self.rd.cargo_target_dir() / cargo_profile / exe, self.path / exe
+            )
 
             if self.strip:
                 # NOTE(benesch): the debug information is large enough that it slows
@@ -262,7 +269,7 @@ class CargoBuild(CargoPreImage):
                 # images and shipping them around. A bit unfortunate, since it'd be
                 # nice to have useful backtraces if the binary crashes.
                 spawn.runv(
-                    [*self.rd.tool("strip"), "--strip-debug", self.path / bin],
+                    [*self.rd.tool("strip"), "--strip-debug", self.path / exe],
                     cwd=self.rd.root,
                 )
             else:
@@ -281,10 +288,16 @@ class CargoBuild(CargoPreImage):
                         ".debug_pubnames",
                         "-R",
                         ".debug_pubtypes",
-                        self.path / bin,
+                        self.path / exe,
                     ],
                     cwd=self.rd.root,
                 )
+
+        for bin in self.bins:
+            copy(Path(bin))
+        for example in self.examples:
+            copy(Path("examples") / example)
+
         if self.extract:
             output = spawn.capture(
                 cargo_build + ["--message-format=json"],
@@ -297,7 +310,9 @@ class CargoBuild(CargoPreImage):
                 message = json.loads(line)
                 if message["reason"] != "build-script-executed":
                     continue
-                out_dir = self.rd.rewrite_builder_path_for_host(Path(message["out_dir"]))
+                out_dir = self.rd.rewrite_builder_path_for_host(
+                    Path(message["out_dir"])
+                )
                 if not out_dir.is_relative_to(target_dir):
                     # Some crates are built for both the host and the target.
                     # Ignore the built-for-host out dir.
@@ -311,14 +326,19 @@ class CargoBuild(CargoPreImage):
         self.build()
 
     def inputs(self) -> Set[str]:
-        inputs = super().inputs()
+        deps = set()
 
         for bin in self.bins:
             crate = self.rd.cargo_workspace.crate_for_bin(bin)
-            deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
-            inputs |= set(inp for dep in deps for inp in dep.inputs())
+            deps |= self.rd.cargo_workspace.transitive_path_dependencies(crate)
 
-        return inputs
+        for example in self.examples:
+            crate = self.rd.cargo_workspace.crate_for_example(example)
+            deps |= self.rd.cargo_workspace.transitive_path_dependencies(
+                crate, dev=True
+            )
+
+        return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
 
 
 # TODO(benesch): make this less hardcoded and custom.
@@ -369,7 +389,9 @@ class CargoTest(CargoPreImage):
                 crate_path = Path(crate_path_match.group(1)).relative_to(
                     self.rd.root.resolve()
                 )
-                executable = self.rd.rewrite_builder_path_for_host(Path(message["executable"]))
+                executable = self.rd.rewrite_builder_path_for_host(
+                    Path(message["executable"])
+                )
                 tests.append((executable, slug, crate_path))
 
         os.makedirs(self.path / "tests" / "examples")
