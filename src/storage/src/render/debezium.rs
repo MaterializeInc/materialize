@@ -15,7 +15,7 @@ use std::str::FromStr;
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
 use differential_dataflow::{Collection, Hashable};
-use mz_dataflow_types::sources::DebeziumTransactionMetadata;
+use mz_dataflow_types::sources::{DebeziumTransactionMetadata, MzOffset};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -462,10 +462,10 @@ struct DebeziumDeduplicationState {
     ///
     /// [`DebeziumEnvelope`] determines whether messages that are not ahead
     /// of the last recorded position will be skipped.
-    last_position_and_offset: Option<(RowCoordinates, i64)>,
+    last_position_and_offset: Option<(RowCoordinates, MzOffset)>,
     /// Whether or not to track every message we've ever seen
     full: Option<TrackFull>,
-    messages_processed: u64,
+    messages_processed: MzOffset,
     // TODO(petrosagg): This is only used when unpacking MySQL row coordinates. The logic was
     // transferred as-is from the previous avro-debezium code. Find a better place to put this or
     // avoid it completely.
@@ -631,7 +631,7 @@ impl DebeziumDeduplicationState {
         Some(DebeziumDeduplicationState {
             last_position_and_offset: None,
             full,
-            messages_processed: 0,
+            messages_processed: 0.into(),
             filenames_to_indices: HashMap::new(),
             projection,
         })
@@ -759,7 +759,7 @@ impl DebeziumDeduplicationState {
         &mut self,
         key: Option<Row>,
         value: &Row,
-        connector_offset: i64,
+        connector_offset: MzOffset,
         upstream_time_millis: Option<i64>,
         debug_name: &str,
     ) -> Result<bool, DataflowError> {
@@ -914,12 +914,12 @@ impl DebeziumDeduplicationState {
 /// Helper to track information for logging on deduplication
 struct SkipInfo {
     old_position: RowCoordinates,
-    old_offset: i64,
+    old_offset: MzOffset,
 }
 
 fn log_duplication_info(
     position: RowCoordinates,
-    connector_offset: i64,
+    connector_offset: MzOffset,
     upstream_time_millis: Option<i64>,
     debug_name: &str,
     is_new: bool,

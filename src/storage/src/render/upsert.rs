@@ -19,7 +19,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
-    sources::{UpsertEnvelope, UpsertStyle},
+    sources::{MzOffset, UpsertEnvelope, UpsertStyle},
     DataflowError, DecodeError, LinearOperator,
 };
 use mz_expr::{EvalError, MirScalarExpr};
@@ -35,7 +35,7 @@ struct UpsertSourceData {
     /// The actual value
     value: Option<Result<Row, DataflowError>>,
     /// The source's reported position for this record
-    position: i64,
+    position: MzOffset,
     /// The time that the upstream source believes that the message was created
     /// Currently only applies to Kafka
     upstream_time_millis: Option<i64>,

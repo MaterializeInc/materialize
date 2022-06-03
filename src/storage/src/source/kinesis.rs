@@ -58,7 +58,7 @@ pub struct KinesisSourceReader {
     /// Storage for messages that have not yet been timestamped
     buffered_messages: VecDeque<SourceMessage<(), Option<Vec<u8>>, ()>>,
     /// Count of processed message
-    processed_message_count: i64,
+    processed_message_count: u64,
     /// Metrics from which per-shard metrics get created.
     base_metrics: KinesisMetrics,
 }

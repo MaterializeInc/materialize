@@ -103,10 +103,10 @@ enum DataflowStatus {
 /// Possibly this should be per-bucket or per-object, depending on the needs
 /// for deterministic timestamping on restarts: issue #5715
 #[derive(Clone, Copy, Debug)]
-struct S3Offset(i64);
+struct S3Offset(u64);
 
-impl AddAssign<i64> for S3Offset {
-    fn add_assign(&mut self, other: i64) {
+impl AddAssign<u64> for S3Offset {
+    fn add_assign(&mut self, other: u64) {
         self.0 += other;
     }
 }

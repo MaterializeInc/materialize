@@ -14,6 +14,7 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::TryFrom;
 use std::num::NonZeroUsize;
 
 use proptest::prelude::{any, Arbitrary};

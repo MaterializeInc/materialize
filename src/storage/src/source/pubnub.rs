@@ -118,7 +118,7 @@ impl SourceReader for PubNubSourceReader {
                                 // documentation on the pubnub website on
                                 // if it is required to produce monotonic
                                 // timetokens.
-                                offset: msg.timetoken.t.try_into().unwrap(),
+                                offset: msg.timetoken.t,
                             },
                             upstream_time_millis: None,
                             key: (),
