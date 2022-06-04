@@ -14,7 +14,14 @@ from typing import Dict, List, Optional, Tuple, Union
 from materialize.mzcompose import Service, ServiceConfig
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
-DEFAULT_DEBEZIUM_VERSION = "1.9"
+
+# Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
+# minor version in the release series, and minor versions have been known to
+# introduce breakage.
+#
+# Do not upgrade past v1.9.2.Final until debezium/debezium#3570 is resolved.
+DEFAULT_DEBEZIUM_VERSION = "1.9.2.Final"
+
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = [
