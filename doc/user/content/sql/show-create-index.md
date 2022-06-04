@@ -8,7 +8,7 @@ menu:
 
 {{< version-added v0.4.0 />}}
 
-`SHOW CREATE INDEX` returns the [`CREATE INDEX`](../create-index) statement used to create the index.
+`SHOW CREATE INDEX` returns the DDL statement used to create the index.
 
 ## Syntax
 
@@ -21,16 +21,19 @@ _index&lowbar;name_ | The index you want use. You can find available index names
 ## Examples
 
 ```sql
-SHOW INDEXES FROM my_view
+SHOW INDEXES FROM my_view;
 ```
+
 ```nofmt
      name
 -------------
  my_view_idx
 ```
+
 ```sql
 SHOW CREATE INDEX my_view_index;
 ```
+
 ```nofmt
              Index             |                                Create Index
 -------------------------------|---------------------------------------------------------------------------
