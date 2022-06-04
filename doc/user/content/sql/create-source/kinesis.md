@@ -17,7 +17,7 @@ aliases:
 {{< beta />}}
 
 {{% create-source/intro %}}
-This page details how to connect Materialize to Kinesis Data Streams to read data from individual streams.
+This page describes how to connect Materialize to Kinesis Data Streams to read data from individual streams.
 {{% /create-source/intro %}}
 
 ## Syntax

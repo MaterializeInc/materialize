@@ -15,7 +15,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-This page details how to connect Materialize to a Kafka broker to read data from individual topics.
+This page describes how to connect Materialize to a Kafka broker to read data from individual topics.
 {{% /create-source/intro %}}
 
 {{< note >}}
