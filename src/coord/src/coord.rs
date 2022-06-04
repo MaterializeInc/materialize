@@ -2227,8 +2227,6 @@ impl<S: Append + 'static> Coordinator<S> {
             None
         };
         let table_id = self.catalog.allocate_user_id().await?;
-        let mut index_depends_on = depends_on.clone();
-        index_depends_on.push(table_id);
         let table = catalog::Table {
             create_sql: table.create_sql,
             desc: table.desc,
