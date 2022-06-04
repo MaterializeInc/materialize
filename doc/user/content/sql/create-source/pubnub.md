@@ -11,7 +11,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-This page details how to connect Materialize to a [PubNub](https://www.pubnub.com) channel, which provides a quick way to get up and running with no external dependencies before plugging in your own data sources.
+This page describes how to connect Materialize to a [PubNub](https://www.pubnub.com) channel, which provides a quick way to get up and running with no external dependencies before plugging in your own data sources.
 {{% /create-source/intro %}}
 
 ## Syntax
