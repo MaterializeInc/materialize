@@ -1185,31 +1185,31 @@ CREATE CLUSTER cluster REPLICAS (), BADOPT
                                     ^
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }] }])] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
 ----
 error: Expected end of statement, found INTROSPECTION
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
                                                                      ^
 
 parse-statement
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1'), SIZE '1'))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1'), SIZE '1'))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
 =>
 CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }, ReplicaOption { name: Size, value: Value(String("1")) }] }])] })
 
 parse-statement
-CREATE CLUSTER REPLICA replica REMOTE ('host1')
+CREATE CLUSTER REPLICA replica REMOTE ['host1']
 ----
 error: Expected dot, found REMOTE
-CREATE CLUSTER REPLICA replica REMOTE ('host1')
+CREATE CLUSTER REPLICA replica REMOTE ['host1']
                                ^
 
 parse-statement
@@ -1220,10 +1220,10 @@ CREATE CLUSTER REPLICA replica SIZE 'small'
                                ^
 
 parse-statement
-CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ('host1'))
+CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ['host1'])
 ----
 error: Expected dot, found SIZE
-CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ('host1'))
+CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ['host1'])
                                ^
 
 parse-statement
@@ -1248,9 +1248,9 @@ CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }, ReplicaOption { name: AvailabilityZone, value: Value(String("b")) }] } })
 
 parse-statement
-CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 ----
-CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 =>
 CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }, ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }] } })
 

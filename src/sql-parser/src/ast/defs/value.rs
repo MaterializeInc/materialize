@@ -168,6 +168,24 @@ impl TryFrom<Value> for i32 {
     }
 }
 
+pub struct WithOptionVecString(pub Vec<String>);
+
+impl TryFrom<Value> for WithOptionVecString {
+    type Error = anyhow::Error;
+    fn try_from(v: Value) -> Result<Self, Self::Error> {
+        match v {
+            Value::Array(a) => {
+                let mut out = Vec::with_capacity(a.len());
+                for i in a {
+                    out.push(i.try_into()?)
+                }
+                Ok(WithOptionVecString(out))
+            }
+            _ => anyhow::bail!("cannot use value as number"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
     Millennium,
