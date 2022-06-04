@@ -26,6 +26,7 @@ Materialize bundles **native connectors** for the following external systems:
 {{</ linkbox >}}
 {{< linkbox title="Object Storage" >}}
 - [S3](/sql/create-source/s3)
+- [Local Files](/sql/create-source/files)
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
@@ -45,7 +46,7 @@ To read from an external data source, Materialize must be able to determine how 
 
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT AVRO</code></p>
 
-Materialize can decode Avro messages by integrating with a schema registry to retrieve a schema, and automatically define the columns and data types to use in the source.
+Materialize can decode Avro messages by integrating with a schema registry to retrieve a schema, and automatically determine the columns and data types to use in the source.
 
 ##### Schema versioning
 
@@ -169,7 +170,7 @@ Any row that doesn't match the number of columns determined by the format is ign
 
 ## Envelopes
 
-[//]: # "TODO(morsapaes) Clarify if we should plug include Materialize CDC (../materialize-cdc) here."
+[//]: # "TODO(morsapaes) Clarify if we should plug Materialize CDC (../materialize-cdc) here."
 
 In addition to determining how to decode incoming records, Materialize also needs to understand how to interpret them. Whether a new record inserts, updates, or deletes existing data in Materialize depends on the `ENVELOPE` specified in the `CREATE SOURCE` statement.
 
