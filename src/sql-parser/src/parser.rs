@@ -2588,26 +2588,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
+        let name = match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ReplicaOption::AvailabilityZone(
-                    self.parse_with_option_value()?,
-                ))
+                ReplicaOptionName::AvailabilityZone
             }
-            REMOTE => {
-                self.expect_token(&Token::LParen)?;
-                let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
-                self.expect_token(&Token::RParen)?;
-                Ok(ReplicaOption::Remote { hosts })
-            }
-            SIZE => {
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ReplicaOption::Size(self.parse_with_option_value()?))
-            }
+            REMOTE => ReplicaOptionName::Remote,
+            SIZE => ReplicaOptionName::Size,
             _ => unreachable!(),
-        }
+        };
+        let value = self.parse_with_option_value()?;
+        Ok(ReplicaOption { name, value })
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {

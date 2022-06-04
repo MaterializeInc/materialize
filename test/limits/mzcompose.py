@@ -1117,8 +1117,8 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (
-                replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100')),
-                replica2 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'))
+                replica1 (REMOTE ['computed_1_1:2100', 'computed_1_2:2100']),
+                replica2 (REMOTE ['computed_2_1:2100', 'computed_2_2:2100'])
             )
         """
         )
@@ -1220,9 +1220,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     replica_name = f"replica_{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
-                        f"{replica_name} (REMOTE ("
+                        f"{replica_name} (REMOTE ["
                         + ", ".join(f"'{n}:2100'" for n in nodes)
-                        + "))"
+                        + "])"
                     )
 
                 c.sql(

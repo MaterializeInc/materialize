@@ -533,9 +533,9 @@ class Composition:
             replica_name: The replica name to use
         """
         self.sql(
-            f"CREATE CLUSTER {cluster_name} REMOTE {replica_name} ("
+            f"CREATE CLUSTER {cluster_name} REPLICAS ( {replica_name} ( REMOTE ["
             + ", ".join(f'"{p.name}:2100"' for p in cluster)
-            + ")"
+            + "]))"
         )
 
     def start_and_wait_for_tcp(self, services: List[str]) -> None:

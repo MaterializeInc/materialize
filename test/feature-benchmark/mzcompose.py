@@ -144,9 +144,9 @@ def start_services(
             c.up(*[f"computed_{n}" for n in range(0, nodes)])
 
             c.sql(
-                "CREATE CLUSTER REPLICA default.feature_benchmark REMOTE ("
+                "CREATE CLUSTER REPLICA default.feature_benchmark REMOTE ["
                 + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
-                + ");"
+                + "];"
             )
 
             c.sql("DROP CLUSTER REPLICA default.default_replica")
