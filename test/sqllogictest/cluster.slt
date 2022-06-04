@@ -26,19 +26,19 @@ CREATE CLUSTER foo REPLICAS (), REPLICAS()
 # Creating cluster w/ remote replica works.
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ('localhost:1234')))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
 
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ('localhost:1234')))
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234']))
 
 statement error cannot create multiple replicas named 'r1' on cluster 'bar'
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ('localhost:1234')), r1 (REMOTE ('localhost:1234')))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234']), r1 (REMOTE ['localhost:1234']))
 
 statement error REMOTE specified more than once
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ('localhost:1234'), REMOTE ('localhost:1234')))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1234'], REMOTE ['localhost:1234']))
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (REMOTE ('localhost:1235')), r2 (REMOTE ('localhost:1236')))
+CREATE CLUSTER bar REPLICAS (r1 (REMOTE ['localhost:1235']), r2 (REMOTE ['localhost:1236']))
 
 query TT rowsort
 SELECT * FROM mz_clusters
@@ -62,7 +62,7 @@ default
 # Test invalid option combinations.
 
 statement error only one of REMOTE or SIZE may be specified
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ('localhost:1234'), SIZE 'small'))
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234'], SIZE 'small'))
 
 # Test `cluster` session variable.
 
@@ -178,7 +178,7 @@ statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER baz REPLICAS (r1 (REMOTE ('localhost:1234')))
+CREATE CLUSTER baz REPLICAS (r1 (REMOTE ['localhost:1234']))
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
@@ -195,13 +195,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ('localhost:1234'))), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION GRANULARITY '1s'
 
 statement ok
 DROP CLUSTER foo
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (REMOTE ('localhost:1234'))), INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER foo REPLICAS (r1 (REMOTE ['localhost:1234'])), INTROSPECTION GRANULARITY '1s'
 
 statement ok
 DROP CLUSTER foo
@@ -379,10 +379,10 @@ statement error AVAILABILITY ZONE specified more than once
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica REMOTE ('host1'), AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ('host1')
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1']

@@ -66,10 +66,10 @@ use crate::ast::{
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOptionName, IndexOptions, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
-    ReplicaOption, Select, SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType,
-    Statement, SubscriptPosition, TableConstraint, TableFactor, TableWithJoins,
-    UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition, WithOption,
-    WithOptionValue,
+    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption, WithOptionValue, WithOptionVecString,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -2750,36 +2750,35 @@ fn plan_replica_config(
     scx: &StatementContext,
     options: Vec<ReplicaOption<Aug>>,
 ) -> Result<ReplicaConfig, anyhow::Error> {
+    let mut seen = HashSet::new();
     let mut remote_replicas = BTreeSet::new();
     let mut size = None;
     let mut availability_zone = None;
 
     for option in options {
-        match option {
-            ReplicaOption::Remote { hosts } => {
+        if !seen.insert(option.name.clone()) {
+            bail!("{} specified more than once", option.name.to_ast_string());
+        }
+        match option.name {
+            ReplicaOptionName::Remote => {
                 scx.require_unsafe_mode("REMOTE cluster replica option")?;
-                if !remote_replicas.is_empty() {
-                    bail!("REMOTE specified more than once");
-                }
-                for host in hosts {
-                    remote_replicas.insert(
-                        host.try_into()
-                            .map_err(|e| anyhow!("invalid REMOTE host: {}", e))?,
-                    );
+                remote_replicas = WithOptionVecString::try_from(option.value)
+                    .map_err(|e| anyhow!("invalid REMOTE: {}", e))?
+                    .0
+                    .into_iter()
+                    .collect::<BTreeSet<String>>();
+                if remote_replicas.is_empty() {
+                    bail!("cannot specify empty REMOTE");
                 }
             }
-            ReplicaOption::Size(s) => {
-                if size.is_some() {
-                    bail!("SIZE specified more than once");
-                }
-                size = Some(s.try_into().map_err(|e| anyhow!("invalid SIZE: {}", e))?);
+            ReplicaOptionName::Size => {
+                size = Some(
+                    String::try_from(option.value).map_err(|e| anyhow!("invalid SIZE: {}", e))?,
+                );
             }
-            ReplicaOption::AvailabilityZone(s) => {
-                if availability_zone.is_some() {
-                    bail!("AVAILABILITY ZONE specified more than once");
-                }
+            ReplicaOptionName::AvailabilityZone => {
                 availability_zone = Some(
-                    s.try_into()
+                    String::try_from(option.value)
                         .map_err(|e| anyhow!("invalid AVAILABILITY ZONE: {}", e))?,
                 );
             }

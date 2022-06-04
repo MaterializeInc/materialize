@@ -25,7 +25,7 @@ use crate::ast::{
     AstInfo, ColumnDef, CreateConnector, CreateSinkConnector, CreateSourceConnector,
     CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata,
     TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    UnresolvedSchemaName, Value, WithOptionVecString,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -974,37 +974,38 @@ impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
 }
 impl_display_t!(CreateClusterReplicaStatement);
 
-/// An option in a `CREATE CLUSTER` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ReplicaOption<T: AstInfo> {
-    /// The `REMOTE <cluster> (<host> [, <host> ...])` option.
-    Remote {
-        /// The hosts.
-        hosts: Vec<WithOptionValue<T>>,
-    },
+pub enum ReplicaOptionName {
+    /// The `REMOTE [<host> [, <host> ...]]` option.
+    Remote,
     /// The `SIZE [[=] <size>]` option.
-    Size(WithOptionValue<T>),
+    Size,
     /// The `AVAILABILITY ZONE [[=] <size>]` option.
-    AvailabilityZone(WithOptionValue<T>),
+    AvailabilityZone,
+}
+
+impl AstDisplay for ReplicaOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ReplicaOptionName::Remote => f.write_str("REMOTE"),
+            ReplicaOptionName::Size => f.write_str("SIZE"),
+            ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CLUSTER` or `CREATE CLUSTER REPLICA` statement.
+pub struct ReplicaOption<T: AstInfo> {
+    pub name: ReplicaOptionName,
+    pub value: WithOptionValue<T>,
 }
 
 impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            ReplicaOption::Remote { hosts } => {
-                f.write_str("REMOTE (");
-                f.write_node(&display::comma_separated(hosts));
-                f.write_str(")");
-            }
-            ReplicaOption::Size(size) => {
-                f.write_str("SIZE ");
-                f.write_node(size);
-            }
-            ReplicaOption::AvailabilityZone(az) => {
-                f.write_str("AVAILABILITY ZONE ");
-                f.write_node(az);
-            }
-        }
+        f.write_node(&self.name);
+        f.write_str(" ");
+        f.write_node(&self.value);
     }
 }
 
@@ -1877,6 +1878,16 @@ impl<T: AstInfo> TryFrom<WithOptionValue<T>> for bool {
         match v {
             WithOptionValue::Value(v) => v.try_into(),
             _ => anyhow::bail!("cannot use value as boolean"),
+        }
+    }
+}
+
+impl<T: AstInfo> TryFrom<WithOptionValue<T>> for WithOptionVecString {
+    type Error = anyhow::Error;
+    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
+        match v {
+            WithOptionValue::Value(v) => v.try_into(),
+            _ => anyhow::bail!("cannot use value as array of strings"),
         }
     }
 }
