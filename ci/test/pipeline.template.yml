@@ -28,88 +28,88 @@ steps:
     agents:
       queue: builder-linux-x86_64
 
-  - id: build-aarch64
-    label: Build aarch64
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
-    inputs:
-      - "*"
-    timeout_in_minutes: 60
-    priority: 1
-    agents:
-      queue: builder-linux-aarch64
+  # - id: build-aarch64
+  #   label: Build aarch64
+  #   command: bin/ci-builder run stable bin/pyactivate -m ci.test.build aarch64
+  #   inputs:
+  #     - "*"
+  #   timeout_in_minutes: 60
+  #   priority: 1
+  #   agents:
+  #     queue: builder-linux-aarch64
 
-  - id: devel-docker-tags
-    label: Tag development docker images
-    command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
-    inputs:
-      - "*"
-    depends_on:
-      - build-x86_64
-      - build-aarch64
-    timeout_in_minutes: 10
-    agents:
-      queue: linux-x86_64
+  # - id: devel-docker-tags
+  #   label: Tag development docker images
+  #   command: bin/ci-builder run stable bin/pyactivate -m ci.test.dev_tag
+  #   inputs:
+  #     - "*"
+  #   depends_on:
+  #     - build-x86_64
 
-  - id: lint-fast
-    label: Lint and rustfmt
-    command: bin/ci-builder run stable ci/test/lint-fast.sh
-    inputs:
-      - "*"
-    timeout_in_minutes: 10
-    agents:
-      queue: linux-x86_64
+  #   timeout_in_minutes: 10
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: lint-slow
-    label: Clippy and doctests
-    command: bin/ci-builder run stable ci/test/lint-slow.sh
-    inputs:
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - "**/*.rs"
-    timeout_in_minutes: 30
-    agents:
-      queue: builder-linux-x86_64
+  # - id: lint-fast
+  #   label: Lint and rustfmt
+  #   command: bin/ci-builder run stable ci/test/lint-fast.sh
+  #   inputs:
+  #     - "*"
+  #   timeout_in_minutes: 10
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: lint-macos
-    label: macOS Clippy
-    command: bin/check
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTUP_TOOLCHAIN: $MATERIALIZED_RUST_VERSION
-    inputs:
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - "**/*.rs"
-    timeout_in_minutes: 30
-    agents:
-      queue: mac
+  # - id: lint-slow
+  #   label: Clippy and doctests
+  #   command: bin/ci-builder run stable ci/test/lint-slow.sh
+  #   inputs:
+  #     - Cargo.lock
+  #     - "**/Cargo.toml"
+  #     - "**/*.rs"
+  #   timeout_in_minutes: 30
+  #   agents:
+  #     queue: builder-linux-x86_64
 
-  - id: lint-deps
-    label: Lint dependencies
-    command: bin/ci-builder run stable ci/test/lint-deps.sh
-    inputs:
-      - Cargo.lock
-      - "**/Cargo.toml"
-      - "**/*.rs"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
+  # - id: lint-macos
+  #   label: macOS Clippy
+  #   command: bin/check
+  #   env:
+  #     CARGO_INCREMENTAL: "0"
+  #     RUSTUP_TOOLCHAIN: $MATERIALIZED_RUST_VERSION
+  #   inputs:
+  #     - Cargo.lock
+  #     - "**/Cargo.toml"
+  #     - "**/*.rs"
+  #   timeout_in_minutes: 30
+  #   agents:
+  #     queue: mac
 
-  - id: lint-docs
-    label: Lint docs
-    command: bin/ci-builder run stable ci/test/lint-docs.sh
-    inputs: [doc/user]
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
+  # - id: lint-deps
+  #   label: Lint dependencies
+  #   command: bin/ci-builder run stable ci/test/lint-deps.sh
+  #   inputs:
+  #     - Cargo.lock
+  #     - "**/Cargo.toml"
+  #     - "**/*.rs"
+  #   timeout_in_minutes: 30
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: preview-docs
-    label: Preview docs
-    command: bin/ci-builder run stable ci/test/preview-docs.sh
-    inputs: [doc/user]
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
+  # - id: lint-docs
+  #   label: Lint docs
+  #   command: bin/ci-builder run stable ci/test/lint-docs.sh
+  #   inputs: [doc/user]
+  #   timeout_in_minutes: 30
+  #   agents:
+  #     queue: linux-x86_64
+
+  # - id: preview-docs
+  #   label: Preview docs
+  #   command: bin/ci-builder run stable ci/test/preview-docs.sh
+  #   inputs: [doc/user]
+  #   timeout_in_minutes: 30
+  #   agents:
+  #     queue: linux-x86_64
 
   - id: cargo-test
     label: Cargo test
@@ -123,348 +123,348 @@ steps:
     agents:
       queue: linux-x86_64
 
-  - id: miri-test
-    label: Miri test
-    command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
-    inputs: [src/repr]
-    timeout_in_minutes: 30
-    agents:
-      queue: builder-linux-x86_64
+  # - id: miri-test
+  #   label: Miri test
+  #   command: bin/ci-builder run nightly ci/test/cargo-test-miri.sh
+  #   inputs: [src/repr]
+  #   timeout_in_minutes: 30
+  #   agents:
+  #     queue: builder-linux-x86_64
 
-  - id: testdrive
-    label: Testdrive %n
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/testdrive]
-    parallelism: 4
-    artifact_paths: test/testdrive/junit_testdrive_*.xml
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          args: [--aws-region=us-east-2]
-    agents:
-      queue: linux-x86_64
+  # - id: testdrive
+  #   label: Testdrive %n
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/testdrive]
+  #   parallelism: 4
+  #   artifact_paths: test/testdrive/junit_testdrive_*.xml
+  #   plugins:
+  #     - ./ci/plugins/scratch-aws-access: ~
+  #     - ./ci/plugins/mzcompose:
+  #         composition: testdrive
+  #         args: [--aws-region=us-east-2]
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: cluster-smoke
-    label: Cluster smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/cluster]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster
-    agents:
-      queue: linux-x86_64
+  # - id: cluster-smoke
+  #   label: Cluster smoke test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   inputs: [test/cluster]
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: cluster
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: cluster-isolation
-    label: Cluster isolation test
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/cluster-isolation]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster-isolation
-    agents:
-      queue: linux-x86_64
+  # - id: cluster-isolation
+  #   label: Cluster isolation test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   inputs: [test/cluster-isolation]
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: cluster-isolation
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: replica-isolation
-    label: Replica isolation
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/replica-isolation]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: replica-isolation
-    agents:
-      queue: linux-x86_64
+  # - id: replica-isolation
+  #   label: Replica isolation
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   inputs: [test/replica-isolation]
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: replica-isolation
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: kafka-ssl
-    label: Kafka SSL smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/kafka-ssl/smoketest.td]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-ssl
-    agents:
-      queue: linux-x86_64
+  # - id: kafka-ssl
+  #   label: Kafka SSL smoke test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/kafka-ssl/smoketest.td]
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: kafka-ssl
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: kafka-sasl-plain
-    label: Kafka SASL PLAIN smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/kafka-sasl-plain/smoketest.td]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-sasl-plain
-          run: testdrive
-    agents:
-      queue: linux-x86_64
+  # - id: kafka-sasl-plain
+  #   label: Kafka SASL PLAIN smoke test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/kafka-sasl-plain/smoketest.td]
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: kafka-sasl-plain
+  #         run: testdrive
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: sqllogictest-fast
-    label: Fast SQL logic tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/sqllogictest]
-    artifact_paths: junit_sqllogictest_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: sqllogictest
-    agents:
-      queue: linux-x86_64
+  # - id: sqllogictest-fast
+  #   label: Fast SQL logic tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/sqllogictest]
+  #   artifact_paths: junit_sqllogictest_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: sqllogictest
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: billing-demo
-    label: Billing demo smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: billing-demo
-          args: [--message-count=100, --partitions=10, --check-sink]
-    agents:
-      queue: linux-x86_64
+  # - id: billing-demo
+  #   label: Billing demo smoke test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: billing-demo
+  #         args: [--message-count=100, --partitions=10, --check-sink]
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: perf-kinesis
-    label: Kinesis performance smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/scratch-aws-access: ~
-      - ./ci/plugins/mzcompose:
-          composition: perf-kinesis
-    agents:
-      queue: linux-x86_64
+  # - id: perf-kinesis
+  #   label: Kinesis performance smoke test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/scratch-aws-access: ~
+  #     - ./ci/plugins/mzcompose:
+  #         composition: perf-kinesis
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: chbench-demo
-    label: chbench smoke test
-    depends_on: build-x86_64
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: chbench
-          args: [--run-seconds=10, --wait]
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-x86_64
+  # - id: chbench-demo
+  #   label: chbench smoke test
+  #   depends_on: build-x86_64
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: chbench
+  #         args: [--run-seconds=10, --wait]
+  #   timeout_in_minutes: 30
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: restarts
-    label: Restart test
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: restart
-    agents:
-      queue: linux-x86_64
+  # - id: restarts
+  #   label: Restart test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: restart
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: upgrade
-    label: Upgrade tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 60
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: upgrade
-          args: [--most-recent, "0"]
-    agents:
-      queue: linux-x86_64
+  # - id: upgrade
+  #   label: Upgrade tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 60
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: upgrade
+  #         args: [--most-recent, "0"]
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: metabase-demo
-    label: Metabase smoke test
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: metabase
-    agents:
-      queue: linux-x86_64
+  # - id: metabase-demo
+  #   label: Metabase smoke test
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: metabase
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: dbt-materialize
-    label: dbt-materialize tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: dbt-materialize
-    agents:
-      queue: linux-x86_64
+  # - id: dbt-materialize
+  #   label: dbt-materialize tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: dbt-materialize
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: debezium-postgres
-    label: Debezium Postgres tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/debezium]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: debezium
-          run: postgres
-    agents:
-      queue: linux-x86_64
+  # - id: debezium-postgres
+  #   label: Debezium Postgres tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/debezium]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: debezium
+  #         run: postgres
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: debezium-sql-server
-    label: Debezium SQL Server tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/debezium]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: debezium
-          run: sql-server
-    agents:
-      queue: linux-x86_64
+  # - id: debezium-sql-server
+  #   label: Debezium SQL Server tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/debezium]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: debezium
+  #         run: sql-server
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: debezium-mysql
-    label: Debezium MySQL tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/debezium]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: debezium
-          run: mysql
-    agents:
-      queue: linux-x86_64
+  # - id: debezium-mysql
+  #   label: Debezium MySQL tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/debezium]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: debezium
+  #         run: mysql
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: pg-cdc
-    label: Postgres CDC tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/pg-cdc]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: pg-cdc
-    agents:
-      queue: linux-x86_64
+  # - id: pg-cdc
+  #   label: Postgres CDC tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/pg-cdc]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: pg-cdc
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: pg-cdc-resumption
-    label: Postgres CDC resumption tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/pg-cdc-resumption]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: pg-cdc-resumption
-    agents:
-      queue: linux-x86_64
+  # - id: pg-cdc-resumption
+  #   label: Postgres CDC resumption tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/pg-cdc-resumption]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: pg-cdc-resumption
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: s3-resumption
-    label: S3 resumption tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/s3-resumption]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: s3-resumption
-    agents:
-      queue: linux-x86_64
+  # - id: s3-resumption
+  #   label: S3 resumption tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   inputs: [test/s3-resumption]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: s3-resumption
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: kafka-resumption
-    label: Kafka resumption tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    # https://github.com/MaterializeInc/materialize/issues/11992
-    soft_fail: true
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-resumption
-    agents:
-      queue: linux-x86_64
+  # - id: kafka-resumption
+  #   label: Kafka resumption tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   # https://github.com/MaterializeInc/materialize/issues/11992
+  #   soft_fail: true
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: kafka-resumption
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: kafka-exactly-once
-    label: Kafka exactly-once tests
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: kafka-exactly-once
-    agents:
-      queue: linux-x86_64
+  # - id: kafka-exactly-once
+  #   label: Kafka exactly-once tests
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 30
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: kafka-exactly-once
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: lang-csharp
-    label: ":csharp: tests"
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/lang/csharp]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: csharp
-    agents:
-      queue: linux-x86_64
+  # - id: lang-csharp
+  #   label: ":csharp: tests"
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   inputs: [test/lang/csharp]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: csharp
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: lang-js
-    label: ":js: tests"
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/lang/js]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: js
-    agents:
-      queue: linux-x86_64
+  # - id: lang-js
+  #   label: ":js: tests"
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   inputs: [test/lang/js]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: js
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: lang-java
-    label: ":java: tests"
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/lang/java]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: java
-    agents:
-      queue: linux-x86_64
+  # - id: lang-java
+  #   label: ":java: tests"
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   inputs: [test/lang/java]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: java
+  #   agents:
+  #     queue: linux-x86_64
 
-  - id: lang-python
-    label: ":python: tests"
-    depends_on: build-x86_64
-    timeout_in_minutes: 10
-    inputs: [test/lang/python]
-    artifact_paths: junit_mzcompose_*.xml
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: python
-    agents:
-      queue: linux-x86_64
+  # - id: lang-python
+  #   label: ":python: tests"
+  #   depends_on: build-x86_64
+  #   timeout_in_minutes: 10
+  #   inputs: [test/lang/python]
+  #   artifact_paths: junit_mzcompose_*.xml
+  #   plugins:
+  #     - ./ci/plugins/mzcompose:
+  #         composition: python
+  #   agents:
+  #     queue: linux-x86_64
 
-  - wait: ~
-    continue_on_failure: true
+  # - wait: ~
+  #   continue_on_failure: true
 
-  - id: analyze
-    label: Analyze tests
-    inputs: ["*"]
-    plugins:
-      - junit-annotate#v2.0.2:
-          artifacts: "*junit_*.xml"
-          job-uuid-file-pattern: _([^_]*).xml
-    priority: 1
-    agents:
-      queue: linux-x86_64
+  # - id: analyze
+  #   label: Analyze tests
+  #   inputs: ["*"]
+  #   plugins:
+  #     - junit-annotate#v2.0.2:
+  #         artifacts: "*junit_*.xml"
+  #         job-uuid-file-pattern: _([^_]*).xml
+  #   priority: 1
+  #   agents:
+  #     queue: linux-x86_64
 
-  - wait: ~
+  # - wait: ~
 
-  - id: deploy
-    label: Deploy
-    trigger: deploy
-    async: true
-    branches: "main v*.*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
+  # - id: deploy
+  #   label: Deploy
+  #   trigger: deploy
+  #   async: true
+  #   branches: "main v*.*"
+  #   build:
+  #     commit: "$BUILDKITE_COMMIT"
+  #     branch: "$BUILDKITE_BRANCH"
+  #     env:
+  #       BUILDKITE_TAG: "$BUILDKITE_TAG"

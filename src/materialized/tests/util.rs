@@ -38,9 +38,8 @@ pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
         Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
         _ => "localhost:9092".parse().unwrap(),
     });
-// Port 2181 is used by ZooKeeper.
 static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
-    Lazy::new(|| Arc::new(PortAllocator::new_with_filter(2100, 2200, &[2181])));
+    Lazy::new(|| Arc::new(PortAllocator::new(30_000, 31_000)));
 
 #[derive(Clone)]
 pub struct Config {
@@ -152,9 +151,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                     .unwrap()
                     .to_path_buf(),
                 port_allocator: PORT_ALLOCATOR.clone(),
-                // NOTE(benesch): would be nice to not have to do this, but
-                // the subprocess output wreaks havoc on cargo2junit.
-                suppress_output: true,
+                suppress_output: false,
                 data_dir: data_directory,
                 command_wrapper: vec![],
             }),

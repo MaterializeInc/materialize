@@ -17,12 +17,8 @@ total=0
 while read -r binary package cwd; do
     echo "--- $binary"
     killall -9 storaged computed materialized &> /dev/null || true
-    # Run tests, generating a JSON event stream. The jq in the pipeline below
-    # prefixes each event's name field, if present, with the package name, so
-    # that we can distinguish tests with the same names in different packages.
-    if (cd "$cwd" && "/tests/$binary" -Z unstable-options --format json --report-time) \
-        | jq -c --arg package "$package" 'if .name then .name = "\($package)::\(.name)" else . end' \
-        | tee -a results.json
+    # Run tests, generating a JSON event stream.
+    if (cd "$cwd" && "/tests/$binary" --nocapture --test-threads=1)
     then
         ((++passed))
     else
