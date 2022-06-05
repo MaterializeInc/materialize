@@ -32,5 +32,5 @@ time = "0.3.9"
 tokio = "1.18.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
 tower-http = { version = "0.3.3", features = ["cors"] }
-uuid = "1.1.0"
+uuid = "1.1.1"
 walkdir = "2.3.2"
