@@ -17,6 +17,9 @@ run() {
     bin/ci-builder run stable bin/mzcompose --mz-quiet --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
+run logs --no-color > services.log
+buildkite-agent artifact upload services.log
+
 run kill
 run rm --force -v
 run down --volumes
