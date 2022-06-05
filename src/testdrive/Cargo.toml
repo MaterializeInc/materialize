@@ -31,7 +31,7 @@ junit-report = "0.7.1"
 once_cell = "1.12.0"
 maplit = "1.0.2"
 md-5 = "0.10.1"
-mysql_async = "0.29.0"
+mysql_async = "0.30.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-ccsr = { path = "../ccsr" }
 mz-coord = { path = "../coord" }
