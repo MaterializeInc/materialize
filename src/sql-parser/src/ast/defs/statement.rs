@@ -1860,34 +1860,33 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
 }
 impl_display_t!(WithOptionValue);
 
-impl<T: AstInfo> TryFrom<WithOptionValue<T>> for String {
-    type Error = anyhow::Error;
+macro_rules! try_from_with_option_value_value {
+    ($t:ty, $ty_name:expr) => {
+        impl<T: AstInfo> TryFrom<WithOptionValue<T>> for $t {
+            type Error = anyhow::Error;
 
-    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
-        match v {
-            WithOptionValue::Value(v) => v.try_into(),
-            _ => anyhow::bail!("cannot use value as string"),
+            fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
+                match v {
+                    WithOptionValue::Value(v) => v.try_into(),
+                    _ => anyhow::bail!("cannot use value as {}", $ty_name),
+                }
+            }
         }
-    }
+    };
 }
 
-impl<T: AstInfo> TryFrom<WithOptionValue<T>> for bool {
-    type Error = anyhow::Error;
+try_from_with_option_value_value!(String, "string");
+try_from_with_option_value_value!(bool, "boolean");
 
-    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
-        match v {
-            WithOptionValue::Value(v) => v.try_into(),
-            _ => anyhow::bail!("cannot use value as boolean"),
-        }
-    }
-}
-
-impl<T: AstInfo> TryFrom<WithOptionValue<T>> for Vec<String> {
+impl<T: AstInfo, V: TryFrom<WithOptionValue<T>>> TryFrom<WithOptionValue<T>> for Vec<V>
+where
+    Vec<V>: TryFrom<Value, Error = anyhow::Error>,
+{
     type Error = anyhow::Error;
     fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
         match v {
             WithOptionValue::Value(v) => v.try_into(),
-            _ => anyhow::bail!("cannot use value as array of strings"),
+            _ => anyhow::bail!("cannot use value as array"),
         }
     }
 }
