@@ -86,6 +86,19 @@ class RepositoryDetails:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
 
+    def rewrite_builder_path_for_host(self, path: Path) -> Path:
+        """Rewrite a path that is relative to the target directory inside the
+        builder to a path that is relative to the target directory on the host.
+
+        If path does is not relative to the target directory inside the builder,
+        it is returned unchanged.
+        """
+        builder_target_dir = Path("/mnt/build") / xcompile.target(self.arch)
+        try:
+            return self.cargo_target_dir() / path.relative_to(builder_target_dir)
+        except ValueError:
+            return path
+
 
 def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
@@ -277,24 +290,21 @@ class CargoBuild(CargoPreImage):
                 cargo_build + ["--message-format=json"],
                 cwd=self.rd.root,
             )
-            target_dir = str(self.rd.cargo_target_dir().absolute())
-            ci_builder_target_dir = "/mnt/build/" + xcompile.target(self.rd.arch)
+            target_dir = self.rd.cargo_target_dir()
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
                     continue
                 message = json.loads(line)
                 if message["reason"] != "build-script-executed":
                     continue
-                out_dir = message["out_dir"]
-                if out_dir.startswith(ci_builder_target_dir):
-                    out_dir = target_dir + out_dir[len(ci_builder_target_dir) :]
-                if not out_dir.startswith(target_dir):
+                out_dir = self.rd.rewrite_builder_path_for_host(Path(message["out_dir"]))
+                if not out_dir.is_relative_to(target_dir):
                     # Some crates are built for both the host and the target.
                     # Ignore the built-for-host out dir.
                     continue
                 package = message["package_id"].split()[0]
                 for src, dst in self.extract.get(package, {}).items():
-                    spawn.runv(["cp", "-R", Path(out_dir) / src, self.path / dst])
+                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
     def run(self) -> None:
         super().run()
@@ -339,8 +349,6 @@ class CargoTest(CargoPreImage):
         output = spawn.capture(args + ["--message-format=json"], cwd=self.rd.root)
 
         tests = []
-        target_dir = str(self.rd.cargo_target_dir().absolute())
-        ci_builder_target_dir = "/mnt/build/" + xcompile.target(self.rd.arch)
         for line in output.split("\n"):
             if line.strip() == "":
                 continue
@@ -361,9 +369,7 @@ class CargoTest(CargoPreImage):
                 crate_path = Path(crate_path_match.group(1)).relative_to(
                     self.rd.root.resolve()
                 )
-                executable = message["executable"]
-                if executable.startswith(ci_builder_target_dir):
-                    executable = target_dir + executable[len(ci_builder_target_dir) :]
+                executable = self.rd.rewrite_builder_path_for_host(Path(message["executable"]))
                 tests.append((executable, slug, crate_path))
 
         os.makedirs(self.path / "tests" / "examples")
@@ -376,8 +382,8 @@ class CargoTest(CargoPreImage):
                 )
                 package = slug.replace(".", "::")
                 manifest.write(f"{slug} {package} {crate_path}\n")
-        shutil.move(str(self.path / "materialized"), self.path / "tests")
-        shutil.move(str(self.path / "testdrive"), self.path / "tests")
+        shutil.move(self.path / "materialized", self.path / "tests")
+        shutil.move(self.path / "testdrive", self.path / "tests")
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
     def inputs(self) -> Set[str]:
