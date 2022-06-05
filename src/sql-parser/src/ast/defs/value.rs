@@ -168,18 +168,21 @@ impl TryFrom<Value> for i32 {
     }
 }
 
-impl TryFrom<Value> for Vec<String> {
+impl<X: TryFrom<Value>> TryFrom<Value> for Vec<X> {
     type Error = anyhow::Error;
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
             Value::Array(a) => {
                 let mut out = Vec::with_capacity(a.len());
                 for i in a {
-                    out.push(i.try_into()?)
+                    out.push(
+                        i.try_into()
+                            .map_err(|_| anyhow::anyhow!("cannot use value in array"))?,
+                    )
                 }
                 Ok(out)
             }
-            _ => anyhow::bail!("cannot use value as number"),
+            _ => anyhow::bail!("cannot use value as array"),
         }
     }
 }
