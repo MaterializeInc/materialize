@@ -11,4 +11,4 @@
 #
 # cargo-test — build constituent services and run `cargo test`.
 
-exec "$(dirname "$0")"/run test
+exec "$(dirname "$0")"/run test "$@"
