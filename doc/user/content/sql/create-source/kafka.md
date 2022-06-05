@@ -15,7 +15,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-This page details how to connect Materialize to a Kafka broker to read data from individual topics.
+This page describes how to connect Materialize to a Kafka broker to read data from individual topics.
 {{% /create-source/intro %}}
 
 {{< note >}}
@@ -56,13 +56,13 @@ Field                                | Value     | Description
 
 ## Supported formats
 
-|<div style="width:290px">Format</div> | Append-only envelope | Upsert envelope | Debezium envelope |
----------------------------------------|:--------------------:|:---------------:|:-----------------:|
-| Avro                                 | ✓                    | ✓               | ✓                 |
-| JSON                                 | ✓                    | ✓               |                   |
-| Protobuf                             | ✓                    | ✓               |                   |
-| Text/bytes                           | ✓                    | ✓               |                   |
-|  CSV                                 | ✓                    |                 |                   |
+|<div style="width:290px">Format</div> | [Append-only envelope] | [Upsert envelope] | [Debezium envelope] |
+---------------------------------------|:----------------------:|:-----------------:|:-------------------:|
+| [Avro]                               | ✓                      | ✓                 | ✓                   |
+| [JSON]                               | ✓                      | ✓                 |                     |
+| [Protobuf]                           | ✓                      | ✓                 |                     |
+| [Text/bytes]                         | ✓                      | ✓                 |                     |
+| [CSV]                                | ✓                      |                   |                     |
 
 ### Key-value encoding
 
@@ -394,3 +394,13 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 - [`CREATE SOURCE`](../)
 - [Using Debezium](/integrations/debezium/)
+
+[Avro]: /sql/create-source/#avro
+[JSON]: /sql/create-source/#json
+[Protobuf]: /sql/create-source/#protobuf
+[Text/bytes]: /sql/create-source/#textbytes
+[CSV]: /sql/create-source/#csv
+
+[Append-only envelope]: /sql/create-source/#append-only-envelope
+[Upsert envelope]: /sql/create-source/#upsert-envelope
+[Debezium envelope]: /sql/create-source/#debezium-envelope

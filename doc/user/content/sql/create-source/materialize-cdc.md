@@ -19,7 +19,7 @@ Currently, the Materialize CDC format is only supported for [Avro-formatted Kafk
 To use the Materialize CDC format, you must:
 
 1. Transform the changefeed produced by your CDC tool into the Materialize CDC format.
-2. Define the Materialize CDC format in an Avro schema when you [create a source](../../sql/create-source/avro-kafka/) in Materialize.
+2. Define the Materialize CDC format in an Avro schema when you [create a source](/sql/create-source/avro-kafka/) in Materialize.
 
 ## Materialize CDC schema components
 
@@ -135,7 +135,7 @@ Field | Description
 
 ## Example Materialize CDC workflow
 
-You specify the use of the Materialize CDC format in the [Avro schema](../../sql/create-source/kafka/#format_spec) when a source is created.
+You specify the use of the Materialize CDC format in the [Avro schema](/sql/create-source/kafka/#format_spec) when a source is created.
 
 ```sql
   CREATE MATERIALIZED SOURCE name_of_source

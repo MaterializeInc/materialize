@@ -1,12 +1,12 @@
 ---
 title: "SHOW CREATE SINK"
-description: "`SHOW CREATE SINK` returns the URL used to create the sink."
+description: "`SHOW CREATE SINK` returns the statement used to create the sink."
 menu:
   main:
     parent: commands
 ---
 
-`SHOW CREATE SINK` returns the [`CREATE SINK`](../create-sink) statement used to create the sink.
+`SHOW CREATE SINK` returns the DDL statement used to create the sink.
 
 ## Syntax
 
@@ -21,14 +21,17 @@ _sink&lowbar;name_ | The sink you want use. You can find available sink names th
 ```sql
 SHOW SINKS
 ```
+
 ```nofmt
      name
 --------------
  my_view_sink
 ```
+
 ```sql
 SHOW CREATE SINK my_view_sink;
 ```
+
 ```nofmt
                Sink              |                                                                                                        Create Sink
 ---------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
