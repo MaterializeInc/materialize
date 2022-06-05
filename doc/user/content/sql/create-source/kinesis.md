@@ -134,7 +134,9 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 ## Known limitations
 
-- **Resharding:** adjusting the number of shards in the source stream is not supported {{% gh 8776 %}}. If you reshard the stream, you'll need to drop and recreate the source.
+##### Resharding
+
+Adjusting the number of shards in the source stream is not supported {{% gh 8776 %}}. If you reshard the stream, you'll need to drop and recreate the source.
 
 ## Related pages
 
