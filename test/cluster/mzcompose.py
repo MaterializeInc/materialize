@@ -32,22 +32,22 @@ SERVICES = [
     Localstack(),
     Computed(
         name="computed_1",
-        options="--workers 2 --processes 2 --process 0 computed_1:2102 computed_2:2102",
+        options="--workers 2 --process 0 computed_1:2102 computed_2:2102",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_2",
-        options="--workers 2 --processes 2 --process 1 computed_1:2102 computed_2:2102",
+        options="--workers 2 --process 1 computed_1:2102 computed_2:2102",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_3",
-        options="--workers 2 --processes 2 --process 0 computed_3:2102 computed_4:2102 --linger --reconcile",
+        options="--workers 2 --process 0 computed_3:2102 computed_4:2102 --linger --reconcile",
         ports=[2100, 2102],
     ),
     Computed(
         name="computed_4",
-        options="--workers 2 --processes 2 --process 1 computed_3:2102 computed_4:2102 --linger --reconcile",
+        options="--workers 2 --process 1 computed_3:2102 computed_4:2102 --linger --reconcile",
         ports=[2100, 2102],
     ),
     Postgres(),
@@ -98,7 +98,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
     c.up("computed_2")
     c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
     c.sql(
-        "CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1:2100', 'computed_2:2100'));"
+        "CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ('computed_1:2100', 'computed_2:2100')));"
     )
     c.run("testdrive", *glob)
 
@@ -128,7 +128,7 @@ def test_github_12251(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1:2100'));
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ('computed_1:2100')));
         SET cluster = cluster1;
         """
     )

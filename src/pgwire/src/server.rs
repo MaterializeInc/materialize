@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::ready;
 use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -19,18 +18,15 @@ use tokio_openssl::SslStream;
 use tracing::trace;
 
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_ore::cast::CastFrom;
-use mz_ore::metrics::MetricsRegistry;
 use mz_ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::message::FrontendStartupMessage;
-use crate::metrics::Metrics;
 use crate::protocol;
 
 /// Configures a [`Server`].
 #[derive(Debug)]
-pub struct Config<'a> {
+pub struct Config {
     /// A client for the coordinator with which the server will communicate.
     pub coord_client: mz_coord::Client,
     /// The TLS configuration for the server.
@@ -44,8 +40,6 @@ pub struct Config<'a> {
     /// a valid Frontegg API token as a password to authenticate. Otherwise,
     /// password authentication is disabled.
     pub frontegg: Option<FronteggAuthentication>,
-    /// The registry that the pg wire server uses to report metrics.
-    pub metrics_registry: &'a MetricsRegistry,
 }
 
 /// Configures a server's TLS encryption and authentication.
@@ -71,15 +65,13 @@ pub enum TlsMode {
 pub struct Server {
     tls: Option<TlsConfig>,
     coord_client: mz_coord::Client,
-    metrics: Metrics,
     frontegg: Option<FronteggAuthentication>,
 }
 
 impl Server {
     /// Constructs a new server.
-    pub fn new(config: Config<'_>) -> Server {
+    pub fn new(config: Config) -> Server {
         Server {
-            metrics: Metrics::register_into(config.metrics_registry),
             tls: config.tls,
             coord_client: config.coord_client,
             frontegg: config.frontegg,
@@ -93,10 +85,7 @@ impl Server {
     {
         let mut coord_client = self.coord_client.new_conn()?;
         let conn_id = coord_client.conn_id();
-        let mut conn = Conn::Unencrypted(MeteredConn {
-            metrics: &self.metrics,
-            inner: conn,
-        });
+        let mut conn = Conn::Unencrypted(conn);
         loop {
             let message = codec::decode_startup(&mut conn).await?;
 
@@ -119,7 +108,6 @@ impl Server {
                         conn: &mut conn,
                         version,
                         params,
-                        metrics: &self.metrics,
                         frontegg: self.frontegg.as_ref(),
                     })
                     .await?;
@@ -162,58 +150,6 @@ impl Server {
                 }
             }
         }
-    }
-}
-
-pub struct MeteredConn<'a, A> {
-    inner: A,
-    metrics: &'a Metrics,
-}
-
-impl<'a, A> AsyncRead for MeteredConn<'a, A>
-where
-    A: AsyncRead + AsyncWrite + Unpin,
-{
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &mut ReadBuf,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_read(cx, buf)
-    }
-}
-
-impl<'a, A> AsyncWrite for MeteredConn<'a, A>
-where
-    A: AsyncRead + AsyncWrite + Unpin,
-{
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let n = ready!(Pin::new(&mut self.inner).poll_write(cx, buf))?;
-        self.metrics.bytes_sent.inc_by(u64::cast_from(n));
-        Poll::Ready(Ok(n))
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
-}
-
-#[async_trait]
-impl<'a, A> AsyncReady for MeteredConn<'a, A>
-where
-    A: AsyncRead + AsyncWrite + AsyncReady + Sync + Unpin,
-{
-    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
-        let ready = self.inner.ready(interest);
-        ready.await
     }
 }
 

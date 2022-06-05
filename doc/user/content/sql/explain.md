@@ -33,10 +33,6 @@ Field | Use
 **OPTIMIZED** | _(Default)_ Display the optimized plan
 **VIEW** | Display the plan for an existing view
 
-{{< version-changed v0.4.0 >}}
-Accept `EXPLAIN <statement>` as shorthand for `EXPLAIN PLAN FOR <statement>`.
-{{< /version-changed >}}
-
 ## Details
 
 The job of the Materialize planner is to turn SQL code into differential

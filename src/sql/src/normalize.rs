@@ -26,9 +26,9 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     AstInfo, CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement,
     CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
-    KafkaConnector, KafkaSourceConnector, Op, Query, Statement, TableFactor, TableFunction,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
+    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op,
+    Query, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 
 use crate::names::{
@@ -109,33 +109,29 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
 
 /// Normalizes a list of `WITH` options.
 ///
-/// # Panics
+/// # Errors
 /// - If any `WithOption`'s `value` is `None`. You can prevent generating these
 ///   values during parsing.
-pub fn options<T: AstInfo>(options: &[WithOption<T>]) -> BTreeMap<String, Value> {
-    options
-        .iter()
-        .map(|o| {
-            (
-                o.key.to_string(),
-                match o
-                    .value
-                    .as_ref()
-                    // The only places that generate options that do not require
-                    // keys and values do not currently use this code path.
-                    .expect("check that all entries have values before calling `options`")
-                {
-                    WithOptionValue::Value(value) => value.clone(),
-                    WithOptionValue::ObjectName(object_name) => {
-                        Value::String(object_name.to_ast_string())
-                    }
-                    WithOptionValue::DataType(data_type) => {
-                        Value::String(data_type.to_ast_string())
-                    }
-                },
-            )
-        })
-        .collect()
+/// - If any `WithOption` has a value of type `WithOptionValue::Secret`.
+pub fn options<T: AstInfo>(
+    options: &[WithOption<T>],
+) -> Result<BTreeMap<String, Value>, anyhow::Error> {
+    let mut out = BTreeMap::new();
+    for option in options {
+        let value = match &option.value {
+            Some(WithOptionValue::Value(value)) => value.clone(),
+            Some(WithOptionValue::Ident(id)) => Value::String(ident(id.clone())),
+            Some(WithOptionValue::DataType(data_type)) => Value::String(data_type.to_ast_string()),
+            Some(WithOptionValue::Secret(_)) => {
+                bail!("secret references not yet supported");
+            }
+            None => {
+                bail!("option {} requires a value", option.key);
+            }
+        };
+        out.insert(option.key.to_string(), value);
+    }
+    Ok(out)
 }
 
 /// Normalizes `WITH` option keys without normalizing their corresponding
@@ -322,9 +318,9 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector,
-            with_options,
-            format,
+            connector: _,
+            with_options: _,
+            format: _,
             include_metadata: _,
             envelope: _,
             if_not_exists,
@@ -334,24 +330,6 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
-
-            for opt in with_options.iter_mut() {
-                if let Some(WithOptionValue::ObjectName(object_name)) = &mut opt.value {
-                    if ident_ref(&opt.key) == "tx_metadata" {
-                        // Use the catalog to resolve to a fully qualified name
-                        *object_name = allocate_name(object_name)?;
-                    }
-                }
-            }
-            if let mz_sql_parser::ast::CreateSourceConnector::Kafka(KafkaSourceConnector {
-                connector: KafkaConnector::Reference { connector, .. },
-                ..
-            }) = connector
-            {
-                *connector = allocate_name(connector)?;
-            };
-
-            crate::connectors::qualify_csr_connector_names(format, scx)?;
         }
 
         Statement::CreateTable(CreateTableStatement {
@@ -494,22 +472,7 @@ macro_rules! with_option_type {
     ($name:expr, String) => {
         match $name {
             Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
-            Some(crate::ast::WithOptionValue::ObjectName(name)) => {
-                // TODO[btv]
-                //
-                // This is a hack to allow unquoted with options; e.g., `WITH foo=bar` instead of `WITH foo="bar"`.
-                // Despite it being an object name, it makes no sense for it to have more than one component.
-                //
-                // We would like to make this `WithOptionValue` variant take an ident,
-                // not an object name; the only reason we can't do that yet is because the "tx_metadata" WITH option
-                // actually genuinely needs an object name, but that is probably being promoted to syntax soon.
-                //
-                // Once we do that, we can simplify this code.
-                if name.0.len() != 1 {
-                    ::anyhow::bail!("expected String or bare identifier")
-                }
-                name.0.into_iter().next().unwrap().into_string()
-            }
+            Some(crate::ast::WithOptionValue::Ident(id)) => id.into_string(),
             _ => ::anyhow::bail!("expected String or bare identifier"),
         }
     };
@@ -530,21 +493,6 @@ macro_rules! with_option_type {
                 mz_repr::strconv::parse_interval(&interval.value)?
             }
             _ => ::anyhow::bail!("expected Interval"),
-        }
-    };
-    ($name:expr, OptionalInterval) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                if value.as_str() == "off" {
-                    None
-                } else {
-                    Some(mz_repr::strconv::parse_interval(&value)?)
-                }
-            }
-            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                Some(mz_repr::strconv::parse_interval(&interval.value)?)
-            }
-            _ => ::anyhow::bail!("expected Interval or 'off'"),
         }
     };
 }
@@ -699,7 +647,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
-    use crate::names::resolve_names_stmt;
+    use crate::names;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
@@ -710,7 +658,7 @@ mod tests {
         )?
         .into_element();
 
-        let (stmt, _) = resolve_names_stmt(scx, parsed)?;
+        let (stmt, _) = names::resolve(scx.catalog, parsed)?;
 
         // Ensure that all identifiers are quoted.
         assert_eq!(

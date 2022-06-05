@@ -383,9 +383,11 @@ publish: true
      The optional `matching` field specifies a glob that determines which
      files in the `source` directory to copy.
 
-  *  `type: cargo-bin` builds a Rust binary with Cargo. The `bin` field
-     indicates the name of the binary target in the Cargo workspace to build.
-     The resulting artifact will be placed into the mzbuild context.
+  *  `type: cargo-bin` builds a Rust binary with Cargo. The `bin` field is a
+     string or a list of strings that indicates the name of one or more binary
+     target in the Cargo workspace to build. The resulting artifact will be
+     placed into the mzbuild context. The `example` field works identically but
+     names an example to build rather than a binary.
 
      All files within the crate directory, and all files within the directories
      of any transitive _path_ dependencies of the crate (i.e., dependencies in

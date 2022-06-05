@@ -8,8 +8,6 @@ aliases:
   - /sql/types/map
 ---
 
-{{< version-added v0.5.3 />}}
-
 `map` data expresses an unordered map with [`text`](../text) keys and an
 arbitrary uniform value type.
 

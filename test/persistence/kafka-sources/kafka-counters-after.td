@@ -27,10 +27,10 @@ $ kafka-ingest format=avro topic=kafka-counters key-format=avro key-schema=${key
 {"f1": "-1"} {"f2": "-1"}
 
 
-> SELECT COUNT(*) = 10001 FROM kafka_counters;
-true
+> SELECT COUNT(*) FROM kafka_counters;
+10001
 
 # We expect the counter to be at 1, that is no data was re-ingested
 # from the Kafka topic post-restart.
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-kafka-counters-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 1 FROM mz_kafka_source_statistics;
-true
+> SELECT SUM(CAST(statistics->'topics'->'testdrive-kafka-counters-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
+1

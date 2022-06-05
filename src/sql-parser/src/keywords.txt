@@ -60,6 +60,7 @@ Cluster
 Clusters
 Coalesce
 Collate
+Collection
 Columns
 Commit
 Committed
@@ -177,6 +178,7 @@ Matching
 Materialize
 Materialized
 Message
+Metadata
 Minute
 Minutes
 Month

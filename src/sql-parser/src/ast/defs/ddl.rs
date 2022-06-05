@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use enum_kinds::EnumKind;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption};
+use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption, WithOptionValue};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -122,14 +122,14 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrConnector {
+pub enum CsrConnector<T: AstInfo> {
     Inline {
         url: String,
     },
     // The reference variant needs to be creatable by the parser with just a name
     // but also must allow populating the values for use in purification and planning
     Reference {
-        connector: UnresolvedObjectName,
+        connector: T::ObjectName,
         url: Option<String>,
         with_options: Option<BTreeMap<String, String>>,
     },
@@ -137,7 +137,7 @@ pub enum CsrConnector {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorAvro<T: AstInfo> {
-    pub connector: CsrConnector,
+    pub connector: CsrConnector<T>,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<WithOption<T>>,
 }
@@ -171,7 +171,7 @@ impl_display_t!(CsrConnectorAvro);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrConnectorProto<T: AstInfo> {
-    pub connector: CsrConnector,
+    pub connector: CsrConnector<T>,
     pub seed: Option<CsrSeedCompiledOrLegacy>,
     pub with_options: Vec<WithOption<T>>,
 }
@@ -394,9 +394,9 @@ impl AstDisplay for SourceIncludeMetadata {
 impl_display!(SourceIncludeMetadata);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Envelope {
+pub enum Envelope<T: AstInfo> {
     None,
-    Debezium(DbzMode),
+    Debezium(DbzMode<T>),
     Upsert,
     CdcV2,
     /// An envelope for sources that directly read differential Rows. This is internal and cannot
@@ -404,7 +404,7 @@ pub enum Envelope {
     DifferentialRow,
 }
 
-impl AstDisplay for Envelope {
+impl<T: AstInfo> AstDisplay for Envelope<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::None => {
@@ -427,7 +427,7 @@ impl AstDisplay for Envelope {
         }
     }
 }
-impl_display!(Envelope);
+impl_display_t!(Envelope);
 
 impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
@@ -480,22 +480,51 @@ impl AstDisplay for Compression {
 impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DbzMode {
-    /// `ENVELOPE DEBEZIUM` with no suffix
-    Plain,
+pub enum DbzMode<T: AstInfo> {
+    /// `ENVELOPE DEBEZIUM [TRANSACTION METADATA (...)]`
+    Plain {
+        tx_metadata: Vec<DbzTxMetadataOption<T>>,
+    },
     /// `ENVELOPE DEBEZIUM UPSERT`
     Upsert,
 }
 
-impl AstDisplay for DbzMode {
+impl<T: AstInfo> AstDisplay for DbzMode<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Plain => f.write_str(""),
+            Self::Plain { tx_metadata } => {
+                if !tx_metadata.is_empty() {
+                    f.write_str(" (TRANSACTION METADATA (");
+                    f.write_node(&display::comma_separated(tx_metadata));
+                    f.write_str("))");
+                }
+            }
             Self::Upsert => f.write_str(" UPSERT"),
         }
     }
 }
-impl_display!(DbzMode);
+impl_display_t!(DbzMode);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DbzTxMetadataOption<T: AstInfo> {
+    Source(T::ObjectName),
+    Collection(WithOptionValue<T>),
+}
+impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            DbzTxMetadataOption::Source(source) => {
+                f.write_str("SOURCE ");
+                f.write_node(source);
+            }
+            DbzTxMetadataOption::Collection(collection) => {
+                f.write_str("COLLECTION ");
+                f.write_node(collection);
+            }
+        }
+    }
+}
+impl_display_t!(DbzTxMetadataOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(ConnectorType)]
@@ -545,22 +574,39 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
 impl_display_t!(CreateConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KafkaConnector {
+pub enum KafkaConnector<T: AstInfo> {
     Inline {
         broker: String,
     },
     // The reference variant needs to be creatable by the parser with just a name
     // but also must allow populating the values for use in purification and planning
     Reference {
-        connector: UnresolvedObjectName,
+        connector: T::ObjectName,
         broker: Option<String>,
         with_options: Option<BTreeMap<String, String>>,
     },
 }
 
+impl<T: AstInfo> AstDisplay for KafkaConnector<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            KafkaConnector::Inline { broker } => {
+                f.write_str("BROKER '");
+                f.write_node(&display::escape_single_quote_string(broker));
+                f.write_str("'");
+            }
+            KafkaConnector::Reference { connector, .. } => {
+                f.write_str("CONNECTOR ");
+                f.write_node(connector);
+            }
+        }
+    }
+}
+impl_display_t!(KafkaConnector);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaSourceConnector {
-    pub connector: KafkaConnector,
+pub struct KafkaSourceConnector<T: AstInfo> {
+    pub connector: KafkaConnector<T>,
     pub topic: String,
     pub key: Option<Vec<Ident>>,
 }
@@ -568,7 +614,7 @@ pub struct KafkaSourceConnector {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
 #[enum_kind(SourceConnectorType)]
 pub enum CreateSourceConnector<T: AstInfo> {
-    Kafka(KafkaSourceConnector),
+    Kafka(KafkaSourceConnector<T>),
     Kinesis {
         arn: String,
     },
@@ -595,34 +641,18 @@ pub enum CreateSourceConnector<T: AstInfo> {
         /// The PubNub channel to subscribe to
         channel: String,
     },
-    Persist {
-        consensus_uri: String,
-        blob_uri: String,
-        collection_id: String,
-        columns: Vec<ColumnDef<T>>,
-    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             CreateSourceConnector::Kafka(KafkaSourceConnector {
-                connector: broker,
+                connector,
                 topic,
                 key,
             }) => {
                 f.write_str("KAFKA ");
-                match broker {
-                    KafkaConnector::Inline { broker } => {
-                        f.write_str("BROKER '");
-                        f.write_node(&display::escape_single_quote_string(broker));
-                        f.write_str("'");
-                    }
-                    KafkaConnector::Reference { connector, .. } => {
-                        f.write_str("CONNECTOR ");
-                        f.write_node(connector);
-                    }
-                }
+                f.write_node(connector);
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
@@ -682,24 +712,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
                 f.write_str("' CHANNEL '");
                 f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
-            }
-            CreateSourceConnector::Persist {
-                consensus_uri,
-                blob_uri,
-                collection_id,
-                columns,
-            } => {
-                f.write_str("PERSIST CONSENSUS '");
-                f.write_node(&display::escape_single_quote_string(consensus_uri));
-                f.write_str("' BLOB '");
-                f.write_node(&display::escape_single_quote_string(blob_uri));
-                f.write_str("' SHARD '");
-                f.write_node(&display::escape_single_quote_string(collection_id));
-                f.write_str("'");
-
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(columns));
-                f.write_str(")");
             }
         }
     }

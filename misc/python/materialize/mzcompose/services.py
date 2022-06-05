@@ -14,7 +14,14 @@ from typing import Dict, List, Optional, Tuple, Union
 from materialize.mzcompose import Service, ServiceConfig
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
-DEFAULT_DEBEZIUM_VERSION = "1.9"
+
+# Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
+# minor version in the release series, and minor versions have been known to
+# introduce breakage.
+#
+# Do not upgrade past v1.9.2.Final until debezium/debezium#3570 is resolved.
+DEFAULT_DEBEZIUM_VERSION = "1.9.2.Final"
+
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
 DEFAULT_MZ_VOLUMES = [
@@ -56,7 +63,6 @@ class Materialized(Service):
                 "MZ_LOG_FILTER",
                 "STORAGED_LOG_FILTER",
                 "COMPUTED_LOG_FILTER",
-                "MZ_PROCESS_LISTEN_HOST=0.0.0.0",
             ]
 
         if forward_aws_credentials:
@@ -81,7 +87,7 @@ class Materialized(Service):
         command_list = [
             f"--data-directory={data_directory}",
             f"--listen-addr 0.0.0.0:{guest_port}",
-            "--experimental",
+            "--unsafe-mode",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 
@@ -162,7 +168,6 @@ class Computed(Service):
             command_list.append(f"--workers {workers}")
 
         if peers:
-            command_list.append(f"--processes {len(peers)}")
             command_list.append(f"--process {peers.index(name)}")
             command_list.append(" ".join(f"{peer}:2102" for peer in peers))
 

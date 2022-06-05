@@ -1417,7 +1417,7 @@ impl<S: Append> Catalog<S> {
                     start_time: to_datetime((config.now)()),
                     start_instant: Instant::now(),
                     nonce: rand::random(),
-                    experimental_mode: config.storage.experimental_mode(),
+                    unsafe_mode: config.unsafe_mode,
                     cluster_id: config.storage.cluster_id(),
                     session_id: Uuid::new_v4(),
                     build_info: config.build_info,
@@ -1940,12 +1940,11 @@ impl<S: Append> Catalog<S> {
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
     pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
-        let experimental_mode = None;
         let metrics_registry = &MetricsRegistry::new();
-        let storage = storage::Connection::open(stash, experimental_mode).await?;
+        let storage = storage::Connection::open(stash).await?;
         let (catalog, _) = Catalog::open(Config {
             storage,
-            experimental_mode,
+            unsafe_mode: true,
             build_info: &DUMMY_BUILD_INFO,
             timestamp_frequency: Duration::from_secs(1),
             now,
@@ -3027,21 +3026,24 @@ impl<S: Append> Catalog<S> {
         create_sql: String,
         pcx: Option<&PlanContext>,
     ) -> Result<CatalogItem, anyhow::Error> {
+        let session_catalog = self.for_system_session();
         let stmt = mz_sql::parse::parse(&create_sql)?.into_element();
-        let plan = mz_sql::plan::plan(pcx, &self.for_system_session(), stmt, &Params::empty())?;
+        let (stmt, depends_on) = mz_sql::names::resolve(&session_catalog, stmt)?;
+        let depends_on = depends_on.into_iter().collect();
+        let plan = mz_sql::plan::plan(pcx, &session_catalog, stmt, &Params::empty())?;
         Ok(match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
                 desc: table.desc,
                 defaults: table.defaults,
                 conn_id: None,
-                depends_on: table.depends_on,
+                depends_on,
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
                 connector: source.connector,
                 desc: source.desc,
-                depends_on: source.depends_on,
+                depends_on,
             }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
@@ -3052,7 +3054,7 @@ impl<S: Append> Catalog<S> {
                     optimized_expr,
                     desc,
                     conn_id: None,
-                    depends_on: view.depends_on,
+                    depends_on,
                 })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
@@ -3060,7 +3062,7 @@ impl<S: Append> Catalog<S> {
                 on: index.on,
                 keys: index.keys,
                 conn_id: None,
-                depends_on: index.depends_on,
+                depends_on,
                 compute_instance: index.compute_instance,
             }),
             Plan::CreateSink(CreateSinkPlan {
@@ -3073,7 +3075,7 @@ impl<S: Append> Catalog<S> {
                 connector: SinkConnectorState::Pending(sink.connector_builder),
                 envelope: sink.envelope,
                 with_snapshot,
-                depends_on: sink.depends_on,
+                depends_on,
                 compute_instance: sink.compute_instance,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => CatalogItem::Type(Type {
@@ -3082,7 +3084,7 @@ impl<S: Append> Catalog<S> {
                     array_id: None,
                     typ: typ.inner,
                 },
-                depends_on: typ.depends_on,
+                depends_on,
             }),
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,

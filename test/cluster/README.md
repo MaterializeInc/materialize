@@ -29,13 +29,13 @@ dataflow`).
 On `dataflow1`, run:
 
 ```
-docker run -p 2101:2101 -p 6876:6876 materialize/dataflowd:latest --workers 2 --processes 2 --process 0 0.0.0.0:2101 dataflow2:2101
+docker run -p 2101:2101 -p 6876:6876 materialize/dataflowd:latest --workers 2 --process 0 0.0.0.0:2101 dataflow2:2101
 ```
 
 On `dataflow2`, run:
 
 ```
-docker run -p 2101:2101 -p 6876:6876 materialize/dataflowd:latest --workers 2 --processes 2 --process 1 dataflow1:2101 0.0.0.0:2101
+docker run -p 2101:2101 -p 6876:6876 materialize/dataflowd:latest --workers 2 --process 1 dataflow1:2101 0.0.0.0:2101
 ```
 
 On `coord`, run:
@@ -59,7 +59,7 @@ the *I*th dataflow node, run:
 ```
 docker run -p 2101:2101 -p 6876:6876 materialize/dataflowd:latest \
     --workers <W> \
-    --processes <N> --process <I> \
+    --process <I> \
     --hosts dataflow1:2101 ... 0.0.0.0:2101 ... dataflow<N>:2101
 ```
 

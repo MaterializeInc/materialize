@@ -18,6 +18,8 @@ use timely::dataflow::operators::capture::Replay;
 use timely::dataflow::operators::Inspect;
 use timely::logging::{TimelyEvent, WorkerIdentifier};
 
+use mz_ore::cli::{self, CliConfig};
+
 /// Views Timely logs from a running dataflow server.
 ///
 /// Listens for incoming log connections from a Timely/Differential program running
@@ -40,7 +42,7 @@ struct Args {
 }
 
 fn main() {
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     let listener =
         TcpListener::bind((&*args.listen_addr, args.port)).expect("binding tcp listener");

@@ -8,11 +8,9 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass
-from pathlib import Path
 from textwrap import dedent
-from typing import Callable, Optional
+from typing import Callable
 
-from materialize import spawn
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Computed,
@@ -79,7 +77,7 @@ def drop_create_replica(c: Composition) -> None:
         dedent(
             """
             > DROP CLUSTER REPLICA cluster1.replica1
-            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ('computed_2_1:2100', 'computed_2_2:2100')
+            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ('computed_1_1:2100', 'computed_1_2:2100')
             """
         )
     )
@@ -216,9 +214,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
         c.sql(
             """
-            CREATE CLUSTER cluster1
-            REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100')),
-            REPLICA replica2 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'))
+            CREATE CLUSTER cluster1 REPLICAS (
+                replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100')),
+                replica2 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'))
+            )
             """
         )
 

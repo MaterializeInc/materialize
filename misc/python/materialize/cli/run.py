@@ -36,7 +36,7 @@ def main() -> int:
     parser.add_argument(
         "program",
         help="the name of the program to run",
-        choices=["materialized", "sqllogictest", "test"],
+        choices=[*KNOWN_PROGRAMS, "test"],
     )
     parser.add_argument(
         "args",
@@ -69,11 +69,24 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "-p",
+        "--package",
+        help="Package to run tests for",
+        action="append",
+        default=[],
+    )
+    parser.add_argument(
+        "--test",
+        help="Test only the specified test target",
+        action="append",
+        default=[],
+    )
+    parser.add_argument(
         "--tokio-console",
         help="Activate the Tokio console",
         action="store_true",
     )
-    args = parser.parse_args()
+    args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
     args.channel = None
@@ -89,7 +102,7 @@ def main() -> int:
             path = ROOT / "target" / "debug" / args.program
         command = [str(path), *args.args]
         if args.tokio_console:
-            command += ["--tokio-console"]
+            command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
         if args.program == "materialized":
             if args.reset:
                 print("Removing mzdata directory...")
@@ -105,7 +118,12 @@ def main() -> int:
     elif args.program == "test":
         _build(args)
         command = _cargo_command(args, "test")
+        for package in args.package:
+            command += ["--package", package]
+        for test in args.test:
+            command += ["--test", test]
         command += args.args
+        os.environ["POSTGRES_URL"] = args.postgres
     else:
         raise UIError(f"unknown program {args.program}")
 

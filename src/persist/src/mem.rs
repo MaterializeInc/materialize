@@ -37,6 +37,9 @@ impl MemMultiRegistry {
     }
 
     /// Opens a [MemBlobMulti] associated with `path`.
+    ///
+    /// TODO: Replace this with PersistClientCache once they're in the same
+    /// crate.
     pub async fn blob_multi(&mut self, path: &str) -> MemBlobMulti {
         if let Some(blob) = self.blob_multi_by_path.get(path) {
             MemBlobMulti::open(MemBlobMultiConfig {

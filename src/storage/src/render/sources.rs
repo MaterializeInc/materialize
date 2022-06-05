@@ -11,7 +11,8 @@
 //!
 //! See [`render_source`] for more details.
 
-use std::sync::Arc;
+use std::any::Any;
+use std::rc::Rc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::consolidate::ConsolidateStream;
@@ -19,15 +20,15 @@ use differential_dataflow::{collection, AsCollection, Collection, Hashable};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::{encoding::*, *};
 use mz_dataflow_types::*;
 use mz_expr::PartitionId;
-use mz_repr::{Diff, GlobalId, Row, RowPacker, Timestamp};
+use mz_repr::{Diff, Row, RowPacker, Timestamp};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
+use crate::source::persist_source;
 use crate::source::{
     self, DecodeResult, DelimitedValueSource, KafkaSourceReader, KinesisSourceReader,
     PostgresSourceReader, PubNubSourceReader, RawSourceCreationConfig, S3SourceReader,
@@ -69,28 +70,25 @@ enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
 pub fn render_source<G>(
     scope: &mut G,
     dataflow_debug_name: &String,
-    as_of_frontier: &Antichain<G::Timestamp>,
-    src_id: GlobalId,
-    source_desc: SourceDesc,
-    storage_metadata: CollectionMetadata,
+    ingestion: IngestionDescription<CollectionMetadata, Timestamp>,
     mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
     (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>),
-    Arc<dyn std::any::Any + Send + Sync>,
+    Rc<dyn Any>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
 {
     // Blank out trivial linear operators.
     if let Some(operator) = &linear_operators {
-        if operator.is_trivial(source_desc.desc.arity()) {
+        if operator.is_trivial(ingestion.desc.desc.arity()) {
             linear_operators = None;
         }
     }
 
     // Tokens that we should return from the method.
-    let mut needed_tokens: Vec<Arc<dyn std::any::Any + Send + Sync>> = Vec::new();
+    let mut needed_tokens: Vec<Rc<dyn Any>> = Vec::new();
 
     // Before proceeding, we may need to remediate sources with non-trivial relational
     // expressions that post-process the bare source. If the expression is trivial, a
@@ -99,7 +97,7 @@ where
     // at the end of `src.optimized_expr`.
     //
     // This has a lot of potential for improvement in the near future.
-    match source_desc.connector.clone() {
+    match ingestion.desc.connector.clone() {
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands. Defers entirely to `render_table`
         SourceConnector::Local { .. } => unreachable!(),
@@ -134,18 +132,18 @@ where
                 // TODO: This feels icky, but getting rid of hardcoding this difference between
                 // Kafka and all other sources seems harder.
                 crate::source::responsible_for(
-                    &src_id,
+                    &ingestion.id,
                     scope.index(),
                     scope.peers(),
                     &PartitionId::None,
                 )
             };
 
-            let source_name = format!("{}-{}", connector.name(), src_id);
+            let source_name = format!("{}-{}", connector.name(), ingestion.id);
             let base_source_config = RawSourceCreationConfig {
                 name: source_name,
                 upstream_name: connector.upstream_name().map(ToOwned::to_owned),
-                id: src_id,
+                id: ingestion.id,
                 scope,
                 // Distribute read responsibility among workers.
                 active: active_read_worker,
@@ -155,8 +153,8 @@ where
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
-                as_of: as_of_frontier.clone(),
-                storage_metadata,
+                as_of: ingestion.since.clone(),
+                storage_metadata: ingestion.storage_metadata,
             };
 
             // Build the _raw_ ok and error sources using `create_raw_source` and the
@@ -203,9 +201,6 @@ where
                     );
                     ((SourceType::Row(ok), err), cap)
                 }
-                ExternalSourceConnector::Persist(_) => {
-                    unreachable!("persist/STORAGE sources cannot be rendered in a storage instance")
-                }
             };
 
             // Include any source errors.
@@ -248,7 +243,7 @@ where
                         schema_registry_config,
                         confluent_wire_format,
                     );
-                    needed_tokens.push(Arc::new(token));
+                    needed_tokens.push(Rc::new(token));
                     (oks, None)
                 } else {
                     // Depending on the type of _raw_ source produced for the given source
@@ -309,7 +304,7 @@ where
                         ),
                     };
                     if let Some(tok) = extra_token {
-                        needed_tokens.push(Arc::new(tok));
+                        needed_tokens.push(Rc::new(tok));
                     }
 
                     // render envelopes
@@ -317,31 +312,22 @@ where
                         SourceEnvelope::Debezium(dbz_envelope) => {
                             let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
                                 Some(tx_metadata) => {
-                                    //TODO(petrosagg): this should read from storage
-                                    let tx_src_desc = storage_state
-                                        .source_descriptions
+                                    let tx_storage_metadata = ingestion
+                                        .source_imports
                                         .get(&tx_metadata.tx_metadata_global_id)
-                                        // N.B. tx_id is validated when constructing dbz_envelope
-                                        .expect("bad tx metadata spec")
+                                        .expect(
+                                            "dependent source missing from ingestion description",
+                                        )
                                         .clone();
-                                    let tx_collection_metadata = storage_state
-                                        .collection_metadata
-                                        .get(&tx_metadata.tx_metadata_global_id)
-                                        // N.B. tx_id is validated when constructing dbz_envelope
-                                        .expect("bad tx metadata spec")
-                                        .clone();
-                                    // TODO(#11667): reuse the existing arrangement if it exists
-                                    let ((tx_source_ok, tx_source_err), tx_token) = render_source(
-                                        scope,
-                                        dataflow_debug_name,
-                                        as_of_frontier,
-                                        tx_metadata.tx_metadata_global_id,
-                                        tx_src_desc,
-                                        tx_collection_metadata,
-                                        // NOTE: For now sources never have LinearOperators
-                                        // but might have in the future
-                                        None,
-                                        storage_state,
+                                    let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
+                                        persist_source::persist_source(
+                                            scope,
+                                            tx_storage_metadata,
+                                            ingestion.since.clone(),
+                                        );
+                                    let (tx_source_ok, tx_source_err) = (
+                                        tx_source_ok_stream.as_collection(),
+                                        tx_source_err_stream.as_collection(),
                                     );
                                     needed_tokens.push(tx_token);
                                     error_collections.push(tx_source_err);
@@ -367,13 +353,11 @@ where
                             let transformed_results =
                                 transform_keys_from_key_envelope(upsert_envelope, results);
 
-                            let as_of_frontier = as_of_frontier.clone();
-
-                            let source_arity = source_desc.desc.typ().arity();
+                            let source_arity = ingestion.desc.desc.typ().arity();
 
                             let (upsert_ok, upsert_err) = super::upsert::upsert(
                                 &transformed_results,
-                                as_of_frontier,
+                                ingestion.since.clone(),
                                 &mut linear_operators,
                                 source_arity,
                                 upsert_envelope.clone(),
@@ -439,7 +423,7 @@ where
                         .inner
                         .flat_map_fallible("SourceLinearOperators", {
                             // Produce an executable plan reflecting the linear operators.
-                            let source_type = source_desc.desc.typ();
+                            let source_type = ingestion.desc.desc.typ();
                             let linear_op_mfp =
                                 mz_dataflow_types::plan::linear_to_mfp(operators, source_type)
                                     .into_plan()
@@ -476,13 +460,13 @@ where
             match &envelope {
                 SourceEnvelope::Upsert(_) => {}
                 _ => {
-                    let as_of_frontier1 = as_of_frontier.clone();
+                    let as_of_frontier1 = ingestion.since.clone();
                     collection = collection
                         .inner
                         .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
                         .as_collection();
 
-                    let as_of_frontier2 = as_of_frontier.clone();
+                    let as_of_frontier2 = ingestion.since;
                     err_collection = err_collection
                         .inner
                         .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
@@ -493,20 +477,12 @@ where
             // Consolidate the results, as there may now be cancellations.
             collection = collection.consolidate_stream();
 
-            let source_token = Arc::new(capability);
-
-            // We also need to keep track of this mapping globally to activate sources
-            // on timestamp advancement queries
-            storage_state
-                .ts_source_mapping
-                .entry(src_id)
-                .or_insert_with(Vec::new)
-                .push(Arc::downgrade(&source_token));
+            let source_token = Rc::new(capability);
 
             needed_tokens.push(source_token);
 
             // Return the collections and any needed tokens.
-            ((collection, err_collection), Arc::new(needed_tokens))
+            ((collection, err_collection), Rc::new(needed_tokens))
         }
     }
 }

@@ -77,7 +77,6 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use mz_stash::Append;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use timely::order::PartialOrder;
@@ -86,7 +85,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::warn;
+use tracing::{trace, warn};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -99,7 +98,8 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
 use mz_dataflow_types::sources::{
-    ExternalSourceConnector, PostgresSourceConnector, SourceConnector, Timeline,
+    ExternalSourceConnector, IngestionDescription, PostgresSourceConnector, SourceConnector,
+    Timeline,
 };
 use mz_dataflow_types::{
     BuildDesc, ConnectorContext, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
@@ -123,13 +123,13 @@ use mz_secrets::{SecretOp, SecretsController, SecretsReader};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident, InsertSource,
-    ObjectType, Query, Raw, RawIdent, SetExpr, Statement,
+    ObjectType, Query, Raw, RawClusterName, SetExpr, Statement,
 };
 use mz_sql::catalog::{
     CatalogComputeInstance, CatalogError, CatalogItemType, CatalogTypeDetails, SessionCatalog as _,
 };
 use mz_sql::names::{
-    FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
+    Aug, FullObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier, SchemaSpecifier,
 };
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
@@ -144,6 +144,7 @@ use mz_sql::plan::{
     TailPlan, View,
 };
 use mz_sql_parser::ast::RawObjectName;
+use mz_stash::Append;
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
@@ -200,8 +201,9 @@ pub struct CreateSourceStatementReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<CreateSourceStatement<Raw>, CoordError>,
+    pub result: Result<CreateSourceStatement<Aug>, CoordError>,
     pub params: Params,
+    pub depends_on: Vec<GlobalId>,
 }
 
 /// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
@@ -233,7 +235,7 @@ pub struct Config<S> {
     pub storage: storage::Connection<S>,
     pub timestamp_frequency: Duration,
     pub logical_compaction_window: Option<Duration>,
-    pub experimental_mode: bool,
+    pub unsafe_mode: bool,
     pub build_info: &'static BuildInfo,
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
@@ -320,6 +322,12 @@ fn concretize_replica_config(
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
+    ///
+    /// This component offers:
+    /// - Sufficient isolation from COMPUTE, so long as communication with
+    ///   COMPUTE replicas is non-blocking.
+    /// - Insufficient isolation from STORAGE. The ADAPTER cannot tolerate
+    ///   failure of STORAGE services.
     dataflow_client: mz_dataflow_types::client::Controller,
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
@@ -551,13 +559,23 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let entries: Vec<_> = self.catalog.entries().cloned().collect();
+        let mut entries: Vec<_> = self.catalog.entries().cloned().collect();
+        // Topologically sort entries based on the used_by relationship
+        entries.sort_unstable_by(|a, b| {
+            use std::cmp::Ordering;
+            if a.used_by().contains(&b.id()) {
+                Ordering::Less
+            } else if b.used_by().contains(&a.id()) {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        });
+
         let logs: HashSet<_> = BUILTINS::logs()
             .map(|log| self.catalog.resolve_builtin_log(log))
             .collect();
 
-        // Sources and indexes may be depended upon by other catalog items,
-        // insert them first.
         for entry in &entries {
             match entry.item() {
                 // Currently catalog item rebuild assumes that sinks and
@@ -573,15 +591,23 @@ impl<S: Append + 'static> Coordinator<S> {
                         .source_description_for(entry.id())
                         .unwrap();
 
+                    let mut ingestion = IngestionDescription {
+                        id: entry.id(),
+                        desc: source_description,
+                        since: Antichain::from_elem(Timestamp::minimum()),
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                    };
+
+                    for id in entry.uses() {
+                        if self.catalog.state().get_entry(id).source().is_some() {
+                            ingestion.source_imports.insert(*id, ());
+                        }
+                    }
+
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![(
-                            entry.id(),
-                            (
-                                source_description,
-                                Antichain::from_elem(Timestamp::minimum()),
-                            ),
-                        )])
+                        .create_sources(vec![ingestion])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -599,12 +625,24 @@ impl<S: Append + 'static> Coordinator<S> {
                         .state()
                         .source_description_for(entry.id())
                         .unwrap();
+
+                    let mut ingestion = IngestionDescription {
+                        id: entry.id(),
+                        desc: source_description,
+                        since: Antichain::from_elem(since_ts),
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                    };
+
+                    for id in entry.uses() {
+                        if self.catalog.state().get_entry(id).source().is_some() {
+                            ingestion.source_imports.insert(*id, ());
+                        }
+                    }
+
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![(
-                            entry.id(),
-                            (source_description, Antichain::from_elem(since_ts)),
-                        )])
+                        .create_sources(vec![ingestion])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -619,8 +657,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
                             idx.compute_instance,
-                            // TODO(benesch): why is this hardcoded to 1000?
-                            Some(1000),
+                            self.logical_compaction_window_ms,
                         )
                         .await;
                     } else {
@@ -630,12 +667,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.ship_dataflow(df, idx.compute_instance).await;
                     }
                 }
-                _ => (), // Handled in next loop.
-            }
-        }
-
-        for entry in entries {
-            match entry.item() {
                 CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
@@ -660,7 +691,12 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await?;
                 }
-                _ => (), // Handled in prior loop.
+                // Nothing to do for these cases
+                CatalogItem::Log(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connector(_) => {}
             }
         }
 
@@ -791,7 +827,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     // than pending writes because of cancellations.
                     if let Some(mut ready) = self.write_lock_wait_group.pop_front() {
                         ready.session.grant_write_lock(write_lock_guard);
-                        self.sequence_plan(ready.tx, ready.session, ready.plan)
+                        // Write statements never need to track catalog
+                        // dependencies.
+                        let depends_on = vec![];
+                        self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                             .await;
                     }
                     // N.B. if no deferred plans, write lock is released by drop
@@ -809,7 +848,13 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             if let Some(timestamp) = self.global_timeline.should_advance_to() {
+                let start = Instant::now();
                 self.advance_local_inputs(timestamp).await;
+                trace!(
+                    "advancing table frontiers to {} took: {} ms",
+                    timestamp,
+                    start.elapsed().as_millis()
+                );
             }
         }
     }
@@ -938,6 +983,7 @@ impl<S: Append + 'static> Coordinator<S> {
             tx,
             result,
             params,
+            depends_on,
         }: CreateSourceStatementReady,
     ) {
         let stmt = match result {
@@ -954,7 +1000,9 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        let result = self.sequence_create_source(&mut session, plan).await;
+        let result = self
+            .sequence_create_source(&mut session, plan, depends_on)
+            .await;
         tx.send(result, session);
     }
 
@@ -1242,7 +1290,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn handle_statement(
         &mut self,
         session: &mut Session,
-        stmt: mz_sql::ast::Statement<Raw>,
+        stmt: mz_sql::ast::Statement<Aug>,
         params: &mz_sql::plan::Params,
     ) -> Result<mz_sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
@@ -1512,7 +1560,13 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
+        let catalog = self.catalog.for_session(&session);
         let stmt = stmt.clone();
+        let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
+            Ok(resolved) => resolved,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
+        let depends_on = depends_on.into_iter().collect();
         let params = portal.parameters.clone();
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
@@ -1521,16 +1575,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = session.conn_id();
                 let params = portal.parameters.clone();
-                let catalog = self.catalog.for_session(&session);
-                let purify_fut =
-                    match mz_sql::connectors::populate_connectors(stmt, &catalog, &mut vec![]) {
-                        Ok(stmt) => mz_sql::pure::purify_create_source(
-                            self.now(),
-                            stmt,
-                            self.connector_context.clone(),
-                        ),
-                        Err(e) => return tx.send(Err(e.into()), session),
-                    };
+                let purify_fut = match mz_sql::connectors::populate_connectors(stmt, &catalog) {
+                    Ok(stmt) => mz_sql::pure::purify_create_source(
+                        self.now(),
+                        stmt,
+                        self.connector_context.clone(),
+                    ),
+                    Err(e) => return tx.send(Err(e.into()), session),
+                };
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
                     internal_cmd_tx
@@ -1540,6 +1592,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 tx,
                                 result,
                                 params,
+                                depends_on,
                             },
                         ))
                         .expect("sending to internal_cmd_tx cannot fail");
@@ -1548,7 +1601,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
             // All other statements are handled immediately.
             _ => match self.handle_statement(&mut session, stmt, &params).await {
-                Ok(plan) => self.sequence_plan(tx, session, plan).await,
+                Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
                 Err(e) => tx.send(Err(e), session),
             },
         }
@@ -1732,6 +1785,7 @@ impl<S: Append + 'static> Coordinator<S> {
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         plan: Plan,
+        depends_on: Vec<GlobalId>,
     ) {
         match plan {
             Plan::CreateConnector(plan) => {
@@ -1756,29 +1810,37 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::CreateTable(plan) => {
-                tx.send(self.sequence_create_table(&session, plan).await, session);
+                tx.send(
+                    self.sequence_create_table(&session, plan, depends_on).await,
+                    session,
+                );
             }
             Plan::CreateSecret(plan) => {
                 tx.send(self.sequence_create_secret(&session, plan).await, session);
             }
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, plan, tx).await;
+                self.sequence_create_sink(session, plan, depends_on, tx)
+                    .await;
             }
             Plan::CreateView(plan) => {
-                tx.send(self.sequence_create_view(&session, plan).await, session);
+                tx.send(
+                    self.sequence_create_view(&session, plan, depends_on).await,
+                    session,
+                );
             }
             Plan::CreateViews(plan) => {
                 tx.send(
-                    self.sequence_create_views(&mut session, plan).await,
+                    self.sequence_create_views(&mut session, plan, depends_on)
+                        .await,
                     session,
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan).await, session);
+                tx.send(self.sequence_create_index(plan, depends_on).await, session);
             }
             Plan::CreateType(plan) => {
-                tx.send(self.sequence_create_type(plan).await, session);
+                tx.send(self.sequence_create_type(plan, depends_on).await, session);
             }
             Plan::DropDatabase(plan) => {
                 tx.send(self.sequence_drop_database(plan).await, session);
@@ -1838,7 +1900,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
             Plan::Tail(plan) => {
-                tx.send(self.sequence_tail(&mut session, plan).await, session);
+                tx.send(
+                    self.sequence_tail(&mut session, plan, depends_on).await,
+                    session,
+                );
             }
             Plan::SendRows(plan) => {
                 tx.send(Ok(send_immediate_rows(plan.rows)), session);
@@ -2222,6 +2287,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateTablePlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateTablePlan {
             name,
@@ -2235,14 +2301,12 @@ impl<S: Append + 'static> Coordinator<S> {
             None
         };
         let table_id = self.catalog.allocate_user_id().await?;
-        let mut index_depends_on = table.depends_on.clone();
-        index_depends_on.push(table_id);
         let table = catalog::Table {
             create_sql: table.create_sql,
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
-            depends_on: table.depends_on,
+            depends_on,
         };
         let table_oid = self.catalog.allocate_oid().await?;
         let ops = vec![catalog::Op::CreateItem {
@@ -2262,14 +2326,21 @@ impl<S: Append + 'static> Coordinator<S> {
                     .state()
                     .source_description_for(table_id)
                     .unwrap();
+
+                let ingestion = IngestionDescription {
+                    id: table_id,
+                    desc: source_description,
+                    since: Antichain::from_elem(since_ts),
+                    source_imports: BTreeMap::new(),
+                    storage_metadata: (),
+                };
+
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![(
-                        table_id,
-                        (source_description, Antichain::from_elem(since_ts)),
-                    )])
+                    .create_sources(vec![ingestion])
                     .await
                     .unwrap();
+
                 self.initialize_storage_read_policies(
                     vec![table_id],
                     self.logical_compaction_window_ms,
@@ -2289,6 +2360,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         plan: CreateSourcePlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
@@ -2297,7 +2369,7 @@ impl<S: Append + 'static> Coordinator<S> {
             create_sql: plan.source.create_sql,
             connector: plan.source.connector,
             desc: plan.source.desc,
-            depends_on: plan.source.depends_on,
+            depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
@@ -2365,17 +2437,26 @@ impl<S: Append + 'static> Coordinator<S> {
                     .source_description_for(source_id)
                     .unwrap();
 
+                let mut ingestion = IngestionDescription {
+                    id: source_id,
+                    desc: source_description,
+                    since: Antichain::from_elem(Timestamp::minimum()),
+                    source_imports: BTreeMap::new(),
+                    storage_metadata: (),
+                };
+
+                for id in self.catalog.state().get_entry(&source_id).uses() {
+                    if self.catalog.state().get_entry(id).source().is_some() {
+                        ingestion.source_imports.insert(*id, ());
+                    }
+                }
+
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![(
-                        source_id,
-                        (
-                            source_description,
-                            Antichain::from_elem(Timestamp::minimum()),
-                        ),
-                    )])
+                    .create_sources(vec![ingestion])
                     .await
                     .unwrap();
+
                 self.initialize_storage_read_policies(
                     vec![source_id],
                     self.logical_compaction_window_ms,
@@ -2398,6 +2479,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: Session,
         plan: CreateSinkPlan,
+        depends_on: Vec<GlobalId>,
         tx: ClientTransmitter<ExecuteResponse>,
     ) {
         let CreateSinkPlan {
@@ -2443,7 +2525,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
                 envelope: sink.envelope,
                 with_snapshot,
-                depends_on: sink.depends_on,
+                depends_on,
                 compute_instance,
             }),
         };
@@ -2522,6 +2604,7 @@ impl<S: Append + 'static> Coordinator<S> {
         view: View,
         replace: Option<GlobalId>,
         materialize: bool,
+        depends_on: Vec<GlobalId>,
     ) -> Result<(Vec<catalog::Op>, Option<(GlobalId, ComputeInstanceId)>), CoordError> {
         self.validate_timeline(view.expr.depends_on())?;
 
@@ -2543,7 +2626,7 @@ impl<S: Append + 'static> Coordinator<S> {
             } else {
                 None
             },
-            depends_on: view.depends_on,
+            depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2594,6 +2677,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &Session,
         plan: CreateViewPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let if_not_exists = plan.if_not_exists;
         let (ops, index) = self
@@ -2603,6 +2687,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 plan.view.clone(),
                 plan.replace,
                 plan.materialize,
+                depends_on,
             )
             .await?;
         match self
@@ -2637,13 +2722,21 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         plan: CreateViewsPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         let mut indexes = vec![];
 
         for (name, view) in plan.views {
             let (mut view_ops, index) = self
-                .generate_view_ops(session, name, view, None, plan.materialize)
+                .generate_view_ops(
+                    session,
+                    name,
+                    view,
+                    None,
+                    plan.materialize,
+                    depends_on.clone(),
+                )
                 .await?;
             ops.append(&mut view_ops);
             indexes.extend(index);
@@ -2678,6 +2771,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_create_index(
         &mut self,
         plan: CreateIndexPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let CreateIndexPlan {
             name,
@@ -2695,7 +2789,7 @@ impl<S: Append + 'static> Coordinator<S> {
             keys: index.keys,
             on: index.on,
             conn_id: None,
-            depends_on: index.depends_on,
+            depends_on,
             compute_instance,
         };
         let oid = self.catalog.allocate_oid().await?;
@@ -2731,6 +2825,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn sequence_create_type(
         &mut self,
         plan: CreateTypePlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
@@ -2738,7 +2833,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 array_id: None,
                 typ: plan.typ.inner,
             },
-            depends_on: plan.typ.depends_on,
+            depends_on,
         };
         let id = self.catalog.allocate_user_id().await?;
         let oid = self.catalog.allocate_oid().await?;
@@ -3458,6 +3553,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         plan: TailPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let TailPlan {
             from,
@@ -3519,11 +3615,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.dataflow_builder(compute_instance)
                     .build_sink_dataflow(sink_name, sink_id, sink_desc)?
             }
-            TailFrom::Query {
-                expr,
-                desc,
-                depends_on,
-            } => {
+            TailFrom::Query { expr, desc } => {
                 let id = self.allocate_transient_id()?;
                 let expr = self.view_optimizer.optimize(expr)?;
                 let desc = RelationDesc::new(expr.typ(), desc.iter_names());
@@ -4955,7 +5047,7 @@ pub async fn serve<S: Append + 'static>(
         storage,
         timestamp_frequency,
         logical_compaction_window,
-        experimental_mode,
+        unsafe_mode,
         build_info,
         metrics_registry,
         now,
@@ -4971,7 +5063,7 @@ pub async fn serve<S: Append + 'static>(
 
     let (catalog, builtin_table_updates) = Catalog::open(catalog::Config {
         storage,
-        experimental_mode: Some(experimental_mode),
+        unsafe_mode,
         build_info,
         timestamp_frequency,
         now: now.clone(),
@@ -5092,7 +5184,7 @@ pub fn index_sql(
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: RawObjectName::Name(mz_sql::normalize::unresolve(view_name)),
-        in_cluster: Some(RawIdent::Resolved(compute_instance.to_string())),
+        in_cluster: Some(RawClusterName::Resolved(compute_instance.to_string())),
         key_parts: Some(
             keys.iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
@@ -5147,6 +5239,7 @@ pub fn describe<S: Append>(
         }
         _ => {
             let catalog = &catalog.for_session(session);
+            let (stmt, _) = mz_sql::names::resolve(catalog, stmt)?;
             Ok(mz_sql::plan::describe(
                 &session.pcx(),
                 catalog,

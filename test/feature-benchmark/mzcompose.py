@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List, Optional, Type
+from typing import List, Type
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -143,9 +143,9 @@ def start_services(
 
             c.sql("DROP CLUSTER default")
             c.sql(
-                "CREATE CLUSTER default REPLICA replica1 (REMOTE ("
+                "CREATE CLUSTER default REPLICAS (replica1 (REMOTE ("
                 + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
-                + "));"
+                + ")));"
             )
 
     c.up("testdrive", persistent=True)

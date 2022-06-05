@@ -14,12 +14,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_persist_client::PersistLocation;
+use anyhow::anyhow;
 use once_cell::sync::Lazy;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
-use postgres::Socket;
+use postgres::{NoTls, Socket};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tower_http::cors::AllowOrigin;
@@ -27,10 +27,12 @@ use tower_http::cors::AllowOrigin;
 use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
+use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::task;
+use mz_persist_client::PersistLocation;
 
 pub static KAFKA_ADDRS: Lazy<mz_kafka_util::KafkaAddrs> =
     Lazy::new(|| match env::var("KAFKA_ADDRS") {
@@ -47,10 +49,11 @@ pub struct Config {
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     frontegg: Option<FronteggAuthentication>,
-    experimental_mode: bool,
+    unsafe_mode: bool,
     workers: usize,
     logical_compaction_window: Option<Duration>,
     now: NowFn,
+    seed: u32,
 }
 
 impl Default for Config {
@@ -60,10 +63,11 @@ impl Default for Config {
             logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
             frontegg: None,
-            experimental_mode: false,
+            unsafe_mode: false,
             workers: 1,
             logical_compaction_window: None,
             now: SYSTEM_TIME.clone(),
+            seed: rand::random(),
         }
     }
 }
@@ -93,8 +97,8 @@ impl Config {
         self
     }
 
-    pub fn experimental_mode(mut self) -> Self {
-        self.experimental_mode = true;
+    pub fn unsafe_mode(mut self) -> Self {
+        self.unsafe_mode = true;
         self
     }
 
@@ -132,16 +136,30 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         }
         Some(data_directory) => (data_directory, None),
     };
+    let (consensus_uri, catalog_postgres_stash) = {
+        let seed = config.seed;
+        let postgres_url = env::var("POSTGRES_URL")
+            .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
+        let mut conn = postgres::Client::connect(&postgres_url, NoTls)?;
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
+             CREATE SCHEMA IF NOT EXISTS catalog_{seed};",
+        ))?;
+        (
+            format!("{postgres_url}?options=--search_path=consensus_{seed}"),
+            format!("{postgres_url}?options=--search_path=catalog_{seed}"),
+        )
+    };
     let metrics_registry = MetricsRegistry::new();
     let inner = runtime.block_on(materialized::serve(materialized::Config {
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
         persist_location: PersistLocation {
             blob_uri: format!("file://{}/persist/blob", data_directory.display()),
-            consensus_uri: format!("sqlite://{}/persist/consensus", data_directory.display()),
+            consensus_uri,
         },
         data_directory: data_directory.clone(),
-        catalog_postgres_stash: None,
+        catalog_postgres_stash: Some(catalog_postgres_stash),
         orchestrator: OrchestratorConfig {
             backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?
@@ -154,19 +172,19 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 // NOTE(benesch): would be nice to not have to do this, but
                 // the subprocess output wreaks havoc on cargo2junit.
                 suppress_output: true,
-                process_listen_host: None,
                 data_dir: data_directory,
                 command_wrapper: vec![],
             }),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
             linger: false,
+            tracing: TracingCliArgs::default(),
         },
         secrets_controller: None,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
         frontegg: config.frontegg,
-        experimental_mode: config.experimental_mode,
+        unsafe_mode: config.unsafe_mode,
         metrics_registry: metrics_registry.clone(),
         metrics_listen_addr: None,
         now: config.now,

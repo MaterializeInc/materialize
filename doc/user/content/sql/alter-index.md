@@ -6,8 +6,6 @@ menu:
     parent: 'commands'
 ---
 
-{{< version-added v0.4.3 />}}
-
 `ALTER INDEX` changes the parameters of an index.
 
 ## Syntax

@@ -49,5 +49,5 @@ DELETE FROM alter_add_column_with_delete WHERE new_column = 2;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DELETE FROM alter_add_column_with_delete WHERE new_column = 1;
 
-> SELECT COUNT(*) = 0 FROM alter_add_column_with_delete;
-true
+> SELECT COUNT(*) FROM alter_add_column_with_delete;
+0

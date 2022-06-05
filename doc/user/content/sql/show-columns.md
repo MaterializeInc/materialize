@@ -38,16 +38,8 @@ Field | Meaning
 **nullable** | Does the column accept `null` values?
 **type** | The column's [type](../types)
 
-
-{{< version-changed v0.4.2 >}}
 Rows are sorted by the order in which the fields are defined in the targeted
-source, view, or table. Prior versions did not guarantee any particular ordering.
-{{< /version-changed >}}
-
-{{< version-changed v0.5.0 >}}
-The `name`, `nullable`, and `type` columns are renamed to `name`, `nullable`,
-and `type`, respectively.
-{{< /version-changed >}}
+source, view, or table.
 
 ## Examples
 

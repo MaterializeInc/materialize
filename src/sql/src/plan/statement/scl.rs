@@ -20,10 +20,10 @@ use mz_repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
-    ExecuteStatement, FetchStatement, PrepareStatement, Raw, ResetVariableStatement,
+    ExecuteStatement, FetchStatement, PrepareStatement, ResetVariableStatement,
     SetVariableStatement, ShowVariableStatement, Value,
 };
-use crate::names::Aug;
+use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
@@ -32,7 +32,7 @@ use crate::plan::{
 
 pub fn describe_set_variable(
     _: &StatementContext,
-    _: &SetVariableStatement,
+    _: SetVariableStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -54,7 +54,7 @@ pub fn plan_set_variable(
 
 pub fn describe_reset_variable(
     _: &StatementContext,
-    _: &ResetVariableStatement,
+    _: ResetVariableStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -70,7 +70,7 @@ pub fn plan_reset_variable(
 
 pub fn describe_show_variable(
     _: &StatementContext,
-    ShowVariableStatement { variable, .. }: &ShowVariableStatement,
+    ShowVariableStatement { variable, .. }: ShowVariableStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::empty()
@@ -98,7 +98,7 @@ pub fn plan_show_variable(
 
 pub fn describe_discard(
     _: &StatementContext,
-    _: &DiscardStatement,
+    _: DiscardStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -117,14 +117,14 @@ pub fn plan_discard(
 
 pub fn describe_declare(
     _: &StatementContext,
-    _: &DeclareStatement<Raw>,
+    _: DeclareStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_declare(
     _: &StatementContext,
-    DeclareStatement { name, stmt }: DeclareStatement<Raw>,
+    DeclareStatement { name, stmt }: DeclareStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
@@ -140,7 +140,7 @@ with_options! {
 
 pub fn describe_fetch(
     _: &StatementContext,
-    _: &FetchStatement<Raw>,
+    _: FetchStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -178,7 +178,7 @@ pub fn plan_fetch(
 
 pub fn describe_close(
     _: &StatementContext,
-    _: &CloseStatement,
+    _: CloseStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -194,18 +194,19 @@ pub fn plan_close(
 
 pub fn describe_prepare(
     _: &StatementContext,
-    _: &PrepareStatement<Raw>,
+    _: PrepareStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_prepare(
     scx: &StatementContext,
-    PrepareStatement { name, stmt }: PrepareStatement<Raw>,
+    PrepareStatement { name, stmt }: PrepareStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
     // TODO: PREPARE supports specifying param types.
     let param_types = [];
-    let desc = describe(scx.pcx()?, scx.catalog, *stmt.clone(), &param_types)?;
+    let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt.clone())?;
+    let desc = describe(scx.pcx()?, scx.catalog, stmt_resolved, &param_types)?;
     Ok(Plan::Prepare(PreparePlan {
         name: name.to_string(),
         stmt: *stmt,
@@ -253,7 +254,7 @@ fn plan_execute_desc<'a>(
 
 pub fn describe_deallocate(
     _: &StatementContext,
-    _: &DeallocateStatement,
+    _: DeallocateStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }

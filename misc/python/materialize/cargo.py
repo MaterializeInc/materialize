@@ -37,7 +37,16 @@ class Crate:
     Attributes:
         name: The name of the crate.
         version: The version of the crate.
+        features: The features of the crate.
+        path: The path to the crate.
+        path_build_dependencies: The build dependencies which are declared
+            using paths.
+        path_dev_dependencies: The dev dependencies which are declared using
+            paths.
+        path_dependencies: The dependencies which are declared using paths.
         rust_version: The minimum Rust version declared in the crate, if any.
+        bins: The names of all binaries in the crate.
+        examples: The names of all examples in the crate.
     """
 
     def __init__(self, root: Path, path: Path):
@@ -48,10 +57,16 @@ class Crate:
         self.version = semver.VersionInfo.parse(config["package"]["version"])
         self.features = config.get("features", {})
         self.path = path
+        self.path_build_dependencies: Set[str] = set()
+        self.path_dev_dependencies: Set[str] = set()
         self.path_dependencies: Set[str] = set()
-        for dep_type in ["build-dependencies", "dependencies"]:
+        for (dep_type, field) in [
+            ("build-dependencies", self.path_build_dependencies),
+            ("dev-dependencies", self.path_dev_dependencies),
+            ("dependencies", self.path_dependencies),
+        ]:
             if dep_type in config:
-                self.path_dependencies.update(
+                field.update(
                     c.get("package", name)
                     for name, c in config[dep_type].items()
                     if "path" in c
@@ -63,12 +78,22 @@ class Crate:
         if "bin" in config:
             for bin in config["bin"]:
                 self.bins.append(bin["name"])
-        if (path / "src" / "main.rs").exists():
-            self.bins.append(self.name)
-        for p in (path / "src" / "bin").glob("*.rs"):
-            self.bins.append(p.stem)
-        for p in (path / "src" / "bin").glob("*/main.rs"):
-            self.bins.append(p.parent.stem)
+        if config["package"].get("autobins", True):
+            if (path / "src" / "main.rs").exists():
+                self.bins.append(self.name)
+            for p in (path / "src" / "bin").glob("*.rs"):
+                self.bins.append(p.stem)
+            for p in (path / "src" / "bin").glob("*/main.rs"):
+                self.bins.append(p.parent.stem)
+        self.examples = []
+        if "example" in config:
+            for example in config["example"]:
+                self.examples.append(example["name"])
+        if config["package"].get("autoexamples", True):
+            for p in (path / "examples").glob("*.rs"):
+                self.examples.append(p.stem)
+            for p in (path / "examples").glob("*/main.rs"):
+                self.examples.append(p.parent.stem)
 
     def inputs(self) -> Set[str]:
         """Compute the files that can impact the compilation of this crate.
@@ -144,7 +169,32 @@ class Workspace:
             raise ValueError(f"bin {bin} does not exist in cargo workspace")
         return out
 
-    def transitive_path_dependencies(self, crate: Crate) -> Set[Crate]:
+    def crate_for_example(self, example: str) -> Crate:
+        """Find the crate containing the named example.
+
+        Args:
+            example: The name of the example to find.
+
+        Raises:
+            ValueError: The named example did not exist in exactly one crate in
+                the Cargo workspace.
+        """
+        out = None
+        for crate in self.crates.values():
+            for e in crate.examples:
+                if e == example:
+                    if out is not None:
+                        raise ValueError(
+                            f"example {example} appears more than once in cargo workspace"
+                        )
+                    out = crate
+        if out is None:
+            raise ValueError(f"example {example} does not exist in cargo workspace")
+        return out
+
+    def transitive_path_dependencies(
+        self, crate: Crate, dev: bool = False
+    ) -> Set[Crate]:
         """Collects the transitive path dependencies of the requested crate.
 
         Note that only _path_ dependencies are collected. Other types of
@@ -152,6 +202,7 @@ class Workspace:
 
         Args:
             crate: The crate object from which to start the dependency crawl.
+            dev: Whether to consider dev dependencies in the root crate.
 
         Returns:
             crate_set: A set of all of the crates in this Cargo workspace upon
@@ -167,6 +218,11 @@ class Workspace:
             deps.add(c)
             for d in c.path_dependencies:
                 visit(self.crates[d])
+            for d in c.path_build_dependencies:
+                visit(self.crates[d])
 
         visit(crate)
+        if dev:
+            for d in crate.path_dev_dependencies:
+                visit(self.crates[d])
         return deps

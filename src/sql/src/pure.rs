@@ -36,10 +36,11 @@ use mz_repr::strconv;
 use crate::ast::{
     AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CsrConnectorAvro,
     CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
-    CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Raw, Value, WithOption,
+    CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Value, WithOption,
     WithOptionValue,
 };
 use crate::kafka_util;
+use crate::names::Aug;
 use crate::normalize;
 
 /// Purifies a statement, removing any dependencies on external state.
@@ -53,9 +54,9 @@ use crate::normalize;
 /// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
     now: u64,
-    mut stmt: CreateSourceStatement<Raw>,
+    mut stmt: CreateSourceStatement<Aug>,
     connector_context: ConnectorContext,
-) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
+) -> Result<CreateSourceStatement<Aug>, anyhow::Error> {
     let CreateSourceStatement {
         connector,
         format,
@@ -65,7 +66,7 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
-    let mut with_options_map = normalize::options(with_options);
+    let mut with_options_map = normalize::options(with_options)?;
     let mut config_options = BTreeMap::new();
 
     match connector {
@@ -186,7 +187,6 @@ pub async fn purify_create_source(
             *details = Some(hex::encode(details_proto.encode_to_vec()));
         }
         CreateSourceConnector::PubNub { .. } => (),
-        CreateSourceConnector::Persist { .. } => (),
     }
 
     purify_source_format(format, connector, &envelope, &config_options, with_options).await?;
@@ -195,11 +195,11 @@ pub async fn purify_create_source(
 }
 
 async fn purify_source_format(
-    format: &mut CreateSourceFormat<Raw>,
-    connector: &mut CreateSourceConnector<Raw>,
-    envelope: &Option<Envelope>,
+    format: &mut CreateSourceFormat<Aug>,
+    connector: &mut CreateSourceConnector<Aug>,
+    envelope: &Option<Envelope<Aug>>,
     connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<WithOption<Raw>>,
+    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(connector, CreateSourceConnector::Kafka { .. })
@@ -251,11 +251,11 @@ async fn purify_source_format(
 }
 
 async fn purify_source_format_single(
-    format: &mut Format<Raw>,
-    connector: &mut CreateSourceConnector<Raw>,
-    envelope: &Option<Envelope>,
+    format: &mut Format<Aug>,
+    connector: &mut CreateSourceConnector<Aug>,
+    envelope: &Option<Envelope<Aug>>,
     connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<WithOption<Raw>>,
+    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
@@ -327,10 +327,10 @@ async fn purify_source_format_single(
 }
 
 async fn purify_csr_connector_proto(
-    connector: &mut CreateSourceConnector<Raw>,
-    csr_connector: &mut CsrConnectorProto<Raw>,
-    envelope: &Option<Envelope>,
-    with_options: &Vec<WithOption<Raw>>,
+    connector: &mut CreateSourceConnector<Aug>,
+    csr_connector: &mut CsrConnectorProto<Aug>,
+    envelope: &Option<Envelope<Aug>>,
+    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
     {
@@ -353,11 +353,11 @@ async fn purify_csr_connector_proto(
                     .expect("CSR Connector must specify Registry URL"),
             }
             .parse()?;
-            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
+            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options)?)?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
                 &kafka_options,
-                &mut normalize::options(&ccsr_options),
+                &mut normalize::options(&ccsr_options)?,
             )?;
 
             let value =
@@ -385,9 +385,9 @@ async fn purify_csr_connector_proto(
 }
 
 async fn purify_csr_connector_avro(
-    connector: &mut CreateSourceConnector<Raw>,
-    csr_connector: &mut CsrConnectorAvro<Raw>,
-    envelope: &Option<Envelope>,
+    connector: &mut CreateSourceConnector<Aug>,
+    csr_connector: &mut CsrConnectorAvro<Aug>,
+    envelope: &Option<Envelope<Aug>>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
@@ -415,7 +415,7 @@ async fn purify_csr_connector_avro(
             kafka_util::generate_ccsr_client_config(
                 url,
                 &connector_options,
-                &mut normalize::options(ccsr_options),
+                &mut normalize::options(ccsr_options)?,
             )
         })?;
 

@@ -25,6 +25,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -43,6 +44,7 @@ use timely::dataflow::operators::{Capability, Event};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
+use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 use tokio::time::MissedTickBehavior;
 use tracing::error;
@@ -310,22 +312,11 @@ where
     }
 }
 
-// TODO(guswynn): consider moving back to non-thread-safe `RC`'s if
-// we end up with a boundary-per-worker
-// TODO(guswynn): consider just using `SyncActivateOnDrop` if merged into timely
-/// A `SourceToken` manages interest in a source, and is thread-safe.
+/// A `SourceToken` manages interest in a source.
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    pub activator: Arc<SyncActivator>,
-}
-
-impl Drop for SourceToken {
-    fn drop(&mut self) {
-        // Best effort: sync activation
-        // failures are ignored
-        let _ = self.activator.activate();
-    }
+    _activator: Rc<ActivateOnDrop<()>>,
 }
 
 /// The status of a source.

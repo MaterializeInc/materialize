@@ -13,10 +13,8 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::collections::HashMap;
 use std::fs::Permissions;
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -33,13 +31,12 @@ use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
-use mz_dataflow_types::client::RemoteClient;
 use mz_dataflow_types::ConnectorContext;
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator::{Orchestrator, ServiceConfig, ServicePort};
+use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_ore::collections::CollectionExt;
+use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::option::OptionExt;
@@ -113,8 +110,8 @@ pub struct Config {
     pub secrets_controller: Option<SecretsControllerConfig>,
 
     // === Mode switches. ===
-    /// Whether to permit usage of experimental features.
-    pub experimental_mode: bool,
+    /// Whether to permit usage of unsafe features.
+    pub unsafe_mode: bool,
     /// The place where the server's metrics will be reported from.
     pub metrics_registry: MetricsRegistry,
     /// Now generation function.
@@ -169,6 +166,8 @@ pub struct OrchestratorConfig {
     /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
     /// ADAPTER is lost.
     pub linger: bool,
+    /// A tracing configuration to inject into all created services.
+    pub tracing: TracingCliArgs,
 }
 
 /// The orchestrator itself.
@@ -273,8 +272,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     let local_addr = listener.local_addr()?;
 
     // Load the coordinator catalog from disk.
-    let coord_storage =
-        mz_coord::catalog::storage::Connection::open(stash, Some(config.experimental_mode)).await?;
+    let coord_storage = mz_coord::catalog::storage::Connection::open(stash).await?;
 
     // Initialize orchestrator.
     let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
@@ -285,52 +283,11 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         ),
         OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
     };
-    let default_listen_host = orchestrator.listen_host();
-    let storage_service = orchestrator
-        .namespace("storage")
-        .ensure_service(
-            "runtime",
-            ServiceConfig {
-                image: config.orchestrator.storaged_image.clone(),
-                args: &|_hosts_ports, my_ports, _my_index| {
-                    let mut storage_opts = vec![
-                        format!("--workers=1"),
-                        format!(
-                            "--listen-addr={}:{}",
-                            default_listen_host, my_ports["controller"]
-                        ),
-                        format!(
-                            "--http-console-addr={}:{}",
-                            default_listen_host, my_ports["http"]
-                        ),
-                        "--log-process-name".to_string(),
-                    ];
-                    if config.orchestrator.linger {
-                        storage_opts.push(format!("--linger"))
-                    }
-                    storage_opts
-                },
-                ports: vec![
-                    ServicePort {
-                        name: "controller".into(),
-                        port_hint: 2100,
-                    },
-                    ServicePort {
-                        name: "http".into(),
-                        port_hint: 6875,
-                    },
-                ],
-                // TODO: limits?
-                cpu_limit: None,
-                memory_limit: None,
-                scale: NonZeroUsize::new(1).unwrap(),
-                labels: HashMap::new(),
-                availability_zone: None,
-            },
-        )
-        .await?;
     let orchestrator = mz_dataflow_types::client::controller::OrchestratorConfig {
-        orchestrator,
+        orchestrator: Box::new(TracingOrchestrator::new(
+            orchestrator,
+            config.orchestrator.tracing,
+        )),
         computed_image: config.orchestrator.computed_image,
         linger: config.orchestrator.linger,
     };
@@ -383,17 +340,11 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     };
 
     // Initialize dataflow controller.
-    let storage_client = Box::new({
-        let mut client =
-            RemoteClient::new(&[storage_service.addresses("controller").into_element()]);
-        client.connect().await;
-        client
-    });
-
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
-        storage_client,
         config.data_directory,
         config.persist_location,
+        orchestrator.orchestrator.namespace("storage"),
+        config.orchestrator.storaged_image,
     )
     .await;
     let dataflow_controller =
@@ -405,7 +356,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
         logical_compaction_window: config.logical_compaction_window,
-        experimental_mode: config.experimental_mode,
+        unsafe_mode: config.unsafe_mode,
         build_info: &BUILD_INFO,
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
@@ -440,7 +391,6 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         let pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
             tls: pgwire_tls,
             coord_client: coord_client.clone(),
-            metrics_registry: &config.metrics_registry,
             frontegg: config.frontegg.clone(),
         });
         let http_server = http::Server::new(http::Config {

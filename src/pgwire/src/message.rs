@@ -193,28 +193,6 @@ pub enum FrontendMessage {
     },
 }
 
-impl FrontendMessage {
-    pub fn name(&self) -> &'static str {
-        match self {
-            FrontendMessage::Query { .. } => "query",
-            FrontendMessage::Parse { .. } => "parse",
-            FrontendMessage::DescribeStatement { .. } => "describe_statement",
-            FrontendMessage::DescribePortal { .. } => "describe_portal",
-            FrontendMessage::Bind { .. } => "bind",
-            FrontendMessage::Execute { .. } => "execute",
-            FrontendMessage::Flush => "flush",
-            FrontendMessage::Sync => "sync",
-            FrontendMessage::CloseStatement { .. } => "close_statement",
-            FrontendMessage::ClosePortal { .. } => "close_portal",
-            FrontendMessage::Terminate => "terminate",
-            FrontendMessage::CopyData(_) => "copy_data",
-            FrontendMessage::CopyDone => "copy_done",
-            FrontendMessage::CopyFail(_) => "copy_fail",
-            FrontendMessage::Password { .. } => "password",
-        }
-    }
-}
-
 /// Internal representation of a backend [message]
 ///
 /// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
@@ -392,6 +370,7 @@ impl ErrorResponse {
             CoordError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
+            CoordError::PlanError(_) => SqlState::INTERNAL_ERROR,
             CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             CoordError::QGM(_) => SqlState::INTERNAL_ERROR,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,

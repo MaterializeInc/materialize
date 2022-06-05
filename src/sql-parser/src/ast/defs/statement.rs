@@ -51,13 +51,13 @@ pub enum Statement<T: AstInfo> {
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
-    AlterObjectRename(AlterObjectRenameStatement<T>),
+    AlterObjectRename(AlterObjectRenameStatement),
     AlterIndex(AlterIndexStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     Discard(DiscardStatement),
-    DropDatabase(DropDatabaseStatement<T>),
-    DropSchema(DropSchemaStatement<T>),
-    DropObjects(DropObjectsStatement<T>),
+    DropDatabase(DropDatabaseStatement),
+    DropSchema(DropSchemaStatement),
+    DropObjects(DropObjectsStatement),
     DropRoles(DropRolesStatement),
     DropClusters(DropClustersStatement),
     DropClusterReplicas(DropClusterReplicasStatement),
@@ -415,7 +415,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
-    pub envelope: Option<Envelope>,
+    pub envelope: Option<Envelope<T>>,
     pub if_not_exists: bool,
     pub materialized: bool,
     pub key_constraint: Option<KeyConstraint>,
@@ -480,7 +480,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub connector: CreateSinkConnector<T>,
     pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
-    pub envelope: Option<Envelope>,
+    pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
     pub as_of: Option<AsOf<T>>,
     pub if_not_exists: bool,
@@ -610,49 +610,14 @@ impl AstDisplay for CreateViewsSourceTarget {
 }
 impl_display!(CreateViewsSourceTarget);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateViewsDefinitions<T: AstInfo> {
-    Source {
-        name: T::ObjectName,
-        targets: Option<Vec<CreateViewsSourceTarget>>,
-    },
-    Literal(Vec<ViewDefinition<T>>),
-}
-
-impl<T: AstInfo> AstDisplay for CreateViewsDefinitions<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            Self::Source { name, targets } => {
-                f.write_str(" FROM SOURCE ");
-                f.write_node(name);
-                if let Some(targets) = targets {
-                    f.write_str(" (");
-                    f.write_node(&display::comma_separated(&targets));
-                    f.write_str(")");
-                }
-            }
-            Self::Literal(defs) => {
-                let mut delim = " ";
-                for def in defs {
-                    f.write_str(delim);
-                    delim = ", ";
-                    f.write_str('(');
-                    f.write_node(def);
-                    f.write_str(')');
-                }
-            }
-        }
-    }
-}
-impl_display_t!(CreateViewsDefinitions);
-
 /// `CREATE VIEWS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateViewsStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub temporary: bool,
     pub materialized: bool,
-    pub definitions: CreateViewsDefinitions<T>,
+    pub source: T::ObjectName,
+    pub targets: Option<Vec<CreateViewsSourceTarget>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
@@ -674,7 +639,13 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
             f.write_str(" IF NOT EXISTS");
         }
 
-        f.write_node(&self.definitions);
+        f.write_str(" FROM SOURCE ");
+        f.write_node(&self.source);
+        if let Some(targets) = &self.targets {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&targets));
+            f.write_str(")");
+        }
     }
 }
 impl_display_t!(CreateViewsStatement);
@@ -907,8 +878,8 @@ pub enum ClusterOption<T: AstInfo> {
     IntrospectionGranularity(WithOptionValue<T>),
     /// The `INTROSPECTION DEBUGGING [[=] <enabled>] option.
     IntrospectionDebugging(WithOptionValue<T>),
-    /// The `REPLICA` option.
-    Replica(ReplicaDefinition<T>),
+    /// The `REPLICAS` option.
+    Replicas(Vec<ReplicaDefinition<T>>),
 }
 
 impl<T: AstInfo> AstDisplay for ClusterOption<T> {
@@ -922,11 +893,9 @@ impl<T: AstInfo> AstDisplay for ClusterOption<T> {
                 f.write_str("INTROSPECTION DEBUGGING ");
                 f.write_node(debugging);
             }
-            ClusterOption::Replica(replica) => {
-                f.write_str("REPLICA ");
-                f.write_node(&replica.name);
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(&replica.options));
+            ClusterOption::Replicas(replicas) => {
+                f.write_str("REPLICAS (");
+                f.write_node(&display::comma_separated(&replicas));
                 f.write_str(")");
             }
         }
@@ -940,6 +909,18 @@ pub struct ReplicaDefinition<T: AstInfo> {
     /// The comma-separated options.
     pub options: Vec<ReplicaOption<T>>,
 }
+
+// Note that this display is meant for replicas defined inline when creating
+// clusters.
+impl<T: AstInfo> AstDisplay for ReplicaDefinition<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(")");
+    }
+}
+impl_display_t!(ReplicaDefinition);
 
 /// `CREATE CLUSTER REPLICA ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1017,14 +998,14 @@ impl_display_t!(CreateTypeAs);
 
 /// `ALTER <OBJECT> ... RENAME TO`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AlterObjectRenameStatement<T: AstInfo> {
+pub struct AlterObjectRenameStatement {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: T::ObjectName,
+    pub name: UnresolvedObjectName,
     pub to_item_name: Ident,
 }
 
-impl<T: AstInfo> AstDisplay for AlterObjectRenameStatement<T> {
+impl AstDisplay for AlterObjectRenameStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("ALTER ");
         f.write_node(&self.object_type);
@@ -1037,7 +1018,7 @@ impl<T: AstInfo> AstDisplay for AlterObjectRenameStatement<T> {
         f.write_node(&self.to_item_name);
     }
 }
-impl_display_t!(AlterObjectRenameStatement);
+impl_display!(AlterObjectRenameStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterIndexAction<T: AstInfo> {
@@ -1048,7 +1029,7 @@ pub enum AlterIndexAction<T: AstInfo> {
 /// `ALTER INDEX ... {RESET, SET}`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterIndexStatement<T: AstInfo> {
-    pub index_name: T::ObjectName,
+    pub index_name: UnresolvedObjectName,
     pub if_exists: bool,
     pub action: AlterIndexAction<T>,
 }
@@ -1082,7 +1063,7 @@ impl_display_t!(AlterIndexStatement);
 /// `ALTER SECRET ... AS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterSecretStatement<T: AstInfo> {
-    pub name: T::ObjectName,
+    pub name: UnresolvedObjectName,
     pub if_exists: bool,
     pub value: Expr<T>,
 }
@@ -1135,13 +1116,13 @@ impl AstDisplay for DiscardTarget {
 impl_display!(DiscardTarget);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropDatabaseStatement<T: AstInfo> {
-    pub name: T::DatabaseName,
+pub struct DropDatabaseStatement {
+    pub name: UnresolvedDatabaseName,
     pub if_exists: bool,
     pub restrict: bool,
 }
 
-impl<T: AstInfo> AstDisplay for DropDatabaseStatement<T> {
+impl AstDisplay for DropDatabaseStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP DATABASE ");
         if self.if_exists {
@@ -1153,16 +1134,16 @@ impl<T: AstInfo> AstDisplay for DropDatabaseStatement<T> {
         }
     }
 }
-impl_display_t!(DropDatabaseStatement);
+impl_display!(DropDatabaseStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropSchemaStatement<T: AstInfo> {
-    pub name: T::SchemaName,
+pub struct DropSchemaStatement {
+    pub name: UnresolvedSchemaName,
     pub if_exists: bool,
     pub cascade: bool,
 }
 
-impl<T: AstInfo> AstDisplay for DropSchemaStatement<T> {
+impl AstDisplay for DropSchemaStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP SCHEMA ");
         if self.if_exists {
@@ -1174,11 +1155,11 @@ impl<T: AstInfo> AstDisplay for DropSchemaStatement<T> {
         }
     }
 }
-impl_display_t!(DropSchemaStatement);
+impl_display!(DropSchemaStatement);
 
 /// `DROP`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DropObjectsStatement<T: AstInfo> {
+pub struct DropObjectsStatement {
     /// If this was constructed as `DROP MATERIALIZED <type>`
     pub materialized: bool,
     /// The type of the object to drop: TABLE, VIEW, etc.
@@ -1186,13 +1167,13 @@ pub struct DropObjectsStatement<T: AstInfo> {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<T::ObjectName>,
+    pub names: Vec<UnresolvedObjectName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
 }
 
-impl<T: AstInfo> AstDisplay for DropObjectsStatement<T> {
+impl AstDisplay for DropObjectsStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP ");
         f.write_node(&self.object_type);
@@ -1206,7 +1187,7 @@ impl<T: AstInfo> AstDisplay for DropObjectsStatement<T> {
         }
     }
 }
-impl_display_t!(DropObjectsStatement);
+impl_display!(DropObjectsStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DropRolesStatement {
@@ -1825,20 +1806,49 @@ impl_display_t!(WithOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
-    ObjectName(UnresolvedObjectName),
+    Ident(Ident),
     DataType(T::DataType),
+    // Temporary variant until we have support for connectors, which will use
+    // explicit fields for each secret reference.
+    Secret(T::ObjectName),
 }
 
 impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             WithOptionValue::Value(value) => f.write_node(value),
-            WithOptionValue::ObjectName(name) => f.write_node(name),
+            WithOptionValue::Ident(id) => f.write_node(id),
             WithOptionValue::DataType(typ) => f.write_node(typ),
+            WithOptionValue::Secret(name) => {
+                f.write_str("SECRET ");
+                f.write_node(name)
+            }
         }
     }
 }
 impl_display_t!(WithOptionValue);
+
+impl<T: AstInfo> TryFrom<WithOptionValue<T>> for String {
+    type Error = anyhow::Error;
+
+    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
+        match v {
+            WithOptionValue::Value(v) => v.try_into(),
+            _ => anyhow::bail!("cannot use value as string"),
+        }
+    }
+}
+
+impl<T: AstInfo> TryFrom<WithOptionValue<T>> for bool {
+    type Error = anyhow::Error;
+
+    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
+        match v {
+            WithOptionValue::Value(v) => v.try_into(),
+            _ => anyhow::bail!("cannot use value as boolean"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionMode {
@@ -2003,7 +2013,7 @@ pub enum IfExistsBehavior {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeclareStatement<T: AstInfo> {
     pub name: Ident,
-    pub stmt: Box<Statement<T>>,
+    pub stmt: Box<T::NestedStatement>,
 }
 
 impl<T: AstInfo> AstDisplay for DeclareStatement<T> {
@@ -2074,7 +2084,7 @@ impl_display!(FetchDirection);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PrepareStatement<T: AstInfo> {
     pub name: Ident,
-    pub stmt: Box<Statement<T>>,
+    pub stmt: Box<T::NestedStatement>,
 }
 
 impl<T: AstInfo> AstDisplay for PrepareStatement<T> {

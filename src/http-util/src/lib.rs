@@ -10,7 +10,8 @@
 //! HTTP utilities.
 
 use askama::Template;
-use axum::response::Html;
+use axum::http::status::StatusCode;
+use axum::response::{Html, IntoResponse};
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -82,4 +83,10 @@ macro_rules! make_handle_static {
             }
         }
     };
+}
+
+/// Serves a basic health check response
+#[allow(clippy::unused_async)]
+pub async fn handle_health_check() -> impl IntoResponse {
+    return (StatusCode::OK, "Health check successful!");
 }

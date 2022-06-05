@@ -24,7 +24,7 @@ use crate::error::Error;
 use crate::location::{Atomicity, BlobMulti, ExternalError};
 
 /// Configuration for opening a [FileBlobMulti].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileBlobConfig {
     base_dir: PathBuf,
 }

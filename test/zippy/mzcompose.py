@@ -7,10 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
-import os
-import sys
-from typing import Dict
+import random
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
@@ -21,12 +18,6 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 from materialize.zippy.framework import Test
-from materialize.zippy.kafka_actions import *
-from materialize.zippy.mz_actions import *
-from materialize.zippy.scenarios import *
-from materialize.zippy.source_actions import *
-from materialize.zippy.table_actions import *
-from materialize.zippy.view_actions import *
 
 SERVICES = [
     Zookeeper(),

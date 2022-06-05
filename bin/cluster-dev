@@ -140,7 +140,7 @@ spec:
             - --kubernetes-image-pull-policy=never
             - --user-defined-secret=user-managed-secrets
             - --user-defined-secret-mount-path=/secrets
-            - --experimental
+            - --unsafe-mode
         ports:
         - containerPort: 6875
           name: sql

@@ -7,20 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub(crate) mod catalog;
-pub(crate) mod util;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-use crate::plan::query::QueryLifetime;
-use crate::plan::{HirRelationExpr, StatementContext};
 use mz_expr_test_util::generate_explanation;
 use mz_lowertest::*;
 
+use crate::names;
+use crate::plan::query::QueryLifetime;
+use crate::plan::{HirRelationExpr, StatementContext};
+use crate::query_model::test::catalog::TestCatalog;
 use crate::query_model::Model;
-use catalog::TestCatalog;
 
-use crate::names::resolve_names_stmt;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+pub(crate) mod catalog;
+pub(crate) mod util;
 
 /// Tests to run on a Query Graph Model.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, MzReflect)]
@@ -57,7 +57,7 @@ fn convert_input_to_model(input: &str, catalog: &TestCatalog) -> Result<Model, S
             assert!(stmts.len() == 1);
             let stmt = stmts.pop().unwrap();
             let scx = &mut StatementContext::new(None, catalog);
-            let stmt = match resolve_names_stmt(scx, stmt) {
+            let stmt = match names::resolve(scx.catalog, stmt) {
                 Ok((stmt, _)) => stmt,
                 Err(e) => return Err(format!("unable to resolve statement {}", e)),
             };

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 fn main() {
-    prost_build::Config::new()
+    tonic_build::configure()
         .extern_path(".mz_ccsr.config", "::mz_ccsr")
         .extern_path(".mz_expr.id", "::mz_expr")
         .extern_path(".mz_expr.linear", "::mz_expr")
@@ -26,7 +26,7 @@ fn main() {
             ".mz_dataflow_types.postgres_source",
             "#[derive(Eq, serde::Serialize, serde::Deserialize)]",
         )
-        .compile_protos(
+        .compile(
             &[
                 "dataflow-types/src/client.proto",
                 "dataflow-types/src/client/controller/storage.proto",

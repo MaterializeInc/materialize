@@ -73,7 +73,7 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
 }
 
 /// Parses a SQL string containing a single data type.
-pub fn parse_data_type(sql: &str) -> Result<UnresolvedDataType, ParserError> {
+pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     let tokens = lexer::lex(sql)?;
     let mut parser = Parser::new(sql, tokens);
     let data_type = parser.parse_data_type()?;
@@ -1728,10 +1728,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
-        let connector = if self.peek_keyword(CONNECTOR) {
-            let _ = self.expect_keyword(CONNECTOR);
+        let connector = if self.parse_keyword(CONNECTOR) {
             CsrConnector::Reference {
-                connector: self.parse_object_name()?,
+                connector: self.parse_raw_name()?,
                 url: None,
                 with_options: None,
             }
@@ -1772,10 +1771,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
-        let connector = if self.peek_keyword(CONNECTOR) {
-            let _ = self.expect_keyword(CONNECTOR);
+        let connector = if self.parse_keyword(CONNECTOR) {
             CsrConnector::Reference {
-                connector: self.parse_object_name()?,
+                connector: self.parse_raw_name()?,
                 url: None,
                 with_options: None,
             }
@@ -1853,14 +1851,38 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
             let debezium_mode = if self.parse_keyword(UPSERT) {
                 DbzMode::Upsert
             } else {
-                DbzMode::Plain
+                let tx_metadata = if self.consume_token(&Token::LParen) {
+                    self.expect_keywords(&[TRANSACTION, METADATA])?;
+                    self.expect_token(&Token::LParen)?;
+                    let options = self.parse_comma_separated(|parser| {
+                        match parser.expect_one_of_keywords(&[SOURCE, COLLECTION])? {
+                            SOURCE => {
+                                let _ = parser.consume_token(&Token::Eq);
+                                Ok(DbzTxMetadataOption::Source(parser.parse_raw_name()?))
+                            }
+                            COLLECTION => {
+                                let _ = parser.consume_token(&Token::Eq);
+                                Ok(DbzTxMetadataOption::Collection(
+                                    parser.parse_with_option_value()?,
+                                ))
+                            }
+                            _ => unreachable!(),
+                        }
+                    })?;
+                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
+                } else {
+                    vec![]
+                };
+                DbzMode::Plain { tx_metadata }
             };
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
@@ -2078,7 +2100,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, PERSIST, POSTGRES, PUBNUB])? {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
@@ -2113,32 +2135,13 @@ impl<'a> Parser<'a> {
                     details,
                 })
             }
-            PERSIST => {
-                self.expect_keyword(CONSENSUS)?;
-                let consensus_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(BLOB)?;
-                let blob_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(SHARD)?;
-                let shard_id = self.parse_literal_string()?;
-
-                // TODO: fail if/when we have constraints
-                let (columns, _constraints) = self.parse_columns(Mandatory)?;
-                Ok(CreateSourceConnector::Persist {
-                    consensus_uri,
-                    blob_uri,
-                    collection_id: shard_id,
-                    columns,
-                })
-            }
             KAFKA => {
                 let connector = match self.expect_one_of_keywords(&[BROKER, CONNECTOR])? {
                     BROKER => KafkaConnector::Inline {
                         broker: self.parse_literal_string()?,
                     },
                     CONNECTOR => KafkaConnector::Reference {
-                        connector: self.parse_object_name()?,
+                        connector: self.parse_raw_name()?,
                         broker: None,
                         with_options: None,
                     },
@@ -2374,40 +2377,30 @@ impl<'a> Parser<'a> {
             if_exists = IfExistsBehavior::Skip;
         }
 
-        let definitions = if self.parse_keywords(&[FROM, SOURCE]) {
-            let name = self.parse_raw_name()?;
-            let targets = if self.consume_token(&Token::LParen) {
-                let targets = self.parse_comma_separated(|parser| {
-                    let name = parser.parse_object_name()?;
-                    let alias = if parser.parse_keyword(AS) {
-                        Some(parser.parse_object_name()?)
-                    } else {
-                        None
-                    };
-                    Ok(CreateViewsSourceTarget { name, alias })
-                })?;
-                self.expect_token(&Token::RParen)?;
-                Some(targets)
-            } else {
-                None
-            };
-            CreateViewsDefinitions::Source { name, targets }
-        } else {
-            let views = self.parse_comma_separated(|parser| {
-                parser.expect_token(&Token::LParen)?;
-                let view = parser.parse_view_definition()?;
-                parser.expect_token(&Token::RParen)?;
-                Ok(view)
+        self.expect_keywords(&[FROM, SOURCE])?;
+        let source = self.parse_raw_name()?;
+        let targets = if self.consume_token(&Token::LParen) {
+            let targets = self.parse_comma_separated(|parser| {
+                let name = parser.parse_object_name()?;
+                let alias = if parser.parse_keyword(AS) {
+                    Some(parser.parse_object_name()?)
+                } else {
+                    None
+                };
+                Ok(CreateViewsSourceTarget { name, alias })
             })?;
-
-            CreateViewsDefinitions::Literal(views)
+            self.expect_token(&Token::RParen)?;
+            Some(targets)
+        } else {
+            None
         };
 
         Ok(Statement::CreateViews(CreateViewsStatement {
             temporary,
             materialized,
             if_exists,
-            definitions,
+            source,
+            targets,
         }))
     }
 
@@ -2462,7 +2455,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_raw_ident(&mut self) -> Result<RawIdent, ParserError> {
+    fn parse_raw_ident(&mut self) -> Result<RawClusterName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
                 Some(Token::Ident(id)) => id,
@@ -2470,13 +2463,13 @@ impl<'a> Parser<'a> {
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
             self.expect_token(&Token::RBracket)?;
-            Ok(RawIdent::Resolved(id))
+            Ok(RawClusterName::Resolved(id))
         } else {
-            Ok(RawIdent::Unresolved(self.parse_identifier()?))
+            Ok(RawClusterName::Unresolved(self.parse_identifier()?))
         }
     }
 
-    fn parse_optional_in_cluster(&mut self) -> Result<Option<RawIdent>, ParserError> {
+    fn parse_optional_in_cluster(&mut self) -> Result<Option<RawClusterName>, ParserError> {
         if self.parse_keywords(&[IN, CLUSTER]) {
             Ok(Some(self.parse_raw_ident()?))
         } else {
@@ -2571,6 +2564,7 @@ impl<'a> Parser<'a> {
         } else {
             self.parse_comma_separated(Parser::parse_cluster_option)?
         };
+
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
             options,
@@ -2601,13 +2595,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[REPLICA, INTROSPECTION])? {
-            REPLICA => {
-                let name = self.parse_identifier()?;
+        match self.expect_one_of_keywords(&[REPLICAS, INTROSPECTION])? {
+            REPLICAS => {
                 self.expect_token(&Token::LParen)?;
-                let options = self.parse_comma_separated(Parser::parse_replica_option)?;
+
+                let replicas = if self.peek_token() == Some(Token::RParen) {
+                    vec![]
+                } else {
+                    self.parse_comma_separated(|parser| {
+                        let name = parser.parse_identifier()?;
+                        parser.expect_token(&Token::LParen)?;
+                        let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
+                        parser.expect_token(&Token::RParen)?;
+                        Ok(ReplicaDefinition { name, options })
+                    })?
+                };
+
                 self.expect_token(&Token::RParen)?;
-                Ok(ClusterOption::Replica(ReplicaDefinition { name, options }))
+                Ok(ClusterOption::Replicas(replicas))
             }
             INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
                 DEBUGGING => {
@@ -2764,7 +2769,7 @@ impl<'a> Parser<'a> {
         };
 
         let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(Parser::parse_raw_name)?;
+        let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),
@@ -3027,10 +3032,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
-        if let Some(value) = self.maybe_parse(Parser::parse_value) {
+        if self.parse_keyword(SECRET) {
+            // HACK(benesch): temporarily allow secret references of the form
+            // `KEY = SECRET db.schema.item`. `KEY = SECRET` is still allowed
+            // for backwards copmatibility and parses as the ident `secret`.
+            // Once we have connectors with explicit fields for secret
+            // references, we can remove this hack.
+            if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
+                Ok(WithOptionValue::Secret(secret))
+            } else {
+                Ok(WithOptionValue::Ident(Ident::new("secret")))
+            }
+        } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
-        } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
-            Ok(WithOptionValue::ObjectName(object_name))
+        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
+            Ok(WithOptionValue::Ident(ident))
         } else {
             return self.expected(self.peek_pos(), "option value", self.peek_token());
         }
@@ -3049,7 +3065,7 @@ impl<'a> Parser<'a> {
             };
 
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         self.expect_keywords(&[RENAME, TO])?;
         let to_item_name = self.parse_identifier()?;
@@ -3064,7 +3080,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
             RESET => {
@@ -3103,7 +3119,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         Ok(match self.expect_one_of_keywords(&[AS, RENAME])? {
             AS => {
@@ -3337,8 +3353,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<UnresolvedDataType, ParserError> {
-        let other = |name: &str| UnresolvedDataType::Other {
+    fn parse_data_type(&mut self) -> Result<RawDataType, ParserError> {
+        let other = |name: &str| RawDataType::Other {
             name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
@@ -3352,16 +3368,16 @@ impl<'a> Parser<'a> {
                     } else {
                         "bpchar"
                     };
-                    UnresolvedDataType::Other {
+                    RawDataType::Other {
                         name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
-                BPCHAR => UnresolvedDataType::Other {
+                BPCHAR => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("bpchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
-                VARCHAR => UnresolvedDataType::Other {
+                VARCHAR => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -3370,7 +3386,7 @@ impl<'a> Parser<'a> {
                 // Number-like types
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
-                DEC | DECIMAL => UnresolvedDataType::Other {
+                DEC | DECIMAL => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -3426,7 +3442,7 @@ impl<'a> Parser<'a> {
                 JSON => other("jsonb"),
                 _ => {
                     self.prev_token();
-                    UnresolvedDataType::Other {
+                    RawDataType::Other {
                         name: RawObjectName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
@@ -3434,7 +3450,7 @@ impl<'a> Parser<'a> {
             },
             Some(Token::Ident(_) | Token::LBracket) => {
                 self.prev_token();
-                UnresolvedDataType::Other {
+                RawDataType::Other {
                     name: self.parse_raw_name()?,
                     typ_mod: self.parse_typ_mod()?,
                 }
@@ -3446,7 +3462,7 @@ impl<'a> Parser<'a> {
             match self.peek_token() {
                 Some(Token::Keyword(LIST)) => {
                     self.next_token();
-                    data_type = UnresolvedDataType::List(Box::new(data_type));
+                    data_type = RawDataType::List(Box::new(data_type));
                 }
                 Some(Token::LBracket) => {
                     // Handle array suffixes. Note that `int[]`, `int[][][]`,
@@ -3454,8 +3470,8 @@ impl<'a> Parser<'a> {
                     self.next_token();
                     let _ = self.maybe_parse(|parser| parser.parse_number_value());
                     self.expect_token(&Token::RBracket)?;
-                    if !matches!(data_type, UnresolvedDataType::Array(_)) {
-                        data_type = UnresolvedDataType::Array(Box::new(data_type));
+                    if !matches!(data_type, RawDataType::Array(_)) {
+                        data_type = RawDataType::Array(Box::new(data_type));
                     }
                 }
                 _ => break,
@@ -3678,13 +3694,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<UnresolvedDataType, ParserError> {
+    fn parse_map(&mut self) -> Result<RawDataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
         let value_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::RBracket)?;
-        Ok(UnresolvedDataType::Map {
+        Ok(RawDataType::Map {
             key_type,
             value_type,
         })

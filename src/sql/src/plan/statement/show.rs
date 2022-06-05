@@ -22,15 +22,14 @@ use mz_sql_parser::ast::ShowCreateConnectorStatement;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
+    ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowSchemasStatement, ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{
-    resolve_names_stmt, resolve_names_stmt_show, Aug, NameSimplifier, ResolvedClusterName,
-    ResolvedDatabaseName, ResolvedSchemaName,
+    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
@@ -38,7 +37,7 @@ use crate::plan::{Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
-    _: &ShowCreateViewStatement<Raw>,
+    _: ShowCreateViewStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -57,7 +56,7 @@ pub fn plan_show_create_view(
         let view_sql = view.create_sql();
         let parsed = parse::parse(view_sql)?;
         let parsed = parsed[0].clone();
-        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
@@ -76,7 +75,7 @@ pub fn plan_show_create_view(
 
 pub fn describe_show_create_table(
     _: &StatementContext,
-    _: &ShowCreateTableStatement<Raw>,
+    _: ShowCreateTableStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -93,7 +92,7 @@ pub fn plan_show_create_table(
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
         let parsed = parse::parse(table.create_sql())?.into_element();
-        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
@@ -111,7 +110,7 @@ pub fn plan_show_create_table(
 
 pub fn describe_show_create_source(
     _: &StatementContext,
-    _: &ShowCreateSourceStatement<Raw>,
+    _: ShowCreateSourceStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -140,7 +139,7 @@ pub fn plan_show_create_source(
 
 pub fn describe_show_create_sink(
     _: &StatementContext,
-    _: &ShowCreateSinkStatement<Raw>,
+    _: ShowCreateSinkStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -169,7 +168,7 @@ pub fn plan_show_create_sink(
 
 pub fn describe_show_create_index(
     _: &StatementContext,
-    _: &ShowCreateIndexStatement<Raw>,
+    _: ShowCreateIndexStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -198,7 +197,7 @@ pub fn plan_show_create_index(
 
 pub fn describe_show_create_connector(
     _: &StatementContext,
-    _: &ShowCreateConnectorStatement<Raw>,
+    _: ShowCreateConnectorStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -696,8 +695,6 @@ pub fn show_secrets<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    scx.require_experimental_mode("SHOW SECRETS")?;
-
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(
@@ -753,11 +750,8 @@ impl<'a> ShowSelect<'a> {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
         };
-        let stmt = resolve_names_stmt_show(scx, Statement::Select(stmt))?;
-        if let Statement::Select(stmt) = stmt {
-            return Ok(ShowSelect { scx, stmt });
-        }
-        unreachable!()
+        let (stmt, _) = names::resolve(scx.catalog, stmt)?;
+        Ok(ShowSelect { scx, stmt })
     }
 
     /// Computes the shape of this `ShowSelect`.

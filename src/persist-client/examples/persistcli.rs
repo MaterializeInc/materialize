@@ -20,6 +20,9 @@ use std::sync::Once;
 
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
+use mz_ore::cli::{self, CliConfig};
+use mz_ore::task::RuntimeExt;
+
 pub mod maelstrom;
 pub mod open_loop;
 pub mod source_example;
@@ -43,7 +46,7 @@ fn main() {
     // that all logging goes to stderr.
     init_logging();
 
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     // Mirror the tokio Runtime configuration in our production binaries.
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
@@ -54,7 +57,15 @@ fn main() {
         .expect("Failed building the Runtime");
 
     let res = match args.command {
-        Command::Maelstrom(args) => crate::maelstrom::txn::run(args),
+        Command::Maelstrom(args) => runtime.block_on(async {
+            // Run the maelstrom stuff in a spawn_blocking because it internally
+            // spawns tasks, so the runtime need to be in the TLC.
+            runtime
+                .handle()
+                .spawn_blocking_named(|| "maelstrom::run", || crate::maelstrom::txn::run(args))
+                .await
+                .expect("task failed")
+        }),
         Command::OpenLoop(args) => runtime.block_on(crate::open_loop::run(args)),
         Command::SourceExample(args) => runtime.block_on(crate::source_example::run(args)),
     };

@@ -351,14 +351,14 @@ CREATE VIEWS FROM SOURCE "foobar"
 ----
 CREATE VIEWS FROM SOURCE foobar
 =>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, definitions: Source { name: Name(UnresolvedObjectName([Ident("foobar")])), targets: None } })
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
 
 parse-statement
 CREATE OR REPLACE VIEWS FROM SOURCE "foobar"
 ----
 CREATE OR REPLACE VIEWS FROM SOURCE foobar
 =>
-CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, materialized: false, definitions: Source { name: Name(UnresolvedObjectName([Ident("foobar")])), targets: None } })
+CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, materialized: false, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: None })
 
 parse-statement
 CREATE VIEWS FROM SOURCE "foobar" ();
@@ -368,18 +368,11 @@ CREATE VIEWS FROM SOURCE "foobar" ();
                                    ^
 
 parse-statement
-CREATE VIEWS (myschema.myview AS SELECT foo FROM bar), (v (has, cols) AS SELECT 1, 2)
-----
-CREATE VIEWS (myschema.myview AS SELECT foo FROM bar), (v (has, cols) AS SELECT 1, 2)
-=>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, definitions: Literal([ViewDefinition { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }, ViewDefinition { name: UnresolvedObjectName([Ident("v")]), columns: [Ident("has"), Ident("cols")], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }]) })
-
-parse-statement
 CREATE MATERIALIZED VIEWS FROM SOURCE "foobar" (t1, "t2" AS t3);
 ----
 CREATE MATERIALIZED VIEWS FROM SOURCE foobar (t1, t2 AS t3)
 =>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, definitions: Source { name: Name(UnresolvedObjectName([Ident("foobar")])), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) } })
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, source: Name(UnresolvedObjectName([Ident("foobar")])), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT TEXT VALUE FORMAT TEXT INCLUDE KEY ENVELOPE NONE
@@ -485,6 +478,44 @@ CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2, 40000000]) KEY FORMAT TEXT VALUE FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("start_offset"), value: Some(Value(Array([Number("2"), Number("40000000")]))) }], include_metadata: [], format: KeyValue { key: Text, value: Avro(InlineSchema { schema: File("path"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SEKRET)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = sekret)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("sekret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Ident(Ident("secret"))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement roundtrip
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = secret)
+
+parse-statement roundtrip
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a)
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (a = SECRET a.b.c)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "broker" }, topic: "topic", key: None }), with_options: [WithOption { key: Ident("a"), value: Some(Secret(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))) }], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE source (a, b, PRIMARY KEY (a) NOT ENFORCED) FROM KAFKA BROKER 'broker' TOPIC 'topic'
@@ -617,7 +648,7 @@ CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSIS
 ----
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY (a, b) CONSISTENCY (TOPIC 'consistency' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = user)) FORMAT BYTES WITH SNAPSHOT
 =>
-CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Inline { url: "http://localhost:8081" }, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(ObjectName(UnresolvedObjectName([Ident("user")]))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
+CreateSink(CreateSinkStatement { name: UnresolvedObjectName([Ident("foo")]), in_cluster: None, from: Name(UnresolvedObjectName([Ident("bar")])), connector: Kafka { broker: "baz", topic: "topic", key: Some(KafkaSinkKey { key_columns: [Ident("a"), Ident("b")], not_enforced: false }), consistency: Some(KafkaConsistency { topic: "consistency", topic_format: Some(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Inline { url: "http://localhost:8081" }, seed: None, with_options: [WithOption { key: Ident("username"), value: Some(Ident(Ident("user"))) }] } })) }) }, with_options: [], format: Some(Bytes), envelope: None, with_snapshot: true, as_of: None, if_not_exists: false })
 
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA BROKER 'baz' TOPIC 'topic' KEY FORMAT BYTES
@@ -862,14 +893,14 @@ DROP TABLE foo
 ----
 DROP TABLE foo
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: false, names: [Name(UnresolvedObjectName([Ident("foo")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: false, names: [UnresolvedObjectName([Ident("foo")])], cascade: false })
 
 parse-statement
 DROP TABLE IF EXISTS foo, bar CASCADE
 ----
 DROP TABLE IF EXISTS foo, bar CASCADE
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: true, names: [Name(UnresolvedObjectName([Ident("foo")])), Name(UnresolvedObjectName([Ident("bar")]))], cascade: true })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Table, if_exists: true, names: [UnresolvedObjectName([Ident("foo")]), UnresolvedObjectName([Ident("bar")])], cascade: true })
 
 parse-statement
 DROP TABLE
@@ -890,21 +921,21 @@ DROP VIEW myschema.myview
 ----
 DROP VIEW myschema.myview
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: View, if_exists: false, names: [Name(UnresolvedObjectName([Ident("myschema"), Ident("myview")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Source, if_exists: false, names: [Name(UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Source, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("mydatasource")])], cascade: false })
 
 parse-statement
 DROP INDEX IF EXISTS myschema.myindex
 ----
 DROP INDEX IF EXISTS myschema.myindex
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Index, if_exists: true, names: [Name(UnresolvedObjectName([Ident("myschema"), Ident("myindex")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Index, if_exists: true, names: [UnresolvedObjectName([Ident("myschema"), Ident("myindex")])], cascade: false })
 
 parse-statement
 TAIL foo.bar
@@ -1011,21 +1042,21 @@ ALTER INDEX name SET (property = true)
 ----
 ALTER INDEX name SET (property = true)
 =>
-AlterIndex(AlterIndexStatement { index_name: Name(UnresolvedObjectName([Ident("name")])), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name RESET (property)
 ----
 ALTER INDEX name RESET (property)
 =>
-AlterIndex(AlterIndexStatement { index_name: Name(UnresolvedObjectName([Ident("name")])), if_exists: false, action: ResetOptions([Ident("property")]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: ResetOptions([Ident("property")]) })
 
 parse-statement
 ALTER INDEX IF EXISTS name SET (property = true)
 ----
 ALTER INDEX IF EXISTS name SET (property = true)
 =>
-AlterIndex(AlterIndexStatement { index_name: Name(UnresolvedObjectName([Ident("name")])), if_exists: true, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, action: SetOptions([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name SET ()
@@ -1046,7 +1077,7 @@ ALTER INDEX name SET (property)
 ----
 ALTER INDEX name SET (property)
 =>
-AlterIndex(AlterIndexStatement { index_name: Name(UnresolvedObjectName([Ident("name")])), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: None }]) })
+AlterIndex(AlterIndexStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, action: SetOptions([WithOption { key: Ident("property"), value: None }]) })
 
 parse-statement
 ALTER INDEX name RESET (property = true)
@@ -1081,7 +1112,7 @@ ALTER INDEX name RENAME TO name2
 ----
 ALTER INDEX name RENAME TO name2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: Name(UnresolvedObjectName([Ident("name")])), to_item_name: Ident("name2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Index, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
 
 parse-statement
 ALTER INDEX i1 misplaced
@@ -1098,56 +1129,81 @@ ALTER INDEX i1
               ^
 
 parse-statement
-CREATE CLUSTER cluster
+CREATE CLUSTER cluster REPLICAS ()
 ----
-CREATE CLUSTER cluster
+CREATE CLUSTER cluster REPLICAS ()
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([])] })
 
 parse-statement
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
 ----
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionGranularity(Value(String("1s")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY = '1s'
+CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s', REPLICAS ()
 ----
-CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s'
+CREATE CLUSTER cluster INTROSPECTION GRANULARITY '1s', REPLICAS ()
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionGranularity(Value(String("1s")))] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [IntrospectionGranularity(Value(String("1s"))), Replicas([])] })
 
 parse-statement
-CREATE CLUSTER cluster WITH INTROSPECTION GRANULARITY = '1s'
-
-parse-statement
-CREATE CLUSTER cluster BADOPT
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = '1s'
 ----
-error: Expected end of statement, found identifier "parse"
-parse-statement
-^
-
-parse-statement
-CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
-----
-CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'))
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replica(ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] })] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICA a (REMOTE ('host1')), INTROSPECTION GRANULARITY '1s', REPLICA b (SIZE '1')
+CREATE CLUSTER cluster WITH REPLICAS (), INTROSPECTION GRANULARITY = '1s'
 ----
-CREATE CLUSTER cluster REPLICA a (REMOTE ('host1')), INTROSPECTION GRANULARITY '1s', REPLICA b (SIZE '1')
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY '1s'
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replica(ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }), IntrospectionGranularity(Value(String("1s"))), Replica(ReplicaDefinition { name: Ident("b"), options: [Size(Value(String("1")))] })] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(String("1s")))] })
 
 parse-statement
-CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = 0
 ----
-CREATE CLUSTER cluster REPLICA a (REMOTE ('host1'), SIZE '1')
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY 0
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replica(ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }, Size(Value(String("1")))] })] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Number("0")))] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY = NULL
+----
+CREATE CLUSTER cluster REPLICAS (), INTROSPECTION GRANULARITY NULL
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([]), IntrospectionGranularity(Value(Null))] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (), BADOPT
+----
+error: Expected one of REPLICAS or INTROSPECTION, found identifier "badopt"
+CREATE CLUSTER cluster REPLICAS (), BADOPT
+                                    ^
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')))
+----
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }] }])] })
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
+----
+error: Expected end of statement, found INTROSPECTION
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1')), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
+                                                                     ^
+
+parse-statement
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1'), SIZE '1'))
+----
+CREATE CLUSTER cluster REPLICAS (a (REMOTE ('host1'), SIZE '1'))
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [Remote { hosts: [Value(String("host1"))] }, Size(Value(String("1")))] }])] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ('host1')
@@ -1266,14 +1322,14 @@ DROP SECRET secret
 ----
 DROP SECRET secret
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: false, names: [Name(UnresolvedObjectName([Ident("secret")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: false, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
 
 parse-statement
 DROP SECRET IF EXISTS secret
 ----
 DROP SECRET IF EXISTS secret
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: true, names: [Name(UnresolvedObjectName([Ident("secret")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Secret, if_exists: true, names: [UnresolvedObjectName([Ident("secret")])], cascade: false })
 
 parse-statement
 SHOW SECRETS
@@ -1287,14 +1343,14 @@ ALTER SECRET secret RENAME TO secret2
 ----
 ALTER SECRET secret RENAME TO secret2
 =>
-AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: Name(UnresolvedObjectName([Ident("secret")])), to_item_name: Ident("secret2") })
+AlterObjectRename(AlterObjectRenameStatement { object_type: Secret, if_exists: false, name: UnresolvedObjectName([Ident("secret")]), to_item_name: Ident("secret2") })
 
 parse-statement
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 ----
 ALTER SECRET secret AS decode('new c2VjcmV0Cg==', 'base64')
 =>
-AlterSecret(AlterSecretStatement { name: Name(UnresolvedObjectName([Ident("secret")])), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
+AlterSecret(AlterSecretStatement { name: UnresolvedObjectName([Ident("secret")]), if_exists: false, value: Function(Function { name: UnresolvedObjectName([Ident("decode")]), args: Args { args: [Value(String("new c2VjcmV0Cg==")), Value(String("base64"))], order_by: [] }, filter: None, over: None, distinct: false }) })
 
 
 parse-statement
@@ -1309,14 +1365,14 @@ DROP CONNECTOR conn1
 ----
 DROP CONNECTOR conn1
 =>
-DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [Name(UnresolvedObjectName([Ident("conn1")]))], cascade: false })
+DropObjects(DropObjectsStatement { materialized: false, object_type: Connector, if_exists: false, names: [UnresolvedObjectName([Ident("conn1")])], cascade: false })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' WITH (consistency = 'lug') FORMAT BYTES
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [WithOption { key: Ident("consistency"), value: Some(Value(String("lug"))) }], include_metadata: [], format: Bare(Bytes), envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username='user', password='word')
@@ -1330,7 +1386,7 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONF
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Reference { connector: UnresolvedObjectName([Ident("conn2")]), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(Csr { csr_connector: CsrConnectorAvro { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, materialized: false, key_constraint: None })
 
 
 parse-statement
@@ -1338,4 +1394,18 @@ CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT PROTOBUF USING 
 ----
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: UnresolvedObjectName([Ident("conn1")]), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnectorProto { connector: Reference { connector: UnresolvedObjectName([Ident("conn2")]), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain)), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: Bare(Protobuf(Csr { csr_connector: CsrConnectorProto { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn2")])), url: None, with_options: None }, seed: None, with_options: [] } })), envelope: Some(Debezium(Plain { tx_metadata: [] })), if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (SOURCE a.b.c, COLLECTION 'foo'))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")]))), Collection(Value(String("foo")))] })), if_not_exists: false, materialized: false, key_constraint: None })
+
+parse-statement
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+----
+CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' ENVELOPE DEBEZIUM (TRANSACTION METADATA (COLLECTION 'foo', SOURCE a.b.c))
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("src1")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Reference { connector: Name(UnresolvedObjectName([Ident("conn1")])), broker: None, with_options: None }, topic: "baz", key: None }), with_options: [], include_metadata: [], format: None, envelope: Some(Debezium(Plain { tx_metadata: [Collection(Value(String("foo"))), Source(Name(UnresolvedObjectName([Ident("a"), Ident("b"), Ident("c")])))] })), if_not_exists: false, materialized: false, key_constraint: None })
