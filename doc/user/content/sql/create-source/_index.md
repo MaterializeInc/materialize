@@ -12,7 +12,7 @@ menu:
 
 A [source](../../overview/key-concepts/#sources) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
 
-Executing a `CREATE SOURCE` statement does **not** prompt data ingestion; it simply registers source metadata in the [system catalog](/sql/system-catalog/#mz_catalog). Data ingestion will only kick off when you create a materialization that depends on an existing source, such as a [materialized view](../../overview/key-concepts/#materialized-views).
+[//]: # "TODO(morsapaes) Clarify what the command gets going in the background in Cloud and add short description."
 
 ## Connectors
 
