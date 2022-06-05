@@ -13,7 +13,7 @@ Business Source License 1.1
 
 Licensor:                  Materialize, Inc.
 
-Licensed Work:             Materialize Version 20220604
+Licensed Work:             Materialize Version 20220605
                            The Licensed Work is © 2022 Materialize, Inc.
 
 Additional Use Grant:      You may use one single server instance of the
@@ -29,7 +29,7 @@ Additional Use Grant:      You may use one single server instance of the
                            functionality of the Licensed Work by creating views
                            whose schemas are controlled by such third parties.
 
-Change Date:               June 04, 2026
+Change Date:               June 05, 2026
 
 Change License:            Apache License, Version 2.0
 
