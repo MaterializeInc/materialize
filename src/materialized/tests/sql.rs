@@ -38,7 +38,6 @@ use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 pub mod util;
 
 #[test]
-#[ignore]
 fn test_no_block() -> Result<(), anyhow::Error> {
     mz_ore::test::init_logging();
 
@@ -351,7 +350,6 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[test]
-#[ignore]
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
@@ -434,7 +432,6 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 // Verifies that tailing non-nullable columns with progress information
 // turns them into nullable columns. See #6304.
 #[test]
-#[ignore]
 fn test_tail_progress_non_nullable_columns() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 

@@ -69,7 +69,8 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
-        "-p", "--package",
+        "-p",
+        "--package",
         help="Package to run tests for",
         action="append",
         default=[],
@@ -122,6 +123,7 @@ def main() -> int:
         for test in args.test:
             command += ["--test", test]
         command += args.args
+        os.environ["POSTGRES_URL"] = args.postgres
     else:
         raise UIError(f"unknown program {args.program}")
 
