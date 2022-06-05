@@ -2465,11 +2465,11 @@ impl<'a> Parser<'a> {
         Ok(IndexOptionName::LogicalCompactionWindow)
     }
 
-    fn parse_index_option(&mut self) -> Result<IndexOptions<Raw>, ParserError> {
+    fn parse_index_option(&mut self) -> Result<IndexOption<Raw>, ParserError> {
         let name = self.parse_index_option_name()?;
         let _ = self.consume_token(&Token::Eq);
         let value = self.parse_with_option_value()?;
-        Ok(IndexOptions { name, value })
+        Ok(IndexOption { name, value })
     }
 
     fn parse_raw_ident(&mut self) -> Result<RawClusterName, ParserError> {
