@@ -69,6 +69,13 @@ versions = [
 ]
 
 [[menu.main]]
+identifier = "cs_redpanda"
+name = "Redpanda"
+parent = "create-source"
+url = "/sql/create-source/kafka"
+weight= 10
+
+[[menu.main]]
 name = "Tables"
 parent = "reference"
 url = "/sql/create-table/"
@@ -81,7 +88,7 @@ url = "/sql/create-view/"
 weight= 40
 
 [[menu.main]]
-name = "Materialized Views"
+name = "Materialized views"
 parent = "reference"
 url = "/sql/create-materialized-view/"
 weight= 45
@@ -111,13 +118,13 @@ url = "/sql/create-index"
 weight= 50
 
 [[menu.main]]
+name = "SQL commands"
 identifier = "commands"
 parent = "reference"
 weight = 100
-name = "SQL Commands"
 
 [[menu.main]]
-name = "SQL Patterns"
+name = "SQL patterns"
 parent = 'reference'
 identifier = 'sql-patterns'
 weight = 85
@@ -136,21 +143,21 @@ weight = 5
 
 [[menu.main]]
 identifier = "integration-guides"
-name = "Integration Guides"
+name = "Integration guides"
 parent = "integrations"
 url = "/integrations"
 weight = 40
 
 [[menu.main]]
 identifier = "client-libraries"
-name = "Client Libraries"
+name = "Client libraries"
 parent = "integrations"
 url = "/integrations/#libraries-and-drivers"
 weight = 30
 
 [[menu.main]]
 identifier = "advanced"
-name = "Advanced Concepts"
+name = "Advanced concepts"
 parent = "overview"
 weight = 80
 
@@ -160,13 +167,13 @@ name = "About"
 weight = 70
 
 [[menu.main]]
-name = "Security Overview"
+name = "Security overview"
 parent = "about"
 url = "https://materialize.com/security-overview"
 weight= 40
 
 [[menu.main]]
-name = "Responsible Disclosure Policy"
+name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
 weight= 2000

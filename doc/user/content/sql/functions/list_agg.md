@@ -1,5 +1,5 @@
 ---
-title: "list_agg Function"
+title: "list_agg function"
 description: "Concatenates input values (including nulls) into a string."
 menu:
   main:

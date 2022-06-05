@@ -1,5 +1,5 @@
 ---
-title: "boolean Data Type"
+title: "boolean type"
 description: "Expresses TRUE or FALSE"
 menu:
   main:

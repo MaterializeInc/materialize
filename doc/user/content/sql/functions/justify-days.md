@@ -1,5 +1,5 @@
 ---
-title: "justify_days Function"
+title: "justify_days function"
 description: "Adjust interval so 30-day time periods are represented as months"
 menu:
   main:

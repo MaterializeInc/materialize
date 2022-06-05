@@ -1,5 +1,5 @@
 ---
-title: "map Data Type"
+title: "map type"
 description: "Expresses a map"
 menu:
   main:

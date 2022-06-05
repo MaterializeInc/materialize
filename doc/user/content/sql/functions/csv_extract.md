@@ -1,5 +1,5 @@
 ---
-title: "csv_extract Function"
+title: "csv_extract function"
 description: "Returns separated values from a column containing a CSV file formatted as a string."
 menu:
   main:

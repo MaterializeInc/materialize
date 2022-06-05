@@ -1,5 +1,5 @@
 ---
-title: "List Data Types"
+title: "List types"
 description: "Lists are ordered sequences of homogenously typed elements"
 menu:
   main:

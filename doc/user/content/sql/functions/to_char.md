@@ -1,5 +1,5 @@
 ---
-title: "to_char Function"
+title: "to_char function"
 description: "Converts a timestamp into a string using the specified format."
 menu:
   main:

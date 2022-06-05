@@ -1,5 +1,5 @@
 ---
-title: "Temporal Filters (Sliding, Hopping, Tumbling Windows)"
+title: "Temporal filters (sliding, hopping & tumbling windows)"
 description: "Perform time-windowed computation over temporal data."
 aliases:
   - /guides/temporal-filters/
