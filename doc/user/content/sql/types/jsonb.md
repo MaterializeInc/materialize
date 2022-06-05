@@ -8,7 +8,7 @@ aliases:
   - /sql/types/json
 ---
 
-`jsonb` data expresses a JavaScript Object Notation (JSON) object similar to
+`jsonb` data expresses a JSON object similar to
 [PostgreSQL's implementation](https://www.postgresql.org/docs/current/datatype-json.html).
 
 Detail | Info
@@ -43,7 +43,7 @@ Materialize supports the following operators and functions.
 
 #### Detail
 
-Functions that return `Col`s are considered table function and can only be used
+Functions that return `Col`s are considered table functions and can only be used
 as tables, i.e. you cannot use them as scalar values. For example, you can only
 use `jsonb_object_keys` in the following way:
 
@@ -120,9 +120,9 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
      "\"foo\""
     ```
 
-### Subscripting
 
-{{< version-added v0.16.0 />}}
+
+### Subscripting
 
 You can use subscript notation (`[]`) to extract an element from a `jsonb` array
 or object.

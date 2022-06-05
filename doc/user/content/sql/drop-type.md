@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.7.1 />}}
-
 `DROP TYPE` removes a [custom data type](../create-type). You cannot use it on default data types.
 
 ## Syntax

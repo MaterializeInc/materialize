@@ -61,7 +61,7 @@ Field | Use
 **(** _col&lowbar;ident_... **)** | Rename the CTE's columns to the list of identifiers, both of which must be the same length.
 **ALL** | Return all rows from query _(implied default)_.
 **DISTINCT** | Return only distinct values from query.
-**DISTINCT ON (** _col&lowbar;ref_... **)**  | Return only the first row with a distinct value for _col&lowbar;ref_. {{< version-added v0.5.1 />}}
+**DISTINCT ON (** _col&lowbar;ref_... **)**  | Return only the first row with a distinct value for _col&lowbar;ref_.
 _target&lowbar;elem_ | Return identified columns or functions.
 **FROM** _table&lowbar;ref_ | The tables you want to read from; note that these can also be other `SELECT` statements or [common table expressions](#common-table-expressions-ctes).
 _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` documentation](../join).
@@ -147,8 +147,6 @@ CTEs have the following limitations, which we are working to improve:
 - `WTIH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
 ### Query hints
-
-{{< version-added v0.6.0 />}}
 
 Users can specify any query hints to help Materialize optimize
 query planning more efficiently.

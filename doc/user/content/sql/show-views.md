@@ -32,19 +32,10 @@ _schema&lowbar;name_ | The schema to show views from. Defaults to `public` in th
 
 Field | Meaning
 ------|--------
-**name** | The name of the view
-**type** | Whether the view was created by the `user` or the `system`
-**materialized** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index)
+**name** | The name of the view.
+**type** | Whether the view was created by the `user` or the `system`.
+**materialized** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index).
 **volatility** | Whether the view is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
-
-{{< version-changed v0.5.0 >}}
-The `Name`, `Type`, and `Materialized` columns are renamed to lowercase, i.e.,
-`name`, `type`, and `materialized`, respectively.
-{{< /version-changed >}}
-
-{{< version-added v0.7.2 >}}
-The `volatile` column.
-{{< /version-added >}}
 
 ## Examples
 

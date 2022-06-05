@@ -110,8 +110,8 @@ Operation | Computes | Notes
 [`time`](../time) `+` [`interval`](../interval) | `time`
 [`time`](../time) `-` [`interval`](../interval) | `time`
 [`time`](../time) `-` [`time`](../time) | [`interval`](../interval)
-[`interval`](../interval) `*` [`double precision`](../float) | [`interval`](../interval) | {{< version-added v0.6.1 />}}
-[`interval`](../interval) `/` [`double precision`](../float) | [`interval`](../interval) | {{< version-added v0.6.1 />}}
+[`interval`](../interval) `*` [`double precision`](../float) | [`interval`](../interval) |
+[`interval`](../interval) `/` [`double precision`](../float) | [`interval`](../interval) |
 
 ## Examples
 

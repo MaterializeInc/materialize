@@ -12,8 +12,6 @@ aliases:
 
 {{< beta />}}
 
-{{< version-added v0.8.0 />}}
-
 {{% create-source/intro %}}
 This page describes how to connect Materialize to a PostgreSQL (10+) database to create and efficiently maintain real-time materialized views on top of a replication stream.
 {{% /create-source/intro %}}

@@ -6,8 +6,6 @@ menu:
     parent: sql-types
 ---
 
-{{< version-added v0.5.0 />}}
-
 Arrays are a multidimensional sequence of any non-array type.
 
 {{< warning >}}
@@ -38,10 +36,6 @@ To reduce confusion, we recommend that you use the simpler form of the type name
 whenever possible.
 
 ### Construction
-
-{{< version-added v0.7.4 >}}
-The `ARRAY` expression syntax.
-{{< /version-added >}}
 
 You can construct arrays using the special `ARRAY` expression:
 
@@ -148,15 +142,11 @@ You can [cast](/sql/functions/cast) all array types to:
 - [`text`](../text) (by assignment)
 - [`list`](../list) (explicit)
 
-{{< version-added v0.7.4 >}}
 You can cast `text` to any array type. The input must conform to the [textual
 format](#textual-format) described above, with the additional restriction that
 you cannot yet use a cast to construct a multidimensional array.
-{{< /version-added >}}
 
 ### Array to `list` casts
-
-{{< version-added v0.20.0 >}}
 
 You can cast any type of array to a list of the same element type, as long as
 the array has only 0 or 1 dimensions, i.e. you can cast `integer[]` to `integer

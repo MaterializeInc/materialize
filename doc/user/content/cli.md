@@ -15,19 +15,19 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
-`--help` | N/A | NOP&mdash;prints binary's list of command line flags
+[`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted.
+`--help` | N/A | NOP&mdash;prints binary's list of command line flags.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
-[`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections
-[`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
-[`--log-filter`](#log-filter) | `info` | Which log messages to emit
-[`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
-[`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
-[`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption {{< version-added v0.7.1 />}}
-[`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
-[`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
-`-v` / `--version` | N/A | Print version and exit
-`-vv` | N/A | Print version and additional build information, and exit
+[`--listen-addr`](#listen-address) | `0.0.0.0:6875` | The host and port on which to listen for HTTP and SQL connections.
+[`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements.
+[`--log-filter`](#log-filter) | `info` | Which log messages to emit.
+[`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA).
+[`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file.
+[`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption.
+[`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file.
+[`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads.
+`-v` / `--version` | N/A | Print version and exit.
+`-vv` | N/A | Print version and additional build information, and exit.
 
 If a command line flag takes an argument, you can alternatively set that flag
 via an environment variable named after the flag. If both the environment
@@ -67,14 +67,6 @@ half of the machine's physical cores as the thread count.  In the future,
 dynamically changing the number of worker threads will be possible over
 distributed clusters, see
 [#2449](https://github.com/MaterializeInc/materialize/issues/2449).
-
-{{< version-changed v0.4.0 >}}
-Rename the `--threads` flag to `--workers`.
-{{</ version-changed >}}
-
-{{< version-changed v0.5.1 >}}
-When unspecified, default to using half of the machine's physical cores.
-{{</ version-changed >}}
 
 #### How many worker threads should you run?
 
@@ -162,11 +154,6 @@ pgwire=trace,info
 
 ### Introspection sources
 
-{{< version-changed v0.7.1 >}}
-In prior versions of Materialize, this option was undocumented but available
-under the name `--logging-granularity`.
-{{< /version-changed >}}
-
 Materialize maintains several built-in sources and views in
 [`mz_catalog`](/sql/system-catalog) that describe the internal state of the
 dataflow execution layer, like `mz_scheduling_elapsed`.
@@ -185,10 +172,6 @@ Materialize can use Transport Layer Security (TLS) to:
 
  * Encrypt traffic between SQL and HTTP clients and the `materialized` server
  * Authenticate SQL and HTTP clients
-
-{{< version-added v0.7.1 >}}
-The `--tls-mode` and `--tls-ca` options.
-{{< /version-changed >}}
 
 #### Configuration
 
@@ -254,8 +237,6 @@ Acquire a certificate from a proper certificate authority (CA) instead.
 [OpenSSL]: https://www.openssl.org
 
 ### Experimental mode
-
-{{< version-added v0.4.0 />}}
 
 {{< warning >}}
 

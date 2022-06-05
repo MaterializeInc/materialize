@@ -6,8 +6,6 @@ menu:
     parent: sql-types
 ---
 
-{{< version-added v0.5.1 />}}
-
 Lists are ordered sequences of homogenously typed elements. Lists' elements can
 be other lists, known as "layered lists."
 
@@ -94,11 +92,9 @@ SELECT LIST[['a', 'b'], ['c']];
  {{a,b},{c}}
 ```
 
-{{< version-added v0.9.13 >}}
 Alternatively, you can construct a list from the results of a subquery. The
 subquery must return a single column. Note that, in this form of the `LIST`
 expression, parentheses are used rather than square brackets.
-{{< /version-added >}}
 
 ```sql
 SELECT LIST(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
@@ -272,8 +268,6 @@ SELECT LIST[['a', 'white space'], [NULL, ''], ['escape"m\e', 'nUlL']];
 ```
 
 ### `text` to `list` casts
-
-{{< version-added v0.5.2 />}}
 
 To cast `text` to a `list`, you must format the text similar to list's [output
 format](#output-format).

@@ -8,8 +8,6 @@ menu:
     parent: 'commands'
 ---
 
-{{< version-added v0.5.0 />}}
-
 `CREATE TABLE` creates an in-memory table.
 
 ## Conceptual framework
@@ -96,10 +94,6 @@ If your dataset is too large to fit in memory, consider using an unmaterialized
 [source](/sql/create-source) instead. This lets you defer materialization to
 views derived from this source, which can aggregate or filter the data down to a
 manageable size.
-
-{{< version-changed v0.23.0 >}}
-Tables no longer have a mandatory default [index](/overview/key-concepts/#indexes).
-{{< /version-changed >}}
 
 ## Examples
 
