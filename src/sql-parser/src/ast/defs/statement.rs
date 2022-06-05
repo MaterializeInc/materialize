@@ -25,7 +25,7 @@ use crate::ast::{
     AstInfo, ColumnDef, CreateConnector, CreateSinkConnector, CreateSourceConnector,
     CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata,
     TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, WithOptionVecString,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -702,7 +702,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
-    pub with_options: Vec<IndexOptions<T>>,
+    pub with_options: Vec<IndexOption<T>>,
     pub if_not_exists: bool,
 }
 
@@ -759,12 +759,12 @@ impl AstDisplay for IndexOptionName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IndexOptions<T: AstInfo> {
+pub struct IndexOption<T: AstInfo> {
     pub name: IndexOptionName,
     pub value: WithOptionValue<T>,
 }
 
-impl<T: AstInfo> AstDisplay for IndexOptions<T> {
+impl<T: AstInfo> AstDisplay for IndexOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         f.write_str(" = ");
@@ -1054,7 +1054,7 @@ impl_display!(AlterObjectRenameStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterIndexAction<T: AstInfo> {
-    SetOptions(Vec<IndexOptions<T>>),
+    SetOptions(Vec<IndexOption<T>>),
     ResetOptions(Vec<IndexOptionName>),
 }
 
@@ -1882,7 +1882,7 @@ impl<T: AstInfo> TryFrom<WithOptionValue<T>> for bool {
     }
 }
 
-impl<T: AstInfo> TryFrom<WithOptionValue<T>> for WithOptionVecString {
+impl<T: AstInfo> TryFrom<WithOptionValue<T>> for Vec<String> {
     type Error = anyhow::Error;
     fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
         match v {

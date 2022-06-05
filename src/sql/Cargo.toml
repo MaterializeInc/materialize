@@ -28,6 +28,7 @@ mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
+paste = "1.0"
 protobuf-native = "0.2.1"
 prost = "0.10.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static"] }
