@@ -468,6 +468,53 @@ pub fn create_statement(
     Ok(stmt.to_ast_string_stable())
 }
 
+macro_rules! generate_extracted_config {
+    ($option_ty:ty, $(($option_name:path, $t:ty)),+) => {
+        paste::paste! {
+            pub struct [<$option_ty Extracted>] {
+                $(
+                    [<$option_name:snake>]: Option<$t>,
+                )*
+            }
+
+            impl std::default::Default for [<$option_ty Extracted>] {
+                fn default() -> Self {
+                    [<$option_ty Extracted>] {
+                        $(
+                            [<$option_name:snake>]: None,
+                        )*
+                    }
+                }
+            }
+
+            impl std::convert::TryFrom<Vec<$option_ty<Aug>>> for [<$option_ty Extracted>] {
+                type Error = anyhow::Error;
+                fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
+                    use [<$option_ty Name>]::*;
+                    let mut seen = HashSet::<[<$option_ty Name>]>::new();
+                    let mut extracted = [<$option_ty Extracted>]::default();
+                    for option in v {
+                        if !seen.insert(option.name.clone()) {
+                            bail!("{} specified more than once", option.name.to_ast_string());
+                        }
+                        match option.name {
+                            $(
+                                $option_name => {
+                                    extracted.[<$option_name:snake>] = Some(
+                                        <$t>::try_from(option.value)
+                                            .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?
+                                    );
+                                }
+                            )*
+                        }
+                    }
+                    Ok(extracted)
+                }
+            }
+        }
+    }
+}
+
 macro_rules! with_option_type {
     ($name:expr, String) => {
         match $name {

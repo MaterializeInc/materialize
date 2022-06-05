@@ -64,12 +64,12 @@ use crate::ast::{
     CsrConnector, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
     CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOptionName, IndexOptions, KafkaConsistency,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
     TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
-    WithOption, WithOptionValue, WithOptionVecString,
+    WithOption, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -89,8 +89,8 @@ use crate::plan::{
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption, Params, Plan, ReplicaConfig,
-    Secret, Sink, Source, Table, Type, View,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink,
+    Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2746,44 +2746,31 @@ const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
     days: 0,
 };
 
+generate_extracted_config!(
+    ReplicaOption,
+    (AvailabilityZone, String),
+    (Size, String),
+    (Remote, Vec<String>)
+);
+
 fn plan_replica_config(
     scx: &StatementContext,
     options: Vec<ReplicaOption<Aug>>,
 ) -> Result<ReplicaConfig, anyhow::Error> {
-    let mut seen = HashSet::new();
-    let mut remote_replicas = BTreeSet::new();
-    let mut size = None;
-    let mut availability_zone = None;
+    let ReplicaOptionExtracted {
+        availability_zone,
+        size,
+        remote,
+    }: ReplicaOptionExtracted = options.try_into()?;
 
-    for option in options {
-        if !seen.insert(option.name.clone()) {
-            bail!("{} specified more than once", option.name.to_ast_string());
-        }
-        match option.name {
-            ReplicaOptionName::Remote => {
-                scx.require_unsafe_mode("REMOTE cluster replica option")?;
-                remote_replicas = WithOptionVecString::try_from(option.value)
-                    .map_err(|e| anyhow!("invalid REMOTE: {}", e))?
-                    .0
-                    .into_iter()
-                    .collect::<BTreeSet<String>>();
-                if remote_replicas.is_empty() {
-                    bail!("cannot specify empty REMOTE");
-                }
-            }
-            ReplicaOptionName::Size => {
-                size = Some(
-                    String::try_from(option.value).map_err(|e| anyhow!("invalid SIZE: {}", e))?,
-                );
-            }
-            ReplicaOptionName::AvailabilityZone => {
-                availability_zone = Some(
-                    String::try_from(option.value)
-                        .map_err(|e| anyhow!("invalid AVAILABILITY ZONE: {}", e))?,
-                );
-            }
-        }
+    if remote.is_some() {
+        scx.require_unsafe_mode("REMOTE cluster replica option")?;
     }
+
+    let remote_replicas = remote
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<BTreeSet<String>>();
 
     match (remote_replicas.len() > 0, size) {
         (true, None) => {
@@ -3268,27 +3255,21 @@ pub fn describe_alter_index_options(
     Ok(StatementDesc::new(None))
 }
 
-fn plan_index_options(
-    with_opts: Vec<IndexOptions<Aug>>,
-) -> Result<Vec<IndexOption>, anyhow::Error> {
-    let mut seen = HashSet::with_capacity(with_opts.len());
-    let mut out = Vec::with_capacity(with_opts.len());
+generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
 
-    for IndexOptions { name, value } in with_opts {
-        if !seen.insert(name.clone()) {
-            bail!("cannot set {} twice", name.to_ast_string());
-        }
-        out.push(match name {
-            IndexOptionName::LogicalCompactionWindow => {
-                let lcw = OptionalInterval::try_from(value)
-                    .map_err(|e| anyhow!("invalid LOGICAL COMPACTION WINDOW: {}", e))?
-                    .0;
-                IndexOption::LogicalCompactionWindow(match lcw {
-                    Some(interval) => Some(interval.duration()?),
-                    None => None,
-                })
-            }
-        });
+fn plan_index_options(
+    with_opts: Vec<IndexOption<Aug>>,
+) -> Result<Vec<crate::plan::IndexOption>, anyhow::Error> {
+    let IndexOptionExtracted {
+        logical_compaction_window,
+    }: IndexOptionExtracted = with_opts.try_into()?;
+
+    let mut out = Vec::with_capacity(1);
+
+    if let Some(OptionalInterval(lcw)) = logical_compaction_window {
+        out.push(crate::plan::IndexOption::LogicalCompactionWindow(
+            lcw.map(|interval| interval.duration()).transpose()?,
+        ))
     }
 
     Ok(out)

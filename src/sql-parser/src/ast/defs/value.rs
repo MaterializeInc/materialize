@@ -168,9 +168,7 @@ impl TryFrom<Value> for i32 {
     }
 }
 
-pub struct WithOptionVecString(pub Vec<String>);
-
-impl TryFrom<Value> for WithOptionVecString {
+impl TryFrom<Value> for Vec<String> {
     type Error = anyhow::Error;
     fn try_from(v: Value) -> Result<Self, Self::Error> {
         match v {
@@ -179,7 +177,7 @@ impl TryFrom<Value> for WithOptionVecString {
                 for i in a {
                     out.push(i.try_into()?)
                 }
-                Ok(WithOptionVecString(out))
+                Ok(out)
             }
             _ => anyhow::bail!("cannot use value as number"),
         }
