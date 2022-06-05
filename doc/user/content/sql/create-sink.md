@@ -48,16 +48,12 @@ _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink. If no
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
 **KAFKA BROKER** _host_ | The Kafka broker's host name without the security protocol, which is specified by the [`WITH` options](#with-options). If you wish to specify multiple brokers (bootstrap servers) as an additional safeguard, use a comma-separated list. For example: `localhost:9092, localhost:9093`.
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
-**KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset. {{< version-added v0.5.1 />}}
-**TOPIC** _consistency&lowbar;topic_ | Makes the sink emit additional [consistency metadata](#consistency-metadata) to the named topic. Only valid for Kafka sinks. If `reuse_topic` is `true`, a default naming convention will be used when the topic name is not explicitly set. This is formed by appending `-consistency` to the output topic name. {{< version-added v0.8.4 />}}
+**KEY (** _key&lowbar;column_ **)** | An optional list of columns to use for the Kafka key. If unspecified, the Kafka key is left unset.
+**TOPIC** _consistency&lowbar;topic_ | Makes the sink emit additional [consistency metadata](#consistency-metadata) to the named topic. Only valid for Kafka sinks. If `reuse_topic` is `true`, a default naming convention will be used when the topic name is not explicitly set. This is formed by appending `-consistency` to the output topic name.
 _sink&lowbar;with&lowbar;options_ | Options affecting sink creation. For more detail, see [`WITH` options](#with-options).
 _with&lowbar;options_ | Options affecting Materialize's connection to Kafka. For more detail, see [Authentication](#authentication).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source. This is the default.
 **ENVELOPE UPSERT** | The sink emits data with upsert semantics: updates and inserts for the given key are expressed as a value, and deletes are expressed as a null value payload in Kafka. For more detail, see [Handling upserts](/sql/create-source/kafka/#handling-upserts).
-
-{{< version-changed v0.7.1 >}}
-The `AS OF` option was removed.
-{{< /version-changed >}}
 
 ### `WITH` options
 
@@ -71,10 +67,10 @@ Field                | Value type | Description
 `consistency_topic`  | `text`     | This option is only available to support backwards-compatibility. Please use the new [`CONSISTENCY` syntax](/sql/create-sink/#sink_kafka_connector) to define a consistency topic for the sink.
 `security_protocol`  | `text`     | Use [`ssl`](#authentication) or, for [Kerberos](#authentication), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
-`retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default. {{< version-added v0.9.7 />}}
-`retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default. {{< version-added v0.9.7 />}}
-`avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`. {{< version-added v0.18.0 />}}
-`avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`. {{< version-added v0.18.0 />}}
+`retention_ms`       | `long`     | Sets the maximum time Kafka will retain a log.  Accepts values [-1, ...]. `-1` specifics no time limit.  If not set, uses the broker default.
+`retention_bytes`    | `long`     | Sets the maximum size a Kafka partion can grow before removing old logs.  Accepts values [-1, ...]. `-1` specifics no size limit.  If not set, uses the broker default.
+`avro_key_fullname`  | `text`     | Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `avro_value_fullname`. The default fullname is `row`.
+`avro_value_fullname`| `text`     | Sets the Avro fullname on the generated value schema. When `KEY` is specified, `avro_key_fullname` must additionally be specified. The default fullname is `envelope`.
 
 #### Authentication
 
@@ -166,8 +162,6 @@ You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 #### Exactly-once sinks (with topic reuse after restart)
 
 {{< beta />}}
-
-{{< version-added v0.9.0 />}}
 
 By default, Materialize creates new, distinct topics for sinks on restart. To enable the reuse of an existing topic instead and achieve exactly-once processing guarantees, Materialize must:
 

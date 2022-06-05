@@ -52,15 +52,6 @@ _col&lowbar;expr_**...** | The expressions to use as the key for the index.
 _field_ | The name of the option you want to set.
 _val_ | The value for the option.
 
-{{< version-changed v0.7.1 >}}
-The `WITH (field = val, ...)` clause was added to allow setting index options
-when creating the index.
-{{</ version-changed >}}
-
-{{< version-added v0.23.0 >}}
-The `USING` clause.
-{{</ version-added >}}
-
 ### `WITH` options
 
 The following option is valid within the `WITH` clause:

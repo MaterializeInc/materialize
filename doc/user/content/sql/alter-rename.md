@@ -6,8 +6,6 @@ menu:
     parent: 'commands'
 ---
 
-{{< version-added v0.4.0 />}}
-
 `ALTER ... RENAME` renames an item, albeit with some [limitations](#details).
 
 Note that renaming schemas and databases are in development. {{% gh 3680 %}}

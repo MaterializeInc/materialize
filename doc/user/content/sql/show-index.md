@@ -41,16 +41,6 @@ Field | Meaning
 **expression** | An expression used to generate the column in the index.
 **null** | Is the column nullable?
 
-{{< version-changed v0.5.0 >}}
-The output columns are renamed from `On_name`, `Key_name`, `Column_name`,
-`Expression`, `Null`, and `Seq_in_index` to `on_name`, `key_name`,
-`column_name`, `expression`, `nullable`, and `seq_in_index`, respectively.
-{{< /version-changed >}}
-
-{{< version-added v0.23.0 >}}
-The `cluster` column.
-{{< /version-added >}}
-
 ### Determine which views have indexes
 
 [`SHOW FULL VIEWS`](../show-views/#show-details-about-views) includes details about which views have indexes, i.e. are materialized.

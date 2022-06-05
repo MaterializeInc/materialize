@@ -64,8 +64,6 @@ platforms.
 
 ### `LATERAL` subqueries
 
-{{< version-added v0.4.1 />}}
-
 To permit subqueries on the right-hand side of a `JOIN` to access the columns
 defined by the left-hand side, declare the subquery as `LATERAL`. Normally, a
 subquery only has access to the columns within its own context.

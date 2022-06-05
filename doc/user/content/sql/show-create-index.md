@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.4.0 />}}
-
 `SHOW CREATE INDEX` returns the DDL statement used to create the index.
 
 ## Syntax

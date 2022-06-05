@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.5.0 />}}
-
 `INSERT` writes values to [user-defined tables](../create-table).
 
 {{< warning >}}
