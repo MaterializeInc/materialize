@@ -45,7 +45,7 @@ To read from an external data source, Materialize must be able to determine how 
 
 <p style="font-size:14px"><b>Syntax:</b> <code>FORMAT AVRO</code></p>
 
-Materialize can decode Avro messages by integrating with a schema registry to retrieve a schema, and automatically define the columns and data types to use in the source.
+Materialize can decode Avro messages by integrating with a schema registry to retrieve a schema, and automatically determine the columns and data types to use in the source.
 
 ##### Schema versioning
 
