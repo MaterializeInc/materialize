@@ -2091,9 +2091,10 @@ fn persist_sink_builder(
 }
 
 pub fn describe_create_sink(
-    _: &StatementContext,
+    scx: &StatementContext,
     _: CreateSinkStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
+    scx.require_unsafe_mode("CREATE SINK")?;
     Ok(StatementDesc::new(None))
 }
 
@@ -2101,6 +2102,7 @@ pub fn plan_create_sink(
     scx: &StatementContext,
     mut stmt: CreateSinkStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
+    scx.require_unsafe_mode("CREATE SINK")?;
     let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
         Some(in_cluster) => in_cluster.0,
