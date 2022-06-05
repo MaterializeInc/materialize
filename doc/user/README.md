@@ -19,6 +19,38 @@ For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Tasks
 
+### (Temporary) Updating LTS Docs
+
+As we start to break apart the binary, we have to work through a temporary phase where users of `v0.26 LTS` (or lower) shouldn't be exposed to documentation changes related to the new features landing in `main`, to avoid confusion. #11795 updated the docs deployment process to use two different branches:
+
+* `lts-docs`: capturing the state of the docs at `v0.26 LTS`, deploying to `https://materialize.com/docs/`
+* `main`: ongoing development branch, deploying to `https://materialize.com/docs/unstable/`
+
+#### Shipping updates to Unstable Docs
+
+PRs to `materialize/main` will trigger new builds of materialize.com/docs/unstable/. Deploy docs updates to unstable if:
+
+1. The change applies to both LTS and Unstable _(e.g. if you're correcting a typo on the Postgres source page)_
+2. The change only applies to Unstable
+
+#### Shipping updates to LTS Docs
+
+To update `materialize.com/docs`, you need to merge a PR to the `lts-docs` branch (typically, following a PR to `main`) to backport the changes, in which case the process is:
+
+1. Create a new branch on your fork that references `lts-docs`.
+   ```
+   git checkout -b my-branch-name lts-docs
+   ```
+2. Cherry-pick the commit from `main` with the changes you need, or just make the necessary changes as you would normally.
+   ```
+   git cherry-pick COMMIT-SHA-FROM-MAIN
+   ```
+4. Push your branch.
+   ```
+   git push
+   ```
+5. Open a PR - if this was a cherry-picked commit that has already been reviewed, approved and merged to `main`, you can just merge it once CI turns green. If it has conflicts or it is a unique PR for `lts-docs`, then you'll need a review.
+
 ### Updating CSS
 
 No CSS is shared with the marketing website to keep the docs CSS maintainable.
@@ -87,7 +119,7 @@ If you see the need to add or change the grouping here, don't be shy.
 
 ## `CREATE SOURCE` docs
 
-Materialize's sources consist of the following components:
+Sources in Materialize consist of the following components:
 
 - Connectors to some external source of data (e.g. Kafka)
 - Formats of that data (e.g. Avro, text)
@@ -95,58 +127,7 @@ Materialize's sources consist of the following components:
   (e.g. append-only, supporting updated and deletes)
 
 Because each of these three components have multiple implementations, the
-docs for `CREATE SOURCE` are too large to fit on a single page. To manage this,
-we've broken the `CREATE SOURCE` documentation into many pages (one page for
-each meaningfully distinct combination of connector and format), and leveraged
-Hugo partials and shortcodes to simplify page creation and reuse content across
-pages.
-
-* You can find all of the `CREATE SOURCE` docs at
-  [content/sql/create-source](content/sql/create-source/).
-* Each `CREATE SOURCE` doc page will call the `create-source` *layout* to provide uniform details
-  [layouts/shortcodes/create-source](layouts/shortcodes/create-source)
-* The details of that layout are filled in by partials at
-  [layouts/partials/create-source/connector](layouts/partials/create-source/connector)
-
-### Hugo shortcodes and partials
-
-Hugo partials are template components, and shortcodes are designed to provide
-a dynamic interface for using those components.
-
-In the case of Materialize, we rely on shortcodes in
-[layouts/shortcodes/create-source](layouts/shortcodes/create-source)
-to simplify generating our many
-`CREATE SOURCE` pages, namely `syntax-details`. This provides an interface
-to dynamically display content from
-[layouts/partials/create-source](layouts/partials/create-source).
-
-[layouts/partials/create-source](layouts/partials/create-source)
-is structured like:
-
-```
-<component>
-  - <implementation>
-    - details.html (fills in Details heading)
-    - syntax.html (fills in Syntax table)
-    - with-options.html (only for connectors; adds With Options heading)
-```
-
-The `syntax-details` shortcode then provides an interface to express which
-implementations of each components you want to include in the documentation
-by simply including the `<implementation>` folder name in the argument for
-the `<component>`. This should be fairly intuitive, but there are the following
-caveats:
-
-- `connector` only takes one value. The `<implementation>/with-options.html`
-  content displays beneath the **Syntax** header.
-- `formats` and `envelopes` can take multiple arguments separated by spaces (e.g.
-  `"text bytes"`).
-
-Here's an example:
-
-```
-{{% create-source/syntax-details connector="kafka" formats="avro-ccsr" envelopes="debezium upsert append-only" %}}
-```
+docs for `CREATE SOURCE` are broken down by connector. You can find all of the `CREATE SOURCE` docs at [content/sql/create-source](content/sql/create-source/).
 
 ### Remaining to-dos
 
@@ -158,21 +139,6 @@ docs. Future wants include:
 - Dynamic front-end that lets users "choose their own adventure" to get the
   correct content in front of them.
 - Dynamic sample generator.
-
-### Updating `CREATE SOURCE` pages
-
-- To update the details of any specific implementation, updating
-  the partial template content immediately propagates those changes to all
-  of the content that relies on it.
-
-  If you want to express conditional logic in these, the easiest way is passing
-  in some parameter from the `syntax-details` shortcode, and then checking for
-  it in the template.
-
-- To add implementations, simply add the directory to the appropriate component's
-  folder, along with the same files as the other implementations. You'll then
-  need to reference the implementation when invoking the `syntax-details`
-  shortcode.
 
 ## Syntax highlighting
 

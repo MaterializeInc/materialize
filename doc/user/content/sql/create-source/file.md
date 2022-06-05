@@ -15,7 +15,7 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-This page details how to use Materialize to read from local files.
+This page describes how to use Materialize to read from local files.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -49,12 +49,12 @@ Field                                | Value     | Description
 
 ## Supported formats
 
-|<div style="width:290px">Format</div> | Append-only envelope | Upsert envelope | Debezium envelope |
----------------------------------------|:--------------------:|:---------------:|:-----------------:|
-| Avro                                 | ✓                    |                 | ✓                 |
-| JSON                                 | ✓                    |                 |                   |
-| Text/bytes                           | ✓                    |                 |                   |
-| CSV                                  | ✓                    |                 |                   |
+|<div style="width:290px">Format</div> | [Append-only envelope] | [Upsert envelope] | [Debezium envelope] |
+---------------------------------------|:----------------------:|:-----------------:|:-------------------:|
+| [Avro]                               | ✓                      |                   | ✓                   |
+| [JSON]                               | ✓                      |                   |                     |
+| [Text/bytes]                         | ✓                      |                   |                     |
+| [CSV]                                | ✓                      |                   |                     |
 
 ## Features
 
@@ -204,3 +204,12 @@ This creates a source that...
 - [`CREATE SOURCE`](../)
 - [`CREATE VIEW`](../../create-view)
 - [`SELECT`](../../select)
+
+[Avro]: /sql/create-source/#avro
+[JSON]: /sql/create-source/#json
+[Text/bytes]: /sql/create-source/#textbytes
+[CSV]: /sql/create-source/#csv
+
+[Append-only envelope]: /sql/create-source/#append-only-envelope
+[Upsert envelope]: /sql/create-source/#upsert-envelope
+[Debezium envelope]: /sql/create-source/#debezium-envelope
