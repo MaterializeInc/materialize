@@ -36,7 +36,7 @@ def main() -> int:
     parser.add_argument(
         "program",
         help="the name of the program to run",
-        choices=["materialized", "sqllogictest", "test"],
+        choices=[*KNOWN_PROGRAMS, "test"],
     )
     parser.add_argument(
         "args",
@@ -67,6 +67,18 @@ def main() -> int:
         "--no-default-features",
         help="Do not activate the `default` feature",
         action="store_true",
+    )
+    parser.add_argument(
+        "-p", "--package",
+        help="Package to run tests for",
+        action="append",
+        default=[],
+    )
+    parser.add_argument(
+        "--test",
+        help="Test only the specified test target",
+        action="append",
+        default=[],
     )
     parser.add_argument(
         "--tokio-console",
@@ -105,6 +117,10 @@ def main() -> int:
     elif args.program == "test":
         _build(args)
         command = _cargo_command(args, "test")
+        for package in args.package:
+            command += ["--package", package]
+        for test in args.test:
+            command += ["--test", test]
         command += args.args
     else:
         raise UIError(f"unknown program {args.program}")
