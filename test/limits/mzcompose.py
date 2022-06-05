@@ -19,7 +19,6 @@ from materialize.mzcompose.services import (
     Computed,
     Kafka,
     Materialized,
-    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -1034,11 +1033,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Postgres(),
-    Materialized(
-        memory="8G",
-        options="--persist-consensus-url postgres://postgres:postgres@postgres",
-    ),
+    Materialized(memory="8G"),
     Testdrive(default_timeout="60s"),
 ]
 
@@ -1065,11 +1060,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres"]
-    )
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
-    c.wait_for_postgres()
     c.up("materialized")
     c.wait_for_materialized()
 
@@ -1092,13 +1084,10 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres"]
-    )
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
-    c.wait_for_postgres()
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
+    c.wait_for_materialized()
 
     nodes = [
         Computed(
@@ -1139,9 +1128,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Create multiple clusters with multiple nodes and replicas each"""
-    c.start_and_wait_for_tcp(
-        services=["zookeeper", "kafka", "schema-registry", "postgres"]
-    )
+    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
     c.wait_for_postgres()
 
     parser.add_argument(
@@ -1177,7 +1164,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     c.up("testdrive", persistent=True)
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
+    c.wait_for_materialized()
 
     # Construct the requied Computed instances and peer them into clusters
     computeds = []

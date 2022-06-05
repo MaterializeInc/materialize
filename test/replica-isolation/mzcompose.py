@@ -17,7 +17,6 @@ from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
-    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -27,12 +26,8 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Postgres(),
     Localstack(),
-    Materialized(
-        options="--persist-consensus-url postgres://postgres:postgres@postgres",
-        extra_ports=[2101],
-    ),
+    Materialized(),
     Testdrive(),
 ]
 
@@ -178,8 +173,6 @@ def workflow_default(c: Composition) -> None:
     c.start_and_wait_for_tcp(
         services=["zookeeper", "kafka", "schema-registry", "localstack"]
     )
-    c.up("postgres")
-    c.wait_for_postgres()
     for id, disruption in enumerate(disruptions):
         run_test(c, disruption, id)
 
