@@ -1616,9 +1616,9 @@ dependencies = [
 
 [[package]]
 name = "enum-iterator"
-version = "1.1.0"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61db03f988325e7f042ab151d28f416fac630f3c53df9ed6d71d98a1f7fabb2f"
+checksum = "3a7cbade83f72b1330fa58dc6203176f374e61eb3682055b6d3df05f56723f85"
 dependencies = [
  "enum-iterator-derive",
 ]
