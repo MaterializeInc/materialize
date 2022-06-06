@@ -19,6 +19,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::marker::Send;
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -669,6 +670,40 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// Data about timestamp bindings, sent to the coordinator, in service
     /// of a specific "linearized" read request
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
+}
+
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+pub fn spawn_client<
+    C: Send + 'static,
+    R: Send + 'static,
+    G: GenericClient<C, R> + Send + 'static,
+>(
+    mut g: G,
+) -> (Sender<C>, Receiver<R>) {
+    let (send_side_tx, mut send_side_rx) = channel(100);
+    let (recv_side_tx, recv_side_rx) = channel(100);
+
+    mz_ore::task::spawn(|| "todo".to_string(), async move {
+        loop {
+            // NOTE this should be `select2` from https://github.com/MaterializeInc/materialize/pull/12796
+            tokio::select! {
+                cmd = send_side_rx.recv() => {
+                    if let Some(cmd) = cmd {
+                        let _ = g.send(cmd).await;
+                    }
+                }
+                // not cancel-safe
+                cmd = g.recv() => {
+                    // TODO error handling
+                    if let Ok(Some(cmd)) = cmd {
+                        let _ = recv_side_tx.send(cmd).await;
+                    }
+                }
+            }
+        }
+    });
+
+    (send_side_tx, recv_side_rx)
 }
 
 /// A client to a running dataflow server.
