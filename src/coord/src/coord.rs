@@ -4728,6 +4728,17 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+        // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
+        // table writes are not batched in a group commit. This is mostly due to the complexity
+        // around checking for conflicting DDL at commit time. There is a possibility that if a user
+        // is executing DDL at a rate faster than 1 query per millisecond, then the global clock
+        // will unboundedly advance past the system clock. This can cause future queries to block,
+        // but will not affect correctness. Since this rate of DDL is unlikely, we are leaving DDL
+        // related writes out of group commits for now.
+        //
+        // In the future we can add these write to group commit by:
+        //  1. Checking for conflicts at commit time and aborting conflicting DDL.
+        //  2. Delaying modifications to on-disk and in-memory catalog until commit time.
         let (timestamp, advance_to) = self.get_and_step_local_write_ts();
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         for u in updates {
