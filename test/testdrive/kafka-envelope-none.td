@@ -57,4 +57,3 @@ bar
 
 ! SELECT * FROM missing_keys_or_values ORDER BY mz_offset ASC
 contains: Decode error: Text: Value not present for message
-
