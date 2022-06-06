@@ -272,7 +272,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
             e => e.into(),
         })?;
 
-    // Initialize network listener.
+    // Initialize network listeners.
     let sql_listener = TcpListener::bind(&config.sql_listen_addr).await?;
     let http_listener = TcpListener::bind(&config.http_listen_addr).await?;
     let sql_local_addr = sql_listener.local_addr()?;
