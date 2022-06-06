@@ -134,19 +134,22 @@ def start_services(
         print(f"The version of the '{instance.upper()}' Mz instance is:")
         c.run("materialized", "--version")
 
-        c.start_and_wait_for_tcp(services=["materialized"])
-        c.wait_for_materialized()
+        # Single-binary legacy Mz instances only have port 6875 open
+        # so only check that port before proceeding
+        c.up("materialized")
+        c.wait_for_materialized(port=6875)
 
         if nodes:
             print(f"Starting cluster for '{instance.upper()}' ...")
             c.up(*[f"computed_{n}" for n in range(0, nodes)])
 
-            c.sql("DROP CLUSTER default")
             c.sql(
-                "CREATE CLUSTER default REPLICAS (replica1 (REMOTE ("
+                "CREATE CLUSTER REPLICA default.feature_benchmark REMOTE ("
                 + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
-                + ")));"
+                + ");"
             )
+
+            c.sql("DROP CLUSTER REPLICA default.default_replica")
 
     c.up("testdrive", persistent=True)
 
