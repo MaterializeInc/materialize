@@ -25,7 +25,7 @@ use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::{encoding::*, *};
 use mz_dataflow_types::*;
 use mz_expr::PartitionId;
-use mz_repr::{Diff, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, Timestamp};
 
 use crate::decode::{render_decode, render_decode_cdcv2, render_decode_delimited};
 use crate::source::persist_source;
@@ -216,6 +216,11 @@ where
                     SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
                     SourceDataEncoding::Single(value) => (None, value),
                 };
+                let key_arity = key_encoding.as_ref().map(|k| {
+                    k.desc()
+                        .expect("RelationDesc must have already been calculated")
+                        .arity()
+                });
 
                 // CDCv2 can't quite be slotted in to the below code, since it determines
                 // its own diffs/timestamps as part of decoding.
@@ -369,7 +374,7 @@ where
                             let results = append_metadata_to_value(results);
 
                             let flattened_stream =
-                                flatten_results_prepend_keys(key_envelope, results);
+                                flatten_results_prepend_keys(key_envelope, key_arity, results);
 
                             let flattened_stream = flattened_stream.pass_through("decode", 1).map(
                                 |(val, time, diff)| match val {
@@ -563,14 +568,18 @@ where
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results_prepend_keys<G>(
     key_envelope: &KeyEnvelope,
+    key_arity: Option<usize>,
     results: timely::dataflow::Stream<G, KV>,
 ) -> timely::dataflow::Stream<G, Result<(Row, Diff), DecodeError>>
 where
     G: Scope,
 {
+    let handle_missing_keys_fn = handle_missing_keys(key_arity);
+
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
+            .map(move |kv| handle_missing_keys_fn(kv))
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, diff)| {
@@ -580,6 +589,7 @@ where
             }),
         KeyEnvelope::Named(_) => {
             results
+                .map(move |kv| handle_missing_keys_fn(kv))
                 .flat_map(raise_key_value_errors)
                 .map(move |maybe_kv| {
                     maybe_kv.map(|(mut key, value, diff)| {
@@ -602,6 +612,21 @@ where
     }
 }
 
+fn handle_missing_keys(key_arity: Option<usize>) -> Box<dyn Fn(KV) -> KV> {
+    let null_key_columns = Row::pack_slice(&vec![Datum::Null; key_arity.unwrap_or(0)]);
+
+    return Box::new(move |kv: KV| -> KV {
+        if let None = kv.key {
+            KV {
+                key: Some(Ok(null_key_columns.clone())),
+                val: kv.val,
+            }
+        } else {
+            kv
+        }
+    });
+}
+
 /// Handle possibly missing key or value portions of messages
 fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row, Diff), DecodeError>> {
     match (key, val) {
@@ -614,7 +639,7 @@ fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row, Diff)
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
         _ => Some(Err(DecodeError::Text(
-            "Key or Value are not present for message".to_string(),
+            "Value not present for message".to_string(),
         ))),
     }
 }
