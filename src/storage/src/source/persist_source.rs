@@ -16,9 +16,11 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use futures_util::Stream as FuturesStream;
+use mz_persist_client::cache::PersistClientCache;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tokio::sync::Mutex;
 use tracing::trace;
 
 use mz_dataflow_types::{
@@ -39,6 +41,7 @@ use crate::source::{SourceStatus, YIELD_INTERVAL};
 pub fn persist_source<G>(
     scope: &G,
     storage_metadata: CollectionMetadata,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
     as_of: Antichain<Timestamp>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -68,9 +71,13 @@ where
             return;
         }
 
-        let mut read =
-            crate::persist_cache::open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
-                storage_metadata.persist_location,
+        let mut read = persist_clients
+            .lock()
+            .await
+            .open(storage_metadata.persist_location)
+            .await
+            .expect("could not open persist client")
+            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
                 storage_metadata.persist_shard,
             )
             .await

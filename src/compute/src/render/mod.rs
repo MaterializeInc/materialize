@@ -102,6 +102,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
@@ -161,6 +162,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                 let (ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
                     source.storage_metadata.clone(),
+                    Arc::clone(&compute_state.persist_clients),
                     dataflow.as_of.clone().unwrap(),
                 );
 

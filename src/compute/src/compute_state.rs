@@ -10,11 +10,13 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::logging::Logger;
 use timely::order::PartialOrder;
@@ -22,7 +24,7 @@ use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId};
@@ -70,6 +72,9 @@ pub struct ComputeState {
     /// Configuration for sink connectors.
     // TODO: remove when sinks move to storage.
     pub connector_context: ConnectorContext,
+    /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+    /// This is intentionally shared between workers.
+    pub persist_clients: Arc<Mutex<PersistClientCache>>,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
