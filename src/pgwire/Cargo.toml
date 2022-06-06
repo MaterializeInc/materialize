@@ -25,5 +25,5 @@ openssl = { version = "0.10.40", features = ["vendored"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio = "1.18.2"
 tokio-openssl = "0.6.3"
-tokio-util = { version = "0.7.2", features = ["codec"] }
+tokio-util = { version = "0.7.3", features = ["codec"] }
 tracing = "0.1.34"
