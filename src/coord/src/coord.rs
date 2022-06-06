@@ -893,38 +893,40 @@ impl<S: Append + 'static> Coordinator<S> {
     /// This is only possible if the write and the delete were concurrent. Therefore, we are free to
     /// order the write before the delete without violating any consistency guarantees.
     async fn group_commit(&mut self) {
-        if !self.pending_writes.is_empty() {
-            let (timestamp, advance_to) = self.get_and_step_local_write_ts();
-            let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-            for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
-                let writes = std::mem::take(writes);
-                for WriteOp { id, rows } in writes {
-                    // object may have been deleted while write was waiting
-                    if self.catalog.try_get_entry(&id).is_some() {
-                        let updates = rows
-                            .into_iter()
-                            .map(|(row, diff)| Update {
-                                row,
-                                diff,
-                                timestamp,
-                            })
-                            .collect::<Vec<_>>();
-                        appends.entry(id).or_default().extend(updates);
-                    }
+        if self.pending_writes.is_empty() {
+            return;
+        }
+
+        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
+        for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
+            let writes = std::mem::take(writes);
+            for WriteOp { id, rows } in writes {
+                // object may have been deleted while write was waiting
+                if self.catalog.try_get_entry(&id).is_some() {
+                    let updates = rows
+                        .into_iter()
+                        .map(|(row, diff)| Update {
+                            row,
+                            diff,
+                            timestamp,
+                        })
+                        .collect::<Vec<_>>();
+                    appends.entry(id).or_default().extend(updates);
                 }
             }
-            let appends = appends
-                .into_iter()
-                .map(|(id, updates)| (id, updates, advance_to))
-                .collect();
-            self.dataflow_client
-                .storage_mut()
-                .append(appends)
-                .await
-                .unwrap();
-            for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
-                let _ = tx.send(None);
-            }
+        }
+        let appends = appends
+            .into_iter()
+            .map(|(id, updates)| (id, updates, advance_to))
+            .collect();
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
+        for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
+            let _ = tx.send(None);
         }
     }
 
@@ -3109,7 +3111,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 match ops {
-                    TransactionOps::Writes(writes) => {
+                    TransactionOps::Writes(mut writes) => {
                         for WriteOp { id, .. } in &writes {
                             // Re-verify this id exists.
                             let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
@@ -3117,11 +3119,8 @@ impl<S: Append + 'static> Coordinator<S> {
                             })?;
                         }
 
-                        // This can be empty if, say, a DELETE's WHERE clause had 0 results.
-                        let writes = writes
-                            .into_iter()
-                            .filter(|WriteOp { rows, .. }| !rows.is_empty())
-                            .collect();
+                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
                         let (tx, rx) = oneshot::channel();
                         write_rx = Some(rx);
                         if self.pending_writes.is_empty() {
