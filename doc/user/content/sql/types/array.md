@@ -1,5 +1,5 @@
 ---
-title: "Array Data Types"
+title: "Array types"
 description: "Express sequences of other types"
 menu:
   main:

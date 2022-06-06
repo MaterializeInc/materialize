@@ -1,5 +1,5 @@
 ---
-title: "Manage Users"
+title: "Manage users"
 description: "Manage Materialize Cloud Users."
 disable_toc: false
 menu:

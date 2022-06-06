@@ -4,7 +4,8 @@ description: "Connecting Materialize to a PostgreSQL database"
 menu:
   main:
     parent: 'create-source'
-    name: Postgres
+    identifier: cs_postgres
+    name: PostgreSQL
     weight: 20
 aliases:
   - /sql/create-source/postgresql
