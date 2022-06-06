@@ -111,7 +111,7 @@ struct Args {
     globs: Vec<String>,
 
     // === Materialize options. ===
-    /// materialized pgwire connection string.
+    /// materialized SQL connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6875",
