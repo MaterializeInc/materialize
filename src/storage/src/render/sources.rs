@@ -579,7 +579,7 @@ where
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
-            .map(move |kv| handle_missing_keys_fn(kv))
+            .map(handle_missing_keys_fn)
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
                 maybe_kv.map(|(mut key, value, diff)| {
@@ -589,7 +589,7 @@ where
             }),
         KeyEnvelope::Named(_) => {
             results
-                .map(move |kv| handle_missing_keys_fn(kv))
+                .map(handle_missing_keys_fn)
                 .flat_map(raise_key_value_errors)
                 .map(move |maybe_kv| {
                     maybe_kv.map(|(mut key, value, diff)| {
@@ -618,6 +618,8 @@ fn handle_missing_keys(key_arity: Option<usize>) -> Box<dyn Fn(KV) -> KV> {
     return Box::new(move |kv: KV| -> KV {
         if let None = kv.key {
             KV {
+                // we can get a small gain by efficiently cloning an already packed Row, rather
+                // than building and packing a vec of Nulls for each record with a missing key
                 key: Some(Ok(null_key_columns.clone())),
                 val: kv.val,
             }
