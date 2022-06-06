@@ -378,7 +378,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     // Listen on the third-party metrics port if we are configured for it.
     if let Some(addr) = config.internal_http_listen_addr {
         let metrics_registry = config.metrics_registry.clone();
-        task::spawn(|| "metrics_server", {
+        task::spawn(|| "internal_http_server", {
             let server = http::MetricsServer::new(metrics_registry);
             async move {
                 server.serve(addr).await;
