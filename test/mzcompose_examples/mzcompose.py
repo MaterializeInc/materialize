@@ -25,16 +25,6 @@ versioned_mz = [
     for version in ["v0.7.0", "v0.8.0"]
 ]
 
-multiple_mz = [
-    Materialized(
-        name=f"materialized{i}",
-        data_directory=f"/share/materialized{i}",
-        sql_port=6875 + 2 * i,
-        http_port=6876 + 2 * i,
-    )
-    for i in [1, 2]
-]
-
 mz_with_options = [
     Materialized(name="mz_2_workers", hostname="materialized", options="--workers 2"),
     Materialized(name="mz_4_workers", hostname="materialized", options="--workers 4"),
@@ -45,7 +35,6 @@ SERVICES = [
     Kafka(),
     SchemaRegistry(),
     *versioned_mz,
-    *multiple_mz,
     *mz_with_options,
     Testdrive(),
 ]
@@ -75,12 +64,6 @@ def workflow_versioned_mz(c: Composition) -> None:
         c.run("testdrive", "test*.td")
 
         c.kill(mz.name)
-
-
-def workflow_two_mz(c: Composition) -> None:
-    for mz in multiple_mz:
-        c.up(mz.name)
-        c.wait_for_materialized(mz.name)
 
 
 def workflow_mz_with_options(c: Composition) -> None:

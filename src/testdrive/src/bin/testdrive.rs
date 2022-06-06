@@ -118,7 +118,9 @@ struct Args {
         value_name = "URL"
     )]
     materialized_url: tokio_postgres::Config,
-    /// HTTP port for public endpoints
+    /// The port on which materialized is listening for untrusted HTTP connections.
+    ///
+    /// The hostname is taken from `materialized_url`.
     #[clap(long, default_value = "6876", value_name = "PORT")]
     materialized_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to

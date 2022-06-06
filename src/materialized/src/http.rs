@@ -25,12 +25,14 @@ use async_trait::async_trait;
 use axum::extract::{FromRequest, RequestParts};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
+use axum::routing::IntoMakeService;
 use axum::{routing, Extension, Router};
 use futures::future::TryFutureExt;
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
+use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
 use mz_coord::SessionClient;
 use mz_ore::metrics::MetricsRegistry;
@@ -328,16 +330,16 @@ async fn auth<B>(
 }
 
 #[derive(Clone)]
-pub struct MetricsServer {
+pub struct InternalServer {
     metrics_registry: MetricsRegistry,
 }
 
-impl MetricsServer {
+impl InternalServer {
     pub fn new(metrics_registry: MetricsRegistry) -> Self {
         Self { metrics_registry }
     }
 
-    pub async fn serve(self, addr: SocketAddr) {
+    pub fn bind(self, addr: SocketAddr) -> axum::Server<AddrIncoming, IntoMakeService<Router>> {
         let metrics_registry = self.metrics_registry;
         let router = Router::new()
             .route(
@@ -350,9 +352,6 @@ impl MetricsServer {
                 "/api/livez",
                 routing::get(mz_http_util::handle_liveness_check),
             );
-        let server = axum::Server::bind(&addr).serve(router.into_make_service());
-        if let Err(err) = server.await {
-            error!("error serving metrics endpoint: {}", err);
-        }
+        axum::Server::bind(&addr).serve(router.into_make_service())
     }
 }

@@ -46,6 +46,7 @@ use mz_pid_file::PidFile;
 use mz_secrets::{SecretsController, SecretsReader, SecretsReaderConfig};
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
+use tracing::error;
 
 use crate::tcp_connection::ConnectionHandler;
 
@@ -376,31 +377,22 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     .await?;
 
     // Listen on the internal HTTP API port if we are configured for it.
-    if let Some(addr) = config.internal_http_listen_addr {
+    let internal_http_local_addr = if let Some(addr) = config.internal_http_listen_addr {
         let metrics_registry = config.metrics_registry.clone();
+        let server = http::InternalServer::new(metrics_registry);
+        let bound_server = server.bind(addr);
+        let internal_http_local_addr = bound_server.local_addr();
         task::spawn(|| "internal_http_server", {
-            let server = http::MetricsServer::new(metrics_registry);
             async move {
-                server.serve(addr).await;
+                if let Err(err) = bound_server.await {
+                    error!("error serving metrics endpoint: {}", err);
+                }
             }
         });
-    }
-
-    // Listen on the internal SQL port if we are configured for it.
-    if let Some(addr) = config.internal_sql_listen_addr {
-        let internal_sql_listener = TcpListener::bind(&addr).await?;
-        task::spawn(|| "internal_pgwire_server", {
-            let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
-                tls: None,
-                coord_client: coord_client.clone(),
-                metrics_registry: &config.metrics_registry,
-                frontegg: None,
-            });
-            async move {
-                internal_pgwire_server.serve(addr).await
-            }
-        });
-    }
+        Some(internal_http_local_addr)
+    } else {
+        None
+    };
 
     // TODO(benesch): replace both `TCPListenerStream`s below with
     // `<type>_listener.incoming()` if that is
@@ -429,6 +421,33 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
         }
     });
 
+    // Listen on the internal SQL port if we are configured for it.
+    let (internal_sql_drain_trigger, internal_sql_local_addr) =
+        if let Some(addr) = config.internal_sql_listen_addr {
+            let (internal_sql_drain_trigger, internal_sql_drain_tripwire) = oneshot::channel();
+            let internal_sql_listener = TcpListener::bind(&addr).await?;
+            let internal_sql_local_addr = internal_sql_listener.local_addr()?;
+            task::spawn(|| "internal_pgwire_server", {
+                let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                    tls: None,
+                    coord_client: coord_client.clone(),
+                    frontegg: None,
+                });
+                let mut incoming = TcpListenerStream::new(internal_sql_listener);
+                async move {
+                    internal_pgwire_server
+                        .serve(incoming.by_ref().take_until(internal_sql_drain_tripwire))
+                        .await
+                }
+            });
+            (
+                Some(internal_sql_drain_trigger),
+                Some(internal_sql_local_addr),
+            )
+        } else {
+            (None, None)
+        };
+
     let (http_drain_trigger, http_drain_tripwire) = oneshot::channel();
     task::spawn(|| "http_server", {
         async move {
@@ -448,7 +467,10 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
     Ok(Server {
         sql_local_addr,
         http_local_addr,
+        internal_sql_local_addr,
+        internal_http_local_addr,
         _pid_file: pid_file,
+        _internal_sql_drain_trigger: internal_sql_drain_trigger,
         _http_drain_trigger: http_drain_trigger,
         _sql_drain_trigger: sql_drain_trigger,
         _coord_handle: coord_handle,
@@ -459,8 +481,11 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
 pub struct Server {
     sql_local_addr: SocketAddr,
     http_local_addr: SocketAddr,
+    internal_sql_local_addr: Option<SocketAddr>,
+    internal_http_local_addr: Option<SocketAddr>,
     _pid_file: PidFile,
     // Drop order matters for these fields.
+    _internal_sql_drain_trigger: Option<oneshot::Sender<()>>,
     _http_drain_trigger: oneshot::Sender<()>,
     _sql_drain_trigger: oneshot::Sender<()>,
     _coord_handle: mz_coord::Handle,
@@ -473,5 +498,13 @@ impl Server {
 
     pub fn http_local_addr(&self) -> SocketAddr {
         self.http_local_addr
+    }
+
+    pub fn internal_sql_local_addr(&self) -> Option<SocketAddr> {
+        self.internal_sql_local_addr
+    }
+
+    pub fn internal_http_local_addr(&self) -> Option<SocketAddr> {
+        self.internal_http_local_addr
     }
 }

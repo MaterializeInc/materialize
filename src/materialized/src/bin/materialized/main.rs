@@ -120,13 +120,11 @@ pub struct Args {
     )]
     internal_sql_listen_addr: Option<SocketAddr>,
 
-    /// The address on which internal APIs get exposed.
+    /// The address on which to listen for trusted HTTP connections.
     ///
-    /// Internal APIs include Prometheus metrics and memory debugging.
-    ///
-    /// This address is never served TLS-encrypted or authenticated so care
-    /// should be taken to not expose the listen address to the public internet
-    /// or other unauthorized parties.
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose the listen address
+    /// to the public internet or other unauthorized parties.
     #[clap(
         long,
         hide = true,
@@ -700,11 +698,17 @@ max log level: {max_log_level}",
     }))?;
 
     println!(
-        "materialized {} listening for pgwire connections on {} and for HTTP connections on {}...",
-        materialized::BUILD_INFO.human_version(),
-        server.sql_local_addr(),
-        server.http_local_addr(),
+        "materialized {} listening...",
+        materialized::BUILD_INFO.human_version()
     );
+    println!(" SQL address: {}", server.sql_local_addr());
+    println!(" HTTP address: {}", server.http_local_addr());
+    if let Some(internal_sql_local_addr) = server.internal_sql_local_addr() {
+        println!(" Internal SQL address: {}", internal_sql_local_addr);
+    }
+    if let Some(internal_http_local_address) = server.internal_http_local_addr() {
+        println!(" Internal HTTP address: {}", internal_http_local_address);
+    }
 
     // Block forever.
     loop {

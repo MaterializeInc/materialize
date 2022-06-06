@@ -8,9 +8,10 @@
 # by the Apache License, Version 2.0.
 
 import os
-from packaging import version
 import random
 from typing import Dict, List, Optional, Tuple, Union
+
+from packaging import version
 
 from materialize.mzcompose import Service, ServiceConfig
 
@@ -39,8 +40,6 @@ class Materialized(Service):
         name: str = "materialized",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        sql_port: Union[int, str] = 6875,
-        http_port: Union[int, str] = 6876,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
@@ -84,35 +83,18 @@ class Materialized(Service):
         if volumes_extra:
             volumes.extend(volumes_extra)
 
-        guest_sql_port = sql_port
-        if isinstance(sql_port, str) and ":" in sql_port:
-            guest_sql_port = sql_port.split(":")[1]
-
-        guest_http_port = http_port
-        if isinstance(http_port, str) and ":" in http_port:
-            guest_http_port = http_port.split(":")[1]
-
         command_list = [
             f"--data-directory={data_directory}",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 
-        config_ports = [sql_port, 5432, *extra_ports]
-        default_port_commands = [
-            f"--sql-listen-addr 0.0.0.0:{guest_sql_port}",
-            f"--http-listen-addr 0.0.0.0:{guest_http_port}",
-        ]
+        config_ports = [6875, 5432, *extra_ports, 6876]
 
         if isinstance(image, str) and ":v" in image:
             requested_version = image.split(":v")[1]
             if version.parse(requested_version) < version.parse("0.27.0"):
-                command_list.append(f"--listen-addr 0.0.0.0:{guest_sql_port}")
-            else:
-                config_ports.append(http_port)
-                command_list.extend(default_port_commands)
-        else:
-            config_ports.append(http_port)
-            command_list.extend(default_port_commands)
+                # HTTP and SQL ports in older versions of Materialize are the same
+                config_ports.pop()
 
         if options:
             if isinstance(options, str):
