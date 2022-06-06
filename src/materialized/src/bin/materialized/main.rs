@@ -224,8 +224,11 @@ pub struct Args {
         default_value = "127.0.0.1:6875"
     )]
     sql_listen_addr: SocketAddr,
-    /// The address on which materialized listens for HTTP connections for
-    /// public endpoints.
+    /// The address on which to listen for untrusted HTTP connections.
+    ///
+    /// Connections on this address are subject to encryption, authentication,
+    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
+    /// options.
     #[clap(
         long,
         env = "MZ_HTTP_LISTEN_ADDR",
