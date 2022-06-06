@@ -27,6 +27,7 @@ use tracing::{debug, info, instrument, trace};
 use crate::batch::{Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
+use crate::r#impl::metrics::RetriesMetrics;
 use crate::r#impl::state::Upper;
 use crate::PersistConfig;
 
@@ -51,6 +52,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) cfg: PersistConfig,
+    pub(crate) retry_metrics: Arc<RetriesMetrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
@@ -251,7 +253,10 @@ where
     ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>> {
         trace!("Batch::append lower={:?} upper={:?}", lower, upper);
 
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+        let mut retry = self
+            .retry_metrics
+            .append_batch
+            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             let res = self
                 .compare_and_append_batch(&mut batch, lower.clone(), upper.clone())
@@ -432,10 +437,10 @@ where
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     pub fn builder(&mut self, size_hint: usize, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
-        trace!("WriteHandle::builder lower={:?}", lower,);
-
+        trace!("WriteHandle::builder lower={:?}", lower);
         BatchBuilder::new(
             self.cfg.clone(),
+            Arc::clone(&self.retry_metrics),
             size_hint,
             lower,
             Arc::clone(&self.blob),

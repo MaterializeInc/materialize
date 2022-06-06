@@ -3676,6 +3676,7 @@ dependencies = [
  "mz-persist-types",
  "num_cpus",
  "num_enum",
+ "prometheus",
  "proptest",
  "proptest-derive",
  "serde",

@@ -50,8 +50,13 @@ pub use crate::r#impl::state::{Since, Upper};
 /// An implementation of the public crate interface.
 pub(crate) mod r#impl {
     pub mod machine;
+    pub mod metrics;
     pub mod state;
 }
+
+// TODO: Remove this in favor of making it possible for all PersistClients to be
+// created by the PersistCache.
+pub use crate::r#impl::metrics::Metrics;
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
@@ -82,6 +87,7 @@ impl PersistLocation {
     /// [Self::open].
     pub async fn open_locations(
         &self,
+        metrics: &Metrics,
     ) -> Result<
         (
             Arc<dyn BlobMulti + Send + Sync>,
@@ -93,10 +99,14 @@ impl PersistLocation {
             "Location::open blob={} consensus={}",
             self.blob_uri, self.consensus_uri,
         );
+        let retry_metrics = metrics.retries_metrics();
         let blob = BlobMultiConfig::try_from(&self.blob_uri).await?;
-        let blob = retry_external("blob::open", || blob.clone().open()).await;
+        let blob = retry_external(&retry_metrics.external.blob_open, || blob.clone().open()).await;
         let consensus = ConsensusConfig::try_from(&self.consensus_uri).await?;
-        let consensus = retry_external("consensus::open", || consensus.clone().open()).await;
+        let consensus = retry_external(&retry_metrics.external.consensus_open, || {
+            consensus.clone().open()
+        })
+        .await;
         Ok((blob, consensus))
     }
 }
@@ -233,6 +243,7 @@ pub struct PersistClient {
     cfg: PersistConfig,
     blob: Arc<dyn BlobMulti + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
+    metrics: Arc<Metrics>,
 }
 
 impl PersistClient {
@@ -245,6 +256,7 @@ impl PersistClient {
         cfg: PersistConfig,
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
+        metrics: Arc<Metrics>,
     ) -> Result<Self, ExternalError> {
         trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
@@ -253,6 +265,7 @@ impl PersistClient {
             cfg,
             blob,
             consensus,
+            metrics,
         })
     }
 
@@ -281,16 +294,20 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open shard_id={:?}", shard_id);
-        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
+        let mut machine =
+            Machine::new(shard_id, Arc::clone(&self.consensus), &self.metrics).await?;
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
+        let retry_metrics = Arc::new(self.metrics.retries_metrics());
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
+            retry_metrics: Arc::clone(&retry_metrics),
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
         };
         let reader = ReadHandle {
+            retry_metrics,
             reader_id,
             machine,
             blob: Arc::clone(&self.blob),
@@ -340,10 +357,12 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open_writer shard_id={:?}", shard_id);
-        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
+        let mut machine =
+            Machine::new(shard_id, Arc::clone(&self.consensus), &self.metrics).await?;
         let shard_upper = machine.fetch_upper().await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
+            retry_metrics: Arc::new(self.metrics.retries_metrics()),
             machine,
             blob: Arc::clone(&self.blob),
             upper: shard_upper,

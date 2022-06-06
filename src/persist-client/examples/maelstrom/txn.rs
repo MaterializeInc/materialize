@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::metrics::MetricsRegistry;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -27,7 +28,7 @@ use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistConfig, ShardId};
+use mz_persist_client::{Metrics, PersistClient, PersistConfig, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -449,7 +450,8 @@ impl Service for TransactorService {
             as Arc<dyn Consensus + Send + Sync>;
 
         // Wire up the TransactorService.
-        let client = PersistClient::new(PersistConfig::default(), blob, consensus).await?;
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
         let transactor = Transactor::new(&client, shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)
