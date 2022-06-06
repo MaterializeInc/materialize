@@ -181,7 +181,7 @@ pub enum Message {
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
-    GroupCommit(Option<WriteTime>),
+    GroupCommit(Option<Timestamp>),
 }
 
 #[derive(Derivative)]
@@ -276,7 +276,7 @@ struct PendingWriteTxn {
 
 /// Timestamps used by writes in an Append command
 #[derive(Debug)]
-pub struct WriteTime {
+pub struct WriteTimestamp {
     /// Timestamp that the write will take place on
     timestamp: Timestamp,
     /// Timestamp to advance the appended table to
@@ -476,7 +476,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    fn get_and_step_local_write_ts(&mut self) -> WriteTime {
+    fn get_and_step_local_write_ts(&mut self) -> WriteTimestamp {
         let timestamp = self.global_timeline.write_ts();
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
@@ -488,20 +488,18 @@ impl<S: Append + 'static> Coordinator<S> {
          */
         let _ = self.global_timeline.read_ts();
         let advance_to = timestamp.step_forward();
-        WriteTime {
+        WriteTimestamp {
             timestamp,
             advance_to,
         }
     }
 
-    //TODO(jkosh44) better name and desc
-    fn peek_local_write_ts(&self) -> WriteTime {
-        let timestamp = self.global_timeline.peek_ts();
-        let advance_to = timestamp.step_forward();
-        WriteTime {
-            timestamp,
-            advance_to,
-        }
+    /// Peek the current timestamp used for operations on local inputs. Used to determine how much
+    /// to block group commits by.
+    ///
+    /// NOTE: This can be removed once DDL is included in group commits.
+    fn peek_local_ts(&self) -> Timestamp {
+        self.global_timeline.peek_ts()
     }
 
     fn now(&self) -> EpochMillis {
@@ -870,8 +868,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     // and advance inputs.
                     self.global_timeline.fast_forward(self.now());
                 }
-                Message::GroupCommit(write_time) => {
-                    self.group_commit(write_time).await;
+                Message::GroupCommit(timestamp) => {
+                    self.try_group_commit(timestamp).await;
                 }
             }
 
@@ -905,85 +903,90 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
     }
 
-    /// TODO(jkosh44) change anything that you need to change if something requires changing because it has changed and requires a change to docs.
+    /// Attempts to commit all pending write transactions in a group commit. If the timestamp
+    /// chosen for the writes is not ahead of `now`, then we can execute and commit the writes
+    /// immediately. Otherwise we must wait for `now` to advance past the timestamp chosen for the
+    /// writes.
+    async fn try_group_commit(&mut self, timestamp: Option<Timestamp>) {
+        if self.pending_writes.is_empty() {
+            return;
+        }
+
+        let timestamp = if let Some(timestamp) = timestamp {
+            timestamp
+        } else {
+            self.peek_local_ts()
+        };
+        let now = (self.catalog.config().now)();
+
+        if timestamp > now {
+            // Cap retry time to 1s. In cases where the system clock has retreated by
+            // some large amount of time, this prevents against then waiting for that
+            // large amount of time in case the system clock then advances back to near
+            // what it was.
+            let remaining_ms =
+                std::cmp::min(timestamp.saturating_sub(now).saturating_add(1), 1_000);
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "group_commit", async move {
+                tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
+                internal_cmd_tx
+                    .send(Message::GroupCommit(Some(timestamp)))
+                    .expect("sending to internal_cmd_tx cannot fail");
+            });
+        } else {
+            self.group_commit().await;
+        }
+    }
+
     /// Commits all pending write transactions at the same timestamp. All pending writes will be
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
     ///
     /// If the table that some write was targeting has been deleted while the write was waiting,
-    /// then the write will be ignored and we respond to the client that the write was successfull.
+    /// then the write will be ignored and we respond to the client that the write was successful.
     /// This is only possible if the write and the delete were concurrent. Therefore, we are free to
     /// order the write before the delete without violating any consistency guarantees.
-    async fn group_commit(&mut self, write_time: Option<WriteTime>) {
-        if self.pending_writes.is_empty() {
-            return;
-        }
-
-        let WriteTime {
+    async fn group_commit(&mut self) {
+        // We cannot use the `peek_local_ts` from `try_group_commit`, because it may be invalid.
+        // While group commit was waiting, some DDL may have executed at the peeked timestamp
+        // causing that timestamp to close and become invalid for future writes. Therefore, we must
+        // get a new valid timestamp. This timestamp may be larger than the peeked timestamp and
+        // may even be larger than `now` depending on how much DDL was executed. In the future we
+        // should include DDL in group commits to avoid this issue.
+        let WriteTimestamp {
             timestamp,
             advance_to,
-        } = if let Some(write_time) = write_time {
-            write_time
-        } else {
-            self.peek_local_write_ts()
-        };
-        let now = (self.catalog.config().now)();
-
-        // TODO(jkosh44) explain this stuff
-        if timestamp > now {
-            // Cap retry time to 1s. In cases where the system clock has retreated by
-            // minutes, this prevents against then waiting for minutes in case the system
-            // clock then advances back to near what it was.
-            let remaining = std::cmp::min(timestamp.saturating_sub(now).saturating_add(1), 1_000);
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "TODO(jkosh44)", async move {
-                // We assume here that the inability to generate a new timestamp is because
-                // the system clock retreated, or has possibly not advanced by at least 1ms. We
-                // thus expect prev > now, and would like to wait for that difference plus 1ms.
-                tokio::time::sleep(Duration::from_millis(remaining)).await;
-                internal_cmd_tx
-                    .send(Message::GroupCommit(Some(WriteTime {
-                        timestamp,
-                        advance_to,
-                    })))
-                    .expect("sending to internal_cmd_tx cannot fail");
-            });
-        } else {
-            let WriteTime {
-                timestamp,
-                advance_to,
-            } = self.get_and_step_local_write_ts();
-            let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-            for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
-                let writes = std::mem::take(writes);
-                for WriteOp { id, rows } in writes {
-                    // object may have been deleted while write was waiting
-                    if self.catalog.try_get_entry(&id).is_some() {
-                        let updates = rows
-                            .into_iter()
-                            .map(|(row, diff)| Update {
-                                row,
-                                diff,
-                                timestamp,
-                            })
-                            .collect::<Vec<_>>();
-                        appends.entry(id).or_default().extend(updates);
-                    }
+        } = self.get_and_step_local_write_ts();
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
+        for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
+            let writes = std::mem::take(writes);
+            for WriteOp { id, rows } in writes {
+                // object may have been deleted while write was waiting
+                if self.catalog.try_get_entry(&id).is_some() {
+                    let updates = rows
+                        .into_iter()
+                        .map(|(row, diff)| Update {
+                            row,
+                            diff,
+                            timestamp,
+                        })
+                        .collect::<Vec<_>>();
+                    appends.entry(id).or_default().extend(updates);
                 }
             }
-            let appends = appends
-                .into_iter()
-                .map(|(id, updates)| (id, updates, advance_to))
-                .collect();
-            self.dataflow_client
-                .storage_mut()
-                .append(appends)
-                .await
-                .unwrap();
-            for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
-                let _ = tx.send(None);
-            }
+        }
+        let appends = appends
+            .into_iter()
+            .map(|(id, updates)| (id, updates, advance_to))
+            .collect();
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
+        for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
+            let _ = tx.send(None);
         }
     }
 
@@ -4793,7 +4796,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // In the future we can add these write to group commit by:
         //  1. Checking for conflicts at commit time and aborting conflicting DDL.
         //  2. Delaying modifications to on-disk and in-memory catalog until commit time.
-        let WriteTime {
+        let WriteTimestamp {
             timestamp,
             advance_to,
         } = self.get_and_step_local_write_ts();
@@ -5907,7 +5910,13 @@ mod timeline {
             }
         }
 
-        /// TODO(jkosh44) desc
+        /// Peek the current value of the timestamp.
+        ///
+        /// No operations should be assigned to the timestamp returned by this function. The
+        /// timestamp returned should only be used to compare the progress of the `TimestampOracle`
+        /// against some external source of time.
+        ///
+        /// NOTE: This can be removed once DDL is included in group commits.
         pub fn peek_ts(&self) -> T {
             match &self.state {
                 TimestampOracleState::Writing(ts) | TimestampOracleState::Reading(ts) => ts.clone(),
