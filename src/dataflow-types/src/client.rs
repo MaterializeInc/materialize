@@ -673,34 +673,39 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 }
 
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::Mutex;
 pub fn spawn_client<
     C: Send + 'static,
     R: Send + 'static,
     G: GenericClient<C, R> + Send + 'static,
 >(
-    mut g: G,
+    g: G,
 ) -> (Sender<C>, Receiver<R>) {
     let (send_side_tx, mut send_side_rx) = channel(100);
     let (recv_side_tx, recv_side_rx) = channel(100);
 
+    let client = Mutex::new(g);
     mz_ore::task::spawn(|| "todo".to_string(), async move {
-        loop {
-            // NOTE this should be `select2` from https://github.com/MaterializeInc/materialize/pull/12796
-            tokio::select! {
-                cmd = send_side_rx.recv() => {
+        moro::async_scope!(|scope| {
+            scope.spawn(async {
+                loop {
+                    let cmd = send_side_rx.recv().await;
                     if let Some(cmd) = cmd {
-                        let _ = g.send(cmd).await;
+                        let _ = client.lock().await.send(cmd).await;
                     }
                 }
-                // not cancel-safe
-                cmd = g.recv() => {
+            });
+            scope.spawn(async {
+                loop {
+                    let cmd = client.lock().await.recv().await;
                     // TODO error handling
                     if let Ok(Some(cmd)) = cmd {
                         let _ = recv_side_tx.send(cmd).await;
                     }
                 }
-            }
-        }
+            });
+        })
+        .await
     });
 
     (send_side_tx, recv_side_rx)
