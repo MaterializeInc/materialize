@@ -106,11 +106,11 @@ pub struct Args {
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
-    /// The address on which materialized listens for pgwire connections from
-    /// the cloud system.
+    /// The address on which to listen for trusted SQL connections.
     ///
-    /// This address is never served TLS-encrypted or authenticated so care
-    /// should be taken to not expose the listen address to the public internet
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose this address to the
+    /// public internet
     /// or other unauthorized parties.
     #[clap(
         long,
