@@ -780,16 +780,17 @@ impl<S: Append + 'static> Coordinator<S> {
             // tables). To address these, spawn a task that forces table timestamps to
             // close on a regular interval. This roughly tracks the behavior of realtime
             // sources that close off timestamps on an interval.
-            self.spawn_periodic_msg(
-                "coordinator_advance_local_inputs",
-                tokio::time::Duration::from_millis(1_000),
-                || Message::AdvanceLocalInputs,
-            );
-            self.spawn_periodic_msg(
-                "group_commit",
-                tokio::time::Duration::from_millis(1),
-                || Message::GroupCommit,
-            );
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "coordinator_advance_local_inputs", async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
+                loop {
+                    interval.tick().await;
+                    // If sending fails, the main thread has shutdown.
+                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
+                        break;
+                    }
+                }
+            });
         }
 
         loop {
@@ -857,23 +858,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
         }
-    }
-
-    fn spawn_periodic_msg<F>(&self, name: &str, duration: Duration, message: F)
-    where
-        F: Fn() -> Message + Send + 'static,
-    {
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
-        task::spawn(|| name, async move {
-            let mut interval = tokio::time::interval(duration);
-            loop {
-                interval.tick().await;
-                // If sending fails, the main thread has shutdown.
-                if internal_cmd_tx.send(message()).is_err() {
-                    break;
-                }
-            }
-        });
     }
 
     // Advance all local inputs (tables) to the current wall clock or at least
@@ -3106,6 +3090,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let txn = self.clear_transaction(session).await;
 
         let mut write_rx = None;
+        let mut internal_command_tx = None;
 
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
@@ -3125,6 +3110,9 @@ impl<S: Append + 'static> Coordinator<S> {
                             .collect();
                         let (tx, rx) = oneshot::channel();
                         write_rx = Some(rx);
+                        if self.pending_writes.is_empty() {
+                            internal_command_tx = Some(self.internal_cmd_tx.clone());
+                        }
                         self.pending_writes.push(PendingWriteTxn {
                             writes,
                             sender: tx,
@@ -3139,6 +3127,14 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
         Ok(async move {
+            if let Some(internal_cmd_tx) = internal_command_tx {
+                // TODO(jkosh44) make duration configurable
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                internal_cmd_tx
+                    .send(Message::GroupCommit)
+                    .expect("sending to internal_cmd_tx cannot fail");
+            }
+
             if let Some(rx) = write_rx {
                 Ok(rx.await?)
             } else {
