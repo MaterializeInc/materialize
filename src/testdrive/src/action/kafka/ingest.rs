@@ -408,13 +408,10 @@ impl Action for IngestAction {
                     false,
                 )?;
                 let mut row = row.as_bytes();
-                let key = if self.omit_key {
-                    None
-                } else {
-                    match &key_transcoder {
-                        None => None,
-                        Some(kt) => kt.transcode(&mut row)?,
-                    }
+                let key = match (self.omit_key, &key_transcoder) {
+                    (true, _) => None,
+                    (false, None) => None,
+                    (false, Some(kt)) => kt.transcode(&mut row)?,
                 };
                 let value = if self.omit_value {
                     None

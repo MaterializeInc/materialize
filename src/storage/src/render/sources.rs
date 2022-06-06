@@ -574,25 +574,25 @@ fn flatten_results_prepend_keys<G>(
 where
     G: Scope,
 {
-    let handle_missing_keys_fn = handle_missing_keys(key_arity);
+    let null_key_columns = Row::pack_slice(&vec![Datum::Null; key_arity.unwrap_or(0)]);
 
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
-            .map(handle_missing_keys_fn)
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
-                maybe_kv.map(|(mut key, value, diff)| {
+                maybe_kv.map(|(key, value, diff)| {
+                    let mut key = key.unwrap_or_else(|| null_key_columns.clone());
                     RowPacker::for_existing_row(&mut key).extend_by_row(&value);
                     (key, diff)
                 })
             }),
         KeyEnvelope::Named(_) => {
             results
-                .map(handle_missing_keys_fn)
                 .flat_map(raise_key_value_errors)
                 .map(move |maybe_kv| {
-                    maybe_kv.map(|(mut key, value, diff)| {
+                    maybe_kv.map(|(key, value, diff)| {
+                        let mut key = key.unwrap_or_else(|| null_key_columns.clone());
                         // Named semantics rename a key that is a single column, and encode a
                         // multi-column field as a struct with that name
                         let row = if key.iter().nth(1).is_none() {
@@ -612,31 +612,17 @@ where
     }
 }
 
-fn handle_missing_keys(key_arity: Option<usize>) -> Box<dyn Fn(KV) -> KV> {
-    let null_key_columns = Row::pack_slice(&vec![Datum::Null; key_arity.unwrap_or(0)]);
-
-    return Box::new(move |kv: KV| -> KV {
-        if let None = kv.key {
-            KV {
-                // we can get a small gain by efficiently cloning an already packed Row, rather
-                // than building and packing a vec of Nulls for each record with a missing key
-                key: Some(Ok(null_key_columns.clone())),
-                val: kv.val,
-            }
-        } else {
-            kv
-        }
-    });
-}
-
 /// Handle possibly missing key or value portions of messages
-fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row, Diff), DecodeError>> {
+fn raise_key_value_errors(
+    KV { key, val }: KV,
+) -> Option<Result<(Option<Row>, Row, Diff), DecodeError>> {
     match (key, val) {
-        (Some(key), Some(value)) => match (key, value) {
-            (Ok(key), Ok((value, diff))) => Some(Ok((key, value, diff))),
+        (key, Some(value)) => match (key, value) {
+            (Some(Ok(key)), Ok((value, diff))) => Some(Ok((Some(key), value, diff))),
+            (None, Ok((value, diff))) => Some(Ok((None, value, diff))),
             // always prioritize the value error if either or both have an error
             (_, Err(e)) => Some(Err(e)),
-            (Err(e), _) => Some(Err(e)),
+            (Some(Err(e)), _) => Some(Err(e)),
         },
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
