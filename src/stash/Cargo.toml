@@ -15,7 +15,7 @@ harness = false
 # harness = false
 
 [dependencies]
-async-trait = "0.1.53"
+async-trait = "0.1.56"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
 mz-ore = { path = "../ore" }
