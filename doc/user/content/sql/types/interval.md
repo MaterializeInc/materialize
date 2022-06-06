@@ -1,5 +1,5 @@
 ---
-title: "interval Data Type"
+title: "interval type"
 description: "Expresses a duration of time"
 menu:
     main:

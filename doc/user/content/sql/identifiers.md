@@ -4,7 +4,7 @@ description: "SQL identifiers are names of columns and database objects such as 
 menu:
   main:
     parent: reference
-    name: 'SQL Identifiers'
+    name: 'SQL identifiers'
     weight: 125
 ---
 

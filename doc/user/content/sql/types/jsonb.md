@@ -1,5 +1,5 @@
 ---
-title: "jsonb Data Type"
+title: "jsonb type"
 description: "Expresses a JSON object"
 menu:
   main:

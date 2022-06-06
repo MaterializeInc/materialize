@@ -1,5 +1,5 @@
 ---
-title: "date_bin Function"
+title: "date_bin function"
 description: "Bins a timestamp into a specified interval"
 menu:
   main:

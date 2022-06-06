@@ -1,5 +1,5 @@
 ---
-title: "LENGTH Function"
+title: "LENGTH function"
 description: "Returns the number of characters in a string."
 menu:
   main:

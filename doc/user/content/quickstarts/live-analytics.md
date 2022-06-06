@@ -1,5 +1,5 @@
 ---
-title: "Build a Real-time Analytics Dashboard"
+title: "Build a real-time analytics dashboard"
 description: "  "
 menu:
     main:

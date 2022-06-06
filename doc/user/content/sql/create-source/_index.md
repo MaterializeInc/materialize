@@ -26,7 +26,7 @@ Materialize bundles **native connectors** for the following external systems:
 {{</ linkbox >}}
 {{< linkbox title="Object Storage" >}}
 - [S3](/sql/create-source/s3)
-- [Local Files](/sql/create-source/files)
+- [Local files](/sql/create-source/files)
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)

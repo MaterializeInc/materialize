@@ -1,5 +1,5 @@
 ---
-title: "array_agg Function"
+title: "array_agg function"
 description: "Aggregate values (including nulls) as an array."
 menu:
   main:

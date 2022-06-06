@@ -1,5 +1,5 @@
 ---
-title: "Replace a Microservice with a SQL Query"
+title: "Replace a microservice with a SQL query"
 description: "Find out how a single Materialize instance can create an entire microservice."
 aliases:
   - /demos/microservice/

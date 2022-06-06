@@ -5,7 +5,7 @@ menu:
   main:
     parent: 'create-source'
     weight: 50
-    name: "Local Files"
+    name: "Local files"
 aliases:
     - /sql/create-source/files
     - /sql/create-source/avro-file

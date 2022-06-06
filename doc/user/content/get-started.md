@@ -5,7 +5,7 @@ menu:
   main:
     parent: 'overview'
     weight: 20
-    name: 'Get Started'
+    name: 'Get started'
 aliases:
   - /katacoda/
 ---

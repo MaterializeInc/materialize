@@ -1,5 +1,5 @@
 ---
-title: "Cloud Deployments"
+title: "Cloud deployments"
 description: "View and manage your Materialize Cloud deployments."
 disable_toc: true
 menu:
