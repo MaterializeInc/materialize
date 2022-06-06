@@ -102,7 +102,7 @@ pub struct Args {
     ///   * In development features that are not yet ready for production use.
     ///   * Features useful for development and testing that would pose a
     ///     legitimate security risk if used in Materialize Cloud.
-    #[clap(long, env = "UNSAFE")]
+    #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
     /// The address on which Prometheus metrics get exposed.
