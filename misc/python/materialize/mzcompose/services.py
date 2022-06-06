@@ -54,7 +54,7 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
-                "MZ_UNSAFE=1",
+                "MZ_UNSAFE_MODE=1",
                 "MZ_EXPERIMENTAL=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
