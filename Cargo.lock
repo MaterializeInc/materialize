@@ -98,9 +98,9 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 
 [[package]]
 name = "arrow-format"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2333f8ccf0d597ba779863c57a0b61f635721187fb2fdeabae92691d7d582fe5"
+checksum = "216249afef413d7e9e9b4b543e73b3e371ace3a812380af98f1c871521572cdd"
 dependencies = [
  "planus",
  "serde",
@@ -108,9 +108,9 @@ dependencies = [
 
 [[package]]
 name = "arrow2"
-version = "0.11.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b040061368d1314b0fd8b8f1fde0671eba1afc63a1c61a4dafaf2d4fc10c96f9"
+checksum = "5feafd6df4e3f577529e6aa2b9b7cdb3c9fe8e8f66ebc8dc29abbe71a7e968f0"
 dependencies = [
  "arrow-format",
  "base64",
@@ -4502,9 +4502,9 @@ dependencies = [
 
 [[package]]
 name = "parquet2"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98f99f9724402d81faadd9cfa1e8dc78055fd0ddfdbefb7adab3a3a13e893408"
+checksum = "5653509c49578c1dbea76a1007d6e3b2fbcf52f2fcb9a3d84593599510c293ae"
 dependencies = [
  "async-stream",
  "bitpacking",
