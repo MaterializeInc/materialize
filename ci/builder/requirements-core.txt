@@ -3,5 +3,5 @@
 # It is extremely unlikely that we'll ever need additional packages here. Do not
 # add to this list without consulting with @benesch!
 
-pip==22.1.1
+pip==22.1.2
 setuptools==62.3.2
