@@ -212,7 +212,11 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     // === Connection options. ===
-    /// The address on which materialized listens for pgwire connections.
+    /// The address on which to listen for untrusted SQL connections.
+    ///
+    /// Connections on this address are subject to encryption, authentication,
+    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
+    /// options.
     #[clap(
         long,
         env = "MZ_SQL_LISTEN_ADDR",
