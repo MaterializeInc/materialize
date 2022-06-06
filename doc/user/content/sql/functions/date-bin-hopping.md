@@ -1,5 +1,5 @@
 ---
-title: "date_bin_hopping Function"
+title: "date_bin_hopping function"
 description: "Builds a set of 'hopping' timestamps from a source timestamp"
 menu:
   main:

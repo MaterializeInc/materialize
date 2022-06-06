@@ -1,5 +1,5 @@
 ---
-title: "System Catalog"
+title: "System catalog"
 description: "The system catalog stores metadata about your Materialize instance."
 aliases:
   - /sql/system-tables

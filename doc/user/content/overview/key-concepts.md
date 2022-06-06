@@ -1,5 +1,5 @@
 ---
-title: "Key Concepts"
+title: "Key concepts"
 description: "Understand Materialize's architecture."
 menu:
   main:

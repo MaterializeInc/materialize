@@ -6,13 +6,11 @@ aliases:
 menu:
   main:
     parent: "integration-guides"
-    name: "Redpanda Kafka"
+    name: "Redpanda"
     weight: 10
 ---
 
 Because [Redpanda](https://vectorized.io/) is Kafka API-compatible, Materialize can process data from it in the same way it processes data from Kafka sources.
-
-The Redpanda integration has [beta-level](/integrations/#beta) support.
 
 ## Configuration
 
@@ -26,5 +24,6 @@ Two configuration parameters that are enabled by default in Kafka need to be ena
 For more information on general Redpanda configuration, see the [Redpanda documentation](https://vectorized.io/docs/configuration/).
 
 ## Related pages
-- [`CREATE SOURCE`](/sql/create-source/)
-- [`CREATE SINK`](/sql/create-sink/)
+
+- [`CREATE SOURCE`](/sql/create-source/kafka/)
+- [`CREATE SINK`](/sql/create-sink/#kafka-sinks)

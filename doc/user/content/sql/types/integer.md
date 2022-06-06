@@ -1,5 +1,5 @@
 ---
-title: "Integer Data Types"
+title: "Integer types"
 description: "Express signed integers"
 menu:
   main:
