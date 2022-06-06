@@ -9,7 +9,7 @@
 
 //! The main Materialize server.
 //!
-//! The name is pronounced "materialize-dee." It listens for pgwire connections
+//! The name is pronounced "materialize-dee." It listens for SQL connections
 //! on port 6875 (MTRL) and for HTTP connections on port 6876.
 //!
 //! The design and implementation of materialized is very much in flux. See the
