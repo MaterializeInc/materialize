@@ -3900,7 +3900,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
- "enum-kinds",
  "itertools",
  "mz-ore",
  "mz-persist-client",

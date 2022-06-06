@@ -24,8 +24,6 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use enum_kinds::EnumKind;
-
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, Expr, Ident, UnresolvedObjectName, WithOption, WithOptionValue};
 
@@ -517,8 +515,7 @@ impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
 }
 impl_display_t!(DbzTxMetadataOption);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
-#[enum_kind(ConnectorType)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnector<T: AstInfo> {
     Kafka {
         broker: String,
@@ -594,8 +591,7 @@ pub struct KafkaSourceConnector<T: AstInfo> {
     pub key: Option<Vec<Ident>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
-#[enum_kind(SourceConnectorType)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSourceConnector<T: AstInfo> {
     Kafka(KafkaSourceConnector<T>),
     Kinesis {
@@ -701,8 +697,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
 }
 impl_display_t!(CreateSourceConnector);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, EnumKind)]
-#[enum_kind(CreateSinkConnectorKind)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateSinkConnector<T: AstInfo> {
     Kafka {
         broker: String,
