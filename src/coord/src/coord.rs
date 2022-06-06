@@ -252,9 +252,14 @@ struct PendingPeek {
     otel_ctx: OpenTelemetryContext,
 }
 
+/// A pending write transaction that will be committing during the next group commit
 struct PendingWriteTxn {
+    /// List of all write operations within the transaction.
     writes: Vec<WriteOp>,
+    /// The client of the write transaction is waiting for a response from this `sender`.
+    /// A response should only be sent after the write transaction has been made durable or aborted.  
     sender: oneshot::Sender<Option<ExecuteResponse>>,
+    /// Connection ID of the client who initiated the transaction.
     conn_id: u32,
 }
 
