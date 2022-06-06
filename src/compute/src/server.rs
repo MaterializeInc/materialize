@@ -10,10 +10,11 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::execute::execute_from;
@@ -96,6 +97,9 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
     let (builders, other) =
         initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
 
+    let persist_clients = PersistClientCache::new(&config.metrics_registry);
+    let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
+
     let worker_guards = execute_from(
         builders,
         other,
@@ -111,6 +115,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
                 .take()
                 .unwrap();
             let (_sink_metrics, _trace_metrics) = metrics_bundle.clone();
+            let persist_clients = Arc::clone(&persist_clients);
             Worker {
                 timely_worker,
                 command_rx,
@@ -118,6 +123,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
                 compute_response_tx,
                 metrics_bundle: metrics_bundle.clone(),
                 connector_context: config.connector_context.clone(),
+                persist_clients,
             }
             .run()
         },
@@ -153,6 +159,9 @@ struct Worker<'w, A: Allocate> {
     /// Configuration for sink connectors.
     // TODO: remove when sinks move to storage.
     pub connector_context: ConnectorContext,
+    /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+    /// This is intentionally shared between workers
+    persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
@@ -209,6 +218,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             sink_metrics: self.metrics_bundle.0.clone(),
                             materialized_logger: None,
                             connector_context: self.connector_context.clone(),
+                            persist_clients: Arc::clone(&self.persist_clients),
                         });
                     }
                     ComputeCommand::DropInstance => {

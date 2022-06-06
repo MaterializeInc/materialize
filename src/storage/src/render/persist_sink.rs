@@ -10,6 +10,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::Exchange;
@@ -55,6 +56,7 @@ pub fn render<G>(
 
     let weak_token = Rc::downgrade(&token);
 
+    let persist_clients = Arc::clone(&storage_state.persist_clients);
     persist_op.build_async(
         scope.clone(),
         move |mut capabilities, frontiers, scheduler| async move {
@@ -62,17 +64,17 @@ pub fn render<G>(
             let mut buffer = Vec::new();
             let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
-            let mut write = crate::persist_cache::open_writer::<
-                SourceData,
-                (),
-                mz_repr::Timestamp,
-                mz_repr::Diff,
-            >(
-                storage_metadata.persist_location,
-                storage_metadata.persist_shard,
-            )
-            .await
-            .expect("could not open persist shard");
+            let mut write = persist_clients
+                .lock()
+                .await
+                .open(storage_metadata.persist_location)
+                .await
+                .expect("could not open persist client")
+                .open_writer::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
+                    storage_metadata.persist_shard,
+                )
+                .await
+                .expect("could not open persist shard");
 
             while scheduler.notified().await {
                 let input_frontier = frontiers.borrow()[0].clone();

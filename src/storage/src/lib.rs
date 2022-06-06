@@ -14,8 +14,6 @@
 #[cfg(feature = "server")]
 pub mod decode;
 #[cfg(feature = "server")]
-pub mod persist_cache;
-#[cfg(feature = "server")]
 pub mod render;
 #[cfg(feature = "server")]
 pub(crate) mod server;

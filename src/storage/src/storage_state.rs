@@ -9,14 +9,16 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crossbeam_channel::TryRecvError;
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 use mz_dataflow_types::client::{StorageCommand, StorageResponse};
 use mz_dataflow_types::sources::SourceConnector;
@@ -68,6 +70,9 @@ pub struct StorageState {
     pub timely_worker_peers: usize,
     /// Configuration for source and sink connectors.
     pub connector_context: ConnectorContext,
+    /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+    /// This is intentionally shared between workers
+    pub persist_clients: Arc<Mutex<PersistClientCache>>,
 }
 
 impl<'w, A: Allocate> Worker<'w, A> {
