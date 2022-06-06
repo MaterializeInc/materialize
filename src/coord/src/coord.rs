@@ -252,12 +252,12 @@ struct PendingPeek {
     otel_ctx: OpenTelemetryContext,
 }
 
-/// A pending write transaction that will be committing during the next group commit
+/// A pending write transaction that will be committing during the next group commit.
 struct PendingWriteTxn {
     /// List of all write operations within the transaction.
     writes: Vec<WriteOp>,
     /// The client of the write transaction is waiting for a response from this `sender`.
-    /// A response should only be sent after the write transaction has been made durable or aborted.  
+    /// A response should only be sent after the write transaction has been made durable or aborted.
     sender: oneshot::Sender<Option<ExecuteResponse>>,
     /// Connection ID of the client who initiated the transaction.
     conn_id: u32,
@@ -883,6 +883,15 @@ impl<S: Append + 'static> Coordinator<S> {
             .unwrap();
     }
 
+    /// Commits all pending write transactions at the same timestamp. All pending writes will be
+    /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
+    /// happen at the same timestamp and all involved tables will be advanced to some timestamp
+    /// larger than the timestamp of the write.
+    ///
+    /// If the table that some write was targeting has been deleted while the write was waiting,
+    /// then the write will be ignored and we respond to the client that the write was successfull.
+    /// This is only possible if the write and the delete were concurrent. Therefore, we are free to
+    /// order the write before the delete without violating any consistency guarantees.
     async fn group_commit(&mut self) {
         if !self.pending_writes.is_empty() {
             let (timestamp, advance_to) = self.get_and_step_local_write_ts();
