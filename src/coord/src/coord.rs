@@ -860,6 +860,7 @@ impl<S: Append + 'static> Coordinator<S> {
     // a time greater than any previous table read (if wall clock has gone
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
         let start = Instant::now();
         let appends = self
