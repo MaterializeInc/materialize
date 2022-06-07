@@ -573,6 +573,19 @@ pub fn plan_create_source(
     };
     let (key_desc, value_desc) = encoding.desc()?;
 
+    let key_desc = key_desc.map(|key_desc| {
+        // keys are optional with `Envelope::None`, so we mark each of the key's columns as nullable
+        if let mz_sql_parser::ast::Envelope::None = &envelope {
+            RelationDesc::from_names_and_types(
+                key_desc
+                    .into_iter()
+                    .map(|(name, typ)| (name, typ.nullable(true))),
+            )
+        } else {
+            key_desc
+        }
+    });
+
     let key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
     // Not all source envelopes are compatible with all source connectors.
