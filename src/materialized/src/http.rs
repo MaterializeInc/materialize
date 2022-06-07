@@ -54,7 +54,6 @@ use crate::BUILD_INFO;
 
 mod catalog;
 mod memory;
-mod metrics;
 mod root;
 mod sql;
 
@@ -344,9 +343,9 @@ impl InternalServer {
         let router = Router::new()
             .route(
                 "/metrics",
-                routing::get(
-                    move || async move { metrics::handle_prometheus(&metrics_registry).await },
-                ),
+                routing::get(move || async move {
+                    mz_http_util::handle_prometheus(&metrics_registry).await
+                }),
             )
             .route(
                 "/api/livez",

@@ -3305,7 +3305,10 @@ version = "0.0.0"
 dependencies = [
  "askama",
  "axum",
+ "headers",
  "include_dir",
+ "mz-ore",
+ "prometheus",
 ]
 
 [[package]]
@@ -3586,6 +3589,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "axum",
  "bincode",
  "bytes",
  "clap",
@@ -3594,6 +3598,7 @@ dependencies = [
  "futures",
  "futures-task",
  "futures-util",
+ "mz-http-util",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",

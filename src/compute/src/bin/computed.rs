@@ -134,7 +134,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     info!("about to bind to {:?}", args.listen_addr);
 
+    let metrics_registry = MetricsRegistry::new();
     if let Some(addr) = args.http_console_addr {
+        let metrics_registry = metrics_registry.clone();
         tracing::info!("serving computed HTTP server on {}", addr);
         mz_ore::task::spawn(
             || "computed_http_server",
@@ -144,6 +146,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         "/api/livez",
                         routing::get(mz_http_util::handle_liveness_check),
                     )
+                    .route(
+                        "/metrics",
+                        routing::get(move || async move {
+                            mz_http_util::handle_prometheus(&metrics_registry).await
+                        }),
+                    )
                     .into_make_service(),
             ),
         );
@@ -152,7 +160,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let config = mz_compute::server::Config {
         workers: args.workers,
         comm_config,
-        metrics_registry: MetricsRegistry::new(),
+        metrics_registry,
         now: SYSTEM_TIME.clone(),
         connector_context: ConnectorContext::from_cli_args(
             &args.tracing.log_filter.inner,

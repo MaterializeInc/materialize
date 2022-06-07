@@ -143,7 +143,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         listener.local_addr()?
     );
 
+    let metrics_registry = MetricsRegistry::new();
     if let Some(addr) = args.http_console_addr {
+        let metrics_registry = metrics_registry.clone();
         tracing::info!("serving storaged HTTP server on {}", addr);
         mz_ore::task::spawn(
             || "storaged_http_server",
@@ -153,6 +155,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         "/api/livez",
                         routing::get(mz_http_util::handle_liveness_check),
                     )
+                    .route(
+                        "/metrics",
+                        routing::get(move || async move {
+                            mz_http_util::handle_prometheus(&metrics_registry).await
+                        }),
+                    )
                     .into_make_service(),
             ),
         );
@@ -161,7 +169,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let config = mz_storage::Config {
         workers: args.workers,
         timely_config,
-        metrics_registry: MetricsRegistry::new(),
+        metrics_registry,
         now: SYSTEM_TIME.clone(),
         connector_context: ConnectorContext::from_cli_args(
             &args.tracing.log_filter.inner,

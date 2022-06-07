@@ -9,6 +9,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -83,16 +84,39 @@ pub struct Args {
     /// Id of the persist shard (for use in multi-process runs).
     #[clap(short, long, value_name = "I")]
     shard_id: Option<String>,
+
+    /// The address of the HTTP profiling UI.
+    #[clap(long, value_name = "HOST:PORT")]
+    http_console_addr: Option<SocketAddr>,
 }
 
 const MIB: u64 = 1024 * 1024;
 
 pub async fn run(args: Args) -> Result<(), anyhow::Error> {
+    let metrics_registry = MetricsRegistry::new();
+    if let Some(addr) = args.http_console_addr {
+        let metrics_registry = metrics_registry.clone();
+        info!("serving HTTP server on {}", addr);
+        mz_ore::task::spawn(
+            || "http_server",
+            axum::Server::bind(&addr).serve(
+                axum::Router::new()
+                    .route(
+                        "/metrics",
+                        axum::routing::get(move || async move {
+                            mz_http_util::handle_prometheus(&metrics_registry).await
+                        }),
+                    )
+                    .into_make_service(),
+            ),
+        );
+    }
+
     let location = PersistLocation {
         blob_uri: args.blob_uri.clone(),
         consensus_uri: args.consensus_uri.clone(),
     };
-    let persist = PersistClientCache::new(&MetricsRegistry::new())
+    let persist = PersistClientCache::new(&metrics_registry)
         .open(location)
         .await?;
 
