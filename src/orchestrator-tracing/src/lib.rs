@@ -113,7 +113,9 @@ pub struct TracingCliArgs {
         long,
         env = "OPENTELEMETRY_FILTER",
         requires = "opentelemetry-endpoint",
-        default_value = "debug"
+        // tokio_postgres has busy `debug` logging.
+        // TODO(guswynn): switch tokio_postgres logging to `trace` upstream
+        default_value = "tokio_postgres=info,debug"
     )]
     pub opentelemetry_filter: SerializableTargets,
     /// Additional key-value pairs to send with all opentelemetry traces.
