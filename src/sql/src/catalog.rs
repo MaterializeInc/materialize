@@ -62,7 +62,7 @@ use crate::plan::statement::StatementDesc;
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
-pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
+pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the name of the user who is issuing the query.
     fn active_user(&self) -> &str;
 

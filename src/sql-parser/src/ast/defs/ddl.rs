@@ -21,7 +21,6 @@
 //! AST types specific to CREATE/ALTER variants of [crate::ast::Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -123,16 +122,8 @@ impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CsrConnector<T: AstInfo> {
-    Inline {
-        url: String,
-    },
-    // The reference variant needs to be creatable by the parser with just a name
-    // but also must allow populating the values for use in purification and planning
-    Reference {
-        connector: T::ObjectName,
-        url: Option<String>,
-        with_options: Option<BTreeMap<String, String>>,
-    },
+    Inline { url: String },
+    Reference { connector: T::ObjectName },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -575,16 +566,8 @@ impl_display_t!(CreateConnector);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnector<T: AstInfo> {
-    Inline {
-        broker: String,
-    },
-    // The reference variant needs to be creatable by the parser with just a name
-    // but also must allow populating the values for use in purification and planning
-    Reference {
-        connector: T::ObjectName,
-        broker: Option<String>,
-        with_options: Option<BTreeMap<String, String>>,
-    },
+    Inline { broker: String },
+    Reference { connector: T::ObjectName },
 }
 
 impl<T: AstInfo> AstDisplay for KafkaConnector<T> {

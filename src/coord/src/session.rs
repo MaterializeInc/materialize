@@ -444,7 +444,7 @@ impl<T: CoordTimestamp> Session<T> {
 }
 
 /// A prepared statement.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PreparedStatement {
     sql: Option<Statement<Raw>>,
     desc: StatementDesc,
