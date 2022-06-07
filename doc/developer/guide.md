@@ -44,6 +44,25 @@ We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
 
+### PostgreSQL
+
+Running Materialize locally requires a running PostgreSQL server.
+
+On macOS, when using Homebrew, Postgres can be installed and started via:
+
+```shell
+brew install postgresql
+brew services start postgresql
+```
+
+On Debian-based Linux variants:
+
+```shell
+apt install postgresql
+```
+
+If you can run `psql` without arguments and connect, you're all set.
+
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
