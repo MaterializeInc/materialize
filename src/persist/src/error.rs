@@ -103,9 +103,3 @@ impl<T> From<sync::PoisonError<T>> for Error {
         Error::String(format!("poison: {}", e))
     }
 }
-
-impl From<rusqlite::Error> for Error {
-    fn from(e: rusqlite::Error) -> Self {
-        Error::String(format!("sqlite: {}", e))
-    }
-}

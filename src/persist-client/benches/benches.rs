@@ -20,7 +20,6 @@ use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
 use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3BlobConfig, S3BlobMulti};
-use mz_persist::sqlite::SqliteConsensus;
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::PersistClient;
@@ -237,20 +236,6 @@ fn bench_all_consensus<BenchConsensusFn>(
                 Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>;
             bench_consensus_fn(b, &mem_consensus);
         });
-    }
-
-    // Create a directory that will automatically be dropped after the test
-    // finishes.
-    {
-        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
-        let sqlite_consensus = runtime
-            .block_on(SqliteConsensus::open(temp_dir.path().join("db")))
-            .expect("failed to create sqlite consensus");
-        let sqlite_consensus = Arc::new(sqlite_consensus) as Arc<dyn Consensus + Send + Sync>;
-        g.bench_function(BenchmarkId::new("sqlite", data.goodput_pretty()), |b| {
-            bench_consensus_fn(b, &sqlite_consensus);
-        });
-        drop(temp_dir);
     }
 
     // Only run Postgres benchmarks if the magic env vars are set.

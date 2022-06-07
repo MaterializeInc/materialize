@@ -15,7 +15,6 @@ use std::time::Instant;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use mz_persist_types::Codec;
-use rusqlite::ffi::ErrorCode;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::error::SqlState;
 
@@ -184,29 +183,6 @@ impl From<std::io::Error> for ExternalError {
         ExternalError::Indeterminate(Indeterminate {
             inner: anyhow::Error::new(x),
         })
-    }
-}
-
-impl From<rusqlite::Error> for ExternalError {
-    fn from(x: rusqlite::Error) -> Self {
-        let code = match x {
-            rusqlite::Error::SqliteFailure(rusqlite::ffi::Error { code, .. }, _) => code,
-            _ => {
-                return ExternalError::Indeterminate(Indeterminate {
-                    inner: anyhow::Error::new(x),
-                })
-            }
-        };
-        match code {
-            // Feel free to add more things to this whitelist as we encounter
-            // them as long as you're certain they're determinate.
-            ErrorCode::DatabaseBusy => ExternalError::Determinate(Determinate {
-                inner: anyhow::Error::new(x),
-            }),
-            _ => ExternalError::Indeterminate(Indeterminate {
-                inner: anyhow::Error::new(x),
-            }),
-        }
     }
 }
 

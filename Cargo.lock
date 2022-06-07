@@ -3568,7 +3568,6 @@ dependencies = [
  "prost",
  "prost-build",
  "rand",
- "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
