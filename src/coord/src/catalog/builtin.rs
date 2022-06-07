@@ -1148,6 +1148,15 @@ pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("status", ScalarType::String.nullable(false)),
 });
 
+pub static MZ_CLUSTER_REPLICAS_STATUS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_replicas_status",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("replica_id", ScalarType::Int64.nullable(false))
+        .with_column("process_id", ScalarType::Int64.nullable(false))
+        .with_column("status", ScalarType::String.nullable(false)),
+});
+
 pub static MZ_AUDIT_EVENTS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
@@ -2061,6 +2070,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTORS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
+        Builtin::Table(&MZ_CLUSTER_REPLICAS_STATUS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECTS),

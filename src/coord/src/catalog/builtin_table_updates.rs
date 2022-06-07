@@ -8,8 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
-use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
+use mz_dataflow_types::client::controller::ComputeInstanceStatus;
+use mz_dataflow_types::client::{
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
+};
 use mz_dataflow_types::sinks::KafkaSinkConnector;
 use mz_dataflow_types::sources::ConnectorInner;
 use mz_expr::MirScalarExpr;
@@ -23,10 +27,10 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpeci
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS, MZ_COLUMNS,
-    MZ_CONNECTORS, MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS,
-    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
-    MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
+    MZ_CLUSTER_REPLICAS_STATUS, MZ_COLUMNS, MZ_CONNECTORS, MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES,
+    MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connector, Error, ErrorKind, Func, Index, Sink, SinkConnector,
@@ -139,6 +143,33 @@ impl CatalogState {
                 Datum::from(size.as_deref()),
                 Datum::from(az),
                 Datum::String("healthy"),
+            ]),
+            diff,
+        }
+    }
+
+    pub(super) fn pack_compute_instance_status_update(
+        &self,
+        compute_instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        process_id: ProcessId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let status = self
+            .try_get_compute_instance_status(compute_instance_id, replica_id, process_id)
+            .expect("status not known");
+        let status = match status {
+            ComputeInstanceStatus::Ready => "ready",
+            ComputeInstanceStatus::NotReady => "not_ready",
+            ComputeInstanceStatus::Unknown => "unknown",
+        };
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_STATUS),
+            row: Row::pack_slice(&[
+                Datum::Int64(replica_id),
+                Datum::Int64(process_id),
+                Datum::String(status),
             ]),
             diff,
         }
