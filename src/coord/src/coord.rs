@@ -4839,12 +4839,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 .push(id);
         }
         for (compute_instance, ids) in by_compute_instance {
-            self.dataflow_client
-                .compute_mut(compute_instance)
-                .unwrap()
-                .drop_sinks(ids)
-                .await
-                .unwrap();
+            // A cluster could have been dropped, so verify it exists.
+            if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {
+                compute.drop_sinks(ids).await.unwrap();
+            }
         }
     }
 
@@ -5776,12 +5774,9 @@ pub mod read_holds {
                     policy_changes.push((*id, read_needs.policy()));
                 }
             }
-            self.dataflow_client
-                .compute_mut(compute_instance)
-                .expect("Reference to absent compute instance")
-                .set_read_policy(policy_changes)
-                .await
-                .unwrap();
+            if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {
+                compute.set_read_policy(policy_changes).await.unwrap();
+            }
         }
     }
 }
