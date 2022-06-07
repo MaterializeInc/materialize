@@ -12,9 +12,10 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use clap::ArgEnum;
+use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
@@ -26,11 +27,13 @@ use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::config::{Config, KubeConfigOptions};
 use kube::error::Error;
+use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceStatus,
 };
 
 const FIELD_MANAGER: &str = "materialized";
@@ -145,6 +148,18 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
             .field("namespace", &self.namespace)
             .field("config", &self.config)
             .finish()
+    }
+}
+
+impl NamespacedKubernetesOrchestrator {
+    /// Return a `ListParams` instance that limits results to the namespace
+    /// assigned to this orchestrator.
+    fn list_params(&self) -> ListParams {
+        let ns_selector = format!(
+            "materialized.materialize.cloud/namespace={}",
+            self.namespace
+        );
+        ListParams::default().labels(&ns_selector)
     }
 }
 
@@ -402,7 +417,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let stateful_sets = self.stateful_set_api.list(&ListParams::default()).await?;
+        let stateful_sets = self.stateful_set_api.list(&self.list_params()).await?;
         let name_prefix = format!("{}-", self.namespace);
         Ok(stateful_sets
             .into_iter()
@@ -414,6 +429,42 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     .map(Into::into)
             })
             .collect())
+    }
+
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
+            let process_id = pod.name().split('-').last().unwrap().parse()?;
+            let service_id_label = "materialized.materialize.cloud/service-id";
+            let service_id = pod
+                .labels()
+                .get(service_id_label)
+                .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
+                .clone();
+
+            let pod_ready = pod
+                .status
+                .and_then(|status| status.conditions)
+                .and_then(|conditions| conditions.into_iter().find(|c| c.type_ == "Ready"))
+                .map(|c| c.status == "True")
+                .unwrap_or(false);
+
+            let status = if pod_ready {
+                ServiceStatus::Ready
+            } else {
+                ServiceStatus::NotReady
+            };
+
+            Ok(ServiceEvent {
+                service_id,
+                process_id,
+                status,
+            })
+        }
+
+        let stream = watcher(self.pod_api.clone(), self.list_params())
+            .touched_objects()
+            .map(|object| object.map_err(Into::into).and_then(into_service_event));
+        Box::pin(stream)
     }
 }
 

@@ -8,7 +8,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.57"
+async-stream = "0.3.3"
 async-trait = "0.1.56"
+futures = "0.3.21"
 itertools = "0.10.3"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore" }

@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use itertools::Itertools;
 use scopeguard::defer;
 use sysinfo::{ProcessExt, ProcessStatus, SystemExt};
@@ -27,7 +28,8 @@ use tokio::time::{self, Duration};
 use tracing::{error, info};
 
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceStatus,
 };
 use mz_ore::id_gen::PortAllocator;
 use mz_pid_file::PidFile;
@@ -103,7 +105,7 @@ impl Orchestrator for ProcessOrchestrator {
                 image_dir: self.image_dir.clone(),
                 port_allocator: Arc::clone(&self.port_allocator),
                 suppress_output: self.suppress_output,
-                supervisors: Mutex::new(HashMap::new()),
+                supervisors: Arc::new(Mutex::new(HashMap::new())),
                 data_dir: self.data_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
             })
@@ -117,7 +119,7 @@ struct NamespacedProcessOrchestrator {
     image_dir: PathBuf,
     port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
-    supervisors: Mutex<HashMap<String, Vec<AbortOnDrop>>>,
+    supervisors: Arc<Mutex<HashMap<String, Vec<AbortOnDrop>>>>,
     data_dir: PathBuf,
     command_wrapper: Vec<String>,
 }
@@ -254,6 +256,39 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         let supervisors = self.supervisors.lock().expect("lock poisoned");
         Ok(supervisors.keys().cloned().collect())
+    }
+
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        // The process orchestrator currently doesn't provide good support for
+        // tracking service status, so we punt and always return an "unknown"
+        // status instead. We can still report the existence of individual
+        // processes though.
+
+        let supervisors = Arc::clone(&self.supervisors);
+        let stream = async_stream::stream! {
+            let mut events = Vec::new();
+            loop {
+                {
+                    let supervisors = supervisors.lock().expect("lock poisoned");
+                    for (service, processes) in supervisors.iter() {
+                        for process_idx in 0..processes.len() {
+                            events.push(ServiceEvent {
+                                service_id: service.to_string(),
+                                process_id: process_idx as i64,
+                                status: ServiceStatus::Unknown,
+                            });
+                        }
+                    }
+                }
+
+                for event in events.drain(..) {
+                    yield Ok(event);
+                }
+
+                time::sleep(Duration::from_secs(5)).await;
+            }
+        };
+        Box::pin(stream)
     }
 }
 

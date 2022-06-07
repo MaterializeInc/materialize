@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use clap::{FromArgMatches, IntoApp};
+use futures_core::stream::BoxStream;
 use http::header::{HeaderName, HeaderValue};
 use opentelemetry::sdk::resource::Resource;
 use opentelemetry::KeyValue;
@@ -28,7 +29,7 @@ use tracing_subscriber::filter::Targets;
 #[cfg(feature = "tokio-console")]
 use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
-    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig,
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
 };
 use mz_ore::cli::KeyValueArg;
 #[cfg(feature = "tokio-console")]
@@ -326,6 +327,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
 
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         self.inner.list_services().await
+    }
+
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        self.inner.watch_services()
     }
 }
 
