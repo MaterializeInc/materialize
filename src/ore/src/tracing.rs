@@ -84,6 +84,9 @@ pub struct OpenTelemetryConfig {
     pub headers: HeaderMap,
     /// A filter which determines which events are exported.
     pub filter: Targets,
+    /// `opentelemetry::sdk::resource::Resource` to include with all
+    /// traces.
+    pub resource: Resource,
 }
 
 /// Configuration of the [Tokio console] integration.
@@ -175,10 +178,14 @@ where
             .with_metadata(MetadataMap::from_headers(otel_config.headers));
         let tracer = opentelemetry_otlp::new_pipeline()
             .tracing()
-            .with_trace_config(trace::config().with_resource(Resource::new([KeyValue::new(
-                "service.name",
-                service_name.to_string(),
-            )])))
+            .with_trace_config(
+                trace::config().with_resource(
+                    // The latter resources wins, so if the user specifies `service.name` on the
+                    // cli, it wins
+                    Resource::new([KeyValue::new("service.name", service_name.to_string())])
+                        .merge(&otel_config.resource),
+                ),
+            )
             .with_exporter(exporter)
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();

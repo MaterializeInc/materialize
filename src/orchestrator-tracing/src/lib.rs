@@ -21,6 +21,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use clap::{FromArgMatches, IntoApp};
 use http::header::{HeaderName, HeaderValue};
+use opentelemetry::sdk::resource::Resource;
+use opentelemetry::KeyValue;
 use tracing_subscriber::filter::Targets;
 
 #[cfg(feature = "tokio-console")]
@@ -114,6 +116,16 @@ pub struct TracingCliArgs {
         default_value = "debug"
     )]
     pub opentelemetry_filter: SerializableTargets,
+    /// Additional key-value pairs to send with all opentelemetry traces.
+    ///
+    /// Requires that the `--opentelemetry-endpoint` option is specified.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_RESOURCE",
+        value_name = "NAME=VALUE",
+        use_value_delimiter = true
+    )]
+    pub opentelemetry_resource: Vec<KeyValueArg<String, String>>,
     /// The address on which to listen for Tokio console connections.
     ///
     /// For details about Tokio console, see: <https://github.com/tokio-rs/console>
@@ -172,6 +184,12 @@ impl From<&TracingCliArgs> for TracingConfig {
                         .map(|header| (header.key.clone(), header.value.clone()))
                         .collect(),
                     filter: args.opentelemetry_filter.inner.clone(),
+                    resource: Resource::new(
+                        args.opentelemetry_resource
+                            .iter()
+                            .cloned()
+                            .map(|kv| KeyValue::new(kv.key, kv.value)),
+                    ),
                 }
             }),
             #[cfg(feature = "tokio-console")]
@@ -244,6 +262,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 opentelemetry_endpoint,
                 opentelemetry_header,
                 opentelemetry_filter,
+                opentelemetry_resource,
                 #[cfg(feature = "tokio-console")]
                     tokio_console_listen_addr: _,
                 #[cfg(feature = "tokio-console")]
@@ -267,6 +286,9 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                     ));
                 }
                 args.push(format!("--opentelemetry-filter={opentelemetry_filter}",));
+                for kv in opentelemetry_resource {
+                    args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
+                }
             }
             #[cfg(feature = "tokio-console")]
             if let Some(port) = tokio_console_port {

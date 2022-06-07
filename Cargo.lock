@@ -3482,6 +3482,7 @@ dependencies = [
  "mz-orchestrator",
  "mz-ore",
  "mz-repr",
+ "opentelemetry",
  "tracing-subscriber",
 ]
 
