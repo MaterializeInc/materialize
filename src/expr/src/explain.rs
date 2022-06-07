@@ -210,7 +210,7 @@ impl<'a> ViewExplanation<'a> {
                             rows.iter().map(|(row, count)| if *count == 1 {
                                 format!("{row}")
                             } else {
-                                format!("{row} ({count} copies)")
+                                format!("({row} x {count})")
                             })
                         )
                     )?,
