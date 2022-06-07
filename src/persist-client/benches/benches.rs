@@ -75,23 +75,21 @@ pub fn bench_persist(c: &mut Criterion) {
     plumbing::bench_blob_get("plumbing/blob_get", throughput, c, &runtime, &data);
     plumbing::bench_blob_set("plumbing/blob_set", throughput, c, &runtime, &data);
     if !throughput {
-        plumbing::bench_consensus_compare_and_set(
-            "plumbing/concurrency=1/consensus_compare_and_set",
-            c,
-            &runtime,
-            &data,
-            1,
-        );
-        plumbing::bench_consensus_compare_and_set(
-            &format!(
-                "plumbing/concurrency={}/consensus_compare_and_set",
-                ncpus_useful
-            ),
-            c,
-            &runtime,
-            &data,
-            ncpus_useful,
-        );
+        let mut bench_compare_and_set = |concurrency, num_shards| {
+            plumbing::bench_consensus_compare_and_set(
+                &format!(
+                    "plumbing/concurrency={},num_shards={}/consensus_compare_and_set",
+                    concurrency, num_shards
+                ),
+                c,
+                &runtime,
+                &data,
+                concurrency,
+                num_shards,
+            )
+        };
+        bench_compare_and_set(1, 1);
+        bench_compare_and_set(1, ncpus_useful);
     }
     plumbing::bench_encode_batch("plumbing/encode_batch", throughput, c, &data);
 }

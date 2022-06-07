@@ -9,11 +9,13 @@
 
 //! Benchmarks for different persistent Write implementations.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use differential_dataflow::trace::Description;
+use futures::stream::{FuturesUnordered, StreamExt};
 use timely::progress::Antichain;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -33,6 +35,7 @@ pub fn bench_consensus_compare_and_set(
     runtime: &Runtime,
     data: &DataGenerator,
     concurrency: usize,
+    num_shards: usize,
 ) {
     let mut g = c.benchmark_group(name);
     let blob_val = workload::flat_blob(&data);
@@ -44,6 +47,7 @@ pub fn bench_consensus_compare_and_set(
             blob_val.clone(),
             b,
             concurrency,
+            num_shards,
         )
     });
 }
@@ -54,6 +58,7 @@ fn bench_consensus_compare_and_set_all_iters(
     data: Vec<u8>,
     b: &mut Bencher,
     concurrency: usize,
+    num_shards: usize,
 ) {
     let deadline = Instant::now() + Duration::from_secs(3600);
     b.iter_custom(|iters| {
@@ -61,34 +66,57 @@ fn bench_consensus_compare_and_set_all_iters(
         // function many times as part of a warmup, and if we deterministically
         // use the same keys we will overwrite previously set values.
         let keys = (0..concurrency)
-            .map(|_| Uuid::new_v4().to_string())
+            .map(|idx| {
+                (
+                    idx,
+                    (0..num_shards)
+                        .map(|shard_idx| (shard_idx, Uuid::new_v4().to_string()))
+                        .collect::<Vec<_>>(),
+                )
+            })
             .collect::<Vec<_>>();
 
         let start = Instant::now();
+
         let mut handles = Vec::new();
-        for (idx, key) in keys.into_iter().enumerate() {
+        for (idx, shard_keys) in keys.into_iter() {
             let consensus = Arc::clone(&consensus);
             let data = data.clone();
             let handle = runtime.handle().spawn_named(
                 || format!("bench_compare_and_set-{}", idx),
                 async move {
-                    let mut current: Option<SeqNo> = None;
-                    while current.map_or(0, |x| x.0) < iters {
-                        let next = current.map_or_else(SeqNo::minimum, |x| x.next());
-                        consensus
-                            .compare_and_set(
+                    // Keep track of the current SeqNo per shard ID.
+                    let mut current: HashMap<usize, Option<SeqNo>> = HashMap::new();
+
+                    for _iter in 0..iters {
+                        let futs = FuturesUnordered::new();
+
+                        for (idx, key) in shard_keys.iter() {
+                            let current_seqno = current.entry(*idx).or_default().clone();
+                            let next_seqno =
+                                current_seqno.map_or_else(SeqNo::minimum, |x| x.next());
+
+                            let fut = consensus.compare_and_set(
                                 deadline,
-                                &key,
-                                current,
+                                key,
+                                current_seqno,
                                 VersionedData {
-                                    seqno: next,
+                                    seqno: next_seqno,
                                     data: data.clone(),
                                 },
-                            )
-                            .await
-                            .expect("gave invalid inputs")
-                            .expect("failed to compare_and_set");
-                        current = Some(next);
+                            );
+                            futs.push(fut);
+
+                            current.insert(*idx, Some(next_seqno));
+                        }
+
+                        let results = futs.collect::<Vec<_>>().await;
+
+                        for result in results {
+                            result
+                                .expect("gave invalid inputs")
+                                .expect("failed to compare_and_set");
+                        }
                     }
                 },
             );
@@ -97,6 +125,7 @@ fn bench_consensus_compare_and_set_all_iters(
         for handle in handles.into_iter() {
             runtime.block_on(handle).expect("task failed");
         }
+
         start.elapsed()
     });
 }
