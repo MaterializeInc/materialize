@@ -210,7 +210,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
             serve_stash(config, stash).await
         }
         None => {
-            let stash = mz_stash::Sqlite::open(&config.data_directory.join("stash"))?;
+            let stash = mz_stash::Sqlite::open(None)?;
             serve_stash(config, stash).await
         }
     }

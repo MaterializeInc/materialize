@@ -2123,7 +2123,6 @@ pub mod BUILTINS {
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::env;
-    use tempfile::TempDir;
 
     use mz_ore::now::NOW_ZERO;
     use tokio_postgres::NoTls;
@@ -2224,8 +2223,7 @@ mod tests {
             })
             .collect();
 
-        let data_dir = TempDir::new()?;
-        let catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
         let conn_catalog = catalog.for_system_session();
         let resolve_type_oid = |item: &str| {
             conn_catalog

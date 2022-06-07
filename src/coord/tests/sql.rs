@@ -20,8 +20,6 @@
 
 use std::sync::Arc;
 
-use tempfile::TempDir;
-
 use mz_coord::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_coord::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
@@ -39,7 +37,6 @@ use tokio::sync::Mutex;
 #[tokio::test]
 async fn datadriven() {
     datadriven::walk_async("tests/testdata", |mut f| async {
-        let data_dir = TempDir::new().unwrap();
         // The datadriven API takes an `FnMut` closure, and can't express to Rust that
         // it will finish polling each returned future before calling the closure
         // again, so we have to wrap the catalog in a share-able type. Datadriven
@@ -48,9 +45,7 @@ async fn datadriven() {
         // Context. This is just a test, so the performance hit of this doesn't matter
         // (and in practice there will be no contention).
         let catalog = Arc::new(Mutex::new(
-            Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone())
-                .await
-                .unwrap(),
+            Catalog::open_debug_sqlite(NOW_ZERO.clone()).await.unwrap(),
         ));
         f.run_async(|test_case| {
             let catalog = Arc::clone(&catalog);

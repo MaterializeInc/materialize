@@ -11,7 +11,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -1365,14 +1364,11 @@ struct AllocatedBuiltinSystemIds<T> {
 }
 
 impl Catalog<Sqlite> {
-    /// Opens a debug sqlite catalog at `data_dir_path`.
+    /// Opens a debug in-memory sqlite catalog.
     ///
     /// See [`Catalog::open_debug`].
-    pub async fn open_debug_sqlite(
-        data_dir_path: &Path,
-        now: NowFn,
-    ) -> Result<Catalog<Sqlite>, anyhow::Error> {
-        let stash = mz_stash::Sqlite::open(&data_dir_path.join("stash"))?;
+    pub async fn open_debug_sqlite(now: NowFn) -> Result<Catalog<Sqlite>, anyhow::Error> {
+        let stash = mz_stash::Sqlite::open(None)?;
         Catalog::open_debug(stash, now).await
     }
 }
@@ -3671,8 +3667,6 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
-
     use mz_ore::now::NOW_ZERO;
     use mz_sql::names::{
         ObjectQualifiers, PartialObjectName, QualifiedObjectName, ResolvedDatabaseSpecifier,
@@ -3696,8 +3690,7 @@ mod tests {
             normal_output: PartialObjectName,
         }
 
-        let data_dir = TempDir::new()?;
-        let catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
 
         let test_cases = vec![
             TestCase {
@@ -3763,8 +3756,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_catalog_revision() -> Result<(), anyhow::Error> {
-        let data_dir = TempDir::new()?;
-        let mut catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
+        let mut catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
         catalog
             .transact(
@@ -3780,7 +3772,7 @@ mod tests {
         assert_eq!(catalog.transient_revision(), 2);
         drop(catalog);
 
-        let catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
         assert_eq!(catalog.transient_revision(), 1);
 
         Ok(())
@@ -3788,8 +3780,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_effective_search_path() -> Result<(), anyhow::Error> {
-        let data_dir = TempDir::new()?;
-        let catalog = Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone()).await?;
+        let catalog = Catalog::open_debug_sqlite(NOW_ZERO.clone()).await?;
         let mz_catalog_schema = (
             ResolvedDatabaseSpecifier::Ambient,
             SchemaSpecifier::Id(catalog.state().get_mz_catalog_schema_id().clone()),

@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 
 use postgres_openssl::MakeTlsConnector;
-use tempfile::NamedTempFile;
 use timely::progress::Antichain;
 use tokio_postgres::Config;
 
@@ -22,14 +21,12 @@ use mz_stash::{
 #[tokio::test]
 async fn test_stash_memory() -> Result<(), anyhow::Error> {
     {
-        let file = NamedTempFile::new()?;
-        let conn = Sqlite::open(file.path())?;
+        let conn = Sqlite::open(None)?;
         let mut memory = Memory::new(conn);
         test_stash(&mut memory).await?;
     }
     {
-        let file = NamedTempFile::new()?;
-        let conn = Sqlite::open(file.path())?;
+        let conn = Sqlite::open(None)?;
         let mut memory = Memory::new(conn);
         test_append(&mut memory).await?;
     }
@@ -39,13 +36,11 @@ async fn test_stash_memory() -> Result<(), anyhow::Error> {
 #[tokio::test]
 async fn test_stash_sqlite() -> Result<(), anyhow::Error> {
     {
-        let file = NamedTempFile::new()?;
-        let mut conn = Sqlite::open(file.path())?;
+        let mut conn = Sqlite::open(None)?;
         test_stash(&mut conn).await?;
     }
     {
-        let file = NamedTempFile::new()?;
-        let mut conn = Sqlite::open(file.path())?;
+        let mut conn = Sqlite::open(None)?;
         test_append(&mut conn).await?;
     }
     Ok(())

@@ -65,9 +65,13 @@ pub struct Sqlite {
 }
 
 impl Sqlite {
-    /// Opens the stash stored at the specified path.
-    pub fn open(path: &Path) -> Result<Sqlite, StashError> {
-        let mut conn = Connection::open(path)?;
+    /// Opens the stash stored at the specified path. If `None`, opens an in-memory
+    /// instance.
+    pub fn open(path: Option<&Path>) -> Result<Sqlite, StashError> {
+        let mut conn = match path {
+            Some(path) => Connection::open(path)?,
+            None => Connection::open_in_memory()?,
+        };
         let tx = conn.transaction()?;
         let app_id: i32 = tx.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
         if app_id == 0 {
