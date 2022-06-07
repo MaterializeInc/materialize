@@ -30,9 +30,6 @@ $ set schema={
         ]
     }
 
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-offset-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
-0
-
 $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=${count} timestamp=4
 {"f1": "d${kafka-ingest.iteration}"} {"f2": "d${kafka-ingest.iteration}"}
 
@@ -41,6 +38,3 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
 
 > SELECT COUNT(*) FROM kafka_time_offset;
 3000
-
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-offset-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = ${count} * 2 FROM mz_kafka_source_statistics;
-true
