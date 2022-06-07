@@ -563,7 +563,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 impl Runner {
     pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
-        let (consensus_uri, catalog_postgres_stash) = {
+        let (consensus_uri, catalog_postgres_stash, storage_postgres_stash) = {
             let postgres_url = &config.postgres_url;
             let (client, conn) = tokio_postgres::connect(&postgres_url, NoTls).await?;
             task::spawn(|| "sqllogictest_connect", async move {
@@ -575,13 +575,16 @@ impl Runner {
                 .batch_execute(&format!(
                     "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
                      DROP SCHEMA IF EXISTS sqllogictest_catalog CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_storage CASCADE;
                      CREATE SCHEMA sqllogictest_consensus;
-                     CREATE SCHEMA sqllogictest_catalog;",
+                     CREATE SCHEMA sqllogictest_catalog;
+                     CREATE SCHEMA sqllogictest_storage;",
                 ))
                 .await?;
             (
                 format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
                 format!("{postgres_url}?options=--search_path=sqllogictest_catalog"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
         let mz_config = materialized::Config {
@@ -593,6 +596,7 @@ impl Runner {
                 consensus_uri,
             },
             catalog_postgres_stash: Some(catalog_postgres_stash),
+            storage_postgres_stash,
             orchestrator: OrchestratorConfig {
                 backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),

@@ -136,18 +136,20 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         }
         Some(data_directory) => (data_directory, None),
     };
-    let (consensus_uri, catalog_postgres_stash) = {
+    let (consensus_uri, catalog_postgres_stash, storage_postgres_stash) = {
         let seed = config.seed;
         let postgres_url = env::var("POSTGRES_URL")
             .map_err(|_| anyhow!("POSTGRES_URL environment variable is not set"))?;
         let mut conn = postgres::Client::connect(&postgres_url, NoTls)?;
         conn.batch_execute(&format!(
             "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-             CREATE SCHEMA IF NOT EXISTS catalog_{seed};",
+             CREATE SCHEMA IF NOT EXISTS catalog_{seed};
+             CREATE SCHEMA IF NOT EXISTS storage_{seed};",
         ))?;
         (
             format!("{postgres_url}?options=--search_path=consensus_{seed}"),
             format!("{postgres_url}?options=--search_path=catalog_{seed}"),
+            format!("{postgres_url}?options=--search_path=storage_{seed}"),
         )
     };
     let metrics_registry = MetricsRegistry::new();
@@ -160,6 +162,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         },
         data_directory: data_directory.clone(),
         catalog_postgres_stash: Some(catalog_postgres_stash),
+        storage_postgres_stash,
         orchestrator: OrchestratorConfig {
             backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                 image_dir: env::current_exe()?

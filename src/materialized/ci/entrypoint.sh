@@ -15,10 +15,12 @@ pg_ctlcluster 14 materialize start
 
 psql -Atc "CREATE SCHEMA IF NOT EXISTS consensus"
 psql -Atc "CREATE SCHEMA IF NOT EXISTS catalog"
+psql -Atc "CREATE SCHEMA IF NOT EXISTS storage"
 
 exec materialized \
     --sql-listen-addr=0.0.0.0:6875 \
     --http-listen-addr=0.0.0.0:6876 \
     "--persist-consensus-url=postgresql://materialize@$(hostname):5432?options=--search_path=consensus" \
     "--catalog-postgres-stash=postgresql://materialize@$(hostname):5432?options=--search_path=catalog" \
+    "--storage-postgres-stash=postgresql://materialize@$(hostname):5432?options=--search_path=storage" \
     "$@"
