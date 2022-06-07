@@ -77,7 +77,7 @@ class Connections(Generator):
     def body(cls) -> None:
         for i in cls.all():
             print(
-                f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialized-addr}}"
+                f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialized-sql-addr}}"
             )
         for i in cls.all():
             print(f"$ postgres-execute connection=conn{i}\nSELECT 1;\n")

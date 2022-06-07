@@ -181,12 +181,14 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             tracing: TracingCliArgs::default(),
         },
         secrets_controller: None,
-        listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
         frontegg: config.frontegg,
         unsafe_mode: config.unsafe_mode,
         metrics_registry: metrics_registry.clone(),
-        metrics_listen_addr: None,
+        internal_sql_listen_addr: None,
+        internal_http_listen_addr: None,
         now: config.now,
         cors_allowed_origin: AllowOrigin::list([]),
         replica_sizes: Default::default(),
@@ -211,7 +213,7 @@ pub struct Server {
 
 impl Server {
     pub fn pg_config(&self) -> postgres::Config {
-        let local_addr = self.inner.local_addr();
+        let local_addr = self.inner.sql_local_addr();
         let mut config = postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
@@ -221,7 +223,7 @@ impl Server {
     }
 
     pub fn pg_config_async(&self) -> tokio_postgres::Config {
-        let local_addr = self.inner.local_addr();
+        let local_addr = self.inner.sql_local_addr();
         let mut config = tokio_postgres::Config::new();
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())

@@ -20,4 +20,4 @@ COPY materialized /usr/local/bin/
 
 USER materialize
 
-ENTRYPOINT ["tini", "--", "materialized", "--listen-addr=0.0.0.0:6875"]
+ENTRYPOINT ["tini", "--", "materialized", "--sql-listen-addr=0.0.0.0:6875", "--http-listen-addr=0.0.0.0:6876"]

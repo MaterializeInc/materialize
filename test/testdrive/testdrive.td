@@ -94,7 +94,7 @@ $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messa
 
 # Use $ postgresql-execute and ${testdrive.materialize_addr}
 
-$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 CREATE TABLE postgres_execute (f1 INTEGER);
 INSERT INTO postgres_execute VALUES (123);
 
@@ -182,7 +182,7 @@ $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort
 
 > CREATE TABLE postgres_connect (f1 INTEGER);
 
-$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 
 $ postgres-execute connection=conn1
 BEGIN;

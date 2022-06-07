@@ -9,7 +9,8 @@
 
 //! The main Materialize server.
 //!
-//! The name is pronounced "materialize-dee." It listens on port 6875 (MTRL).
+//! The name is pronounced "materialize-dee." It listens for SQL connections
+//! on port 6875 (MTRL) and for HTTP connections on port 6876.
 //!
 //! The design and implementation of materialized is very much in flux. See the
 //! draft architecture doc for the most up-to-date plan [0]. Access is limited
@@ -105,18 +106,32 @@ pub struct Args {
     #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
-    /// The address on which Prometheus metrics get exposed.
+    /// The address on which to listen for trusted SQL connections.
     ///
-    /// This address is never served TLS-encrypted or authenticated so care
-    /// should be taken to not expose the listen address to the public internet
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose this address to the
+    /// public internet
     /// or other unauthorized parties.
     #[clap(
         long,
         hide = true,
         value_name = "HOST:PORT",
-        env = "THIRD_PARTY_METRICS_ADDR"
+        env = "MZ_INTERNAL_SQL_LISTEN_ADDR"
     )]
-    metrics_listen_addr: Option<SocketAddr>,
+    internal_sql_listen_addr: Option<SocketAddr>,
+
+    /// The address on which to listen for trusted HTTP connections.
+    ///
+    /// Connections to this address are not subject to encryption, authentication,
+    /// or access control. Care should be taken to not expose the listen address
+    /// to the public internet or other unauthorized parties.
+    #[clap(
+        long,
+        hide = true,
+        value_name = "HOST:PORT",
+        env = "MZ_INTERNAL_HTTP_LISTEN_ADDR"
+    )]
+    internal_http_listen_addr: Option<SocketAddr>,
 
     // === Platform options. ===
     /// The service orchestrator implementation to use.
@@ -195,14 +210,30 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     // === Connection options. ===
-    /// The address on which to listen for connections.
+    /// The address on which to listen for untrusted SQL connections.
+    ///
+    /// Connections on this address are subject to encryption, authentication,
+    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
+    /// options.
     #[clap(
         long,
-        env = "LISTEN_ADDR",
+        env = "MZ_SQL_LISTEN_ADDR",
         value_name = "HOST:PORT",
         default_value = "127.0.0.1:6875"
     )]
-    listen_addr: SocketAddr,
+    sql_listen_addr: SocketAddr,
+    /// The address on which to listen for untrusted HTTP connections.
+    ///
+    /// Connections on this address are subject to encryption, authentication,
+    /// and authorization as specified by the `--tls-mode` and `--frontegg-auth`
+    /// options.
+    #[clap(
+        long,
+        env = "MZ_HTTP_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "127.0.0.1:6876"
+    )]
+    http_listen_addr: SocketAddr,
     /// How stringently to demand TLS authentication and encryption.
     ///
     /// If set to "disable", then materialized rejects HTTP and PostgreSQL
@@ -471,7 +502,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else if !args.cors_allowed_origin.is_empty() {
         AllowOrigin::list(args.cors_allowed_origin)
     } else {
-        let port = args.listen_addr.port();
+        let port = args.http_listen_addr.port();
         AllowOrigin::list([
             HeaderValue::from_str(&format!("http://localhost:{}", port)).unwrap(),
             HeaderValue::from_str(&format!("http://127.0.0.1:{}", port)).unwrap(),
@@ -643,8 +674,10 @@ max log level: {max_log_level}",
     let server = runtime.block_on(materialized::serve(materialized::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
-        listen_addr: args.listen_addr,
-        metrics_listen_addr: args.metrics_listen_addr,
+        sql_listen_addr: args.sql_listen_addr,
+        http_listen_addr: args.http_listen_addr,
+        internal_sql_listen_addr: args.internal_sql_listen_addr,
+        internal_http_listen_addr: args.internal_http_listen_addr,
         tls,
         frontegg,
         cors_allowed_origin,
@@ -665,10 +698,17 @@ max log level: {max_log_level}",
     }))?;
 
     println!(
-        "materialized {} listening on {}...",
-        materialized::BUILD_INFO.human_version(),
-        server.local_addr(),
+        "materialized {} listening...",
+        materialized::BUILD_INFO.human_version()
     );
+    println!(" SQL address: {}", server.sql_local_addr());
+    println!(" HTTP address: {}", server.http_local_addr());
+    if let Some(internal_sql_local_addr) = server.internal_sql_local_addr() {
+        println!(" Internal SQL address: {}", internal_sql_local_addr);
+    }
+    if let Some(internal_http_local_address) = server.internal_http_local_addr() {
+        println!(" Internal HTTP address: {}", internal_http_local_address);
+    }
 
     // Block forever.
     loop {

@@ -11,6 +11,8 @@ import os
 import random
 from typing import Dict, List, Optional, Tuple, Union
 
+from packaging import version
+
 from materialize.mzcompose import Service, ServiceConfig
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
@@ -38,7 +40,6 @@ class Materialized(Service):
         name: str = "materialized",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        port: Union[int, str] = 6875,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
@@ -82,15 +83,18 @@ class Materialized(Service):
         if volumes_extra:
             volumes.extend(volumes_extra)
 
-        guest_port = port
-        if isinstance(port, str) and ":" in port:
-            guest_port = port.split(":")[1]
-
         command_list = [
             f"--data-directory={data_directory}",
-            f"--listen-addr 0.0.0.0:{guest_port}",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
+
+        config_ports = [6875, 5432, *extra_ports, 6876]
+
+        if isinstance(image, str) and ":v" in image:
+            requested_version = image.split(":v")[1]
+            if version.parse(requested_version) < version.parse("0.27.0"):
+                # HTTP and SQL ports in older versions of Materialize are the same
+                config_ports.pop()
 
         if options:
             if isinstance(options, str):
@@ -114,7 +118,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port, 5432, *extra_ports],
+                "ports": config_ports,
                 "environment": environment,
                 "volumes": volumes,
             }

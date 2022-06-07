@@ -243,7 +243,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     {
         use postgres_protocol::message::backend::Message;
 
-        let mut stream = TcpStream::connect(server.inner.local_addr())?;
+        let mut stream = TcpStream::connect(server.inner.sql_local_addr())?;
 
         // Send a startup packet for protocol version two, which Materialize
         // does not support.

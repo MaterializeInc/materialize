@@ -474,7 +474,9 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `"stdrive.aws-endpoint`
 
-#### `testdrive.materialized-addr`
+#### `testdrive.materialized-http-addr`
+
+#### `testdrive.materialized-sql-addr`
 
 #### `testdrive.materialized-user`
 
@@ -527,7 +529,7 @@ In addition to the default connection that is used for the `>` and `!` statement
 Executes a list of statements over the specified connection. The `connection` can be specified as either an URL or as a named connection created by `$ postgres-connect`:
 
 ```
-$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 CREATE TABLE postgres_execute (f1 INTEGER);
 ```
 
@@ -538,7 +540,7 @@ If any of the statements fail, the entire test will fail. Any result sets return
 Creates a named psql connection that can be used by multiple `$ postgres-execute` statements
 
 ```
-$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
 
 $ postgres-execute connection=conn1
 BEGIN;

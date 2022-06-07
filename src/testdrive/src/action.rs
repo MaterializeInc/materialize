@@ -93,9 +93,12 @@ pub struct Config {
     pub backoff_factor: f64,
 
     // === Materialize options. ===
-    /// The connection parameters for the materialized instance that testdrive
+    /// The pgwire connection parameters for the materialized instance that testdrive
     /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
+    /// The port for the public endpoints of the materialized instance that
+    /// testdrive will connect to via HTTP.
+    pub materialized_http_port: u16,
     /// Session parameters to set after connecting to materialized.
     pub materialized_params: Vec<(String, String)>,
     /// An optional Postgres connection string to the catalog stash.
@@ -149,7 +152,8 @@ pub struct State {
 
     // === Materialize state. ===
     materialized_catalog_postgres_stash: Option<String>,
-    materialized_addr: String,
+    materialized_sql_addr: String,
+    materialized_http_addr: String,
     materialized_user: String,
     pgclient: tokio_postgres::Client,
 
@@ -489,8 +493,8 @@ pub(crate) async fn build(
         );
     }
     vars.insert(
-        "testdrive.materialized-addr".into(),
-        state.materialized_addr.clone(),
+        "testdrive.materialized-sql-addr".into(),
+        state.materialized_sql_addr.clone(),
     );
     vars.insert(
         "testdrive.materialized-user".into(),
@@ -719,7 +723,7 @@ pub async fn create_state(
 
     let materialized_catalog_postgres_stash = config.materialized_catalog_postgres_stash.clone();
 
-    let (materialized_addr, materialized_user, pgclient, pgconn_task) = {
+    let (materialized_sql_addr, materialized_http_addr, materialized_user, pgclient, pgconn_task) = {
         let materialized_url = util::postgres::config_url(&config.materialized_pgconfig)?;
 
         let (pgclient, pgconn) = Retry::default()
@@ -752,12 +756,23 @@ pub async fn create_state(
             Err(_) => "<unknown user>".to_owned(),
         };
 
-        let materialized_addr = format!(
+        let materialized_sql_addr = format!(
             "{}:{}",
             materialized_url.host_str().unwrap(),
             materialized_url.port().unwrap()
         );
-        (materialized_addr, materialized_user, pgclient, pgconn_task)
+        let materialized_http_addr = format!(
+            "{}:{}",
+            materialized_url.host_str().unwrap(),
+            config.materialized_http_port
+        );
+        (
+            materialized_sql_addr,
+            materialized_http_addr,
+            materialized_user,
+            pgclient,
+            pgconn_task,
+        )
     };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
@@ -844,7 +859,8 @@ pub async fn create_state(
 
         // === Materialize state. ===
         materialized_catalog_postgres_stash,
-        materialized_addr,
+        materialized_sql_addr,
+        materialized_http_addr,
         materialized_user,
         pgclient,
 

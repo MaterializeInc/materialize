@@ -283,7 +283,7 @@ fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
                     .authority(&*format!(
                         "{}:{}",
                         Ipv4Addr::LOCALHOST,
-                        server.inner.local_addr().port()
+                        server.inner.http_local_addr().port()
                     ))
                     .path_and_query("/api/sql")
                     .build()

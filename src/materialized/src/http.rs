@@ -25,12 +25,14 @@ use async_trait::async_trait;
 use axum::extract::{FromRequest, RequestParts};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
+use axum::routing::IntoMakeService;
 use axum::{routing, Extension, Router};
 use futures::future::TryFutureExt;
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::{Request, StatusCode};
+use hyper::server::conn::AddrIncoming;
 use hyper_openssl::MaybeHttpsStream;
 use mz_coord::SessionClient;
 use mz_ore::metrics::MetricsRegistry;
@@ -38,7 +40,7 @@ use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -46,7 +48,7 @@ use tracing::{error, warn};
 
 use mz_coord::session::Session;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
-use mz_ore::netio::SniffedStream;
+use mz_ore::netio::SniffingStream;
 
 use crate::BUILD_INFO;
 
@@ -57,10 +59,6 @@ mod root;
 mod sql;
 
 const SYSTEM_USER: &str = "mz_system";
-
-const METHODS: &[&[u8]] = &[
-    b"OPTIONS", b"GET", b"HEAD", b"POST", b"PUT", b"DELETE", b"TRACE", b"CONNECT",
-];
 
 const TLS_HANDSHAKE_START: u8 = 22;
 
@@ -150,23 +148,12 @@ impl Server {
         self.tls.as_ref().map(|tls| &tls.context)
     }
 
-    pub fn match_handshake(&self, buf: &[u8]) -> bool {
-        if self.tls.is_some() && sniff_tls(buf) {
-            return true;
-        }
-        let buf = if let Some(pos) = buf.iter().position(|&b| b == b' ') {
-            &buf[..pos]
-        } else {
-            &buf[..]
-        };
-        METHODS.contains(&buf)
-    }
-
-    pub async fn handle_connection(
-        &self,
-        conn: SniffedStream<TcpStream>,
-    ) -> Result<(), anyhow::Error> {
-        let (conn, conn_protocol) = match (&self.tls_context(), sniff_tls(&conn.sniff_buffer())) {
+    pub async fn handle_connection(&self, conn: TcpStream) -> Result<(), anyhow::Error> {
+        let mut ss = SniffingStream::new(conn);
+        let mut buf = [0; 1];
+        ss.read_exact(&mut buf).await?;
+        let conn = ss.into_sniffed();
+        let (conn, conn_protocol) = match (&self.tls_context(), sniff_tls(&buf)) {
             (Some(tls_context), true) => {
                 let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
                 if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
@@ -343,16 +330,16 @@ async fn auth<B>(
 }
 
 #[derive(Clone)]
-pub struct MetricsServer {
+pub struct InternalServer {
     metrics_registry: MetricsRegistry,
 }
 
-impl MetricsServer {
+impl InternalServer {
     pub fn new(metrics_registry: MetricsRegistry) -> Self {
         Self { metrics_registry }
     }
 
-    pub async fn serve(self, addr: SocketAddr) {
+    pub fn bind(self, addr: SocketAddr) -> axum::Server<AddrIncoming, IntoMakeService<Router>> {
         let metrics_registry = self.metrics_registry;
         let router = Router::new()
             .route(
@@ -365,9 +352,6 @@ impl MetricsServer {
                 "/api/livez",
                 routing::get(mz_http_util::handle_liveness_check),
             );
-        let server = axum::Server::bind(&addr).serve(router.into_make_service());
-        if let Err(err) = server.await {
-            error!("error serving metrics endpoint: {}", err);
-        }
+        axum::Server::bind(&addr).serve(router.into_make_service())
     }
 }
