@@ -19,7 +19,6 @@ use crate::file::{FileBlobConfig, FileBlobMulti};
 use crate::location::{BlobMulti, Consensus, ExternalError};
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3BlobConfig, S3BlobMulti};
-use crate::sqlite::SqliteConsensus;
 
 #[cfg(any(test, debug_assertions))]
 use crate::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
@@ -109,8 +108,6 @@ impl BlobMultiConfig {
 /// Config for an implementation of [Consensus].
 #[derive(Debug, Clone)]
 pub enum ConsensusConfig {
-    /// Config for [SqliteConsensus].
-    Sqlite(String),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
@@ -122,9 +119,6 @@ impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus + Send + Sync>, ExternalError> {
         match self {
-            ConsensusConfig::Sqlite(config) => SqliteConsensus::open(config)
-                .await
-                .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
             ConsensusConfig::Postgres(config) => PostgresConsensus::open(config)
                 .await
                 .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
@@ -144,23 +138,8 @@ impl ConsensusConfig {
                 err
             )
         })?;
-        let query_params = url.query_pairs().collect::<HashMap<_, _>>();
 
         let config = match url.scheme() {
-            "sqlite" => {
-                if !query_params.is_empty() {
-                    return Err(ExternalError::from(anyhow!(
-                        "unknown consensus location params {}: {}",
-                        query_params
-                            .keys()
-                            .map(|x| x.to_owned())
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        url.as_str(),
-                    )));
-                }
-                Ok(ConsensusConfig::Sqlite(url.path().to_owned()))
-            }
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(value).await?,
             )),
