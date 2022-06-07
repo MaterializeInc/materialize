@@ -29,5 +29,5 @@ $ set schema={
 $ kafka-ingest format=avro topic=wide-data-ten key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=10 start-iteration=10
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
-> SELECT COUNT(*) = 20, MIN(LENGTH(value)), MAX(LENGTH(value)) FROM wide_data_source;
+> SELECT COUNT(*), MIN(LENGTH(value)), MAX(LENGTH(value)) FROM wide_data_source;
 20 524288 524288

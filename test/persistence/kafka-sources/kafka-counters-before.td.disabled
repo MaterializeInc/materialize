@@ -40,5 +40,5 @@ $ kafka-ingest format=avro topic=kafka-counters key-format=avro key-schema=${key
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) = ${count} FROM kafka_counters;
-true
+> SELECT COUNT(*) FROM kafka_counters;
+"${count}"

@@ -146,6 +146,18 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: kafka-persistence
+    label: Kafka persistence
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+          run: kafka-sources
+    agents:
+      queue: linux-x86_64
+
   - id: cluster-smoke
     label: Cluster smoke test
     depends_on: build-x86_64
