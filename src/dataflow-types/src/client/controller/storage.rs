@@ -440,6 +440,7 @@ where
                                     "--http-console-addr={}:{}",
                                     assigned.listen_host, assigned.ports["http"]
                                 ),
+                                format!("--opentelemetry-resource=storage_id={}", ingestion.id),
                             ]
                         },
                         ports: vec![

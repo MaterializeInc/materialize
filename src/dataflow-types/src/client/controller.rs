@@ -209,61 +209,68 @@ where
 
                 let service_name = generate_replica_service_name(instance_id, replica_id);
 
-                let service =
-                    orchestrator
-                        .namespace("compute")
-                        .ensure_service(
-                            &service_name,
-                            ServiceConfig {
-                                image: computed_image.clone(),
-                                args: &|assigned| {
-                                    let mut compute_opts = vec![
-                                        format!(
-                                            "--listen-addr={}:{}",
-                                            assigned.listen_host, assigned.ports["controller"]
-                                        ),
-                                        format!(
-                                            "--http-console-addr={}:{}",
-                                            assigned.listen_host, assigned.ports["http"]
-                                        ),
-                                        format!("--workers={}", size_config.workers),
-                                    ];
-                                    compute_opts.extend(assigned.peers.iter().map(
-                                        |(host, ports)| format!("{host}:{}", ports["compute"]),
+                let service = orchestrator
+                    .namespace("compute")
+                    .ensure_service(
+                        &service_name,
+                        ServiceConfig {
+                            image: computed_image.clone(),
+                            args: &|assigned| {
+                                let mut compute_opts = vec![
+                                    format!(
+                                        "--listen-addr={}:{}",
+                                        assigned.listen_host, assigned.ports["controller"]
+                                    ),
+                                    format!(
+                                        "--http-console-addr={}:{}",
+                                        assigned.listen_host, assigned.ports["http"]
+                                    ),
+                                    format!("--workers={}", size_config.workers),
+                                    format!("--opentelemetry-resource=instance_id={}", instance_id),
+                                    format!("--opentelemetry-resource=replica_id={}", replica_id),
+                                ];
+                                compute_opts.extend(
+                                    assigned.peers.iter().map(|(host, ports)| {
+                                        format!("{host}:{}", ports["compute"])
+                                    }),
+                                );
+                                if let Some(index) = assigned.index {
+                                    compute_opts.push(format!("--process={index}"));
+                                    compute_opts.push(format!(
+                                        "--opentelemetry-resource=replica_index={}",
+                                        index
                                     ));
-                                    if let Some(index) = assigned.index {
-                                        compute_opts.push(format!("--process={index}"));
-                                    }
-                                    if *linger {
-                                        compute_opts.push(format!("--linger"));
-                                    }
-                                    compute_opts
-                                },
-                                ports: vec![
-                                    ServicePort {
-                                        name: "controller".into(),
-                                        port_hint: 2100,
-                                    },
-                                    ServicePort {
-                                        name: "compute".into(),
-                                        port_hint: 2102,
-                                    },
-                                    ServicePort {
-                                        name: "http".into(),
-                                        port_hint: 6875,
-                                    },
-                                ],
-                                cpu_limit: size_config.cpu_limit,
-                                memory_limit: size_config.memory_limit,
-                                scale: size_config.scale,
-                                labels: hashmap! {
-                                    "cluster-id".into() => instance_id.to_string(),
-                                    "type".into() => "cluster".into(),
-                                },
-                                availability_zone,
+                                }
+                                if *linger {
+                                    compute_opts.push(format!("--linger"));
+                                }
+                                compute_opts
                             },
-                        )
-                        .await?;
+                            ports: vec![
+                                ServicePort {
+                                    name: "controller".into(),
+                                    port_hint: 2100,
+                                },
+                                ServicePort {
+                                    name: "compute".into(),
+                                    port_hint: 2102,
+                                },
+                                ServicePort {
+                                    name: "http".into(),
+                                    port_hint: 6875,
+                                },
+                            ],
+                            cpu_limit: size_config.cpu_limit,
+                            memory_limit: size_config.memory_limit,
+                            scale: size_config.scale,
+                            labels: hashmap! {
+                                "cluster-id".into() => instance_id.to_string(),
+                                "type".into() => "cluster".into(),
+                            },
+                            availability_zone,
+                        },
+                    )
+                    .await?;
                 let client = ComputedRemoteClient::new(&service.addresses("controller"));
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
                 self.compute_mut(instance_id)
