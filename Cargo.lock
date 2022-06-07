@@ -3599,6 +3599,7 @@ dependencies = [
  "futures-task",
  "futures-util",
  "mz-http-util",
+ "mz-orchestrator-tracing",
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
@@ -3612,7 +3613,6 @@ dependencies = [
  "timely",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid 1.1.1",
 ]
 

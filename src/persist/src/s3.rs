@@ -26,7 +26,7 @@ use bytes::{Buf, Bytes};
 use futures_util::FutureExt;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{debug, trace};
+use tracing::{debug, trace, trace_span, Instrument};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
@@ -472,12 +472,14 @@ impl S3BlobMulti {
         let path = self.get_path(key);
 
         let value_len = value.len();
+        let part_span = trace_span!("s3set_single_part", payload_len = value_len);
         self.client
             .put_object()
             .bucket(&self.bucket)
             .key(path)
             .body(ByteStream::from(value))
             .send()
+            .instrument(part_span)
             .await
             .map_err(|err| Error::from(err.to_string()))?;
         debug!(
@@ -500,6 +502,7 @@ impl S3BlobMulti {
             .bucket(&self.bucket)
             .key(&path)
             .send()
+            .instrument(trace_span!("s3set_multi_start"))
             .await
             .map_err(|err| Error::from(format!("create_multipart_upload err: {}", err)))?;
         let upload_id = upload_res.upload_id().ok_or_else(|| {
@@ -524,6 +527,7 @@ impl S3BlobMulti {
             // NB: Without this spawn, these will execute serially. This is rust
             // async 101 stuff, but there isn't much async in the persist
             // codebase (yet?) so I thought it worth calling out.
+            let part_span = trace_span!("s3set_multi_part", payload_len = part_range.len());
             let part_fut = async_runtime.spawn_named(
                 // TODO: Add the key and part number once this can be annotated
                 // with metadata.
@@ -536,6 +540,7 @@ impl S3BlobMulti {
                     .part_number(part_num as i32)
                     .body(ByteStream::from(value.slice(part_range)))
                     .send()
+                    .instrument(part_span)
                     .map(move |res| (start_parts.elapsed(), res)),
             );
             part_futs.push((part_num, part_fut));
@@ -606,6 +611,7 @@ impl S3BlobMulti {
                     .build(),
             )
             .send()
+            .instrument(trace_span!("s3set_multi_complete", num_parts = parts_len))
             .await
             .map_err(|err| Error::from(format!("complete_multipart_upload err: {}", err)))?;
         trace!(

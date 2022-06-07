@@ -30,7 +30,7 @@ use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::{debug, trace};
+use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::cache::PersistClientCache;
@@ -211,6 +211,7 @@ impl PersistClient {
     /// If `shard_id` has never been used before, initializes a new shard and
     /// returns handles with `since` and `upper` frontiers set to initial values
     /// of `Antichain::from_elem(T::minimum())`.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -245,6 +246,7 @@ impl PersistClient {
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [WriteHandle].
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn open_reader<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -267,6 +269,7 @@ impl PersistClient {
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [ReadHandle].
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn open_writer<K, V, T, D>(
         &self,
         shard_id: ShardId,

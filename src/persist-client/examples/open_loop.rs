@@ -20,7 +20,7 @@ use mz_persist_client::cache::PersistClientCache;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, info_span, trace, Instrument};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
@@ -154,9 +154,10 @@ where
     let data_generator =
         DataGenerator::new(num_records_total, args.record_size_bytes, args.batch_size);
 
-    let benchmark_description = format!("num-readers={} num-writers={} runtime-seconds={} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
-                                        args.num_readers, args.num_writers, args.runtime_seconds, num_records_total, args.records_per_second,
-                                        args.record_size_bytes, args.batch_size);
+    let benchmark_description = format!(
+        "num-readers={} num-writers={} runtime-seconds={} num_records_total={} records-per-second={} record-size-bytes={} batch-size={}",
+        args.num_readers, args.num_writers, args.runtime_seconds, num_records_total, args.records_per_second,
+        args.record_size_bytes, args.batch_size);
 
     info!("starting benchmark: {}", benchmark_description);
     let mut generator_handles: Vec<JoinHandle<Result<String, anyhow::Error>>> = vec![];
@@ -188,8 +189,11 @@ where
         let start = start.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let data_generator_handle =
-            mz_ore::task::spawn(|| format!("data-generator-{}", idx), async move {
+        // Intentionally create the span outside the task to set the parent.
+        let generator_span = info_span!("generator", idx);
+        let data_generator_handle = mz_ore::task::spawn(
+            || format!("data-generator-{}", idx),
+            async move {
                 trace!("data generator {} waiting for barrier", idx);
                 b.wait().await;
                 info!("starting data generator {}", idx);
@@ -205,16 +209,19 @@ where
                     // in a spawn_blocking to play nicely with the rest of
                     // the async code.
                     let mut data_generator = data_generator.clone();
+                    // Intentionally create the span outside the task to set the
+                    // parent.
+                    let batch_span = info_span!("batch", batch_idx);
                     let batch = mz_ore::task::spawn_blocking(
                         || "data_generator-batch",
-                        move || data_generator.gen_batch(usize::cast_from(batch_idx)),
+                        move || {
+                            batch_span
+                                .in_scope(|| data_generator.gen_batch(usize::cast_from(batch_idx)))
+                        },
                     )
                     .await
                     .expect("task failed");
                     trace!("data generator {} made a batch", idx);
-
-                    // Intentionally return before the sleep if we got a None
-                    // batch (indicating that we're done).
                     let batch = match batch {
                         Some(x) => x,
                         None => {
@@ -236,8 +243,12 @@ where
                     let next_batch_time = time_per_batch * (batch_idx);
                     let sleep = next_batch_time.saturating_sub(elapsed);
                     if sleep > Duration::ZERO {
-                        trace!("Data generator ahead of schedule, sleeping for {:?}", sleep);
-                        tokio::time::sleep(sleep).await;
+                        async {
+                            debug!("Data generator ahead of schedule, sleeping for {:?}", sleep);
+                            tokio::time::sleep(sleep).await
+                        }
+                        .instrument(info_span!("throttle"))
+                        .await;
                     }
 
                     // send will only error if the matching receiver has been dropped.
@@ -257,11 +268,15 @@ where
                         prev_log = elapsed;
                     }
                 }
-            });
+            }
+            .instrument(generator_span),
+        );
 
         generator_handles.push(data_generator_handle);
         let b = Arc::clone(&barrier);
 
+        // Intentionally create the span outside the task to set the parent.
+        let writer_span = info_span!("writer", idx);
         let writer_handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
             trace!("writer {} waiting for barrier", idx);
             b.wait().await;
@@ -315,13 +330,15 @@ where
             writer.finish().await.unwrap();
 
             Ok(finished)
-        });
+        }.instrument(writer_span));
 
         write_handles.push(writer_handle);
     }
 
     for (idx, mut reader) in readers.into_iter().enumerate() {
         let b = Arc::clone(&barrier);
+        // Intentionally create the span outside the task to set the parent.
+        let reader_span = info_span!("reader", idx);
         let reader_handle = mz_ore::task::spawn(|| format!("reader-{}", idx), async move {
             trace!("reader {} waiting for barrier", idx);
             b.wait().await;
@@ -375,7 +392,7 @@ where
                     return Ok((finished, reader));
                 }
             }
-        });
+        }.instrument(reader_span));
         read_handles.push(reader_handle);
     }
 
@@ -436,6 +453,7 @@ mod raw_persist_benchmark {
     use mz_persist_client::{PersistClient, ShardId};
     use mz_persist_types::Codec64;
     use tokio::task::JoinHandle;
+    use tracing::{info_span, Instrument};
 
     use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -492,55 +510,67 @@ mod raw_persist_benchmark {
                 .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id)
                 .await?;
 
-            let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let mut current_upper = timely::progress::Timestamp::minimum();
-                while let Some(records) = records_rx.recv().await {
-                    let mut max_ts = 0;
-                    let current_upper_chain = Antichain::from_elem(current_upper);
+            // Intentionally create the span outside the task to set the parent.
+            let batch_writer_span = info_span!("batch-writer", idx);
+            let handle = mz_ore::task::spawn(
+                || format!("batch-writer-{}", idx),
+                async move {
+                    let mut current_upper = timely::progress::Timestamp::minimum();
+                    while let Some(records) = records_rx.recv().await {
+                        let mut max_ts = 0;
+                        let current_upper_chain = Antichain::from_elem(current_upper);
 
-                    let mut builder = write.builder(records.len(), current_upper_chain);
+                        let mut builder = write.builder(records.len(), current_upper_chain);
 
-                    for ((k, v), t, d) in records.iter() {
-                        builder
-                            .add(&k.to_vec(), &v.to_vec(), &u64::decode(t), &i64::decode(d))
+                        for ((k, v), t, d) in records.iter() {
+                            builder
+                                .add(&k.to_vec(), &v.to_vec(), &u64::decode(t), &i64::decode(d))
+                                .await
+                                .expect("invalid usage");
+
+                            max_ts = std::cmp::max(max_ts, u64::decode(t));
+                        }
+
+                        max_ts = max_ts + 1;
+                        let new_upper_chain = Antichain::from_elem(max_ts);
+                        current_upper = max_ts;
+
+                        let batch = builder
+                            .finish(new_upper_chain)
                             .await
                             .expect("invalid usage");
 
-                        max_ts = std::cmp::max(max_ts, u64::decode(t));
-                    }
-
-                    max_ts = max_ts + 1;
-                    let new_upper_chain = Antichain::from_elem(max_ts);
-                    current_upper = max_ts;
-
-                    let batch = builder
-                        .finish(new_upper_chain)
-                        .await
-                        .expect("invalid usage");
-
-                    match batch_tx.send(batch).await {
-                        Ok(_) => (),
-                        Err(e) => panic!("send error: {}", e),
+                        match batch_tx.send(batch).await {
+                            Ok(_) => (),
+                            Err(e) => panic!("send error: {}", e),
+                        }
                     }
                 }
-            });
+                .instrument(batch_writer_span),
+            );
             handles.push(handle);
 
             let mut write = persist
                 .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id)
                 .await?;
 
-            let handle = mz_ore::task::spawn(|| format!("appender-{}", idx), async move {
-                while let Some(batch) = batch_rx.recv().await {
-                    let lower = batch.lower().clone();
-                    let upper = batch.upper().clone();
-                    write
-                        .append_batch(batch, lower, upper)
-                        .await
-                        .expect("invalid usage")
-                        .expect("unexpected upper");
+            // Intentionally create the span outside the task to set the parent.
+            let appender_span = info_span!("appender", idx);
+            let handle = mz_ore::task::spawn(
+                || format!("appender-{}", idx),
+                async move {
+                    while let Some(batch) = batch_rx.recv().await {
+                        let lower = batch.lower().clone();
+                        let upper = batch.upper().clone();
+                        write
+                            .append_batch(batch, lower, upper)
+                            .await
+                            .expect("invalid usage")
+                            .expect("unexpected upper");
+                    }
                 }
-            });
+                .instrument(appender_span),
+            );
             handles.push(handle);
 
             let writer = RawBenchmarkWriter {
