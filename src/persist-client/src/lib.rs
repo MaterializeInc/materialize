@@ -39,6 +39,7 @@ use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
 
+pub mod batch;
 pub mod cache;
 pub mod error;
 pub mod read;
