@@ -615,13 +615,11 @@ fn raise_key_value_errors(
     KV { key, val }: KV,
 ) -> Option<Result<(Option<Row>, Row, Diff), DecodeError>> {
     match (key, val) {
-        (key, Some(value)) => match (key, value) {
-            (Some(Ok(key)), Ok((value, diff))) => Some(Ok((Some(key), value, diff))),
-            (None, Ok((value, diff))) => Some(Ok((None, value, diff))),
-            // always prioritize the value error if either or both have an error
-            (_, Err(e)) => Some(Err(e)),
-            (Some(Err(e)), _) => Some(Err(e)),
-        },
+        (Some(Ok(key)), Some(Ok((value, diff)))) => Some(Ok((Some(key), value, diff))),
+        (None, Some(Ok((value, diff)))) => Some(Ok((None, value, diff))),
+        // always prioritize the value error if either or both have an error
+        (_, Some(Err(e))) => Some(Err(e)),
+        (Some(Err(e)), _) => Some(Err(e)),
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
         _ => Some(Err(DecodeError::Text(
