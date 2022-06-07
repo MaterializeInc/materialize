@@ -11,12 +11,14 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
+use mz_secrets::{SecretsReader, SecretsReaderConfig};
 use mz_stash::{Append, Postgres, Sqlite};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -32,7 +34,7 @@ use mz_dataflow_types::client::{
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    ConnectorInner, ExternalSourceConnector, SourceConnector, Timeline,
+    ConnectorInner, ExternalSourceConnector, MaybeStringId, SourceConnector, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -139,6 +141,7 @@ pub struct CatalogState {
     roles: HashMap<String, Role>,
     config: mz_sql::catalog::CatalogConfig,
     oid_counter: u32,
+    secrets_reader: SecretsReader,
 }
 
 impl CatalogState {
@@ -1382,7 +1385,10 @@ impl Catalog<Sqlite> {
     /// See [`Catalog::open_debug`].
     pub async fn open_debug_sqlite(now: NowFn) -> Result<Catalog<Sqlite>, anyhow::Error> {
         let stash = mz_stash::Sqlite::open(None)?;
-        Catalog::open_debug(stash, now).await
+        // N.B. sqlite stash is on its way out and none of the tests that actually use this deal with secrets anyway.
+        // If new tests are added that do, we'll quickly fail
+        let secrets_dir = Component::RootDir;
+        Catalog::open_debug(stash, secrets_dir.as_ref(), now).await
     }
 }
 
@@ -1395,11 +1401,12 @@ impl Catalog<Postgres> {
     pub async fn open_debug_postgres(
         url: String,
         schema: Option<String>,
+        secrets_path: &Path,
         now: NowFn,
     ) -> Result<Catalog<Postgres>, anyhow::Error> {
         let tls = mz_postgres_util::make_tls(&tokio_postgres::Config::new()).unwrap();
         let stash = mz_stash::Postgres::new(url, schema, tls).await?;
-        Catalog::open_debug(stash, now).await
+        Catalog::open_debug(stash, secrets_path, now).await
     }
 }
 
@@ -1434,6 +1441,7 @@ impl<S: Append> Catalog<S> {
                     now: config.now.clone(),
                 },
                 oid_counter: FIRST_USER_OID,
+                secrets_reader: config.secrets_reader,
             },
             transient_revision: 0,
             storage: Arc::new(Mutex::new(config.storage)),
@@ -1953,9 +1961,16 @@ impl<S: Append> Catalog<S> {
     /// This function should not be called in production contexts. Use
     /// [`Catalog::open`] with appropriately set configuration parameters
     /// instead.
-    pub async fn open_debug(stash: S, now: NowFn) -> Result<Catalog<S>, anyhow::Error> {
+    pub async fn open_debug(
+        stash: S,
+        secrets_path: &Path,
+        now: NowFn,
+    ) -> Result<Catalog<S>, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let storage = storage::Connection::open(stash).await?;
+        let secrets_reader = SecretsReader::new(SecretsReaderConfig {
+            mount_path: secrets_path.to_path_buf(),
+        });
         let (catalog, _) = Catalog::open(Config {
             storage,
             unsafe_mode: true,
@@ -1964,6 +1979,7 @@ impl<S: Append> Catalog<S> {
             now,
             skip_migrations: true,
             metrics_registry,
+            secrets_reader,
         })
         .await?;
         Ok(catalog)
@@ -3690,6 +3706,10 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn now(&self) -> EpochMillis {
         (self.state.config().now)()
     }
+
+    fn secrets_reader(&self) -> &SecretsReader {
+        &self.state.secrets_reader
+    }
 }
 
 impl mz_sql::catalog::CatalogDatabase for Database {
@@ -3757,7 +3777,7 @@ impl mz_sql::catalog::CatalogConnector for Connector {
         self.connector.uri()
     }
 
-    fn options(&self) -> std::collections::BTreeMap<String, String> {
+    fn options(&self) -> std::collections::BTreeMap<String, MaybeStringId> {
         self.connector.options()
     }
 }

@@ -22,6 +22,7 @@ use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_secrets::SecretsReader;
 use prost::Message;
 use regex::Regex;
 use reqwest::Url;
@@ -39,8 +40,8 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MzOffset,
-    PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MaybeStringId,
+    MzOffset, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
     SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
@@ -77,8 +78,8 @@ use crate::names::{
     self, Aug, FullSchemaName, QualifiedObjectName, RawDatabaseSpecifier, ResolvedClusterName,
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
-use crate::normalize;
 use crate::normalize::ident;
+use crate::normalize::{self, SqlMaybeValueId};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -296,6 +297,7 @@ pub fn describe_create_source(
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
+    secrets_reader: &SecretsReader,
 ) -> Result<Plan, anyhow::Error> {
     let CreateSourceStatement {
         name,
@@ -316,8 +318,8 @@ pub fn plan_create_source(
     let mut with_options = normalize::options(with_options_original)?;
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
-        Some(val) => match val {
-            Value::Number(n) => match n.parse::<u64>() {
+        Some(val) => match val.try_into_value() {
+            Some(Value::Number(n)) => match n.parse::<u64>() {
                 Ok(n) => Duration::from_millis(n),
                 Err(_) => bail!("timestamp_frequency_ms must be an u64"),
             },
@@ -358,7 +360,7 @@ pub fn plan_create_source(
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
                 None => None,
-                Some(Value::String(s)) => Some(s),
+                Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
@@ -378,10 +380,10 @@ pub fn plan_create_source(
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
                 }
-                Some(Value::Number(n)) => {
+                Some(SqlMaybeValueId::Value(Value::Number(n))) => {
                     start_offsets.insert(0, parse_offset(&n)?);
                 }
-                Some(Value::Array(vs)) => {
+                Some(SqlMaybeValueId::Value(Value::Array(vs))) => {
                     for (i, v) in vs.iter().enumerate() {
                         match v {
                             Value::Number(n) => {
@@ -394,7 +396,16 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(scx, format, &envelope, with_options_original)?;
+            let encoding = get_encoding(
+                scx,
+                format,
+                &envelope,
+                with_options_original,
+                secrets_reader,
+            )?;
+
+            // XXX(chae): is this the place to inline? Or should it get delayed until we actually connect to kafka?
+            let config_options = kafka_util::inline_secrets(config_options, secrets_reader)?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -491,7 +502,13 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(scx, format, &envelope, with_options_original)?;
+            let encoding = get_encoding(
+                scx,
+                format,
+                &envelope,
+                with_options_original,
+                secrets_reader,
+            )?;
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -534,7 +551,13 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(scx, format, &envelope, with_options_original)?;
+            let encoding = get_encoding(
+                scx,
+                format,
+                &envelope,
+                with_options_original,
+                secrets_reader,
+            )?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -680,7 +703,7 @@ pub fn plan_create_source(
                             Ok(_) => Cow::from("ordered"),
                             Err(_) => Cow::from("none"),
                         },
-                        Some(Value::String(s)) => Cow::from(s),
+                        Some(SqlMaybeValueId::Value(Value::String(s))) => Cow::from(s),
                         _ => bail!("deduplication option must be a string"),
                     };
 
@@ -722,13 +745,13 @@ pub fn plan_create_source(
 
                             let dedup_start = match with_options.remove("deduplication_start") {
                                 None => None,
-                                Some(Value::String(start)) => Some(parse_datetime(&start)?),
+                                Some(SqlMaybeValueId::Value(Value::String(start))) => Some(parse_datetime(&start)?),
                                 _ => bail!("deduplication_start option must be a string"),
                             };
 
                             let dedup_end = match with_options.remove("deduplication_end") {
                                 None => None,
-                                Some(Value::String(end)) => Some(parse_datetime(&end)?),
+                                Some(SqlMaybeValueId::Value(Value::String(end))) => Some(parse_datetime(&end)?),
                                 _ => bail!("deduplication_end option must be a string"),
                             };
 
@@ -745,7 +768,7 @@ pub fn plan_create_source(
                                     let pad_start =
                                         match with_options.remove("deduplication_pad_start") {
                                             None => None,
-                                            Some(Value::String(pad_start)) => {
+                                            Some(SqlMaybeValueId::Value(Value::String(pad_start))) => {
                                                 Some(parse_datetime(&pad_start)?)
                                             }
                                             _ => bail!(
@@ -833,7 +856,7 @@ pub fn plan_create_source(
 
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
-        Some(Value::Boolean(b)) => b,
+        Some(SqlMaybeValueId::Value(Value::Boolean(b))) => b,
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
 
@@ -890,15 +913,16 @@ pub fn plan_create_source(
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
     let timeline = if let Some(timeline) = with_options.remove("timeline") {
-        match timeline {
-            Value::String(timeline) => Timeline::User(timeline),
-            v => bail!("unsupported timeline value {}", v.to_ast_string()),
+        match timeline.try_into_value() {
+            Some(Value::String(timeline)) => Timeline::User(timeline),
+            Some(v) => bail!("unsupported timeline value {}", v.to_ast_string()),
+            None => bail!("unsupported timeline value: secret"),
         }
     } else {
         match envelope {
             SourceEnvelope::CdcV2 => match with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
-                Some(Value::Boolean(true)) => Timeline::EpochMilliseconds,
+                Some(SqlMaybeValueId::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
                 Some(v) => bail!("unsupported epoch_ms_timeline value {}", v),
             },
             _ => Timeline::EpochMilliseconds,
@@ -1179,16 +1203,19 @@ fn get_encoding(
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope<Aug>,
     with_options: &Vec<WithOption<Aug>>,
+    secrets_reader: &SecretsReader,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
-        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format, with_options)?,
+        CreateSourceFormat::Bare(format) => {
+            get_encoding_inner(scx, format, with_options, secrets_reader)?
+        }
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(scx, key, with_options)? {
+            let key = match get_encoding_inner(scx, key, with_options, secrets_reader)? {
                 SourceDataEncoding::Single(key) => key,
                 SourceDataEncoding::KeyValue { key, .. } => key,
             };
-            let value = match get_encoding_inner(scx, value, with_options)? {
+            let value = match get_encoding_inner(scx, value, with_options, secrets_reader)? {
                 SourceDataEncoding::Single(value) => value,
                 SourceDataEncoding::KeyValue { value, .. } => value,
             };
@@ -1212,6 +1239,7 @@ fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
     with_options: &Vec<WithOption<Aug>>,
+    secrets_reader: &SecretsReader,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncoding::Single(match format {
@@ -1268,7 +1296,20 @@ fn get_encoding_inner(
                             let options = connector
                                 .options()
                                 .into_iter()
-                                .map(|(k, v)| (k, Value::String(v)))
+                                // XXX(chae): prob not right to go backwards? maybe generate_ccsr_client_config should take MaybeStringId
+                                .map(|(k, v)| {
+                                    (
+                                        k,
+                                        match v {
+                                            MaybeStringId::String(s) => {
+                                                SqlMaybeValueId::Value(Value::String(s))
+                                            }
+                                            MaybeStringId::Secret(id) => {
+                                                SqlMaybeValueId::Secret(id)
+                                            }
+                                        },
+                                    )
+                                })
                                 .collect();
                             (options, connector.uri())
                         }
@@ -1277,6 +1318,7 @@ fn get_encoding_inner(
                         registry_url.parse()?,
                         &kafka_util::extract_config(&mut normalize::options(with_options)?)?,
                         &mut ccsr_with_options,
+                        secrets_reader,
                     )?;
                     normalize::ensure_empty_options(
                         &ccsr_with_options,
@@ -1338,7 +1380,20 @@ fn get_encoding_inner(
                             let options = connector
                                 .options()
                                 .into_iter()
-                                .map(|(k, v)| (k, Value::String(v)))
+                                // XXX(chae): prob not right to go backwards? maybe generate_ccsr_client_config should take MaybeStringId
+                                .map(|(k, v)| {
+                                    (
+                                        k,
+                                        match v {
+                                            MaybeStringId::String(s) => {
+                                                SqlMaybeValueId::Value(Value::String(s))
+                                            }
+                                            MaybeStringId::Secret(id) => {
+                                                SqlMaybeValueId::Secret(id)
+                                            }
+                                        },
+                                    )
+                                })
                                 .collect();
                             (options, connector.uri())
                         }
@@ -1348,6 +1403,7 @@ fn get_encoding_inner(
                         registry_url.parse()?,
                         &kafka_util::extract_config(&mut normalize::options(with_options)?)?,
                         &mut ccsr_with_options,
+                        secrets_reader,
                     )?;
                     normalize::ensure_empty_options(
                         &ccsr_with_options,
@@ -1757,7 +1813,7 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
-    with_options: &mut BTreeMap<String, Value>,
+    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
     broker: String,
     topic_prefix: String,
     relation_key_indices: Option<Vec<usize>>,
@@ -1766,10 +1822,11 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
+    secrets_reader: &SecretsReader,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
-        Some(Value::String(topic)) => Some(topic),
+        Some(SqlMaybeValueId::Value(Value::String(topic))) => Some(topic),
         Some(_) => bail!("consistency_topic must be a string"),
     };
     if consistency_topic.is_some() && consistency.is_some() {
@@ -1778,14 +1835,14 @@ fn kafka_sink_builder(
         bail!("Cannot specify consistency_topic and CONSISTENCY options simultaneously");
     }
     let reuse_topic = match with_options.remove("reuse_topic") {
-        Some(Value::Boolean(b)) => b,
+        Some(SqlMaybeValueId::Value(Value::Boolean(b))) => b,
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
     let config_options = kafka_util::extract_config(with_options)?;
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
-        Some(Value::String(s)) => Some(s),
+        Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
         None => None,
         Some(_) => bail!("avro_key_fullname must be a string"),
     };
@@ -1795,7 +1852,7 @@ fn kafka_sink_builder(
     }
 
     let avro_value_fullname = match with_options.remove("avro_value_fullname") {
-        Some(Value::String(s)) => Some(s),
+        Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
         None => None,
         Some(_) => bail!("avro_value_fullname must be a string"),
     };
@@ -1825,6 +1882,7 @@ fn kafka_sink_builder(
                 schema_registry_url.clone(),
                 &config_options,
                 &mut ccsr_with_options,
+                secrets_reader,
             )?;
 
             let include_transaction =
@@ -1865,6 +1923,7 @@ fn kafka_sink_builder(
         reuse_topic,
         consistency,
         consistency_topic,
+        secrets_reader,
     )?;
 
     let broker_addrs = broker.parse()?;
@@ -1894,7 +1953,7 @@ fn kafka_sink_builder(
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
         None => -1,
-        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => n.parse::<i32>()?,
         Some(_) => bail!("partition count for sink topics must be an integer"),
     };
 
@@ -1907,7 +1966,7 @@ fn kafka_sink_builder(
     // Use the user supplied value for replication factor, or default to -1 (broker default)
     let replication_factor = match with_options.remove("replication_factor") {
         None => -1,
-        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => n.parse::<i32>()?,
         Some(_) => bail!("replication factor for sink topics must be an integer"),
     };
 
@@ -1919,7 +1978,7 @@ fn kafka_sink_builder(
 
     let retention_duration = match with_options.remove("retention_ms") {
         None => None,
-        Some(Value::Number(n)) => match n.parse::<i64>()? {
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => match n.parse::<i64>()? {
             -1 => Some(None),
             millis @ 0.. => Some(Some(Duration::from_millis(millis as u64))),
             _ => bail!("retention ms for sink topics must be greater than or equal to -1"),
@@ -1929,7 +1988,7 @@ fn kafka_sink_builder(
 
     let retention_bytes = match with_options.remove("retention_bytes") {
         None => None,
-        Some(Value::Number(n)) => Some(n.parse::<i64>()?),
+        Some(SqlMaybeValueId::Value(Value::Number(n))) => Some(n.parse::<i64>()?),
         Some(_) => bail!("retention bytes for sink topics must be an integer"),
     };
 
@@ -1944,6 +2003,8 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
+    // XXX(chae): is this where secrets should be inlined for kafka sinks??  "End of planning"?
+    let config_options = kafka_util::inline_secrets(config_options, secrets_reader)?;
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
         format,
@@ -1974,10 +2035,11 @@ fn kafka_sink_builder(
 fn get_kafka_sink_consistency_config(
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
-    config_options: &BTreeMap<String, String>,
+    config_options: &BTreeMap<String, MaybeStringId>,
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
+    secrets_reader: &SecretsReader,
 ) -> Result<Option<(String, KafkaSinkFormat)>, anyhow::Error> {
     let result = match consistency {
         Some(KafkaConsistency {
@@ -2001,6 +2063,7 @@ fn get_kafka_sink_consistency_config(
                     schema_registry_url.clone(),
                     config_options,
                     &mut ccsr_with_options,
+                    secrets_reader,
                 )?;
 
                 Some((
@@ -2100,6 +2163,7 @@ pub fn describe_create_sink(
 pub fn plan_create_sink(
     scx: &StatementContext,
     mut stmt: CreateSinkStatement<Aug>,
+    secrets_reader: &SecretsReader,
 ) -> Result<Plan, anyhow::Error> {
     let compute_instance = match &stmt.in_cluster {
         None => scx.resolve_compute_instance(None)?.id(),
@@ -2245,6 +2309,7 @@ pub fn plan_create_sink(
             envelope,
             suffix_nonce,
             &root_user_dependencies,
+            secrets_reader,
         )?,
         CreateSinkConnector::Persist {
             consensus_uri,
@@ -2895,8 +2960,16 @@ pub fn plan_create_connector(
                 registry,
                 with_options: with_options
                     .iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_string()))
-                    .collect::<BTreeMap<String, String>>(),
+                    .map(|(k, v)| {
+                        (
+                            k.to_owned(),
+                            match v {
+                                SqlMaybeValueId::Value(v) => MaybeStringId::String(v.to_string()),
+                                SqlMaybeValueId::Secret(id) => MaybeStringId::Secret(id.clone()),
+                            },
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>(),
             }
         }
     };

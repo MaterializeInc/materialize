@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
+use mz_dataflow_types::sources::MaybeStringId;
 use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -72,7 +73,7 @@ pub async fn purify_create_source(
     let _ = catalog;
 
     let mut with_options_map = normalize::options(with_options)?;
-    let mut config_options = BTreeMap::new();
+    let config_options;
 
     match connector {
         CreateSourceConnector::Kafka(KafkaSourceConnector {
@@ -83,24 +84,20 @@ pub async fn purify_create_source(
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connector)?;
                     let connector = item.catalog_connector()?;
-                    (connector.uri(), Some(connector.options()))
+                    (connector.uri(), connector.options())
                 }
-                KafkaConnector::Inline { broker } => (broker.to_string(), None),
+                KafkaConnector::Inline { broker } => (
+                    broker.to_string(),
+                    kafka_util::extract_config(&mut with_options_map)?,
+                ),
             };
-            config_options = if let Some(options) = connector_options {
-                options
-                    .iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect::<BTreeMap<String, String>>()
-            } else {
-                // Verify that the provided security options are valid and then test them.
-                kafka_util::extract_config(&mut with_options_map)?
-            };
+            config_options = connector_options;
             let consumer = kafka_util::create_consumer(
                 &broker,
                 &topic,
                 &config_options,
                 connector_context.librdkafka_log_level,
+                catalog.secrets_reader(),
             )
             .await
             .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
@@ -135,6 +132,7 @@ pub async fn purify_create_source(
             }
         }
         CreateSourceConnector::S3 { .. } => {
+            config_options = BTreeMap::new();
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
             validate_aws_credentials(
                 &aws_config,
@@ -143,6 +141,7 @@ pub async fn purify_create_source(
             .await?;
         }
         CreateSourceConnector::Kinesis { arn } => {
+            config_options = BTreeMap::new();
             let region = arn
                 .parse::<ARN>()
                 .context("Unable to parse provided ARN")?
@@ -162,6 +161,7 @@ pub async fn purify_create_source(
             slot,
             details,
         } => {
+            config_options = BTreeMap::new();
             slot.get_or_insert_with(|| {
                 format!(
                     "materialize_{}",
@@ -178,7 +178,7 @@ pub async fn purify_create_source(
             };
             *details = Some(hex::encode(details_proto.encode_to_vec()));
         }
-        CreateSourceConnector::PubNub { .. } => (),
+        CreateSourceConnector::PubNub { .. } => config_options = BTreeMap::new(),
     }
 
     purify_source_format(
@@ -199,7 +199,7 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, String>,
+    connector_options: &BTreeMap<String, MaybeStringId>,
     with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
@@ -271,7 +271,7 @@ async fn purify_source_format_single(
     format: &mut Format<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, String>,
+    connector_options: &BTreeMap<String, MaybeStringId>,
     with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     match format {
@@ -391,6 +391,7 @@ async fn purify_csr_connector_proto(
                 url,
                 &kafka_options,
                 &mut normalize::options(&ccsr_options)?,
+                catalog.secrets_reader(),
             )?;
 
             let value =
@@ -422,7 +423,7 @@ async fn purify_csr_connector_avro(
     connector: &mut CreateSourceConnector<Aug>,
     csr_connector: &mut CsrConnectorAvro<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, String>,
+    connector_options: &BTreeMap<String, MaybeStringId>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
     {
@@ -453,6 +454,7 @@ async fn purify_csr_connector_avro(
                 url,
                 &connector_options,
                 &mut normalize::options(ccsr_options)?,
+                catalog.secrets_reader(),
             )
         })?;
 

@@ -1144,14 +1144,20 @@ pub fn provide_default_metadata(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum MaybeStringId {
+    String(String),
+    Secret(GlobalId),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ConnectorInner {
     Kafka {
         broker: KafkaAddrs,
-        config_options: BTreeMap<String, String>,
+        config_options: BTreeMap<String, MaybeStringId>,
     },
     CSR {
         registry: String,
-        with_options: BTreeMap<String, String>,
+        with_options: BTreeMap<String, MaybeStringId>,
     },
 }
 
@@ -1163,7 +1169,7 @@ impl ConnectorInner {
         }
     }
 
-    pub fn options(&self) -> BTreeMap<String, String> {
+    pub fn options(&self) -> BTreeMap<String, MaybeStringId> {
         match self {
             ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
             ConnectorInner::CSR { with_options, .. } => with_options.clone(),
