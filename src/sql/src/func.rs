@@ -27,7 +27,7 @@ use crate::names::{resolve_names, resolve_names_expr, PartialObjectName};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, ColumnOrder, HirRelationExpr, HirScalarExpr,
-    ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+    ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc, ValueWindowFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
@@ -492,6 +492,12 @@ impl From<ScalarWindowFunc> for Operation<ScalarWindowFunc> {
     }
 }
 
+impl From<ValueWindowFunc> for Operation<(HirScalarExpr, ValueWindowFunc)> {
+    fn from(a: ValueWindowFunc) -> Operation<(HirScalarExpr, ValueWindowFunc)> {
+        Operation::unary(move |_ecx, e| Ok((e, a.clone())))
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 /// Describes possible types of function parameters.
 ///
@@ -917,6 +923,14 @@ impl GetReturnType for (HirScalarExpr, AggregateFunc) {
 impl GetReturnType for ScalarWindowFunc {
     fn return_type(&self, _ecx: &ExprContext, _param_list: &ParamList) -> ReturnType {
         ReturnType::scalar(self.output_type().scalar_type.into())
+    }
+}
+
+impl GetReturnType for (HirScalarExpr, ValueWindowFunc) {
+    fn return_type(&self, ecx: &ExprContext, _param_list: &ParamList) -> ReturnType {
+        let c = ecx.column_type(&self.0);
+        let s = self.1.output_type(c).scalar_type;
+        ReturnType::scalar(s.into())
     }
 }
 
@@ -1648,6 +1662,7 @@ pub enum Func {
     Aggregate(Vec<FuncImpl<(HirScalarExpr, AggregateFunc)>>),
     Table(Vec<FuncImpl<TableFuncPlan>>),
     ScalarWindow(Vec<FuncImpl<ScalarWindowFunc>>),
+    ValueWindow(Vec<FuncImpl<(HirScalarExpr, ValueWindowFunc)>>),
 }
 
 impl Func {
@@ -1657,6 +1672,7 @@ impl Func {
             Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::ScalarWindow(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::ValueWindow(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
         }
     }
 }
@@ -2457,6 +2473,79 @@ lazy_static! {
             // Scalar window functions.
             "row_number" => ScalarWindow {
                 params!() => ScalarWindowFunc::RowNumber, 3100;
+            },
+            "dense_rank" => ScalarWindow {
+                params!() => ScalarWindowFunc::DenseRank, 3102;
+            },
+            "lag" => ValueWindow {
+                // All args are encoded into a single record to be handled later
+                params!(Any) => Operation::unary(|ecx, e| {
+                    let typ = ecx.scalar_type(&e);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
+                    };
+                    Ok((e, ValueWindowFunc::Lag))
+                }) => Any, 3106;
+                params!(Any, Int32) => Operation::binary(|ecx, e, offset| {
+                    let typ = ecx.scalar_type(&e);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
+                    };
+                    Ok((e, ValueWindowFunc::Lag))
+                }) => Any, 3107;
+                params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs,
+                    };
+                    Ok((e, ValueWindowFunc::Lag))
+                }) => AnyCompatible, 3108;
+            },
+            "lead" => ValueWindow {
+                // All args are encoded into a single record to be handled later
+                params!(Any) => Operation::unary(|ecx, e| {
+                    let typ = ecx.scalar_type(&e);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs: vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
+                    };
+                    Ok((e, ValueWindowFunc::Lead))
+                }) => Any, 3109;
+                params!(Any, Int32) => Operation::binary(|ecx, e, offset| {
+                    let typ = ecx.scalar_type(&e);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs: vec![e, offset, HirScalarExpr::literal_null(typ)],
+                    };
+                    Ok((e, ValueWindowFunc::Lead))
+                }) => Any, 3110;
+                params!(AnyCompatible, Int32, AnyCompatible) => Operation::variadic(|_ecx, exprs| {
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")]
+                        },
+                        exprs,
+                    };
+                    Ok((e, ValueWindowFunc::Lead))
+                }) => AnyCompatible, 3111;
+            },
+            "first_value" => ValueWindow {
+                params!(Any) => ValueWindowFunc::FirstValue => Any, 3112;
+            },
+            "last_value" => ValueWindow {
+                params!(Any) => ValueWindowFunc::LastValue => Any, 3113;
             },
 
             // Table functions.

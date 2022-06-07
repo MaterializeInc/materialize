@@ -59,6 +59,7 @@ use mz_sql_parser::ast::{
     Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator, Limit, OrderByExpr,
     Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition, TableAlias, TableFactor,
     TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement, Value, Values,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowSpec,
 };
 
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
@@ -69,7 +70,8 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
     CoercibleScalarExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind,
-    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, VariadicFunc, WindowExpr, WindowExprType,
+    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, VariadicFunc, WindowExpr,
+    WindowExprType,
 };
 use crate::plan::plan_utils::{self, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem};
@@ -3955,7 +3957,7 @@ fn plan_op(
 
 fn plan_function<'a>(
     ecx: &ExprContext,
-    Function {
+    f @ Function {
         name,
         args,
         filter,
@@ -3981,50 +3983,7 @@ fn plan_function<'a>(
         }
         Func::Scalar(impls) => impls,
         Func::ScalarWindow(impls) => {
-            if !ecx.allow_windows {
-                sql_bail!("window functions are not allowed in {}", ecx.name);
-            }
-
-            // Various things are duplicated here and below, but done this way to improve
-            // error messages.
-
-            if *distinct {
-                sql_bail!(
-                    "DISTINCT specified, but {} is not an aggregate function",
-                    name
-                );
-            }
-
-            if filter.is_some() {
-                bail_unsupported!("FILTER in window functions");
-            }
-
-            let window_spec = match over.as_ref() {
-                Some(over) => over,
-                None => sql_bail!("window function {} requires an OVER clause", name),
-            };
-            if window_spec.window_frame.is_some() {
-                bail_unsupported!("window frames");
-            }
-            let mut partition = Vec::new();
-            for expr in &window_spec.partition_by {
-                partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
-            }
-
-            let scalar_args = match &args {
-                FunctionArgs::Star => {
-                    sql_bail!("* argument is invalid with non-aggregate function {}", name)
-                }
-                FunctionArgs::Args { args, order_by } => {
-                    if !order_by.is_empty() {
-                        sql_bail!(
-                            "ORDER BY specified, but {} is not an aggregate function",
-                            name
-                        );
-                    }
-                    plan_exprs(ecx, args)?
-                }
-            };
+            let (window_spec, _, scalar_args, partition) = validate_window_function_plan(ecx, f)?;
 
             let func = func::select_impl(
                 ecx,
@@ -4040,6 +3999,31 @@ fn plan_function<'a>(
                 func: WindowExprType::Scalar(ScalarWindowExpr {
                     func,
                     order_by: col_orders,
+                }),
+                partition,
+                order_by,
+            }));
+        }
+        Func::ValueWindow(impls) => {
+            let (window_spec, window_frame, scalar_args, partition) =
+                validate_window_function_plan(ecx, f)?;
+
+            let (expr, func) = func::select_impl(
+                ecx,
+                FuncSpec::Func(&unresolved_name),
+                impls,
+                scalar_args,
+                vec![],
+            )?;
+
+            let (order_by, col_orders) = plan_function_order_by(ecx, &window_spec.order_by)?;
+
+            return Ok(HirScalarExpr::Windowing(WindowExpr {
+                func: WindowExprType::Value(ValueWindowExpr {
+                    func,
+                    expr: Box::new(expr),
+                    order_by: col_orders,
+                    window_frame,
                 }),
                 partition,
                 order_by,
@@ -4253,6 +4237,147 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
     };
     let expr = HirScalarExpr::literal(datum, scalar_type);
     Ok(expr.into())
+}
+
+fn validate_window_function_plan<'a>(
+    ecx: &ExprContext,
+    Function {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &'a Function<Aug>,
+) -> Result<
+    (
+        &'a WindowSpec<Aug>,
+        mz_expr::WindowFrame,
+        Vec<CoercibleScalarExpr>,
+        Vec<HirScalarExpr>,
+    ),
+    PlanError,
+> {
+    if !ecx.allow_windows {
+        sql_bail!("window functions are not allowed in {}", ecx.name);
+    }
+
+    // Various things are duplicated here and in `plan_function` to improve error messages.
+
+    if *distinct {
+        sql_bail!(
+            "DISTINCT specified, but {} is not an aggregate function",
+            name
+        );
+    }
+
+    if filter.is_some() {
+        bail_unsupported!("FILTER in non-aggregate window functions");
+    }
+
+    let window_spec = match over.as_ref() {
+        Some(over) => over,
+        None => sql_bail!("window function {} requires an OVER clause", name),
+    };
+    let window_frame = match window_spec.window_frame.as_ref() {
+        Some(frame) => plan_window_frame(frame)?,
+        None => mz_expr::WindowFrame::default(),
+    };
+    let mut partition = Vec::new();
+    for expr in &window_spec.partition_by {
+        partition.push(plan_expr(ecx, expr)?.type_as_any(ecx)?);
+    }
+
+    let scalar_args = match &args {
+        FunctionArgs::Star => {
+            sql_bail!("* argument is invalid with non-aggregate function {}", name)
+        }
+        FunctionArgs::Args { args, order_by } => {
+            if !order_by.is_empty() {
+                sql_bail!(
+                    "ORDER BY specified, but {} is not an aggregate function",
+                    name
+                );
+            }
+            plan_exprs(ecx, args)?
+        }
+    };
+
+    Ok((window_spec, window_frame, scalar_args, partition))
+}
+
+fn plan_window_frame(
+    WindowFrame {
+        units,
+        start_bound,
+        end_bound,
+    }: &WindowFrame,
+) -> Result<mz_expr::WindowFrame, PlanError> {
+    use mz_expr::WindowFrameBound::*;
+    let units = window_frame_unit_ast_to_expr(units)?;
+    let start_bound = window_frame_bound_ast_to_expr(start_bound);
+    let end_bound = end_bound
+        .as_ref()
+        .map(window_frame_bound_ast_to_expr)
+        .unwrap_or(CurrentRow);
+
+    // Validate bounds according to Postgres rules
+    match (&start_bound, &end_bound) {
+        // Start bound can't be UNBOUNDED FOLLOWING
+        (UnboundedFollowing, _) => {
+            sql_bail!("frame start cannot be UNBOUNDED FOLLOWING")
+        }
+        // End bound can't be UNBOUNDED PRECEDING
+        (_, UnboundedPreceding) => {
+            sql_bail!("frame end cannot be UNBOUNDED PRECEDING")
+        }
+        // Start bound should come before end bound in the list of bound definitions
+        (CurrentRow, OffsetPreceding(_)) => {
+            sql_bail!("frame starting from current row cannot have preceding rows")
+        }
+        (OffsetFollowing(_), OffsetPreceding(_) | CurrentRow) => {
+            sql_bail!("frame starting from following row cannot have preceding rows")
+        }
+        // Other bounds are valid
+        (_, _) => (),
+    }
+
+    // RANGE is only supported in the default frame
+    if units == mz_expr::WindowFrameUnits::Range
+        && (start_bound != UnboundedPreceding || end_bound != CurrentRow)
+    {
+        bail_unsupported!("RANGE in non-default window frames")
+    }
+
+    let frame = mz_expr::WindowFrame {
+        units,
+        start_bound,
+        end_bound,
+    };
+    Ok(frame)
+}
+
+fn window_frame_unit_ast_to_expr(
+    unit: &WindowFrameUnits,
+) -> Result<mz_expr::WindowFrameUnits, PlanError> {
+    match unit {
+        WindowFrameUnits::Rows => Ok(mz_expr::WindowFrameUnits::Rows),
+        WindowFrameUnits::Range => Ok(mz_expr::WindowFrameUnits::Range),
+        WindowFrameUnits::Groups => bail_unsupported!("GROUPS in window frames"),
+    }
+}
+
+fn window_frame_bound_ast_to_expr(bound: &WindowFrameBound) -> mz_expr::WindowFrameBound {
+    match bound {
+        WindowFrameBound::CurrentRow => mz_expr::WindowFrameBound::CurrentRow,
+        WindowFrameBound::Preceding(None) => mz_expr::WindowFrameBound::UnboundedPreceding,
+        WindowFrameBound::Preceding(Some(offset)) => {
+            mz_expr::WindowFrameBound::OffsetPreceding(*offset)
+        }
+        WindowFrameBound::Following(None) => mz_expr::WindowFrameBound::UnboundedFollowing,
+        WindowFrameBound::Following(Some(offset)) => {
+            mz_expr::WindowFrameBound::OffsetFollowing(*offset)
+        }
+    }
 }
 
 // Implement these as two identical enums without From/Into impls so that they

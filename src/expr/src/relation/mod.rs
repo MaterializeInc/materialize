@@ -24,7 +24,7 @@ use mz_ore::stack::{maybe_grow, CheckedRecursion, RecursionGuard, RecursionLimit
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, RelationType, Row, ScalarType};
 
-use self::func::{AggregateFunc, TableFunc};
+use self::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::explain::ViewExplanation;
 use crate::{
     func as scalar_func, DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId,
@@ -1898,7 +1898,7 @@ impl AggregateExpr {
 
     /// Extracts unique input from aggregate type
     pub fn on_unique(&self, input_type: &RelationType) -> MirScalarExpr {
-        match self.func {
+        match &self.func {
             // Count is one if non-null, and zero if null.
             AggregateFunc::Count => self
                 .expr
@@ -1991,6 +1991,183 @@ impl AggregateExpr {
                             MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
                             record,
                         ],
+                    }],
+                }
+            }
+
+            // DenseRank takes a list of records and outputs a list containing exactly 1 element
+            AggregateFunc::DenseRank { .. } => {
+                let list = self
+                    .expr
+                    .clone()
+                    // extract the list within the record
+                    .call_unary(UnaryFunc::RecordGet(0));
+
+                // extract the expression within the list
+                let record = MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListIndex,
+                    exprs: vec![
+                        list,
+                        MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                    ],
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: self
+                            .typ(input_type)
+                            .scalar_type
+                            .unwrap_list_element_type()
+                            .clone(),
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?dense_rank?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![
+                            MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
+                            record,
+                        ],
+                    }],
+                }
+            }
+
+            // The input type for LagLead is a ((OriginalRow, (InputValue, Offset, Default)), OrderByExprs...)
+            AggregateFunc::LagLead { lag_lead, .. } => {
+                let tuple = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let lag_lead_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                let column_name = match lag_lead {
+                    LagLeadType::Lag => "?lag?",
+                    LagLeadType::Lead => "?lead?",
+                };
+
+                // Extract the encoded args
+                let encoded_args = tuple.call_unary(UnaryFunc::RecordGet(1));
+                let expr = encoded_args.clone().call_unary(UnaryFunc::RecordGet(0));
+                let offset = encoded_args.clone().call_unary(UnaryFunc::RecordGet(1));
+                let default_value = encoded_args.call_unary(UnaryFunc::RecordGet(2));
+
+                // In this case, the window always has only one element, so if the offset is not null and
+                // not zero, the default value should be returned instead.
+                let value = offset
+                    .clone()
+                    .call_binary(
+                        MirScalarExpr::literal_ok(Datum::Int32(0), ScalarType::Int32),
+                        crate::BinaryFunc::Eq,
+                    )
+                    .if_then_else(expr, default_value);
+                let null_offset_check = offset
+                    .call_unary(crate::UnaryFunc::IsNull(crate::func::IsNull))
+                    .if_then_else(MirScalarExpr::literal_null(lag_lead_return_type), value);
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from(column_name),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![null_offset_check, original_row],
+                    }],
+                }
+            }
+
+            // The input type for FirstValue is a ((OriginalRow, InputValue), OrderByExprs...)
+            AggregateFunc::FirstValue { window_frame, .. } => {
+                let tuple = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let first_value_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                // Extract the input value
+                let expr = tuple.call_unary(UnaryFunc::RecordGet(1));
+
+                // If the window frame includes the current (single) row, return its value, null otherwise
+                let value = if window_frame.includes_current_row() {
+                    expr
+                } else {
+                    MirScalarExpr::literal_null(first_value_return_type)
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?first_value?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
+                    }],
+                }
+            }
+
+            // The input type for LastValue is a ((OriginalRow, InputValue), OrderByExprs...)
+            AggregateFunc::LastValue { window_frame, .. } => {
+                let tuple = self.expr.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                // Get the overall return type
+                let return_type = self
+                    .typ(input_type)
+                    .scalar_type
+                    .unwrap_list_element_type()
+                    .clone();
+                let last_value_return_type = return_type.unwrap_record_element_type()[0].clone();
+
+                // Extract the original row
+                let original_row = tuple.clone().call_unary(UnaryFunc::RecordGet(0));
+
+                // Extract the input value
+                let expr = tuple.call_unary(UnaryFunc::RecordGet(1));
+
+                // If the window frame includes the current (single) row, return its value, null otherwise
+                let value = if window_frame.includes_current_row() {
+                    expr
+                } else {
+                    MirScalarExpr::literal_null(last_value_return_type)
+                };
+
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate {
+                        elem_type: return_type,
+                    },
+                    exprs: vec![MirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![
+                                ColumnName::from("?last_value?"),
+                                ColumnName::from("?record?"),
+                            ],
+                        },
+                        exprs: vec![value, original_row],
                     }],
                 }
             }
@@ -2217,4 +2394,109 @@ where
         }
     }
     tiebreaker()
+}
+
+/// Describe a window frame, e.g. `RANGE UNBOUNDED PRECEDING` or
+/// `ROWS BETWEEN 5 PRECEDING AND CURRENT ROW`.
+///
+/// Window frames define a subset of the partition , and only a subset of
+/// window functions make use of the window frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+pub struct WindowFrame {
+    /// ROWS, RANGE or GROUPS
+    pub units: WindowFrameUnits,
+    /// Where the frame starts
+    pub start_bound: WindowFrameBound,
+    /// Where the frame ends
+    pub end_bound: WindowFrameBound,
+}
+
+impl WindowFrame {
+    /// Return the default window frame used when one is not explicitly defined
+    pub fn default() -> Self {
+        WindowFrame {
+            units: WindowFrameUnits::Range,
+            start_bound: WindowFrameBound::UnboundedPreceding,
+            end_bound: WindowFrameBound::CurrentRow,
+        }
+    }
+
+    fn includes_current_row(&self) -> bool {
+        use WindowFrameBound::*;
+        match self.start_bound {
+            UnboundedPreceding => match self.end_bound {
+                UnboundedPreceding => false,
+                OffsetPreceding(0) => true,
+                OffsetPreceding(_) => false,
+                CurrentRow => true,
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            OffsetPreceding(0) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                OffsetPreceding(0) => true,
+                // Any nonzero offsets here will create an empty window
+                OffsetPreceding(_) => false,
+                CurrentRow => true,
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            OffsetPreceding(_) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                // Window ends at the current row
+                OffsetPreceding(0) => true,
+                OffsetPreceding(_) => false,
+                CurrentRow => true,
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            CurrentRow => true,
+            OffsetFollowing(0) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                OffsetPreceding(_) => unreachable!(),
+                CurrentRow => unreachable!(),
+                OffsetFollowing(_) => true,
+                UnboundedFollowing => true,
+            },
+            OffsetFollowing(_) => match self.end_bound {
+                UnboundedPreceding => unreachable!(),
+                OffsetPreceding(_) => unreachable!(),
+                CurrentRow => unreachable!(),
+                OffsetFollowing(_) => false,
+                UnboundedFollowing => false,
+            },
+            UnboundedFollowing => false,
+        }
+    }
+}
+
+/// Describe how frame bounds are interpreted
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect)]
+pub enum WindowFrameUnits {
+    /// Each row is treated as the unit of work for bounds
+    Rows,
+    /// Each peer group is treated as the unit of work for bounds,
+    /// and offset-based bounds use the value of the ORDER BY expression
+    Range,
+    /// Each peer group is treated as the unit of work for bounds.
+    /// Groups is currently not supported, and it is rejected during planning.
+    Groups,
+}
+
+/// Specifies [WindowFrame]'s `start_bound` and `end_bound`
+///
+/// The order between frame bounds is significant, as Postgres enforces
+/// some restrictions there.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord)]
+pub enum WindowFrameBound {
+    /// `UNBOUNDED PRECEDING`
+    UnboundedPreceding,
+    /// `<N> PRECEDING`
+    OffsetPreceding(u64),
+    /// `CURRENT ROW`
+    CurrentRow,
+    /// `<N> FOLLOWING`
+    OffsetFollowing(u64),
+    /// `UNBOUNDED FOLLOWING`.
+    UnboundedFollowing,
 }

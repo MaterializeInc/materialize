@@ -571,6 +571,10 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::ArrayConcat { .. }
         | AggregateFunc::ListConcat { .. }
         | AggregateFunc::StringAgg { .. }
-        | AggregateFunc::RowNumber { .. } => ReductionType::Basic,
+        | AggregateFunc::RowNumber { .. }
+        | AggregateFunc::DenseRank { .. }
+        | AggregateFunc::LagLead { .. }
+        | AggregateFunc::FirstValue { .. }
+        | AggregateFunc::LastValue { .. } => ReductionType::Basic,
     }
 }
