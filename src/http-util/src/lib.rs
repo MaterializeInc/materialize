@@ -85,8 +85,8 @@ macro_rules! make_handle_static {
     };
 }
 
-/// Serves a basic health check response
+/// Serves a basic liveness check response
 #[allow(clippy::unused_async)]
-pub async fn handle_health_check() -> impl IntoResponse {
-    return (StatusCode::OK, "Health check successful!");
+pub async fn handle_liveness_check() -> impl IntoResponse {
+    return (StatusCode::OK, "Liveness check successful!");
 }
