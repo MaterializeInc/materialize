@@ -15,6 +15,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use anyhow::Context;
 use async_trait::async_trait;
+use bytes::Bytes;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
@@ -180,7 +181,10 @@ impl Consensus for PostgresConsensus {
         let seqno: SeqNo = row.try_get("sequence_number")?;
 
         let data: Vec<u8> = row.try_get("data")?;
-        Ok(Some(VersionedData { seqno, data }))
+        Ok(Some(VersionedData {
+            seqno,
+            data: Bytes::from(data),
+        }))
     }
 
     async fn compare_and_set(
@@ -222,7 +226,7 @@ impl Consensus for PostgresConsensus {
             let client = self.client.lock().await;
 
             client
-                .execute(&*q, &[&key, &new.seqno, &new.data, &expected])
+                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref(), &expected])
                 .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
@@ -232,7 +236,9 @@ impl Consensus for PostgresConsensus {
                      )
                      ON CONFLICT DO NOTHING";
             let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &new.seqno, &new.data]).await?
+            client
+                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref()])
+                .await?
         };
 
         if result == 1 {
@@ -267,7 +273,10 @@ impl Consensus for PostgresConsensus {
         for row in rows {
             let seqno: SeqNo = row.try_get("sequence_number")?;
             let data: Vec<u8> = row.try_get("data")?;
-            results.push(VersionedData { seqno, data });
+            results.push(VersionedData {
+                seqno,
+                data: Bytes::from(data),
+            });
         }
 
         if results.is_empty() {

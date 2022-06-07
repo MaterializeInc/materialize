@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::Bytes;
 use fail::fail_point;
 
 use tokio::fs::{self, File, OpenOptions};
@@ -111,7 +112,7 @@ impl BlobMulti for FileBlobMulti {
         &self,
         _deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         let file_path = self.blob_path(key);

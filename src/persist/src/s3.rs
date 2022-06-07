@@ -438,7 +438,7 @@ impl BlobMulti for S3BlobMulti {
         &self,
         _deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         _atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // NB: S3 is always atomic, so we're free to ignore the atomic param.
@@ -467,7 +467,7 @@ impl BlobMulti for S3BlobMulti {
 }
 
 impl S3BlobMulti {
-    async fn set_single_part(&self, key: &str, value: Vec<u8>) -> Result<(), ExternalError> {
+    async fn set_single_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -488,7 +488,7 @@ impl S3BlobMulti {
         Ok(())
     }
 
-    async fn set_multi_part(&self, key: &str, value: Vec<u8>) -> Result<(), ExternalError> {
+    async fn set_multi_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -519,7 +519,6 @@ impl S3BlobMulti {
         // TODO: The aws cli throttles how many of these are outstanding at any
         // given point. We'll likely want to do the same at some point.
         let start_parts = Instant::now();
-        let value = Bytes::from(value);
         let mut part_futs = Vec::new();
         for (part_num, part_range) in self.multipart_config.part_iter(value.len()) {
             // NB: Without this spawn, these will execute serially. This is rust

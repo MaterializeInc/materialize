@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
 use mz_persist_types::Codec;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::error::SqlState;
@@ -238,18 +239,18 @@ pub struct VersionedData {
     /// The sequence number of the data.
     pub seqno: SeqNo,
     /// The data itself.
-    pub data: Vec<u8>,
+    pub data: Bytes,
 }
 
 impl<T: Codec> From<(SeqNo, &T)> for VersionedData {
     fn from(x: (SeqNo, &T)) -> Self {
         let (seqno, t) = x;
-        let mut ret = VersionedData {
+        let mut data = BytesMut::new();
+        Codec::encode(t, &mut data);
+        VersionedData {
             seqno,
-            data: Vec::new(),
-        };
-        Codec::encode(t, &mut ret.data);
-        ret
+            data: Bytes::from(data),
+        }
     }
 }
 
@@ -362,7 +363,7 @@ pub trait BlobMulti: std::fmt::Debug {
         &self,
         deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         atomic: Atomicity,
     ) -> Result<(), ExternalError>;
 
@@ -421,14 +422,14 @@ pub mod tests {
 
         // Set a key with AllowNonAtomic and get it back.
         blob0
-            .set(no_timeout, "k0", values[0].clone(), AllowNonAtomic)
+            .set(no_timeout, "k0", values[0].clone().into(), AllowNonAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[0].clone()));
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[0].clone()));
 
         // Set a key with RequireAtomic and get it back.
         blob0
-            .set(no_timeout, "k0a", values[0].clone(), RequireAtomic)
+            .set(no_timeout, "k0a", values[0].clone().into(), RequireAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[0].clone()));
         assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[0].clone()));
@@ -443,13 +444,13 @@ pub mod tests {
 
         // Can overwrite a key with AllowNonAtomic.
         blob0
-            .set(no_timeout, "k0", values[1].clone(), AllowNonAtomic)
+            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
         // Can overwrite a key with RequireAtomic.
         blob0
-            .set(no_timeout, "k0a", values[1].clone(), RequireAtomic)
+            .set(no_timeout, "k0a", values[1].clone().into(), RequireAtomic)
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[1].clone()));
         assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[1].clone()));
@@ -474,7 +475,7 @@ pub mod tests {
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
         blob0
-            .set(no_timeout, "k0", values[1].clone(), AllowNonAtomic)
+            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
             .await?;
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
@@ -485,7 +486,7 @@ pub mod tests {
         for i in 1..=5 {
             let key = format!("k{}", i);
             blob0
-                .set(no_timeout, &key, values[0].clone(), AllowNonAtomic)
+                .set(no_timeout, &key, values[0].clone().into(), AllowNonAtomic)
                 .await?;
             expected_keys.push(key);
         }
@@ -532,7 +533,7 @@ pub mod tests {
 
         let state = VersionedData {
             seqno: SeqNo(5),
-            data: "abc".as_bytes().to_vec(),
+            data: Bytes::from("abc"),
         };
 
         // Incorrectly setting the data with a non-None expected should fail.
@@ -582,7 +583,7 @@ pub mod tests {
 
         let new_state = VersionedData {
             seqno: SeqNo(10),
-            data: "def".as_bytes().to_vec(),
+            data: Bytes::from("def"),
         };
 
         // Trying to update without the correct expected seqno fails, (even if expected > current)
@@ -603,7 +604,7 @@ pub mod tests {
 
         let invalid_constant_seqno = VersionedData {
             seqno: SeqNo(5),
-            data: "invalid".as_bytes().to_vec(),
+            data: Bytes::from("invalid"),
         };
 
         // Trying to set the data to a sequence number == current fails even if
@@ -617,7 +618,7 @@ pub mod tests {
 
         let invalid_regressing_seqno = VersionedData {
             seqno: SeqNo(3),
-            data: "invalid".as_bytes().to_vec(),
+            data: Bytes::from("invalid"),
         };
 
         // Trying to set the data to a sequence number < current fails even if
@@ -686,7 +687,7 @@ pub mod tests {
 
         let state = VersionedData {
             seqno: SeqNo(1),
-            data: "einszweidrei".as_bytes().to_vec(),
+            data: Bytes::from("einszweidrei"),
         };
 
         assert_eq!(
@@ -710,7 +711,7 @@ pub mod tests {
         // Trying to update from a stale version of current doesn't work.
         let invalid_jump_forward = VersionedData {
             seqno: SeqNo(11),
-            data: "invalid".as_bytes().to_vec(),
+            data: Bytes::from("invalid"),
         };
         assert_eq!(
             consensus
@@ -741,7 +742,7 @@ pub mod tests {
                     None,
                     VersionedData {
                         seqno: SeqNo(0),
-                        data: vec![],
+                        data: Bytes::new(),
                     }
                 )
                 .await,
@@ -755,7 +756,7 @@ pub mod tests {
                     None,
                     VersionedData {
                         seqno: SeqNo(i64::MAX.try_into().expect("i64::MAX fits in u64")),
-                        data: vec![],
+                        data: Bytes::new(),
                     }
                 )
                 .await,
@@ -768,7 +769,7 @@ pub mod tests {
                 None,
                 VersionedData {
                     seqno: SeqNo(1 << 63),
-                    data: vec![],
+                    data: Bytes::new(),
                 }
             )
             .await
@@ -780,7 +781,7 @@ pub mod tests {
                 None,
                 VersionedData {
                     seqno: SeqNo(u64::MAX),
-                    data: vec![],
+                    data: Bytes::new(),
                 }
             )
             .await

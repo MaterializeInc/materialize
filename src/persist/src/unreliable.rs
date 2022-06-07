@@ -15,6 +15,7 @@ use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::Bytes;
 use rand::prelude::SmallRng;
 use rand::{Rng, SeedableRng};
 use tracing::trace;
@@ -159,7 +160,7 @@ impl BlobMulti for UnreliableBlobMulti {
         &self,
         deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         self.handle

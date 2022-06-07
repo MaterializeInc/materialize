@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::Bytes;
 
 use crate::error::Error;
 use crate::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
@@ -56,15 +57,15 @@ impl MemMultiRegistry {
 
 #[derive(Debug, Default)]
 struct MemBlobMultiCore {
-    dataz: HashMap<String, Vec<u8>>,
+    dataz: HashMap<String, Bytes>,
 }
 
 impl MemBlobMultiCore {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        Ok(self.dataz.get(key).cloned())
+        Ok(self.dataz.get(key).map(|x| x.to_vec()))
     }
 
-    fn set(&mut self, key: &str, value: Vec<u8>) -> Result<(), ExternalError> {
+    fn set(&mut self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         self.dataz.insert(key.to_owned(), value);
         Ok(())
     }
@@ -112,7 +113,7 @@ impl BlobMulti for MemBlobMulti {
         &self,
         _deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         _atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // NB: This is always atomic, so we're free to ignore the atomic param.

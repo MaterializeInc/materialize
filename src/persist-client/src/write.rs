@@ -15,6 +15,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
+use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
@@ -722,16 +723,15 @@ where
 
         let mut buf = Vec::new();
         batch.encode(&mut buf);
+        let buf = Bytes::from(buf);
 
         let key = Uuid::new_v4().to_string();
         let () = retry_external("compare_and_append::set", || async {
-            // If MultiBlob::set took value as a ref, then we wouldn't have
-            // to clone here.
             self.blob
                 .set(
                     Instant::now() + FOREVER,
                     &key,
-                    buf.clone(),
+                    Bytes::clone(&buf),
                     Atomicity::RequireAtomic,
                 )
                 .await
