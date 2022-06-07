@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.57"
-async-trait = "0.1.53"
+async-trait = "0.1.56"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 futures = "0.3.21"
@@ -25,5 +25,5 @@ openssl = { version = "0.10.40", features = ["vendored"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio = "1.18.2"
 tokio-openssl = "0.6.3"
-tokio-util = { version = "0.7.2", features = ["codec"] }
+tokio-util = { version = "0.7.3", features = ["codec"] }
 tracing = "0.1.34"

@@ -150,8 +150,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             axum::Server::bind(&addr.parse()?).serve(
                 mz_prof::http::router(&BUILD_INFO)
                     .route(
-                        "/api/health",
-                        routing::get(mz_http_util::handle_health_check),
+                        "/api/livez",
+                        routing::get(mz_http_util::handle_liveness_check),
                     )
                     .into_make_service(),
             ),

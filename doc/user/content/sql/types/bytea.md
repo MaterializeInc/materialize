@@ -1,5 +1,5 @@
 ---
-title: "bytea Data Type"
+title: "bytea type"
 description: "Expresses a Unicode string"
 aliases:
     - /sql/types/string

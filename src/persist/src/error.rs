@@ -12,8 +12,6 @@
 use std::sync::Arc;
 use std::{error, fmt, io, sync};
 
-use arrow2::error::ArrowError;
-
 use crate::location::{ExternalError, SeqNo};
 
 /// A persistence related error.
@@ -94,8 +92,8 @@ impl<'a> From<&'a str> for Error {
     }
 }
 
-impl From<ArrowError> for Error {
-    fn from(e: ArrowError) -> Self {
+impl From<arrow2::error::Error> for Error {
+    fn from(e: arrow2::error::Error) -> Self {
         Error::String(e.to_string())
     }
 }

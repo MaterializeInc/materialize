@@ -1,5 +1,5 @@
 ---
-title: "COALESCE Function"
+title: "COALESCE function"
 description: "Returns the first non-NULL element provided."
 menu:
   main:

@@ -148,10 +148,10 @@ where
                 self.responses
                     .push_back(ComputeResponse::FrontierUppers(list));
             }
-            ComputeResponse::PeekResponse(uuid, response) => {
+            ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
                 if self.peeks.remove(&uuid) {
                     self.responses
-                        .push_back(ComputeResponse::PeekResponse(uuid, response));
+                        .push_back(ComputeResponse::PeekResponse(uuid, response, otel_ctx));
                 }
             }
             ComputeResponse::TailResponse(id, response) => {

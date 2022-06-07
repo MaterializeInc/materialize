@@ -362,8 +362,8 @@ impl MetricsServer {
                 ),
             )
             .route(
-                "/api/health",
-                routing::get(mz_http_util::handle_health_check),
+                "/api/livez",
+                routing::get(mz_http_util::handle_liveness_check),
             );
         let server = axum::Server::bind(&addr).serve(router.into_make_service());
         if let Err(err) = server.await {

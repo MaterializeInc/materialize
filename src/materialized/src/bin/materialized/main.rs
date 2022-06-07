@@ -37,7 +37,7 @@ use http::header::HeaderValue;
 use itertools::Itertools;
 use jsonwebtoken::DecodingKey;
 use once_cell::sync::Lazy;
-use sysinfo::{ProcessorExt, SystemExt};
+use sysinfo::{CpuExt, SystemExt};
 use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
@@ -102,7 +102,7 @@ pub struct Args {
     ///   * In development features that are not yet ready for production use.
     ///   * Features useful for development and testing that would pose a
     ///     legitimate security risk if used in Materialize Cloud.
-    #[clap(long, env = "UNSAFE")]
+    #[clap(long, env = "UNSAFE_MODE")]
     unsafe_mode: bool,
 
     /// The address on which Prometheus metrics get exposed.
@@ -605,7 +605,7 @@ max log level: {max_log_level}",
         ncpus_physical = num_cpus::get_physical(),
         ncpus_useful = ncpus_useful,
         cpu0 = {
-            match &system.processors().get(0) {
+            match &system.cpus().get(0) {
                 None => "<unknown>".to_string(),
                 Some(cpu0) => format!("{} {}MHz", cpu0.brand(), cpu0.frequency()),
             }

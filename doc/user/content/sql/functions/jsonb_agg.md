@@ -1,5 +1,5 @@
 ---
-title: "jsonb_agg Function"
+title: "jsonb_agg function"
 description: "Aggregates values (including nulls) as a jsonb array."
 menu:
   main:

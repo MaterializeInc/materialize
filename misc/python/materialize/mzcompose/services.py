@@ -54,6 +54,8 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
+                "MZ_UNSAFE_MODE=1",
+                "MZ_EXPERIMENTAL=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -87,7 +89,6 @@ class Materialized(Service):
         command_list = [
             f"--data-directory={data_directory}",
             f"--listen-addr 0.0.0.0:{guest_port}",
-            "--unsafe-mode",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 
@@ -632,9 +633,6 @@ class SqlLogicTest(Service):
         name: str = "sqllogictest-svc",
         mzbuild: str = "sqllogictest",
         environment: List[str] = [
-            "PGUSER=postgres",
-            "PGHOST=postgres",
-            "PGPASSWORD=postgres",
             "MZ_SOFT_ASSERTIONS=1",
         ],
         volumes: List[str] = ["../..:/workdir"],

@@ -15,7 +15,6 @@ from materialize.mzcompose.services import (
     Computed,
     Kafka,
     Materialized,
-    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -25,10 +24,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Postgres(),
-    Materialized(
-        options="--persist-consensus-url postgres://postgres:postgres@postgres"
-    ),
+    Materialized(),
     Testdrive(),
 ]
 
@@ -201,10 +197,8 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     print(f"+++ Running disruption scenario {disruption.name}")
 
     c.up("testdrive", persistent=True)
-    c.up("postgres")
-    c.wait_for_postgres()
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
+    c.wait_for_materialized()
 
     nodes = [
         Computed(
@@ -260,7 +254,6 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         cleanup_list = [
             "materialized",
             "testdrive",
-            "postgres",
             *[n.name for n in nodes],
         ]
         c.kill(*cleanup_list)

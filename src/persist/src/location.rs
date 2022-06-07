@@ -70,7 +70,8 @@ pub struct Determinate {
 
 impl std::fmt::Display for Determinate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "determinate: {}", self.inner)
+        write!(f, "determinate: ")?;
+        self.inner.fmt(f)
     }
 }
 
@@ -94,7 +95,8 @@ pub struct Indeterminate {
 
 impl std::fmt::Display for Indeterminate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "indeterminate: {}", self.inner)
+        write!(f, "indeterminate: ")?;
+        self.inner.fmt(f)
     }
 }
 

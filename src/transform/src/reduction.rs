@@ -94,7 +94,15 @@ impl FoldConstants {
 
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = match rows {
-                        Ok(rows) => Self::fold_reduce_constant(group_key, aggregates, rows),
+                        Ok(rows) => {
+                            if let Some(rows) =
+                                Self::fold_reduce_constant(group_key, aggregates, rows, self.limit)
+                            {
+                                rows
+                            } else {
+                                return Ok(());
+                            }
+                        }
                         Err(e) => Err(e.clone()),
                     };
                     *relation = MirRelationExpr::Constant {
@@ -422,32 +430,43 @@ impl FoldConstants {
         group_key: &[MirScalarExpr],
         aggregates: &[AggregateExpr],
         rows: &[(Row, Diff)],
-    ) -> Result<Vec<(Row, Diff)>, EvalError> {
+        limit: Option<usize>,
+    ) -> Option<Result<Vec<(Row, Diff)>, EvalError>> {
         // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
         // where `an` is the input to the nth aggregate function in
         // `aggregates`.
         let mut groups = BTreeMap::new();
         let temp_storage2 = RowArena::new();
         let mut row_buf = Row::default();
+        let mut limit_remaining = limit.unwrap_or(usize::MAX);
         for (row, diff) in rows {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
             // arrive at a reduce.
 
             if *diff <= 0 {
-                return Err(EvalError::InvalidParameterValue(String::from(
+                return Some(Err(EvalError::InvalidParameterValue(String::from(
                     "constant folding encountered reduce on collection \
                                                with non-positive multiplicities",
-                )));
+                ))));
             }
+
+            if limit_remaining < *diff as usize {
+                return None;
+            }
+            limit_remaining -= *diff as usize;
 
             let datums = row.unpack();
             let temp_storage = RowArena::new();
-            let key = group_key
+            let key = match group_key
                 .iter()
                 .map(|e| e.eval(&datums, &temp_storage2))
-                .collect::<Result<Vec<_>, _>>()?;
-            let val = aggregates
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(key) => key,
+                Err(e) => return Some(Err(e)),
+            };
+            let val = match aggregates
                 .iter()
                 .map(|agg| {
                     row_buf
@@ -455,7 +474,11 @@ impl FoldConstants {
                         .extend(&[agg.expr.eval(&datums, &temp_storage)?]);
                     Ok::<_, EvalError>(row_buf.clone())
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(val) => val,
+                Err(e) => return Some(Err(e)),
+            };
             let entry = groups.entry(key).or_insert_with(Vec::new);
             for _ in 0..*diff {
                 entry.push(val.clone());
@@ -495,7 +518,7 @@ impl FoldConstants {
                 }
             })
             .collect();
-        Ok(new_rows)
+        Some(Ok(new_rows))
     }
 
     fn fold_topk_constant<'a>(

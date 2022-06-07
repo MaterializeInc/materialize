@@ -91,10 +91,10 @@ fn encode_parquet_kvtd<W: Write>(
         &SCHEMA_ARROW_KVTD,
         options,
         vec![
-            Encoding::Plain,
-            Encoding::Plain,
-            Encoding::Plain,
-            Encoding::Plain,
+            vec![Encoding::Plain],
+            vec![Encoding::Plain],
+            vec![Encoding::Plain],
+            vec![Encoding::Plain],
         ],
     )?;
 
@@ -103,7 +103,6 @@ fn encode_parquet_kvtd<W: Write>(
         value: Some(inline_base64),
     }];
     let mut writer = FileWriter::try_new(w, (**SCHEMA_ARROW_KVTD).clone(), options)?;
-    writer.start().map_err(|err| err.to_string())?;
     for group in row_groups {
         writer.write(group?).map_err(|err| err.to_string())?;
     }

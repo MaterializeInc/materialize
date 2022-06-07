@@ -1,5 +1,5 @@
 ---
-title: "Change Deployment Details"
+title: "Change deployment details"
 description: "Change deployment name or size."
 hidden: true
 ---

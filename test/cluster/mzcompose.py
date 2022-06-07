@@ -19,7 +19,6 @@ from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
-    Postgres,
     SchemaRegistry,
     Testdrive,
     Zookeeper,
@@ -50,10 +49,7 @@ SERVICES = [
         options="--workers 2 --process 1 computed_3:2102 computed_4:2102 --linger --reconcile",
         ports=[2100, 2102],
     ),
-    Postgres(),
-    Materialized(
-        options="--persist-consensus-url postgres://postgres:postgres@postgres",
-    ),
+    Materialized(),
     Testdrive(
         volumes=[
             "mzdata:/mzdata",
@@ -89,9 +85,8 @@ def workflow_nightly(c: Composition) -> None:
 
 
 def test_cluster(c: Composition, *glob: str) -> None:
-    c.up("materialized", "postgres")
-    c.wait_for_materialized(service="materialized")
-    c.wait_for_postgres()
+    c.up("materialized")
+    c.wait_for_materialized()
 
     # Create a remote cluster and verify that tests pass.
     c.up("computed_1")
@@ -123,7 +118,7 @@ def test_cluster(c: Composition, *glob: str) -> None:
 # This tests that the client does not wait indefinitely on a resource that crashed
 def test_github_12251(c: Composition) -> None:
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
+    c.wait_for_materialized()
     c.up("computed_1")
     c.sql(
         """

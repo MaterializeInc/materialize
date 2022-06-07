@@ -18,6 +18,7 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 from materialize.zippy.framework import Test
+from materialize.zippy.scenarios import *  # noqa: F401 F403
 
 SERVICES = [
     Zookeeper(),

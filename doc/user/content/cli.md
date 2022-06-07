@@ -6,7 +6,7 @@ menu:
   main:
     parent: reference
     weight: 200
-    name: "`materialized` Binary"
+    name: "`materialized` binary"
 ---
 
 ## Command line flags

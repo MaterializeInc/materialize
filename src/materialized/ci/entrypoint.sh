@@ -18,6 +18,6 @@ psql -Atc "CREATE SCHEMA IF NOT EXISTS catalog"
 
 exec materialized \
     --listen-addr=0.0.0.0:6875 \
-    --persist-consensus-url=postgresql://materialize@%2Ftmp?options=--search_path=consensus \
-    --catalog-postgres-stash=postgresql://materialize@%2Ftmp?options=--search_path=catalog \
+    "--persist-consensus-url=postgresql://materialize@$(hostname):5432?options=--search_path=consensus" \
+    "--catalog-postgres-stash=postgresql://materialize@$(hostname):5432?options=--search_path=catalog" \
     "$@"

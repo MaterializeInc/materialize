@@ -1,5 +1,5 @@
 ---
-title: "text Data Type"
+title: "text type"
 description: "Expresses a Unicode string"
 aliases:
     - /sql/types/string

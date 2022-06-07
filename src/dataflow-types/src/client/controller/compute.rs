@@ -39,6 +39,7 @@ use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 
 use super::ReadPolicy;
@@ -398,6 +399,7 @@ where
         Ok(())
     }
     /// Initiate a peek request for the contents of `id` at `timestamp`.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn peek(
         &mut self,
         id: GlobalId,
@@ -430,6 +432,9 @@ where
                 finishing,
                 map_filter_project,
                 target_replica,
+                // Obtain an `OpenTelemetryContext` from the thread-local tracing
+                // tree to forward it on to the compute worker.
+                otel_ctx: OpenTelemetryContext::obtain(),
             }))
             .await
             .map_err(ComputeError::from)

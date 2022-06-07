@@ -1,5 +1,5 @@
 ---
-title: "Build Live Views for Reverse ETL"
+title: "Build live views for reverse ETL"
 description: "  "
 ---
 

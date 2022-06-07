@@ -249,7 +249,6 @@ pub struct Config<S> {
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
     conn_id: u32,
-    otel_ctx: OpenTelemetryContext,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -500,6 +499,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// NOTE: This can be removed once DDL is included in group commits.
     fn peek_local_write_ts(&self) -> Timestamp {
         self.global_timeline.peek_write_ts()
+    }
+
+    fn local_fast_forward(&mut self, lower_bound: Timestamp) {
+        self.global_timeline.fast_forward(lower_bound);
     }
 
     fn now(&self) -> EpochMillis {
@@ -866,7 +869,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
-                    self.global_timeline.fast_forward(self.now());
+                    // Fast forwarding puts the `TimestampOracle` in write mode,
+                    // which means the next read will have to advance a table
+                    // after reading from it. To prevent this we explicitly put
+                    // the `TimestampOracle` in read mode. Writes will always
+                    // advance a table no matter what mode the `TimestampOracle`
+                    // is in. We step back the value of `now()` so that the
+                    // next write can happen at `now()` and not a value above
+                    // `now()`
+                    let now = self.now();
+                    self.local_fast_forward(now.step_back().unwrap_or(now));
+                    let _ = self.get_local_read_ts();
                 }
                 Message::GroupCommit => {
                     self.try_group_commit().await;
@@ -992,13 +1005,12 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn message_controller(&mut self, message: ControllerResponse) {
         match message {
-            ControllerResponse::PeekResponse(uuid, response) => {
+            ControllerResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // We expect exactly one peek response, which we forward. Then we clean up the
                 // peek's state in the coordinator.
                 if let Some(PendingPeek {
                     sender: rows_tx,
                     conn_id,
-                    otel_ctx,
                 }) = self.pending_peeks.remove(&uuid)
                 {
                     otel_ctx.attach_as_parent();
@@ -1720,7 +1732,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     if let Some(PendingPeek {
                         sender: rows_tx,
                         conn_id: _,
-                        otel_ctx: _,
                     }) = self.pending_peeks.remove(&uuid)
                     {
                         rows_tx
@@ -5584,7 +5595,6 @@ pub mod fast_path_peek {
                 uuid = Uuid::new_v4();
             }
 
-            let otel_ctx = OpenTelemetryContext::obtain();
             // The peek is ready to go for both cases, fast and non-fast.
             // Stash the response mechanism, and broadcast dataflow construction.
             self.pending_peeks.insert(
@@ -5592,7 +5602,6 @@ pub mod fast_path_peek {
                 PendingPeek {
                     sender: rows_tx,
                     conn_id,
-                    otel_ctx: otel_ctx.clone(),
                 },
             );
             self.client_pending_peeks
@@ -5647,6 +5656,7 @@ pub mod fast_path_peek {
                 self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
+            let otel_ctx = OpenTelemetryContext::obtain();
             Ok(crate::ExecuteResponse::SendingRows {
                 future: Box::pin(rows_rx),
                 otel_ctx,

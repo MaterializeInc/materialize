@@ -800,7 +800,7 @@ class Composition:
         _wait_for_pg(
             dbname=dbname,
             host=host,
-            port=port or self.default_port(service),
+            port=self.port(service, port) if port else self.default_port(service),
             timeout_secs=timeout_secs,
             query=query,
             user=user,

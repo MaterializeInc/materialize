@@ -1,5 +1,5 @@
 ---
-title: "record Data Type"
+title: "record type"
 description: "A tuple with arbitrary contents"
 menu:
   main:

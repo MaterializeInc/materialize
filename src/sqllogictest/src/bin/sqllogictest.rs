@@ -47,6 +47,10 @@ struct Args {
     /// Run with N materialized workers.
     #[clap(long, value_name = "N", default_value = "3")]
     workers: usize,
+    /// PostgreSQL connection URL to use for `persist` consensus and the catalog
+    /// stash.
+    #[clap(long)]
+    postgres_url: String,
     /// Path to sqllogictest script to run.
     #[clap(value_name = "PATH", required = true)]
     paths: Vec<String>,
@@ -67,6 +71,7 @@ async fn main() {
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
         verbosity: args.verbosity,
         workers: args.workers,
+        postgres_url: args.postgres_url.clone(),
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
     };

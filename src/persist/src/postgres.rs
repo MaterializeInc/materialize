@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
+use anyhow::Context;
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -138,7 +139,9 @@ impl PostgresConsensus {
         // TODO: reconsider opening with NoTLS. Perhaps we actually want to,
         // especially given the fact that its not entirely known what data
         // will actually be stored in Consensus.
-        let (mut client, conn) = tokio_postgres::connect(&config.url, NoTls).await?;
+        let (mut client, conn) = tokio_postgres::connect(&config.url, NoTls)
+            .await
+            .with_context(|| format!("error connecting to postgres"))?;
         let handle = task::spawn(|| "pg_consensus_client", async move {
             if let Err(e) = conn.await {
                 tracing::error!("connection error: {}", e);
