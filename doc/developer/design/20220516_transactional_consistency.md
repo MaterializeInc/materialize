@@ -68,6 +68,9 @@ timeline. There can only be at most a single Coordinator thread assigning timest
 timelines can share a thread if they want). All the properties discussed below need to happen on a per-timeline basis,
 and require no communication across timelines (except maybe to serialize access to the catalog).
 
+Each timeline needs some definition for the current time. For example timelines that track real time can use the system
+clock for the current time. The current time can go backwards, but timestamps assigned must be monotonically increasing.
+
 The document also allows user tables to exist in any timeline.
 
 ### Global Timestamp
@@ -131,17 +134,23 @@ Strict Serializability across restarts.
 Write read cycles (write followed by read followed by write followed by read etc) and consecutive writes can cause the
 global timestamp to increase in an unbounded fashion.
 
-Proposal: All writes across all sessions per timeline should be blocked and added to a queue. At the end of X
-millisecond all pending writes are sent in a batch to STORAGE and committed together at the same timestamp. The commits
-are all assigned the current global write timestamp.
+NOTE: Recall that each timeline has some definiton of the current time (i.e. the system clock) and a current timestamp
+(the timestamp most recently assigned to an operation).
+
+Proposal: All writes across all sessions per timeline should be added to a queue. If the current timestamp of the global
+timeline is less than or equal to the current time of the global timeline, then all writes in the queue can be executed
+and committed immediately. Otherwise the queue must wait until the current time is equal to or greater than the current
+timestamp, before executing and committing the writes in the queue. All writes in a queue are executed and committed
+together in a batch and assigned the same timestamp. The commits are all assigned the current global write timestamp.
 
 NOTE: The `TimestampOracle` provides us the property that the global write timestamp will be higher than all previous
 reads.
 
-This approach limits the per session write throughput to 1 write transaction per X milliseconds for user tables.
+This approach limits the per session write throughput to 1 write transaction per 1 time unit for user tables.
 
 This approach guarantees that when a write completes, the global timestamp is larger than or equal the timestamp of that
-write. Also, when a write completes, all previous writes and reads were at a lower timestamp than the write.
+write. Also, when a write completes, all previous writes and reads were at a lower timestamp than the write. Also, it
+places a bounds on how much faster the global timestamp can advance compared to the current time.
 
 NOTE: If the client had multiple writes to a single table known ahead of time, then grouping them in a single
 multi-statement write transaction would increase throughput. There may be some user education needed for this.
