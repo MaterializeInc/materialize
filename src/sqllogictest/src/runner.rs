@@ -36,6 +36,7 @@ use std::ops;
 use std::path::Path;
 use std::str;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -44,11 +45,12 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use futures::sink::SinkExt;
 use md5::{Digest, Md5};
-use mz_persist_client::PersistLocation;
 use once_cell::sync::Lazy;
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
+use tokio::runtime::Runtime;
+use tokio::sync::oneshot;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
@@ -63,6 +65,8 @@ use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::task;
+use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use mz_persist_client::PersistLocation;
 use mz_pgrepr::{Interval, Jsonb, Numeric, Value};
 use mz_repr::adt::numeric;
 use mz_repr::ColumnName;
@@ -296,10 +300,12 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
 }
 
 pub(crate) struct Runner {
+    server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
     clients: HashMap<String, tokio_postgres::Client>,
-    server: materialized::Server,
+    _shutdown_trigger: oneshot::Sender<()>,
+    _server_thread: JoinOnDropHandle<()>,
     _temp_dir: TempDir,
 }
 
@@ -555,17 +561,38 @@ fn format_row(row: &Row, types: &[Type], mode: Mode, sort: &Sort) -> Vec<String>
 }
 
 impl Runner {
-    pub async fn start() -> Result<Self, anyhow::Error> {
+    pub async fn start(config: &RunConfig<'_>) -> Result<Self, anyhow::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let (consensus_uri, catalog_postgres_stash) = {
+            let postgres_url = &config.postgres_url;
+            let (client, conn) = tokio_postgres::connect(&postgres_url, NoTls).await?;
+            task::spawn(|| "sqllogictest_connect", async move {
+                if let Err(e) = conn.await {
+                    panic!("connection error: {}", e);
+                }
+            });
+            client
+                .batch_execute(&format!(
+                    "DROP SCHEMA IF EXISTS sqllogictest_consensus CASCADE;
+                     DROP SCHEMA IF EXISTS sqllogictest_catalog CASCADE;
+                     CREATE SCHEMA sqllogictest_consensus;
+                     CREATE SCHEMA sqllogictest_catalog;",
+                ))
+                .await?;
+            (
+                format!("{postgres_url}?options=--search_path=sqllogictest_consensus"),
+                format!("{postgres_url}?options=--search_path=sqllogictest_catalog"),
+            )
+        };
         let mz_config = materialized::Config {
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
             data_directory: temp_dir.path().to_path_buf(),
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
-                consensus_uri: format!("sqlite://{}/persist/consensus", temp_dir.path().display()),
+                consensus_uri,
             },
-            catalog_postgres_stash: None,
+            catalog_postgres_stash: Some(catalog_postgres_stash),
             orchestrator: OrchestratorConfig {
                 backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
                     image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
@@ -592,11 +619,44 @@ impl Runner {
             availability_zones: Default::default(),
             connector_context: Default::default(),
         };
-        let server = materialized::serve(mz_config).await?;
-        let client = connect(&server).await;
+        // We need to run the server on its own Tokio runtime, which in turn
+        // requires its own thread, so that we can wait for any tasks spawned
+        // by the server to be shutdown at the end of each file. If we were to
+        // share a Tokio runtime, tasks from the last file's server would still
+        // be live at the start of the next file's server.
+        let (server_addr_tx, server_addr_rx) = oneshot::channel();
+        let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
+        let server_thread = thread::spawn(|| {
+            let runtime = match Runtime::new() {
+                Ok(runtime) => runtime,
+                Err(e) => {
+                    server_addr_tx
+                        .send(Err(e.into()))
+                        .expect("receiver should not drop first");
+                    return;
+                }
+            };
+            let server = match runtime.block_on(materialized::serve(mz_config)) {
+                Ok(runtime) => runtime,
+                Err(e) => {
+                    server_addr_tx
+                        .send(Err(e))
+                        .expect("receiver should not drop first");
+                    return;
+                }
+            };
+            server_addr_tx
+                .send(Ok(server.local_addr()))
+                .expect("receiver should not drop first");
+            let _ = runtime.block_on(shutdown_tripwire);
+        });
+        let server_addr = server_addr_rx.await??;
+        let client = connect(server_addr).await;
 
         Ok(Runner {
-            server,
+            server_addr,
+            _shutdown_trigger: shutdown_trigger,
+            _server_thread: server_thread.join_on_drop(),
             _temp_dir: temp_dir,
             client,
             clients: HashMap::new(),
@@ -897,7 +957,7 @@ impl Runner {
             None => &self.client,
             Some(name) => {
                 if !self.clients.contains_key(name) {
-                    let client = connect(&self.server).await;
+                    let client = connect(self.server_addr).await;
                     self.clients.insert(name.into(), client);
                 }
                 self.clients.get(name).unwrap()
@@ -946,8 +1006,7 @@ impl Runner {
     }
 }
 
-async fn connect(server: &materialized::Server) -> tokio_postgres::Client {
-    let addr = server.local_addr();
+async fn connect(addr: SocketAddr) -> tokio_postgres::Client {
     let (client, connection) = tokio_postgres::connect(
         &format!("host={} port={} user=materialize", addr.ip(), addr.port()),
         NoTls,
@@ -972,6 +1031,7 @@ pub struct RunConfig<'a> {
     pub stderr: &'a dyn WriteFmt,
     pub verbosity: usize,
     pub workers: usize,
+    pub postgres_url: String,
     pub no_fail: bool,
     pub fail_fast: bool,
 }
@@ -991,7 +1051,7 @@ pub async fn run_string(
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
     let mut outcomes = Outcomes::default();
-    let mut state = Runner::start().await.unwrap();
+    let mut state = Runner::start(config).await.unwrap();
     let mut parser = crate::parser::Parser::new(source, input);
     writeln!(config.stdout, "==> {}", source);
     for record in parser.parse_records()? {
@@ -1050,7 +1110,7 @@ pub async fn rewrite_file(config: &RunConfig<'_>, filename: &Path) -> Result<(),
 
     let mut buf = RewriteBuffer::new(&input);
 
-    let mut state = Runner::start().await?;
+    let mut state = Runner::start(config).await?;
     let mut parser = crate::parser::Parser::new(filename.to_str().unwrap_or(""), &input);
     writeln!(config.stdout, "==> {}", filename.display());
     for record in parser.parse_records()? {
