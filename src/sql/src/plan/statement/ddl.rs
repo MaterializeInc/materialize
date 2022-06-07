@@ -465,6 +465,7 @@ pub fn plan_create_source(
             (connector, encoding)
         }
         CreateSourceConnector::Kinesis { arn, .. } => {
+            scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
             let arn: ARN = arn
                 .parse()
                 .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
@@ -491,6 +492,7 @@ pub fn plan_create_source(
             pattern,
             compression,
         } => {
+            scx.require_unsafe_mode("CREATE SOURCE ... FROM S3")?;
             let aws = normalize::aws_config(&mut with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
