@@ -633,9 +633,6 @@ class SqlLogicTest(Service):
         name: str = "sqllogictest-svc",
         mzbuild: str = "sqllogictest",
         environment: List[str] = [
-            "PGUSER=postgres",
-            "PGHOST=postgres",
-            "PGPASSWORD=postgres",
             "MZ_SOFT_ASSERTIONS=1",
         ],
         volumes: List[str] = ["../..:/workdir"],

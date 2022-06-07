@@ -115,6 +115,8 @@ def main() -> int:
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--catalog-postgres-stash={args.postgres}?options=--search_path=catalog",
             ]
+        elif args.program == "sqllogictest":
+            command += [f"--postgres-url={args.postgres}"]
     elif args.program == "test":
         _build(args)
         command = _cargo_command(args, "test")
