@@ -54,12 +54,17 @@ message ProtoTimeline {
 
 message ProtoSourceEnvelope {
     oneof kind {
-        ProtoKeyEnvelope none = 1;
+        ProtoNoneEnvelope none = 1;
         ProtoDebeziumEnvelope debezium = 2;
         ProtoUpsertEnvelope upsert = 3;
         google.protobuf.Empty cdc_v2 = 4;
         google.protobuf.Empty differential_row = 5;
     }
+}
+
+message ProtoNoneEnvelope {
+    ProtoKeyEnvelope key_envelope = 1;
+    uint64 key_arity = 2;
 }
 
 message ProtoUpsertEnvelope {

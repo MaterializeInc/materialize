@@ -216,12 +216,6 @@ where
                     SourceDataEncoding::KeyValue { key, value } => (Some(key), value),
                     SourceDataEncoding::Single(value) => (None, value),
                 };
-                let key_arity = key_encoding.as_ref().map(|k| {
-                    k.desc()
-                        .expect("RelationDesc must have already been calculated")
-                        .arity()
-                });
-
                 // CDCv2 can't quite be slotted in to the below code, since it determines
                 // its own diffs/timestamps as part of decoding.
                 //
@@ -370,11 +364,11 @@ where
 
                             (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                         }
-                        SourceEnvelope::None(key_envelope) => {
+                        SourceEnvelope::None(none_envelope) => {
                             let results = append_metadata_to_value(results);
 
                             let flattened_stream =
-                                flatten_results_prepend_keys(key_envelope, key_arity, results);
+                                flatten_results_prepend_keys(none_envelope, results);
 
                             let flattened_stream = flattened_stream.pass_through("decode", 1).map(
                                 |(val, time, diff)| match val {
@@ -567,14 +561,18 @@ where
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results_prepend_keys<G>(
-    key_envelope: &KeyEnvelope,
-    key_arity: Option<usize>,
+    none_envelope: &NoneEnvelope,
     results: timely::dataflow::Stream<G, KV>,
 ) -> timely::dataflow::Stream<G, Result<(Row, Diff), DecodeError>>
 where
     G: Scope,
 {
-    let null_key_columns = Row::pack_slice(&vec![Datum::Null; key_arity.unwrap_or(0)]);
+    let NoneEnvelope {
+        key_envelope,
+        key_arity,
+    } = none_envelope;
+
+    let null_key_columns = Row::pack_slice(&vec![Datum::Null; *key_arity]);
 
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
