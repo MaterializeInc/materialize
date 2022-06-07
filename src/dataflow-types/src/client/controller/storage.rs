@@ -292,7 +292,7 @@ impl From<StashError> for StorageError {
 
 impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
     pub(super) fn new(state_dir: PathBuf) -> Self {
-        let stash = mz_stash::Sqlite::open(&state_dir.join("storage"))
+        let stash = mz_stash::Sqlite::open(Some(&state_dir.join("storage")))
             .expect("unable to create storage stash");
         Self {
             clients: BTreeMap::default(),
