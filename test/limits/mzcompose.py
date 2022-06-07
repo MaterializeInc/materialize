@@ -1129,7 +1129,6 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Create multiple clusters with multiple nodes and replicas each"""
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
-    c.wait_for_postgres()
 
     parser.add_argument(
         "--workers",
@@ -1222,7 +1221,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                     replica_definitions.append(
                         f"{replica_name} (REMOTE ("
-                        + ", ".join(f'"{n}:2100"' for n in nodes)
+                        + ", ".join(f"'{n}:2100'" for n in nodes)
                         + "))"
                     )
 
