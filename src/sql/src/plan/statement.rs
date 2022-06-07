@@ -220,8 +220,10 @@ pub fn plan(
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
-        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
-        Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
+        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt, catalog.secrets_reader()),
+        Statement::CreateSource(stmt) => {
+            ddl::plan_create_source(scx, stmt, catalog.secrets_reader())
+        }
         Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),

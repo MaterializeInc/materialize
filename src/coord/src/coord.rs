@@ -397,9 +397,6 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
-    /// Handle to secrets reader that gives us access to user secrets
-    #[allow(dead_code)]
-    secrets_reader: SecretsReader,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -5273,6 +5270,7 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
+        secrets_reader,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -5307,7 +5305,6 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
-                secrets_reader,
                 replica_sizes,
                 availability_zones,
                 connector_context,

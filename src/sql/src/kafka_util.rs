@@ -17,8 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 
+use mz_dataflow_types::sources::MaybeStringId;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
+use mz_secrets::SecretsReader;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -27,6 +29,8 @@ use tokio::time::Duration;
 
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_sql_parser::ast::Value;
+
+use crate::normalize::SqlMaybeValueId;
 
 enum ValType {
     Path,
@@ -110,24 +114,25 @@ impl Config {
 }
 
 fn extract(
-    input: &mut BTreeMap<String, Value>,
+    input: &mut BTreeMap<String, SqlMaybeValueId>,
     configs: &[Config],
-) -> Result<BTreeMap<String, String>, anyhow::Error> {
+) -> Result<BTreeMap<String, MaybeStringId>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
         let value = match input.remove(config.name) {
-            Some(v) => config
+            Some(SqlMaybeValueId::Value(v)) => config
                 .val_type
                 .process_val(&v)
+                .map(|v| MaybeStringId::String(config.do_transform(v)))
                 .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
+            Some(SqlMaybeValueId::Secret(id)) => MaybeStringId::Secret(id),
             // Check for default values
             None => match &config.default {
-                Some(v) => v.to_string(),
+                Some(v) => MaybeStringId::String(config.do_transform(v.to_string())),
                 None => continue,
             },
         };
-        let value = config.do_transform(value);
         out.insert(config.get_kafka_config_key(), value);
     }
     Ok(out)
@@ -144,8 +149,8 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &mut BTreeMap<String, Value>,
-) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
+) -> Result<BTreeMap<String, MaybeStringId>, anyhow::Error> {
     extract(
         with_options,
         &[
@@ -191,6 +196,23 @@ pub fn extract_config(
     )
 }
 
+pub fn inline_secrets(
+    config: BTreeMap<String, MaybeStringId>,
+    secrets_reader: &SecretsReader,
+) -> anyhow::Result<BTreeMap<String, String>> {
+    config
+        .into_iter()
+        .map(|(k, v)| {
+            let inlined_value = match v {
+                MaybeStringId::String(s) => s,
+                // TODO: Support more than just strings?
+                MaybeStringId::Secret(id) => secrets_reader.read_string(id)?,
+            };
+            Ok((k, inlined_value))
+        })
+        .collect()
+}
+
 /// Create a new `rdkafka::ClientConfig` with the provided
 /// [`options`](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md),
 /// and test its ability to create an `rdkafka::consumer::BaseConsumer`.
@@ -203,13 +225,17 @@ pub fn extract_config(
 pub async fn create_consumer(
     broker: &str,
     topic: &str,
-    options: &BTreeMap<String, String>,
+    options: &BTreeMap<String, MaybeStringId>,
     librdkafka_log_level: tracing::Level,
+    secrets_reader: &SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
     let mut config = create_new_client_config(librdkafka_log_level);
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
-        config.set(k, v);
+        match v {
+            MaybeStringId::String(s) => config.set(k, s),
+            MaybeStringId::Secret(id) => config.set(k, secrets_reader.read_string(id)?),
+        };
     }
 
     let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> =
@@ -253,7 +279,7 @@ pub async fn create_consumer(
 pub async fn lookup_start_offsets(
     consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
     topic: &str,
-    with_options: &BTreeMap<String, Value>,
+    with_options: &BTreeMap<String, SqlMaybeValueId>,
     now: u64,
 ) -> Result<Option<Vec<i64>>, anyhow::Error> {
     let time_offset = with_options.get("kafka_time_offset");
@@ -264,8 +290,8 @@ pub async fn lookup_start_offsets(
     }
 
     // Validate and resolve `kafka_time_offset`.
-    let time_offset = match time_offset.unwrap() {
-        Value::Number(s) => match s.parse::<i64>() {
+    let time_offset = match time_offset.unwrap().try_as_value() {
+        Some(Value::Number(s)) => match s.parse::<i64>() {
             // Timestamp in millis *before* now (e.g. -10 means 10 millis ago)
             Ok(ts) if ts < 0 => {
                 let now: i64 = now.try_into()?;
@@ -383,17 +409,18 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    _kafka_options: &BTreeMap<String, String>,
-    ccsr_options: &mut BTreeMap<String, Value>,
+    // XXX(chae): make these use the same types??
+    _kafka_options: &BTreeMap<String, MaybeStringId>,
+    ccsr_options: &mut BTreeMap<String, SqlMaybeValueId>,
+    secrets_reader: &SecretsReader,
 ) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
     if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
-        Some(Value::String(path)) => Some(path),
-        Some(_) => {
-            bail!("ssl_ca_location must be a string");
-        }
+        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
+        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(id)?),
+        Some(_) => bail!("ssl_ca_location must be a string or secret"),
         None => None,
     } {
         let mut ca_buf = Vec::new();
@@ -404,18 +431,16 @@ pub fn generate_ccsr_client_config(
 
     let ssl_key_location = ccsr_options.remove("ssl_key_location");
     let key_path = match &&ssl_key_location {
-        Some(Value::String(path)) => Some(path),
-        Some(_) => {
-            bail!("ssl_key_location must be a string");
-        }
+        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
+        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(id)?),
+        Some(_) => bail!("ssl_key_location must be a string or secret"),
         None => None,
     };
     let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
     let cert_path = match &ssl_certificate_location {
-        Some(Value::String(path)) => Some(path),
-        Some(_) => {
-            bail!("ssl_certificate_location must be a string");
-        }
+        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
+        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(id)?),
+        Some(_) => bail!("ssl_certificate_location must be a string or secret"),
         None => None,
     };
     match (key_path, cert_path) {
@@ -443,7 +468,16 @@ pub fn generate_ccsr_client_config(
     )?;
 
     if let Some(username) = ccsr_options.remove("username") {
-        client_config = client_config.auth(username, ccsr_options.remove("password"));
+        let username = match username {
+            MaybeStringId::String(s) => s,
+            MaybeStringId::Secret(id) => secrets_reader.read_string(id)?,
+        };
+        let password = match ccsr_options.remove("password") {
+            Some(MaybeStringId::String(s)) => Some(s),
+            Some(MaybeStringId::Secret(id)) => Some(secrets_reader.read_string(id)?),
+            None => None,
+        };
+        client_config = client_config.auth(username, password);
     }
 
     Ok(client_config)
