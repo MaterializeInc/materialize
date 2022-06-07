@@ -851,13 +851,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             if let Some(timestamp) = self.global_timeline.should_advance_to() {
-                let start = Instant::now();
                 self.advance_local_inputs(timestamp).await;
-                trace!(
-                    "advancing table frontiers to {} took: {} ms",
-                    timestamp,
-                    start.elapsed().as_millis()
-                );
             }
         }
     }
@@ -867,17 +861,28 @@ impl<S: Append + 'static> Coordinator<S> {
     // backward). This downgrades the capabilities of all tables, which means that
     // all tables can no longer produce new data before this timestamp.
     async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
+        let start = Instant::now();
         let appends = self
             .catalog
             .entries()
             .filter(|e| e.is_table())
             .map(|table| (table.id(), vec![], advance_to))
-            .collect();
+            .collect::<Vec<_>>();
+
+        let num_updates = appends.len();
+
         self.dataflow_client
             .storage_mut()
             .append(appends)
             .await
             .unwrap();
+
+        trace!(
+            "advance_local_inputs for {} tables to {} took: {} ms",
+            num_updates,
+            advance_to,
+            start.elapsed().as_millis()
+        );
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
