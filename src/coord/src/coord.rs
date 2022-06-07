@@ -497,8 +497,8 @@ impl<S: Append + 'static> Coordinator<S> {
     /// to block group commits by.
     ///
     /// NOTE: This can be removed once DDL is included in group commits.
-    fn peek_local_write_ts(&self) -> Timestamp {
-        self.global_timeline.peek_write_ts()
+    fn peek_local_ts(&self) -> Timestamp {
+        self.global_timeline.peek_ts()
     }
 
     fn local_fast_forward(&mut self, lower_bound: Timestamp) {
@@ -932,7 +932,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // In the future we should include DDL in group commits, to avoid this issue. Then
         // `self.peek_local_write_ts()` can be removed. Instead we can call
         // `self.get_and_step_local_write_ts()` and safely use that value once we wake up.
-        let timestamp = self.peek_local_write_ts();
+        let timestamp = self.peek_local_ts();
         let now = (self.catalog.config().now)();
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
@@ -5877,7 +5877,7 @@ mod timeline {
             }
         }
 
-        /// Peek the current value of the write timestamp.
+        /// Peek the current value of the timestamp.
         ///
         /// No operations should be assigned to the timestamp returned by this function. The
         /// timestamp returned should only be used to compare the progress of the `TimestampOracle`
@@ -5887,17 +5887,9 @@ mod timeline {
         /// this timestamp.
         ///
         /// NOTE: This can be removed once DDL is included in group commits.
-        pub fn peek_write_ts(&self) -> T {
+        pub fn peek_ts(&self) -> T {
             match &self.state {
-                TimestampOracleState::Writing(ts) => ts.clone(),
-                TimestampOracleState::Reading(ts) => {
-                    let mut next = (self.next)();
-                    if next.less_equal(&ts) {
-                        next = ts.step_forward();
-                    }
-                    assert!(ts.less_than(&next));
-                    next
-                }
+                TimestampOracleState::Writing(ts) | TimestampOracleState::Reading(ts) => ts.clone(),
             }
         }
 
@@ -5907,12 +5899,19 @@ mod timeline {
         /// `self.read_ts()`, and less than or equal to all subsequent values of
         /// `self.read_ts()`.
         pub fn write_ts(&mut self) -> T {
-            let next = self.peek_write_ts();
-            if let TimestampOracleState::Reading(_) = self.state {
-                self.state = TimestampOracleState::Writing(next.clone());
-                self.advance_to = Some(next.clone());
+            match &self.state {
+                TimestampOracleState::Writing(ts) => ts.clone(),
+                TimestampOracleState::Reading(ts) => {
+                    let mut next = (self.next)();
+                    if next.less_equal(&ts) {
+                        next = ts.step_forward();
+                    }
+                    assert!(ts.less_than(&next));
+                    self.state = TimestampOracleState::Writing(next.clone());
+                    self.advance_to = Some(next.clone());
+                    next
+                }
             }
-            next
         }
         /// Acquire a new timestamp for reading.
         ///
