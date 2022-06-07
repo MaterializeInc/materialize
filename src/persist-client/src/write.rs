@@ -28,6 +28,7 @@ use crate::batch::{Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::state::Upper;
+use crate::PersistConfig;
 
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
@@ -49,6 +50,7 @@ pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    pub(crate) cfg: PersistConfig,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
@@ -433,6 +435,7 @@ where
         trace!("WriteHandle::builder lower={:?}", lower,);
 
         BatchBuilder::new(
+            self.cfg.clone(),
             size_hint,
             lower,
             Arc::clone(&self.blob),

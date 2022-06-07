@@ -9,6 +9,7 @@
 
 //! A handle to a batch of updates
 
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -18,17 +19,19 @@ use bytes::Bytes;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
+use mz_ore::cast::CastFrom;
+use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, BlobMulti};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
-use tracing::{debug_span, instrument, warn, Instrument};
+use tokio::task::JoinHandle;
+use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, FOREVER};
-use crate::ShardId;
+use crate::{PersistConfig, ShardId};
 
 /// A handle to a batch of updates that has been written to blob storage but
 /// which has not yet been appended to a shard.
@@ -152,6 +155,8 @@ where
     records: ColumnarRecordsVecBuilder,
     blob: Arc<dyn BlobMulti + Send + Sync>,
 
+    parts: BatchParts<T>,
+
     key_buf: Vec<u8>,
     val_buf: Vec<u8>,
 
@@ -168,17 +173,25 @@ where
     D: Semigroup + Codec64,
 {
     pub(crate) fn new(
+        cfg: PersistConfig,
         size_hint: usize,
         lower: Antichain<T>,
         blob: Arc<dyn BlobMulti + Send + Sync>,
         shard_id: ShardId,
     ) -> Self {
+        let parts = BatchParts::new(
+            cfg.batch_builder_max_outstanding_parts,
+            shard_id,
+            lower.clone(),
+            Arc::clone(&blob),
+        );
         Self {
             size_hint,
             lower,
             max_ts: T::minimum(),
-            records: ColumnarRecordsVecBuilder::default(),
+            records: ColumnarRecordsVecBuilder::new_with_len(cfg.blob_target_size),
             blob,
+            parts,
             shard_id,
             key_buf: Vec::new(),
             val_buf: Vec::new(),
@@ -191,7 +204,10 @@ where
     /// This fails if any of the updates in this batch are beyond the given
     /// `upper`.
     #[instrument(level = "debug", name = "batch::finish", skip_all, fields(shard = %self.shard_id))]
-    pub async fn finish(self, upper: Antichain<T>) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
+    pub async fn finish(
+        mut self,
+        upper: Antichain<T>,
+    ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if upper.less_equal(&self.max_ts) {
             return Err(InvalidUsage::UpdateBeyondUpper {
                 max_ts: self.max_ts,
@@ -199,77 +215,21 @@ where
             });
         }
 
+        // NB: If self.records is empty, this call will return an empty vec, not
+        // a single-element vec with an empty ColumnarRecords. This is a
+        // critical performance optimization that avoids the write to s3
+        // entirely if an append only has a frontier update (which is the
+        // overwhelming common case in practice). The assert is a safety net in
+        // case we accidentally break this behavior in ColumnarRecords.
+        for part in self.records.finish() {
+            assert!(part.len() > 0);
+            self.parts.write(part, upper.clone()).await;
+        }
+        let keys = self.parts.finish().await;
+
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(self.lower, upper, since);
-
-        let updates = self.records.finish();
-
-        if updates.len() == 0 {
-            return Ok(Batch::new(
-                Arc::clone(&self.blob),
-                self.shard_id,
-                desc,
-                vec![],
-            ));
-        }
-
-        // TODO: Get rid of the from_le_bytes.
-        let encoded_desc = Description::new(
-            Antichain::from(
-                desc.lower()
-                    .elements()
-                    .iter()
-                    .map(|x| u64::from_le_bytes(T::encode(x)))
-                    .collect::<Vec<_>>(),
-            ),
-            Antichain::from(
-                desc.upper()
-                    .elements()
-                    .iter()
-                    .map(|x| u64::from_le_bytes(T::encode(x)))
-                    .collect::<Vec<_>>(),
-            ),
-            Antichain::from(
-                desc.since()
-                    .elements()
-                    .iter()
-                    .map(|x| u64::from_le_bytes(T::encode(x)))
-                    .collect::<Vec<_>>(),
-            ),
-        );
-
-        let batch = BlobTraceBatchPart {
-            desc: encoded_desc.clone(),
-            updates,
-            index: 0,
-        };
-
-        let mut buf = Vec::new();
-        debug_span!("make_batch::encode").in_scope(|| {
-            batch.encode(&mut buf);
-        });
-        let buf = Bytes::from(buf);
-
-        let key = Uuid::new_v4().to_string();
-        let () = retry_external("make_batch::set", || async {
-            self.blob
-                .set(
-                    Instant::now() + FOREVER,
-                    &key,
-                    Bytes::clone(&buf),
-                    Atomicity::RequireAtomic,
-                )
-                .await
-        })
-        .instrument(debug_span!("make_batch::set", payload_len = buf.len()))
-        .await;
-
-        let batch = Batch::new(
-            Arc::clone(&self.blob),
-            self.shard_id.clone(),
-            desc,
-            vec![key],
-        );
+        let batch = Batch::new(Arc::clone(&self.blob), self.shard_id.clone(), desc, keys);
 
         Ok(batch)
     }
@@ -278,9 +238,6 @@ where
     ///
     /// The update timestamp must be greater or equal to `lower` that was given
     /// when creating this [BatchBuilder].
-    //
-    // NOTE: This function is async right now, even though it doesn't need it.
-    // We're keeping the option open in case we might need it in the future.
     pub async fn add(&mut self, key: &K, val: &V, ts: &T, diff: &D) -> Result<(), InvalidUsage<T>> {
         if !self.lower.less_equal(ts) {
             return Err(InvalidUsage::UpdateNotBeyondLower {
@@ -307,12 +264,234 @@ where
         }
         self.records.push(((&self.key_buf, &self.val_buf), t, d));
 
-        // TODO(aljoscha): As of now, this batch builder doesn't have constant
-        // memory usage but scales with the number of added records. Instead of
-        // keeping one records builder around, we should periodically finish and
-        // flush the updates to a blob, store the blob key in the builder, and
-        // reset the records builder.
+        // If we've filled up a chunk of ColumnarRecords, flush it out now to
+        // blob storage to keep our memory usage capped.
+        if let Some(parts) = self.records.take_filled() {
+            for part in parts {
+                // TODO: This upper would ideally be `[self.max_ts+1]` but
+                // there's nothing that lets us increment a timestamp. An empty
+                // antichain is guaranteed to correctly bound the data in this
+                // part, but it doesn't really tell us anything. Figure out how
+                // to make a tighter bound, possibly by changing the part
+                // description to be an _inclusive_ upper.
+                let upper = Antichain::new();
+                self.parts.write(part, upper).await;
+            }
+        }
 
         Ok(())
+    }
+}
+
+// TODO: If this is dropped, cancel (and delete?) any writing parts and delete
+// any finished ones.
+#[derive(Debug)]
+struct BatchParts<T> {
+    max_outstanding: usize,
+    shard_id: ShardId,
+    lower: Antichain<T>,
+    blob: Arc<dyn BlobMulti + Send + Sync>,
+    writing_parts: VecDeque<(String, JoinHandle<()>)>,
+    finished_parts: Vec<String>,
+}
+
+impl<T: Timestamp + Codec64> BatchParts<T> {
+    fn new(
+        max_outstanding: usize,
+        shard_id: ShardId,
+        lower: Antichain<T>,
+        blob: Arc<dyn BlobMulti + Send + Sync>,
+    ) -> Self {
+        BatchParts {
+            max_outstanding,
+            shard_id,
+            lower,
+            blob,
+            writing_parts: VecDeque::new(),
+            finished_parts: Vec::new(),
+        }
+    }
+
+    async fn write(&mut self, updates: ColumnarRecords, upper: Antichain<T>) {
+        let since = Antichain::from_elem(T::minimum());
+        let desc = Description::new(self.lower.clone(), upper, since);
+        let blob = Arc::clone(&self.blob);
+        let key = Uuid::new_v4().to_string();
+        let blob_key = key.clone();
+        let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
+
+        let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
+        let handle = mz_ore::task::spawn(
+            || "batch::write_part",
+            async move {
+                // TODO: Get rid of the from_le_bytes.
+                let encoded_desc = Description::new(
+                    Antichain::from(
+                        desc.lower()
+                            .elements()
+                            .iter()
+                            .map(|x| u64::from_le_bytes(T::encode(x)))
+                            .collect::<Vec<_>>(),
+                    ),
+                    Antichain::from(
+                        desc.upper()
+                            .elements()
+                            .iter()
+                            .map(|x| u64::from_le_bytes(T::encode(x)))
+                            .collect::<Vec<_>>(),
+                    ),
+                    Antichain::from(
+                        desc.since()
+                            .elements()
+                            .iter()
+                            .map(|x| u64::from_le_bytes(T::encode(x)))
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+
+                let batch = BlobTraceBatchPart {
+                    desc: encoded_desc.clone(),
+                    updates: vec![updates],
+                    index,
+                };
+
+                let buf = mz_ore::task::spawn_blocking(
+                    || "batch::encode_part",
+                    move || {
+                        let mut buf = Vec::new();
+                        batch.encode(&mut buf);
+                        Bytes::from(buf)
+                    },
+                )
+                .instrument(debug_span!("batch::encode_part"))
+                .await
+                .expect("part encode task failed");
+
+                let () = retry_external("batch::set", || async {
+                    blob.set(
+                        Instant::now() + FOREVER,
+                        &blob_key,
+                        Bytes::clone(&buf),
+                        Atomicity::RequireAtomic,
+                    )
+                    .await
+                })
+                .instrument(trace_span!("batch::set", payload_len = buf.len()))
+                .await;
+            }
+            .instrument(write_span),
+        );
+        self.writing_parts.push_back((key, handle));
+
+        while self.writing_parts.len() > self.max_outstanding {
+            let (key, handle) = self
+                .writing_parts
+                .pop_front()
+                .expect("pop failed when len was just > some usize");
+            let () = handle
+                .instrument(debug_span!("batch::max_outstanding"))
+                .await
+                .expect("part upload task failed");
+            self.finished_parts.push(key);
+        }
+    }
+
+    async fn finish(self) -> Vec<String> {
+        let mut keys = self.finished_parts;
+        if !self.writing_parts.is_empty() {
+            async {
+                for (key, handle) in self.writing_parts {
+                    let () = handle.await.expect("part upload task failed");
+                    keys.push(key);
+                }
+            }
+            .instrument(debug_span!("batch::upload"))
+            .await
+        }
+        keys
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cache::PersistClientCache;
+    use crate::tests::all_ok;
+    use crate::PersistLocation;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn batch_builder_flushing() {
+        mz_ore::test::init_logging();
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let mut cache = PersistClientCache::new_no_metrics();
+        // Set blob_target_size to 0 so that each row gets forced into its own
+        // batch. Set max_outstanding to a small value that's >1 to test various
+        // edge cases below.
+        cache.cfg.batch_builder_max_outstanding_parts = 2;
+        cache.cfg.blob_target_size = 0;
+        let client = cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
+            .await
+            .expect("client construction failed");
+        let (mut write, read) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        // A new builder has no writing or finished parts.
+        let mut builder = write.builder(0, Antichain::from_elem(0));
+        assert_eq!(builder.parts.writing_parts.len(), 0);
+        assert_eq!(builder.parts.finished_parts.len(), 0);
+
+        // We set blob_target_size to 0, so the first update gets forced out
+        // into a batch.
+        builder
+            .add(&data[0].0 .0, &data[0].0 .1, &data[0].1, &data[0].2)
+            .await
+            .expect("invalid usage");
+        assert_eq!(builder.parts.writing_parts.len(), 1);
+        assert_eq!(builder.parts.finished_parts.len(), 0);
+
+        // We set batch_builder_max_outstanding_parts to 2, so we are allow to
+        // pipeline a second part.
+        builder
+            .add(&data[1].0 .0, &data[1].0 .1, &data[1].1, &data[1].2)
+            .await
+            .expect("invalid usage");
+        assert_eq!(builder.parts.writing_parts.len(), 2);
+        assert_eq!(builder.parts.finished_parts.len(), 0);
+
+        // But now that we have 3 parts, the add call back-pressures until the
+        // first one finishes.
+        builder
+            .add(&data[2].0 .0, &data[2].0 .1, &data[2].1, &data[2].2)
+            .await
+            .expect("invalid usage");
+        assert_eq!(builder.parts.writing_parts.len(), 2);
+        assert_eq!(builder.parts.finished_parts.len(), 1);
+
+        // Finish off the batch and verify that the keys and such get plumbed
+        // correctly by reading the data back.
+        let batch = builder
+            .finish(Antichain::from_elem(4))
+            .await
+            .expect("invalid usage");
+        write
+            .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
+            .await
+            .expect("invalid usage")
+            .expect("unexpected upper");
+        assert_eq!(
+            read.expect_snapshot(3).await.read_all().await,
+            all_ok(&data, 3)
+        );
     }
 }

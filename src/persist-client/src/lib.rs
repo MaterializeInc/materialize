@@ -25,6 +25,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
+use mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN;
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
 use proptest_derive::Arbitrary;
@@ -161,6 +162,31 @@ impl ShardId {
     }
 }
 
+/// The tunable knobs for persist.
+#[derive(Debug, Clone)]
+pub struct PersistConfig {
+    /// A target maximum size of blob payloads in bytes. If a logical "batch" is
+    /// bigger than this, it will be broken up into smaller, independent pieces.
+    /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen
+    /// to always respect it). This target size doesn't apply for an individual
+    /// update that exceeds it in size, but that scenario is almost certainly a
+    /// mis-use of the system.
+    pub blob_target_size: usize,
+    /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
+    /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
+    /// calls on previous ones finishing.
+    pub batch_builder_max_outstanding_parts: usize,
+}
+
+impl Default for PersistConfig {
+    fn default() -> Self {
+        Self {
+            blob_target_size: KEY_VAL_DATA_MAX_LEN,
+            batch_builder_max_outstanding_parts: 1,
+        }
+    }
+}
+
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [PersistLocation].
 ///
@@ -179,6 +205,7 @@ impl ShardId {
 /// ```
 #[derive(Debug, Clone)]
 pub struct PersistClient {
+    cfg: PersistConfig,
     blob: Arc<dyn BlobMulti + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
 }
@@ -190,13 +217,18 @@ impl PersistClient {
     /// This is exposed mostly for testing. Persist users likely want
     /// [PersistClientCache::open].
     pub async fn new(
+        cfg: PersistConfig,
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
     ) -> Result<Self, ExternalError> {
         trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
-        Ok(PersistClient { blob, consensus })
+        Ok(PersistClient {
+            cfg,
+            blob,
+            consensus,
+        })
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -228,6 +260,7 @@ impl PersistClient {
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
+            cfg: self.cfg.clone(),
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
@@ -285,6 +318,7 @@ impl PersistClient {
         let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
         let shard_upper = machine.fetch_upper().await;
         let writer = WriteHandle {
+            cfg: self.cfg.clone(),
             machine,
             blob: Arc::clone(&self.blob),
             upper: shard_upper,
@@ -328,7 +362,13 @@ mod tests {
     use super::*;
 
     pub async fn new_test_client() -> PersistClient {
-        PersistClientCache::new_no_metrics()
+        // Configure an aggressively small blob_target_size so we get some
+        // amount of coverage of that in tests. Similarly, for max_outstanding.
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.blob_target_size = 10;
+        cache.cfg.batch_builder_max_outstanding_parts = 1;
+
+        cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
                 consensus_uri: "mem://".to_owned(),

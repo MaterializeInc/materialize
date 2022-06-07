@@ -19,7 +19,7 @@ use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use tracing::debug;
 
 use crate::r#impl::machine::retry_external;
-use crate::{PersistClient, PersistLocation};
+use crate::{PersistClient, PersistConfig, PersistLocation};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
 ///
@@ -31,6 +31,7 @@ use crate::{PersistClient, PersistLocation};
 /// share, for example, these Postgres connections.
 #[derive(Debug, Clone)]
 pub struct PersistClientCache {
+    pub(crate) cfg: PersistConfig,
     blob_by_uri: HashMap<String, Arc<dyn BlobMulti + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
 }
@@ -40,6 +41,7 @@ impl PersistClientCache {
     pub fn new(_registry: &MetricsRegistry) -> Self {
         // TODO: Use the registry once persist has metrics.
         PersistClientCache {
+            cfg: PersistConfig::default(),
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
         }
@@ -85,7 +87,7 @@ impl PersistClientCache {
                 Arc::clone(x.insert(consensus))
             }
         };
-        PersistClient::new(blob, consensus).await
+        PersistClient::new(self.cfg.clone(), blob, consensus).await
     }
 }
 

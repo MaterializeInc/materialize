@@ -33,7 +33,7 @@ use tracing::{error, trace};
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
-use mz_persist_client::{PersistClient, PersistLocation};
+use mz_persist_client::{PersistClient, PersistConfig, PersistLocation};
 
 use self::impls::ConsensusTimestamper;
 use self::impls::PersistConsensus;
@@ -193,7 +193,7 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         as Arc<dyn BlobMulti + Send + Sync>;
     let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
         as Arc<dyn Consensus + Send + Sync>;
-    PersistClient::new(blob, consensus).await
+    PersistClient::new(PersistConfig::default(), blob, consensus).await
 }
 
 mod api {
