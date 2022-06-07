@@ -468,6 +468,10 @@ impl<S: Append + 'static> Coordinator<S> {
         (ts, advance_to)
     }
 
+    fn local_fast_forward(&mut self, lower_bound: Timestamp) {
+        self.global_timeline.fast_forward(lower_bound);
+    }
+
     fn now(&self) -> EpochMillis {
         (self.catalog.config().now)()
     }
@@ -832,7 +836,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
-                    self.global_timeline.fast_forward(self.now());
+                    // Fast forwarding puts the `TimestampOracle` in write mode,
+                    // which means the next read will have to advance a table
+                    // after reading from it. To prevent this we explicitly put
+                    // the `TimestampOracle` in read mode. Writes will always
+                    // advance a table no matter what mode the `TimestampOracle`
+                    // is in. We step back the value of `now()` so that the
+                    // next write can happen at `now()` and not a value above
+                    // `now()`
+                    let now = self.now();
+                    self.local_fast_forward(now.step_back().unwrap_or(now));
+                    let _ = self.get_local_read_ts();
                 }
             }
 
