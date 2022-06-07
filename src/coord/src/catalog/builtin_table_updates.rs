@@ -27,7 +27,7 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpeci
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
     MZ_CLUSTER_REPLICAS_STATUS, MZ_COLUMNS, MZ_CONNECTORS, MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES,
     MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES,
     MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
@@ -135,14 +135,13 @@ impl CatalogState {
         };
 
         BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_BASE),
             row: Row::pack_slice(&[
                 Datum::Int64(compute_instance_id),
                 Datum::Int64(id),
                 Datum::String(&name),
                 Datum::from(size.as_deref()),
                 Datum::from(az),
-                Datum::String("healthy"),
             ]),
             diff,
         }

@@ -1136,16 +1136,15 @@ pub static MZ_SECRETS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
-pub static MZ_CLUSTER_REPLICAS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_cluster_replicas",
+pub static MZ_CLUSTER_REPLICAS_BASE: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_cluster_replicas_base",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("cluster_id", ScalarType::Int64.nullable(false))
         .with_column("id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("size", ScalarType::String.nullable(true))
-        .with_column("availability_zone", ScalarType::String.nullable(true))
-        .with_column("status", ScalarType::String.nullable(false)),
+        .with_column("availability_zone", ScalarType::String.nullable(true)),
 });
 
 pub static MZ_CLUSTER_REPLICAS_STATUS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1247,6 +1246,33 @@ WHERE
     mz_dataflow_operators.worker = mz_dataflow_operator_addresses.worker AND
     mz_dataflow_names.local_id = mz_dataflow_operator_addresses.address[1] AND
     mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
+};
+
+pub const MZ_CLUSTER_REPLICAS: BuiltinView = BuiltinView {
+    name: "mz_cluster_replicas",
+    schema: MZ_CATALOG_SCHEMA,
+    sql: "CREATE VIEW mz_catalog.mz_cluster_replicas AS
+WITH counts AS (
+    SELECT
+        replica_id,
+        count(*) AS total,
+        sum(CASE WHEN status = 'ready' THEN 1 else 0 END) AS ready,
+        sum(CASE WHEN status = 'not_ready' THEN 1 else 0 END) AS not_ready
+    FROM mz_catalog.mz_cluster_replicas_status
+    GROUP BY replica_id
+)
+SELECT
+    mz_cluster_replicas_base.*,
+    CASE
+        WHEN counts.total = 0 OR counts.not_ready > 0
+            THEN 'unhealthy'
+        WHEN counts.ready = counts.total
+            THEN 'healthy'
+        ELSE 'unknown'
+        END AS status
+FROM mz_catalog.mz_cluster_replicas_base
+LEFT OUTER JOIN counts
+    ON mz_cluster_replicas_base.id = counts.replica_id",
 };
 
 pub const MZ_MATERIALIZATION_FRONTIERS: BuiltinView = BuiltinView {
@@ -2069,7 +2095,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTORS),
-        Builtin::Table(&MZ_CLUSTER_REPLICAS),
+        Builtin::Table(&MZ_CLUSTER_REPLICAS_BASE),
         Builtin::Table(&MZ_CLUSTER_REPLICAS_STATUS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::View(&MZ_RELATIONS),
@@ -2080,6 +2106,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::View(&MZ_DATAFLOW_NAMES),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_REACHABILITY),
+        Builtin::View(&MZ_CLUSTER_REPLICAS),
         Builtin::View(&MZ_MATERIALIZATION_FRONTIERS),
         Builtin::View(&MZ_MESSAGE_COUNTS),
         Builtin::View(&MZ_PERF_ARRANGEMENT_RECORDS),
