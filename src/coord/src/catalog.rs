@@ -846,13 +846,13 @@ impl CatalogState {
 
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
-    state: &'a CatalogState,
+    state: Cow<'a, CatalogState>,
     conn_id: u32,
     compute_instance: String,
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     user: String,
-    prepared_statements: Option<&'a HashMap<String, PreparedStatement>>,
+    prepared_statements: Option<Cow<'a, HashMap<String, PreparedStatement>>>,
 }
 
 impl ConnCatalog<'_> {
@@ -861,7 +861,19 @@ impl ConnCatalog<'_> {
     }
 
     pub fn state(&self) -> &CatalogState {
-        self.state
+        &*self.state
+    }
+
+    pub fn into_owned(self) -> ConnCatalog<'static> {
+        ConnCatalog {
+            state: Cow::Owned(self.state.into_owned()),
+            conn_id: self.conn_id,
+            compute_instance: self.compute_instance,
+            database: self.database,
+            search_path: self.search_path,
+            user: self.user,
+            prepared_statements: self.prepared_statements.map(|s| Cow::Owned(s.into_owned())),
+        }
     }
 
     fn effective_search_path(
@@ -1966,19 +1978,19 @@ impl<S: Append> Catalog<S> {
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect();
         ConnCatalog {
-            state: &self.state,
+            state: Cow::Borrowed(&self.state),
             conn_id: session.conn_id(),
             compute_instance: session.vars().cluster().into(),
             database,
             search_path,
             user: session.user().into(),
-            prepared_statements: Some(session.prepared_statements()),
+            prepared_statements: Some(Cow::Borrowed(session.prepared_statements())),
         }
     }
 
     pub fn for_sessionless_user(&self, user: String) -> ConnCatalog {
         ConnCatalog {
-            state: &self.state,
+            state: Cow::Borrowed(&self.state),
             conn_id: SYSTEM_CONN_ID,
             compute_instance: "default".into(),
             database: self
@@ -3374,6 +3386,7 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc> {
         self.prepared_statements
+            .as_ref()
             .map(|ps| ps.get(name).map(|ps| ps.desc()))
             .flatten()
     }

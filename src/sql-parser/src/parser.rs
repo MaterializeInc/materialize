@@ -1731,8 +1731,6 @@ impl<'a> Parser<'a> {
         let connector = if self.parse_keyword(CONNECTOR) {
             CsrConnector::Reference {
                 connector: self.parse_raw_name()?,
-                url: None,
-                with_options: None,
             }
         } else {
             CsrConnector::Inline {
@@ -1774,8 +1772,6 @@ impl<'a> Parser<'a> {
         let connector = if self.parse_keyword(CONNECTOR) {
             CsrConnector::Reference {
                 connector: self.parse_raw_name()?,
-                url: None,
-                with_options: None,
             }
         } else {
             CsrConnector::Inline {
@@ -2142,8 +2138,6 @@ impl<'a> Parser<'a> {
                     },
                     CONNECTOR => KafkaConnector::Reference {
                         connector: self.parse_raw_name()?,
-                        broker: None,
-                        with_options: None,
                     },
                     _ => unreachable!(),
                 };

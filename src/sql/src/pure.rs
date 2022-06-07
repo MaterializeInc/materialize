@@ -39,9 +39,11 @@ use crate::ast::{
     CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Value, WithOption,
     WithOptionValue,
 };
+use crate::catalog::SessionCatalog;
 use crate::kafka_util;
 use crate::names::Aug;
 use crate::normalize;
+use crate::plan::StatementContext;
 
 /// Purifies a statement, removing any dependencies on external state.
 ///
@@ -53,6 +55,7 @@ use crate::normalize;
 /// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
 /// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
+    catalog: Box<dyn SessionCatalog>,
     now: u64,
     mut stmt: CreateSourceStatement<Aug>,
     connector_context: ConnectorContext,
@@ -66,6 +69,8 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
+    let _ = catalog;
+
     let mut with_options_map = normalize::options(with_options)?;
     let mut config_options = BTreeMap::new();
 
@@ -74,24 +79,11 @@ pub async fn purify_create_source(
             connector, topic, ..
         }) => {
             let (broker, connector_options) = match connector {
-                KafkaConnector::Reference {
-                    broker,
-                    with_options,
-                    connector,
-                } => {
-                    let broker_url = match broker {
-                        Some(url) => url.to_owned(),
-                        None => {
-                            bail!("Unable to find connector named {}", connector.to_string())
-                        }
-                    };
-                    let options = match with_options {
-                        Some(opts) => opts,
-                        None => {
-                            bail!("Unable to find connector named {}", connector.to_string())
-                        }
-                    };
-                    (broker_url, Some(options))
+                KafkaConnector::Reference { connector } => {
+                    let scx = StatementContext::new(None, &*catalog);
+                    let item = scx.get_item_by_resolved_name(&connector)?;
+                    let connector = item.catalog_connector()?;
+                    (connector.uri(), Some(connector.options()))
                 }
                 KafkaConnector::Inline { broker } => (broker.to_string(), None),
             };
@@ -189,12 +181,21 @@ pub async fn purify_create_source(
         CreateSourceConnector::PubNub { .. } => (),
     }
 
-    purify_source_format(format, connector, &envelope, &config_options, with_options).await?;
+    purify_source_format(
+        &*catalog,
+        format,
+        connector,
+        &envelope,
+        &config_options,
+        with_options,
+    )
+    .await?;
 
     Ok(stmt)
 }
 
 async fn purify_source_format(
+    catalog: &dyn SessionCatalog,
     format: &mut CreateSourceFormat<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
@@ -231,6 +232,7 @@ async fn purify_source_format(
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
             purify_source_format_single(
+                catalog,
                 format,
                 connector,
                 envelope,
@@ -241,16 +243,31 @@ async fn purify_source_format(
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            purify_source_format_single(key, connector, envelope, connector_options, with_options)
-                .await?;
-            purify_source_format_single(val, connector, envelope, connector_options, with_options)
-                .await?;
+            purify_source_format_single(
+                catalog,
+                key,
+                connector,
+                envelope,
+                connector_options,
+                with_options,
+            )
+            .await?;
+            purify_source_format_single(
+                catalog,
+                val,
+                connector,
+                envelope,
+                connector_options,
+                with_options,
+            )
+            .await?;
         }
     }
     Ok(())
 }
 
 async fn purify_source_format_single(
+    catalog: &dyn SessionCatalog,
     format: &mut Format<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
@@ -260,8 +277,14 @@ async fn purify_source_format_single(
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connector } => {
-                purify_csr_connector_avro(connector, csr_connector, envelope, connector_options)
-                    .await?
+                purify_csr_connector_avro(
+                    catalog,
+                    connector,
+                    csr_connector,
+                    envelope,
+                    connector_options,
+                )
+                .await?
             }
             AvroSchema::InlineSchema {
                 schema: mz_sql_parser::ast::Schema::File(path),
@@ -291,8 +314,14 @@ async fn purify_source_format_single(
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connector } => {
-                purify_csr_connector_proto(connector, csr_connector, envelope, with_options)
-                    .await?;
+                purify_csr_connector_proto(
+                    catalog,
+                    connector,
+                    csr_connector,
+                    envelope,
+                    with_options,
+                )
+                .await?;
             }
             ProtobufSchema::InlineSchema {
                 message_name: _,
@@ -327,6 +356,7 @@ async fn purify_source_format_single(
 }
 
 async fn purify_csr_connector_proto(
+    catalog: &dyn SessionCatalog,
     connector: &mut CreateSourceConnector<Aug>,
     csr_connector: &mut CsrConnectorProto<Aug>,
     envelope: &Option<Envelope<Aug>>,
@@ -347,10 +377,13 @@ async fn purify_csr_connector_proto(
     match seed {
         None => {
             let url = match connector {
-                CsrConnector::Inline { url } => url,
-                CsrConnector::Reference { url, .. } => url
-                    .as_ref()
-                    .expect("CSR Connector must specify Registry URL"),
+                CsrConnector::Inline { url } => url.to_string(),
+                CsrConnector::Reference { connector } => {
+                    let scx = StatementContext::new(None, &*catalog);
+                    let item = scx.get_item_by_resolved_name(&connector)?;
+                    let connector = item.catalog_connector()?;
+                    connector.uri()
+                }
             }
             .parse()?;
             let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options)?)?;
@@ -385,6 +418,7 @@ async fn purify_csr_connector_proto(
 }
 
 async fn purify_csr_connector_avro(
+    catalog: &dyn SessionCatalog,
     connector: &mut CreateSourceConnector<Aug>,
     csr_connector: &mut CsrConnectorAvro<Aug>,
     envelope: &Option<Envelope<Aug>>,
@@ -404,10 +438,13 @@ async fn purify_csr_connector_avro(
     } = csr_connector;
     if seed.is_none() {
         let url = match connector {
-            CsrConnector::Inline { url } => url,
-            CsrConnector::Reference { url, .. } => url
-                .as_ref()
-                .expect("CSR Connector must specify Registry URL"),
+            CsrConnector::Inline { url } => url.to_string(),
+            CsrConnector::Reference { connector } => {
+                let scx = StatementContext::new(None, &*catalog);
+                let item = scx.get_item_by_resolved_name(&connector)?;
+                let connector = item.catalog_connector()?;
+                connector.uri()
+            }
         }
         .parse()?;
 
