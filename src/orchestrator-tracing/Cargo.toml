@@ -12,9 +12,10 @@ async-trait = "0.1.56"
 clap = { version = "3.1.18", features = ["env", "derive"] }
 http = "0.2.7"
 mz-orchestrator = { path = "../orchestrator" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-repr = { path = "../repr" }
 tracing-subscriber = { version = "0.3.11", default-features = false }
+opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
 
 [features]
 tokio-console = ["mz-ore/tokio-console"]
