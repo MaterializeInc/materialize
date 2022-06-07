@@ -47,9 +47,11 @@ uuid = { version = "1.1.1", features = ["v4"] }
 
 [dev-dependencies]
 async-trait = "0.1.56"
+axum = "0.5.6"
 clap = { version = "3.1.18", features = ["derive", "env"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
 futures-task = "0.3.21"
+mz-http-util = { path = "../http-util" }
 num_cpus = "1.13.1"
 num_enum = "0.5.7"
 serde_json = "1.0.81"

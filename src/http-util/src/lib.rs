@@ -12,6 +12,10 @@
 use askama::Template;
 use axum::http::status::StatusCode;
 use axum::response::{Html, IntoResponse};
+use axum::TypedHeader;
+use headers::ContentType;
+use mz_ore::metrics::MetricsRegistry;
+use prometheus::Encoder;
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -89,4 +93,15 @@ macro_rules! make_handle_static {
 #[allow(clippy::unused_async)]
 pub async fn handle_liveness_check() -> impl IntoResponse {
     return (StatusCode::OK, "Liveness check successful!");
+}
+
+/// Serves metrics from the selected metrics registry variant.
+#[allow(clippy::unused_async)]
+pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse {
+    let mut buffer = Vec::new();
+    let encoder = prometheus::TextEncoder::new();
+    encoder
+        .encode(&registry.gather(), &mut buffer)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
 }
