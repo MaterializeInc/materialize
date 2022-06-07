@@ -1010,7 +1010,6 @@ impl Runner {
     }
 }
 
-
 async fn connect(addr: SocketAddr) -> tokio_postgres::Client {
     let (client, connection) = tokio_postgres::connect(
         &format!("host={} port={} user=materialize", addr.ip(), addr.port()),
