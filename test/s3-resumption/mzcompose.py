@@ -17,7 +17,10 @@ from materialize.mzcompose.services import (
 
 SERVICES = [
     Localstack(),
-    Materialized(environment=["MZ_LOG_FILTER=dataflow::source::s3=trace,info"], options=["--unsafe-mode"]),
+    Materialized(
+        environment=["MZ_LOG_FILTER=dataflow::source::s3=trace,info"],
+        options=["--unsafe-mode"],
+    ),
     Toxiproxy(),
     Testdrive(default_timeout="600s"),
 ]
