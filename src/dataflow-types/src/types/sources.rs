@@ -326,7 +326,7 @@ pub enum SourceEnvelope {
     ///
     /// If the `KeyEnvelope` is present,
     /// include the key columns as an output column of the source with the given properties.
-    None(KeyEnvelope),
+    None(NoneEnvelope),
     /// `Debezium` avoids holding onto previously seen values by trusting the required
     /// `before` and `after` value fields coming from the upstream source.
     Debezium(DebeziumEnvelope),
@@ -384,6 +384,30 @@ pub enum UnplannedSourceEnvelope {
     /// An envelope for sources that directly read differential Rows. This is internal and
     /// cannot be requested via SQL.
     DifferentialRow,
+}
+
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct NoneEnvelope {
+    pub key_envelope: KeyEnvelope,
+    pub key_arity: usize,
+}
+
+impl RustType<ProtoNoneEnvelope> for NoneEnvelope {
+    fn into_proto(&self) -> ProtoNoneEnvelope {
+        ProtoNoneEnvelope {
+            key_envelope: Some(self.key_envelope.into_proto()),
+            key_arity: self.key_arity.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoNoneEnvelope) -> Result<Self, TryFromProtoError> {
+        Ok(NoneEnvelope {
+            key_envelope: proto
+                .key_envelope
+                .into_rust_if_some("ProtoNoneEnvelope::key_envelope")?,
+            key_arity: proto.key_arity.into_rust()?,
+        })
+    }
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -814,7 +838,11 @@ impl UnplannedSourceEnvelope {
     ///
     /// Panics if the input envelope is `UnplannedSourceEnvelope::Upsert` and
     /// key is not passed as `Some`
-    fn into_source_envelope(self, key: Option<Vec<usize>>) -> SourceEnvelope {
+    fn into_source_envelope(
+        self,
+        key: Option<Vec<usize>>,
+        key_arity: Option<usize>,
+    ) -> SourceEnvelope {
         match self {
             UnplannedSourceEnvelope::Upsert(upsert_style) => {
                 SourceEnvelope::Upsert(UpsertEnvelope {
@@ -825,7 +853,10 @@ impl UnplannedSourceEnvelope {
             UnplannedSourceEnvelope::Debezium(inner) => {
                 SourceEnvelope::Debezium(inner)
             }
-            UnplannedSourceEnvelope::None(inner) => SourceEnvelope::None(inner),
+            UnplannedSourceEnvelope::None(key_envelope) => SourceEnvelope::None(NoneEnvelope {
+                key_envelope,
+                key_arity: key_arity.unwrap_or(0),
+            }),
             UnplannedSourceEnvelope::CdcV2 => SourceEnvelope::CdcV2,
             UnplannedSourceEnvelope::DifferentialRow => SourceEnvelope::DifferentialRow,
         }
@@ -846,11 +877,12 @@ impl UnplannedSourceEnvelope {
                     Some(desc) => desc,
                     None => {
                         return Ok((
-                            self.into_source_envelope(None),
+                            self.into_source_envelope(None, None),
                             value_desc.concat(metadata_desc),
                         ))
                     }
                 };
+                let key_arity = key_desc.arity();
 
                 let (keyed, key) = match key_envelope {
                     KeyEnvelope::None => (value_desc, None),
@@ -896,7 +928,10 @@ impl UnplannedSourceEnvelope {
                         (key_desc.with_key(vec![0]).concat(value_desc), Some(vec![0]))
                     }
                 };
-                (self.into_source_envelope(key), keyed.concat(metadata_desc))
+                (
+                    self.into_source_envelope(key, Some(key_arity)),
+                    keyed.concat(metadata_desc),
+                )
             }
             UnplannedSourceEnvelope::Debezium(DebeziumEnvelope { after_idx, .. })
             | UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx }) => {
@@ -913,7 +948,7 @@ impl UnplannedSourceEnvelope {
                             _ => desc,
                         };
 
-                        (self.into_source_envelope(key), desc)
+                        (self.into_source_envelope(key, None), desc)
                     }
                     ty => bail!(
                         "Incorrect type for Debezium value, expected Record, got {:?}",
@@ -931,7 +966,7 @@ impl UnplannedSourceEnvelope {
                             // TODO maybe check this by name
                             match &fields[0].1.scalar_type {
                                 ScalarType::Record { fields, .. } => (
-                                    self.into_source_envelope(None),
+                                    self.into_source_envelope(None, None),
                                     RelationDesc::from_names_and_types(fields.clone()),
                                 ),
                                 ty => {
@@ -945,7 +980,7 @@ impl UnplannedSourceEnvelope {
                 }
             }
             UnplannedSourceEnvelope::DifferentialRow => (
-                self.into_source_envelope(None),
+                self.into_source_envelope(None, None),
                 value_desc.concat(metadata_desc),
             ),
         })
