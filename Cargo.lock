@@ -3263,6 +3263,7 @@ dependencies = [
  "mz-postgres-util",
  "mz-repr",
  "mz-stash",
+ "once_cell",
  "proptest",
  "proptest-derive",
  "prost",
