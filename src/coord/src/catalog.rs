@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
-use mz_stash::{Append, Postgres, Sqlite};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -26,8 +25,9 @@ use tracing::{info, trace};
 
 use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_dataflow_types::client::controller::ComputeInstanceStatus;
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
@@ -58,6 +58,7 @@ use mz_sql::plan::{
     Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
+use mz_stash::{Append, Postgres, Sqlite};
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
@@ -516,6 +517,10 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) {
+        let replica = ComputeInstanceReplica {
+            config,
+            process_status: HashMap::new(),
+        };
         let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
         assert!(compute_instance
             .replica_id_by_name
@@ -523,7 +528,7 @@ impl CatalogState {
             .is_none());
         assert!(compute_instance
             .replicas_by_id
-            .insert(replica_id, config)
+            .insert(replica_id, replica)
             .is_none());
     }
 
@@ -946,7 +951,13 @@ pub struct ComputeInstance {
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
-    pub replicas_by_id: HashMap<ReplicaId, ConcreteComputeInstanceReplicaConfig>,
+    pub replicas_by_id: HashMap<ReplicaId, ComputeInstanceReplica>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeInstanceReplica {
+    pub config: ConcreteComputeInstanceReplicaConfig,
+    pub process_status: HashMap<ProcessId, ComputeInstanceStatus>,
 }
 
 #[derive(Clone, Debug)]

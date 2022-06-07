@@ -117,9 +117,9 @@ impl CatalogState {
     ) -> BuiltinTableUpdate {
         let instance = &self.compute_instances_by_id[&compute_instance_id];
         let id = instance.replica_id_by_name[name];
-        let config = &instance.replicas_by_id[&id];
+        let replica = &instance.replicas_by_id[&id];
 
-        let (size, az) = match config {
+        let (size, az) = match &replica.config {
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config,
                 availability_zone,

@@ -578,9 +578,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
-            for (replica_id, config) in instance.replicas_by_id.clone() {
+            for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.dataflow_client
-                    .add_replica_to_instance(instance.id, replica_id, config)
+                    .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -2308,9 +2308,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .create_instance(instance.id, instance.logging.clone())
             .await
             .unwrap();
-        for (replica_id, config) in instance.replicas_by_id.clone() {
+        for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.dataflow_client
-                .add_replica_to_instance(instance.id, replica_id, config)
+                .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -3042,9 +3042,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
-            for (replica_id, config) in replicas {
+            for (replica_id, replica) in replicas {
                 self.dataflow_client
-                    .drop_replica(instance_id, replica_id, config)
+                    .drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3085,9 +3085,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        for (compute_id, replica_id, config) in replicas_to_drop {
+        for (compute_id, replica_id, replica) in replicas_to_drop {
             self.dataflow_client
-                .drop_replica(compute_id, replica_id, config)
+                .drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
