@@ -12,6 +12,7 @@ use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use tokio::sync::oneshot;
 
 use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
 use mz_expr::{EvalError, UnmaterializableFunc};
@@ -487,6 +488,12 @@ impl From<NotNullViolation> for CoordError {
 impl From<RecursionLimitError> for CoordError {
     fn from(e: RecursionLimitError) -> CoordError {
         CoordError::RecursionLimit(e)
+    }
+}
+
+impl From<oneshot::error::RecvError> for CoordError {
+    fn from(e: oneshot::error::RecvError) -> CoordError {
+        CoordError::Unstructured(e.into())
     }
 }
 

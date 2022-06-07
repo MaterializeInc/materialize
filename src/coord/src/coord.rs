@@ -108,7 +108,6 @@ use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
-use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
@@ -182,6 +181,7 @@ pub enum Message {
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
+    GroupCommit,
 }
 
 #[derive(Derivative)]
@@ -260,6 +260,26 @@ pub enum PeekResponseUnary {
     Rows(Vec<Row>),
     Error(String),
     Canceled,
+}
+
+/// A pending write transaction that will be committing during the next group commit.
+struct PendingWriteTxn {
+    /// List of all write operations within the transaction.
+    writes: Vec<WriteOp>,
+    /// The client of the write transaction is waiting for a response from this `sender`.
+    /// A response should only be sent after the write transaction has been made durable or aborted.
+    sender: oneshot::Sender<Option<ExecuteResponse>>,
+    /// Connection ID of the client who initiated the transaction.
+    conn_id: u32,
+}
+
+/// Timestamps used by writes in an Append command.
+#[derive(Debug)]
+pub struct WriteTimestamp {
+    /// Timestamp that the write will take place on.
+    timestamp: Timestamp,
+    /// Timestamp to advance the appended table to.
+    advance_to: Timestamp,
 }
 
 /// State provided to a catalog transaction closure.
@@ -366,6 +386,8 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
+    /// Pending writes waiting for a group commit
+    pending_writes: Vec<PendingWriteTxn>,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -453,8 +475,8 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Assign a timestamp for a write to a local input and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    fn get_and_step_local_write_ts(&mut self) -> (Timestamp, Timestamp) {
-        let ts = self.global_timeline.write_ts();
+    fn get_and_step_local_write_ts(&mut self) -> WriteTimestamp {
+        let timestamp = self.global_timeline.write_ts();
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
          * timestamp will go up for the next write.
@@ -464,8 +486,19 @@ impl<S: Append + 'static> Coordinator<S> {
          * same timestamp as long as they're written to the WAL first.
          */
         let _ = self.global_timeline.read_ts();
-        let advance_to = ts.step_forward();
-        (ts, advance_to)
+        let advance_to = timestamp.step_forward();
+        WriteTimestamp {
+            timestamp,
+            advance_to,
+        }
+    }
+
+    /// Peek the current timestamp used for operations on local inputs. Used to determine how much
+    /// to block group commits by.
+    ///
+    /// NOTE: This can be removed once DDL is included in group commits.
+    fn peek_local_ts(&self) -> Timestamp {
+        self.global_timeline.peek_ts()
     }
 
     fn local_fast_forward(&mut self, lower_bound: Timestamp) {
@@ -848,6 +881,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.local_fast_forward(now.step_back().unwrap_or(now));
                     let _ = self.get_local_read_ts();
                 }
+                Message::GroupCommit => {
+                    self.try_group_commit().await;
+                }
             }
 
             if let Some(timestamp) = self.global_timeline.should_advance_to() {
@@ -884,6 +920,92 @@ impl<S: Append + 'static> Coordinator<S> {
             advance_to,
             start.elapsed().as_millis()
         );
+    }
+
+    /// Attempts to commit all pending write transactions in a group commit. If the timestamp
+    /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
+    /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
+    /// writes.
+    async fn try_group_commit(&mut self) {
+        if self.pending_writes.is_empty() {
+            return;
+        }
+
+        // If we need to sleep below, then it's possible that some DDL may execute while we sleep.
+        // In that case, the DDL will use some timestamp greater than or equal to the time that we
+        // peeked, closing the peeked time and making it invalid for future writes. Therefore, we
+        // must get a new valid timestamp everytime this method is called.
+        // In the future we should include DDL in group commits, to avoid this issue. Then
+        // `self.peek_local_write_ts()` can be removed. Instead we can call
+        // `self.get_and_step_local_write_ts()` and safely use that value once we wake up.
+        let timestamp = self.peek_local_ts();
+        let now = (self.catalog.config().now)();
+        if timestamp > now {
+            // Cap retry time to 1s. In cases where the system clock has retreated by
+            // some large amount of time, this prevents against then waiting for that
+            // large amount of time in case the system clock then advances back to near
+            // what it was.
+            let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000);
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "group_commit", async move {
+                tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
+                internal_cmd_tx
+                    .send(Message::GroupCommit)
+                    .expect("sending to internal_cmd_tx cannot fail");
+            });
+        } else {
+            self.group_commit().await;
+        }
+    }
+
+    /// Commits all pending write transactions at the same timestamp. All pending writes will be
+    /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
+    /// happen at the same timestamp and all involved tables will be advanced to some timestamp
+    /// larger than the timestamp of the write.
+    async fn group_commit(&mut self) {
+        // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
+        // any point during this method. We will still commit the write without waiting for `now()`
+        // to advance. This is ok because the next batch of writes will trigger the wait loop in
+        // `try_group_commit()` if `now()` hasn't advanced past the global timeline, preventing
+        // an unbounded advancin of the global timeline ahead of `now()`.
+        let WriteTimestamp {
+            timestamp,
+            advance_to,
+        } = self.get_and_step_local_write_ts();
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
+        for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
+            let writes = std::mem::take(writes);
+            for WriteOp { id, rows } in writes {
+                // If the table that some write was targeting has been deleted while the write was
+                // waiting, then the write will be ignored and we respond to the client that the
+                // write was successful. This is only possible if the write and the delete were
+                // concurrent. Therefore, we are free to order the write before the delete without
+                // violating any consistency guarantees.
+                if self.catalog.try_get_entry(&id).is_some() {
+                    let updates = rows
+                        .into_iter()
+                        .map(|(row, diff)| Update {
+                            row,
+                            diff,
+                            timestamp,
+                        })
+                        .collect::<Vec<_>>();
+                    appends.entry(id).or_default().extend(updates);
+                }
+            }
+        }
+        let appends = appends
+            .into_iter()
+            .map(|(id, updates)| (id, updates, advance_to))
+            .collect();
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
+        for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
+            let _ = tx.send(None);
+        }
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1573,7 +1695,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 return;
             }
 
-            // Cancel deferred writes. There is at most one pending write per session.
+            // Cancel pending writes. There is at most one pending write per session.
+            if let Some(idx) = self.pending_writes.iter().position(
+                |PendingWriteTxn {
+                     conn_id: txn_conn_id,
+                     ..
+                 }| *txn_conn_id == conn_id,
+            ) {
+                let PendingWriteTxn { sender, .. } = self.pending_writes.remove(idx);
+                let _ = sender.send(Some(ExecuteResponse::Canceled));
+            }
+
+            // Cancel deferred writes. There is at most one deferred write per session.
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
@@ -3033,7 +3166,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 session.vars_mut().end_transaction(action);
 
                 match result {
-                    Ok(()) => tx.send(Ok(response), session),
+                    Ok(None) => tx.send(Ok(response), session),
+                    Ok(Some(response)) => tx.send(Ok(response), session),
                     Err(err) => tx.send(Err(err), session),
                 }
             },
@@ -3044,55 +3178,36 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<impl Future<Output = Result<(), CoordError>>, CoordError> {
+    ) -> Result<impl Future<Output = Result<Option<ExecuteResponse>, CoordError>>, CoordError> {
         let txn = self.clear_transaction(session).await;
 
-        // Although the compaction frontier may have advanced, we do not need to
-        // call `maintenance` here because it will soon be called after the next
-        // `update_upper`.
+        let mut write_rx = None;
 
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 match ops {
-                    TransactionOps::Writes(inserts) => {
-                        // Although the transaction has a wall_time in its pcx, we use a new
-                        // coordinator timestamp here to provide linearizability. The wall_time does
-                        // not have to relate to the write time.
-                        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
-                        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-
-                        for WriteOp { id, rows } in inserts {
+                    TransactionOps::Writes(mut writes) => {
+                        for WriteOp { id, .. } in &writes {
                             // Re-verify this id exists.
                             let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
                                 CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
                             })?;
-                            // This can be empty if, say, a DELETE's WHERE clause had 0 results.
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            let updates = rows
-                                .into_iter()
-                                .map(|(row, diff)| Update {
-                                    row,
-                                    diff,
-                                    timestamp,
-                                })
-                                .collect::<Vec<_>>();
-                            appends.entry(id).or_default().extend(updates);
                         }
 
-                        match appends.len() {
-                            1 => {
-                                let (id, updates) = appends.into_element();
-                                self.dataflow_client
-                                    .storage_mut()
-                                    .append(vec![(id, updates, advance_to)])
-                                    .await
-                                    .unwrap();
-                            },
-                            0 => {},
-                            _ => unreachable!("multi-table write transaction should fail immediately when the second table is added to the transaction"),
+                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                        let (tx, rx) = oneshot::channel();
+                        write_rx = Some(rx);
+                        if self.pending_writes.is_empty() {
+                            self.internal_cmd_tx
+                                .send(Message::GroupCommit)
+                                .expect("sending to internal_cmd_tx cannot fail");
                         }
+                        self.pending_writes.push(PendingWriteTxn {
+                            writes,
+                            sender: tx,
+                            conn_id: session.conn_id(),
+                        });
                     }
                     TransactionOps::Secrets(secrets) => {
                         self.secrets_controller.apply(secrets).await?
@@ -3101,7 +3216,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
         }
-        Ok(async move { Ok(()) })
+        Ok(async move {
+            if let Some(rx) = write_rx {
+                Ok(rx.await?)
+            } else {
+                Ok(None)
+            }
+        })
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
@@ -4675,7 +4796,21 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let (timestamp, advance_to) = self.get_and_step_local_write_ts();
+        // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
+        // table writes are not batched in a group commit. This is mostly due to the complexity
+        // around checking for conflicting DDL at commit time. There is a possibility that if a user
+        // is executing DDL at a rate faster than 1 query per millisecond, then the global timeline
+        // will unboundedly advance past the system clock. This can cause future queries to block,
+        // but will not affect correctness. Since this rate of DDL is unlikely, we are leaving DDL
+        // related writes out of group commits for now.
+        //
+        // In the future we can add these write to group commit by:
+        //  1. Checking for conflicts at commit time and aborting conflicting DDL.
+        //  2. Delaying modifications to on-disk and in-memory catalog until commit time.
+        let WriteTimestamp {
+            timestamp,
+            advance_to,
+        } = self.get_and_step_local_write_ts();
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         for u in updates {
             appends.entry(u.id).or_default().push(Update {
@@ -5058,6 +5193,7 @@ pub async fn serve<S: Append + 'static>(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
+                pending_writes: Vec::new(),
                 secrets_controller,
                 secrets_reader,
                 replica_sizes,
@@ -5747,6 +5883,22 @@ mod timeline {
             }
         }
 
+        /// Peek the current value of the timestamp.
+        ///
+        /// No operations should be assigned to the timestamp returned by this function. The
+        /// timestamp returned should only be used to compare the progress of the `TimestampOracle`
+        /// against some external source of time.
+        ///
+        /// Subsequent values of `self.read_ts()` and `self.write_ts()` will be greater or equal to
+        /// this timestamp.
+        ///
+        /// NOTE: This can be removed once DDL is included in group commits.
+        pub fn peek_ts(&self) -> T {
+            match &self.state {
+                TimestampOracleState::Writing(ts) | TimestampOracleState::Reading(ts) => ts.clone(),
+            }
+        }
+
         /// Acquire a new timestamp for writing.
         ///
         /// This timestamp will be strictly greater than all prior values of
@@ -5783,6 +5935,7 @@ mod timeline {
                 }
             }
         }
+
         /// Electively advance the tracked times.
         ///
         /// If `lower_bound` is strictly greater than the current time (of either state), the
