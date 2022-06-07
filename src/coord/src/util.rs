@@ -16,6 +16,7 @@ use crate::error::CoordError;
 use crate::session::Session;
 
 /// Handles responding to clients.
+#[derive(Debug)]
 pub struct ClientTransmitter<T> {
     tx: Option<oneshot::Sender<Response<T>>>,
     internal_cmd_tx: UnboundedSender<Message>,
