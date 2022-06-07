@@ -595,7 +595,7 @@ impl Runner {
                 blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
                 consensus_uri,
             },
-            catalog_postgres_stash: Some(catalog_postgres_stash),
+            catalog_postgres_stash,
             storage_postgres_stash,
             orchestrator: OrchestratorConfig {
                 backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
