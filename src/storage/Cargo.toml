@@ -30,7 +30,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange", optional = true }
 mz-kafka-util = { path = "../kafka-util", optional = true }
 mz-kinesis-util = { path = "../kinesis-util", optional = true }
-mz-ore = { path = "../ore", features = ["task"] }
+mz-ore = { path = "../ore", features = ["task", "select"] }
 mz-persist = { path = "../persist", optional = true }
 mz-persist-client = { path = "../persist-client", optional = true }
 mz-persist-types = { path = "../persist-types", optional = true }

@@ -61,7 +61,8 @@ console-subscriber = { version = "0.1.6", optional = true }
 tokio = { version = "1.18.2", features = ["macros"] }
 
 [features]
-default = ["network", "chrono", "cli", "metrics", "stack", "test"]
+default = ["network", "chrono", "cli", "metrics", "stack", "test", "select"]
+select = ["tokio/sync"]
 network = ["async-trait", "bytes", "futures", "openssl", "smallvec", "tokio-openssl", "tokio", "task"]
 task = ["tokio", "tokio/tracing"]
 tracing_ = [
