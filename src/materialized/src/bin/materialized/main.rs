@@ -672,7 +672,9 @@ max log level: {max_log_level}",
             user_defined_secret_mount_path: args.user_defined_secret_mount_path.unwrap_or_default(),
             refresh_pod_name: args.pod_name.unwrap_or_default(),
         },
-        Orchestrator::Process => SecretsControllerConfig::LocalFileSystem,
+        Orchestrator::Process => {
+            SecretsControllerConfig::LocalFileSystem(data_directory.join("secrets"))
+        }
     };
 
     let server = runtime.block_on(materialized::serve(materialized::Config {
@@ -690,7 +692,7 @@ max log level: {max_log_level}",
         catalog_postgres_stash,
         storage_postgres_stash,
         orchestrator,
-        secrets_controller: Some(secrets_controller),
+        secrets_controller,
         unsafe_mode: args.unsafe_mode,
         metrics_registry,
         now: SYSTEM_TIME.clone(),

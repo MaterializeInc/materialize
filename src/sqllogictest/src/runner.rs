@@ -58,7 +58,7 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
-use materialized::{OrchestratorBackend, OrchestratorConfig};
+use materialized::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::id_gen::PortAllocator;
@@ -610,7 +610,9 @@ impl Runner {
                 linger: false,
                 tracing: TracingCliArgs::default(),
             },
-            secrets_controller: None,
+            secrets_controller: SecretsControllerConfig::LocalFileSystem(
+                temp_dir.path().to_path_buf().join("secrets"),
+            ),
             // Setting the port to 0 means that the OS will automatically
             // allocate an available port.
             sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

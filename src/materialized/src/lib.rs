@@ -111,8 +111,8 @@ pub struct Config {
     pub orchestrator: OrchestratorConfig,
 
     // === Secrets Storage options. ===
-    /// Optional configuration for a secrets controller.
-    pub secrets_controller: Option<SecretsControllerConfig>,
+    /// Configuration for a secrets controller.
+    pub secrets_controller: SecretsControllerConfig,
 
     // === Mode switches. ===
     /// Whether to permit usage of unsafe features.
@@ -187,7 +187,7 @@ pub enum OrchestratorBackend {
 /// Configuration for the service orchestrator.
 #[derive(Debug, Clone)]
 pub enum SecretsControllerConfig {
-    LocalFileSystem,
+    LocalFileSystem(PathBuf),
     // Create a Kubernetes Controller.
     Kubernetes {
         /// The name of a Kubernetes context to use, if the Kubernetes configuration
@@ -274,8 +274,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize secrets controller.
     let (secrets_controller, secrets_reader) = match config.secrets_controller {
-        None | Some(SecretsControllerConfig::LocalFileSystem) => {
-            let secrets_storage = config.data_directory.join("secrets");
+        SecretsControllerConfig::LocalFileSystem(secrets_storage) => {
             fs::create_dir_all(&secrets_storage).with_context(|| {
                 format!("creating secrets directory: {}", secrets_storage.display())
             })?;
@@ -291,12 +290,12 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 secrets_reader,
             )
         }
-        Some(SecretsControllerConfig::Kubernetes {
+        SecretsControllerConfig::Kubernetes {
             context,
             user_defined_secret,
             user_defined_secret_mount_path,
             refresh_pod_name,
-        }) => {
+        } => {
             let secrets_controller = Box::new(
                 KubernetesSecretsController::new(
                     context.to_owned(),
