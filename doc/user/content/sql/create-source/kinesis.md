@@ -1,11 +1,12 @@
 ---
 title: "CREATE SOURCE: Kinesis Data Streams"
 description: "Connecting Materialize to a Kinesis data stream"
-menu:
-  main:
-    parent: 'create-source'
-    name: Kinesis Data Streams
-    weight: 40
+draft: true
+#menu:
+#  main:
+#    parent: 'create-source'
+#    name: Kinesis Data Streams
+#    weight: 40
 aliases:
     - /sql/create-source/kinesis-source
     - /sql/create-source/json-kinesis
@@ -13,6 +14,8 @@ aliases:
     - /sql/create-source/text-kinesis
     - /sql/create-source/csv-kinesis
 ---
+
+[//]: # "NOTE(morsapaes) Once we're ready to bring the KDS source back, check #12991 to restore the previous docs state."
 
 {{< beta />}}
 

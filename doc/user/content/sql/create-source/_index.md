@@ -22,10 +22,8 @@ Materialize bundles **native connectors** for the following external systems:
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/sql/create-source/kafka)
 - [Redpanda](/sql/create-source/kafka)
-- [Kinesis Data Streams](/sql/create-source/kinesis)
 {{</ linkbox >}}
-{{< linkbox title="Object Storage" >}}
-- [S3](/sql/create-source/s3)
+{{< linkbox title="" >}}
 {{</ linkbox >}}
 {{< linkbox title="Databases (CDC)" >}}
 - [PostgreSQL](/sql/create-source/postgres)
