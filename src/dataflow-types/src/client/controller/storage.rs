@@ -23,7 +23,6 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -196,7 +195,10 @@ impl Arbitrary for CollectionMetadata {
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<T: Timestamp + Lattice + Codec64, S = mz_stash::Sqlite> {
+pub struct StorageControllerState<
+    T: Timestamp + Lattice + Codec64,
+    S = mz_stash::Memory<mz_stash::Postgres>,
+> {
     pub(super) clients: BTreeMap<GlobalId, Box<dyn StorageClient<T>>>,
     /// Collections maintained by the storage controller.
     ///
@@ -291,9 +293,16 @@ impl From<StashError> for StorageError {
 }
 
 impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
-    pub(super) fn new(state_dir: PathBuf) -> Self {
-        let stash = mz_stash::Sqlite::open(Some(&state_dir.join("storage")))
-            .expect("unable to create storage stash");
+    pub(super) async fn new(postgres_url: String) -> Self {
+        let tls = mz_postgres_util::make_tls(
+            &tokio_postgres::config::Config::from_str(&postgres_url)
+                .expect("invalid postgres url for storage stash"),
+        )
+        .expect("could not make storage TLS connector");
+        let stash = mz_stash::Postgres::new(postgres_url, None, tls)
+            .await
+            .expect("could not connect to postgres storage stash");
+        let stash = mz_stash::Memory::new(stash);
         Self {
             clients: BTreeMap::default(),
             collections: BTreeMap::default(),
@@ -739,7 +748,7 @@ where
 {
     /// Create a new storage controller from a client it should wrap.
     pub async fn new(
-        state_dir: PathBuf,
+        postgres_url: String,
         persist_location: PersistLocation,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
@@ -747,7 +756,7 @@ where
         let persist_client = persist_location.open().await.unwrap();
 
         Self {
-            state: StorageControllerState::new(state_dir),
+            state: StorageControllerState::new(postgres_url).await,
             persist_location,
             persist_client,
             orchestrator,

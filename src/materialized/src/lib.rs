@@ -100,6 +100,8 @@ pub struct Config {
     /// Optional Postgres connection string which will use Postgres as the metadata
     /// stash instead of sqlite from the `data_directory`.
     pub catalog_postgres_stash: Option<String>,
+    /// Postgres connection string for storage's stash.
+    pub storage_postgres_stash: String,
 
     // === Connector options. ===
     /// Configuration for source and sink connectors created by the storage
@@ -349,7 +351,7 @@ async fn serve_stash<S: mz_stash::Append + 'static>(
 
     // Initialize dataflow controller.
     let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
-        config.data_directory,
+        config.storage_postgres_stash,
         config.persist_location,
         orchestrator.orchestrator.namespace("storage"),
         config.orchestrator.storaged_image,

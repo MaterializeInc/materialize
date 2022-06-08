@@ -107,13 +107,14 @@ def main() -> int:
             if args.reset:
                 print("Removing mzdata directory...")
                 shutil.rmtree("mzdata", ignore_errors=True)
-            for schema in ["consensus", "catalog"]:
+            for schema in ["consensus", "catalog", "storage"]:
                 if args.reset:
                     _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             command += [
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--catalog-postgres-stash={args.postgres}?options=--search_path=catalog",
+                f"--storage-postgres-stash={args.postgres}?options=--search_path=storage",
             ]
         elif args.program == "sqllogictest":
             command += [f"--postgres-url={args.postgres}"]
