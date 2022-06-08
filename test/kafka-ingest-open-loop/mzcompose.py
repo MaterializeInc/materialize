@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import sys
 import time
 
 from pg8000.dbapi import InterfaceError
@@ -39,14 +38,7 @@ def query_materialize(
 ) -> int:
     with c.sql_cursor() as cursor:
         try:
-            cursor.execute("SELECT * FROM load_test_materialization_frontier")
-            row = cursor.fetchone()
-            if row is None or len(row) != 1 or row[0] is None:
-                return 0
-            timestamp = int(row[0])
-            if timestamp == 0:
-                return 0
-            cursor.execute(f"SELECT * FROM records_ingested AS OF {timestamp}")
+            cursor.execute("SELECT * FROM load_test_count")
             row = cursor.fetchone()
             if row is None or len(row) != 1 or row[0] is None:
                 return 0
@@ -111,60 +103,28 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--value-bytes", type=int, default=500, help="record payload size in bytes"
     )
     parser.add_argument(
-        "--upsert",
-        action="store_true",
-        help="whether to use envelope UPSERT (True) or NONE (False)",
-    )
-    parser.add_argument(
         "--timeout-secs", type=int, default=120, help="timeout to send records to Kafka"
     )
     parser.add_argument(
-        "--enable-persistence",
-        action="store_true",
-        help="whether or not to enable persistence on materialized",
-    )
-    parser.add_argument(
-        "--s3-storage",
+        "--blob-url",
         type=str,
         default=None,
-        help="enables s3 persist storage, pointed at the given subpath of our internal testing bucket",
+        help="location where we store persistent data",
     )
     parser.add_argument(
-        "--workers",
-        type=int,
+        "--consensus-url",
+        type=str,
         default=None,
-        help="number of dataflow workers to use in materialized",
+        help="location where we store persistent data",
     )
     args = parser.parse_args()
 
-    envelope = "NONE"
-    if args.upsert:
-        envelope = "UPSERT"
-
-    options = []
-    if args.enable_persistence:
-        options = [
-            "--persistent-user-tables",
-            "--persistent-kafka-sources",
-            "--disable-persistent-system-tables-test=true",
-        ]
-
-    if args.s3_storage == "":
-        print("--s3-storage value must be non-empty", file=sys.stderr)
-        sys.exit(1)
-    elif args.s3_storage:
-        if args.enable_persistence is not True:
-            print(
-                "cannot specifiy --s3-storage without --enable-persistence",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        options.extend(
-            [
-                "--persist-storage-enabled",
-                f"--persist-storage=s3://mtlz-test-persist-1d-lifecycle-delete/{args.s3_storage}",
-            ]
-        )
+    options = [
+        "--persist-consensus-url",
+        f"{args.consensus_url}",
+        "--persist-blob-url",
+        f"{args.blob_url}",
+    ]
 
     override = [
         Materialized(
@@ -181,7 +141,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.run(
             "testdrive",
-            f"--var=envelope={envelope}",
             "setup.td",
         )
 
@@ -236,13 +195,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_smoke_test(c: Composition) -> None:
-    for arg in ["--upsert", "--enable-persistence"]:
-        c.workflow(
-            "default",
-            "--num-seconds=15",
-            "--records-per-second=1000",
-            arg,
-        )
-        c.kill("materialized")
-        c.rm("materialized", "testdrive", "kafka", destroy_volumes=True)
-        c.rm_volumes("mzdata", "pgdata")
+    c.workflow(
+        "default",
+        "--num-seconds=15",
+        "--records-per-second=1000",
+    )
+    c.kill("materialized")
+    c.rm("materialized", "testdrive", "kafka", destroy_volumes=True)
+    c.rm_volumes("mzdata", "pgdata")
