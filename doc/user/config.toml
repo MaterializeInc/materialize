@@ -146,14 +146,12 @@ weight = 5
 identifier = "integration-guides"
 name = "Integration guides"
 parent = "integrations"
-url = "/integrations"
 weight = 40
 
 [[menu.main]]
 identifier = "client-libraries"
 name = "Client libraries"
 parent = "integrations"
-url = "/integrations/#libraries-and-drivers"
 weight = 30
 
 [[menu.main]]
