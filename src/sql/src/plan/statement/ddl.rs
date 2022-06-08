@@ -79,7 +79,7 @@ use crate::names::{
     ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedObjectName, SchemaSpecifier,
 };
 use crate::normalize::ident;
-use crate::normalize::{self, SqlMaybeValueId};
+use crate::normalize::{self, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -319,7 +319,7 @@ pub fn plan_create_source(
     let mut with_options = normalize::options(with_options_original)?;
 
     let ts_frequency = match with_options.remove("timestamp_frequency_ms") {
-        Some(val) => match val.try_into_value() {
+        Some(val) => match val.into() {
             Some(Value::Number(n)) => match n.parse::<u64>() {
                 Ok(n) => Duration::from_millis(n),
                 Err(_) => bail!("timestamp_frequency_ms must be an u64"),
@@ -361,7 +361,7 @@ pub fn plan_create_source(
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
                 None => None,
-                Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
+                Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
@@ -381,10 +381,10 @@ pub fn plan_create_source(
                 None => {
                     start_offsets.insert(0, MzOffset::from(0));
                 }
-                Some(SqlMaybeValueId::Value(Value::Number(n))) => {
+                Some(SqlValueOrSecret::Value(Value::Number(n))) => {
                     start_offsets.insert(0, parse_offset(&n)?);
                 }
-                Some(SqlMaybeValueId::Value(Value::Array(vs))) => {
+                Some(SqlValueOrSecret::Value(Value::Array(vs))) => {
                     for (i, v) in vs.iter().enumerate() {
                         match v {
                             Value::Number(n) => {
@@ -686,7 +686,7 @@ pub fn plan_create_source(
                             Ok(_) => Cow::from("ordered"),
                             Err(_) => Cow::from("none"),
                         },
-                        Some(SqlMaybeValueId::Value(Value::String(s))) => Cow::from(s),
+                        Some(SqlValueOrSecret::Value(Value::String(s))) => Cow::from(s),
                         _ => bail!("deduplication option must be a string"),
                     };
 
@@ -728,13 +728,13 @@ pub fn plan_create_source(
 
                             let dedup_start = match with_options.remove("deduplication_start") {
                                 None => None,
-                                Some(SqlMaybeValueId::Value(Value::String(start))) => Some(parse_datetime(&start)?),
+                                Some(SqlValueOrSecret::Value(Value::String(start))) => Some(parse_datetime(&start)?),
                                 _ => bail!("deduplication_start option must be a string"),
                             };
 
                             let dedup_end = match with_options.remove("deduplication_end") {
                                 None => None,
-                                Some(SqlMaybeValueId::Value(Value::String(end))) => Some(parse_datetime(&end)?),
+                                Some(SqlValueOrSecret::Value(Value::String(end))) => Some(parse_datetime(&end)?),
                                 _ => bail!("deduplication_end option must be a string"),
                             };
 
@@ -751,7 +751,7 @@ pub fn plan_create_source(
                                     let pad_start =
                                         match with_options.remove("deduplication_pad_start") {
                                             None => None,
-                                            Some(SqlMaybeValueId::Value(Value::String(pad_start))) => {
+                                            Some(SqlValueOrSecret::Value(Value::String(pad_start))) => {
                                                 Some(parse_datetime(&pad_start)?)
                                             }
                                             _ => bail!(
@@ -839,7 +839,7 @@ pub fn plan_create_source(
 
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
-        Some(SqlMaybeValueId::Value(Value::Boolean(b))) => b,
+        Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
 
@@ -896,7 +896,7 @@ pub fn plan_create_source(
 
     // Allow users to specify a timeline. If they do not, determine a default timeline for the source.
     let timeline = if let Some(timeline) = with_options.remove("timeline") {
-        match timeline.try_into_value() {
+        match timeline.into() {
             Some(Value::String(timeline)) => Timeline::User(timeline),
             Some(v) => bail!("unsupported timeline value {}", v.to_ast_string()),
             None => bail!("unsupported timeline value: secret"),
@@ -905,7 +905,7 @@ pub fn plan_create_source(
         match envelope {
             SourceEnvelope::CdcV2 => match with_options.remove("epoch_ms_timeline") {
                 None => Timeline::External(name.to_string()),
-                Some(SqlMaybeValueId::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
+                Some(SqlValueOrSecret::Value(Value::Boolean(true))) => Timeline::EpochMilliseconds,
                 Some(v) => bail!("unsupported epoch_ms_timeline value {}", v),
             },
             _ => Timeline::EpochMilliseconds,
@@ -1760,7 +1760,7 @@ fn kafka_sink_builder(
     scx: &StatementContext,
     format: Option<Format<Aug>>,
     consistency: Option<KafkaConsistency<Aug>>,
-    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
+    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
     broker: String,
     topic_prefix: String,
     relation_key_indices: Option<Vec<usize>>,
@@ -1773,7 +1773,7 @@ fn kafka_sink_builder(
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
-        Some(SqlMaybeValueId::Value(Value::String(topic))) => Some(topic),
+        Some(SqlValueOrSecret::Value(Value::String(topic))) => Some(topic),
         Some(_) => bail!("consistency_topic must be a string"),
     };
     if consistency_topic.is_some() && consistency.is_some() {
@@ -1782,14 +1782,14 @@ fn kafka_sink_builder(
         bail!("Cannot specify consistency_topic and CONSISTENCY options simultaneously");
     }
     let reuse_topic = match with_options.remove("reuse_topic") {
-        Some(SqlMaybeValueId::Value(Value::Boolean(b))) => b,
+        Some(SqlValueOrSecret::Value(Value::Boolean(b))) => b,
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
     let config_options = kafka_util::extract_config(with_options)?;
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
-        Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
+        Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
         None => None,
         Some(_) => bail!("avro_key_fullname must be a string"),
     };
@@ -1799,7 +1799,7 @@ fn kafka_sink_builder(
     }
 
     let avro_value_fullname = match with_options.remove("avro_value_fullname") {
-        Some(SqlMaybeValueId::Value(Value::String(s))) => Some(s),
+        Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
         None => None,
         Some(_) => bail!("avro_value_fullname must be a string"),
     };
@@ -1899,7 +1899,7 @@ fn kafka_sink_builder(
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
         None => -1,
-        Some(SqlMaybeValueId::Value(Value::Number(n))) => n.parse::<i32>()?,
+        Some(SqlValueOrSecret::Value(Value::Number(n))) => n.parse::<i32>()?,
         Some(_) => bail!("partition count for sink topics must be an integer"),
     };
 
@@ -1912,7 +1912,7 @@ fn kafka_sink_builder(
     // Use the user supplied value for replication factor, or default to -1 (broker default)
     let replication_factor = match with_options.remove("replication_factor") {
         None => -1,
-        Some(SqlMaybeValueId::Value(Value::Number(n))) => n.parse::<i32>()?,
+        Some(SqlValueOrSecret::Value(Value::Number(n))) => n.parse::<i32>()?,
         Some(_) => bail!("replication factor for sink topics must be an integer"),
     };
 
@@ -1924,7 +1924,7 @@ fn kafka_sink_builder(
 
     let retention_duration = match with_options.remove("retention_ms") {
         None => None,
-        Some(SqlMaybeValueId::Value(Value::Number(n))) => match n.parse::<i64>()? {
+        Some(SqlValueOrSecret::Value(Value::Number(n))) => match n.parse::<i64>()? {
             -1 => Some(None),
             millis @ 0.. => Some(Some(Duration::from_millis(millis as u64))),
             _ => bail!("retention ms for sink topics must be greater than or equal to -1"),
@@ -1934,7 +1934,7 @@ fn kafka_sink_builder(
 
     let retention_bytes = match with_options.remove("retention_bytes") {
         None => None,
-        Some(SqlMaybeValueId::Value(Value::Number(n))) => Some(n.parse::<i64>()?),
+        Some(SqlValueOrSecret::Value(Value::Number(n))) => Some(n.parse::<i64>()?),
         Some(_) => bail!("retention bytes for sink topics must be an integer"),
     };
 
@@ -2910,8 +2910,8 @@ pub fn plan_create_connector(
                         (
                             k.to_owned(),
                             match v {
-                                SqlMaybeValueId::Value(v) => StringOrSecret::String(v.to_string()),
-                                SqlMaybeValueId::Secret(id) => StringOrSecret::Secret(id.clone()),
+                                SqlValueOrSecret::Value(v) => StringOrSecret::String(v.to_string()),
+                                SqlValueOrSecret::Secret(id) => StringOrSecret::Secret(id.clone()),
                             },
                         )
                     })
