@@ -7,12 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use chrono::{DateTime, NaiveDateTime, Utc};
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
 use mz_dataflow_types::sinks::KafkaSinkConnector;
 use mz_dataflow_types::sources::ConnectorInner;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
@@ -20,14 +23,14 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpeci
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS, MZ_COLUMNS, MZ_CONNECTORS,
-    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS, MZ_COLUMNS,
+    MZ_CONNECTORS, MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS,
+    MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
-    Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connector, Error, ErrorKind, Func, Index, Sink, SinkConnector,
+    SinkConnectorState, Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -559,5 +562,53 @@ impl CatalogState {
             ]),
             diff,
         }]
+    }
+
+    pub fn pack_audit_log_update(
+        &self,
+        event: &VersionedEvent,
+    ) -> Result<BuiltinTableUpdate, Error> {
+        let (id, event_type, object_type, event_details, user, occurred_at): (
+            uuid::Uuid,
+            &EventType,
+            &ObjectType,
+            &EventDetails,
+            &str,
+            u64,
+        ) = match event {
+            VersionedEvent::V1(ev) => (
+                ev.uuid,
+                &ev.event_type,
+                &ev.object_type,
+                &ev.event_details,
+                &ev.user,
+                ev.occurred_at,
+            ),
+        };
+        let event_details = Jsonb::from_serde_json(event_details.as_json())
+            .map_err(|e| {
+                Error::new(ErrorKind::Unstructured(format!(
+                    "could not pack audit log update: {}",
+                    e
+                )))
+            })?
+            .into_row();
+        let event_details = event_details.iter().next().unwrap();
+        let dt = NaiveDateTime::from_timestamp(
+            (occurred_at / 1_000_000_000).try_into().expect("must fit"),
+            (occurred_at % 1_000_000_000).try_into().expect("must fit"),
+        );
+        Ok(BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
+            row: Row::pack_slice(&[
+                Datum::Uuid(id),
+                Datum::String(&format!("{:?}", event_type)),
+                Datum::String(&format!("{:?}", object_type)),
+                event_details,
+                Datum::String(user),
+                Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
+            ]),
+            diff: 1,
+        })
     }
 }

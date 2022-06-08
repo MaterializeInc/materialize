@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/audit-log",
     "src/avro-derive",
     "src/avro",
     "src/billing-demo",

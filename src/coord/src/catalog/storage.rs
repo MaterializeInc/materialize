@@ -17,6 +17,7 @@ use mz_repr::proto::{IntoRustIfSome, RustType};
 use prost::{self, Message};
 use uuid::Uuid;
 
+use mz_audit_log::VersionedEvent;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
 };
@@ -50,6 +51,7 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     .upsert(stash, vec![])
                     .await?;
                 COLLECTION_ITEM.upsert(stash, vec![]).await?;
+                COLLECTION_AUDIT_LOG.upsert(stash, vec![]).await?;
 
                 COLLECTION_GID_ALLOC
                     .upsert(
@@ -384,6 +386,14 @@ impl<S: Append> Connection<S> {
             .collect()
     }
 
+    pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = Vec<u8>>, Error> {
+        Ok(COLLECTION_AUDIT_LOG
+            .peek_one(&mut self.stash)
+            .await?
+            .into_keys()
+            .map(|ev| ev.event))
+    }
+
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
     pub async fn load_system_gids(
         &mut self,
@@ -548,6 +558,7 @@ impl<S: Append> Connection<S> {
             introspection_sources: TableTransaction::new(introspection_sources, None, |_a, _b| {
                 false
             }),
+            audit_log_updates: Vec::new(),
         })
     }
 
@@ -570,6 +581,9 @@ pub struct Transaction<'a, S> {
         ComputeIntrospectionSourceIndexValue,
         i64,
     >,
+    // Don't make this a table transaction so that it's not read into the stash
+    // memory cache.
+    audit_log_updates: Vec<(AuditLogKey, (), i64)>,
 }
 
 impl<'a, S: Append> Transaction<'a, S> {
@@ -604,6 +618,11 @@ impl<'a, S: Append> Transaction<'a, S> {
         });
         items.sort_by_key(|(id, _, _)| *id);
         items
+    }
+
+    pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
+        let event = event.serialize();
+        self.audit_log_updates.push((AuditLogKey { event }, (), 1));
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
@@ -935,6 +954,13 @@ impl<'a, S: Append> Transaction<'a, S> {
             self.introspection_sources.pending(),
         )
         .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_AUDIT_LOG,
+            self.audit_log_updates,
+        )
+        .await?;
         if batches.is_empty() {
             return Ok(());
         }
@@ -1153,6 +1179,13 @@ struct ConfigValue {
 }
 impl_codec!(ConfigValue);
 
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct AuditLogKey {
+    #[prost(bytes)]
+    event: Vec<u8>,
+}
+impl_codec!(AuditLogKey);
+
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
@@ -1175,3 +1208,4 @@ static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
 static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");
 static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
 static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
+static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");

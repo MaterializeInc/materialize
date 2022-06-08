@@ -838,6 +838,9 @@ name = "bytesize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c58ec36aac5066d5ca17df51b3e70279f5670a72102f5752cb7e7c856adfc70"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "cast"
@@ -2981,6 +2984,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-audit-log"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytesize",
+ "serde",
+ "serde_json",
+ "uuid 1.1.1",
+]
+
+[[package]]
 name = "mz-avro"
 version = "0.6.5"
 dependencies = [
@@ -3124,6 +3138,7 @@ dependencies = [
  "fail",
  "futures",
  "itertools",
+ "mz-audit-log",
  "mz-build-info",
  "mz-ccsr",
  "mz-dataflow-types",

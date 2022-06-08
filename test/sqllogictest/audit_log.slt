@@ -1,0 +1,62 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test expected population of mz_audit_events after some DDL statements.
+
+mode cockroach
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r (SIZE '1'));
+
+statement ok
+CREATE MATERIALIZED VIEW v2 AS SELECT 1
+
+statement ok
+CREATE VIEW unmat AS SELECT 1
+
+statement ok
+CREATE TABLE t ()
+
+statement ok
+CREATE DEFAULT INDEX ON t
+
+statement ok
+ALTER VIEW unmat RENAME TO renamed
+
+statement ok
+CREATE OR REPLACE VIEW v2 AS SELECT 2
+
+statement ok
+CREATE DEFAULT INDEX ON renamed
+
+statement ok
+DROP VIEW renamed
+
+statement ok
+CREATE SOURCE s FROM PUBNUB
+SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+CHANNEL 'pubnub-market-orders';
+
+query TTTT
+SELECT event_type, object_type, event_details, user FROM mz_audit_events ORDER BY occurred_at
+----
+Create  Cluster  {"name":"foo"}  materialize
+Create  ClusterReplica  {"cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
+Create  View  {"database":"materialize","item":"v2","schema":"public"}  materialize
+Create  Index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
+Create  View  {"database":"materialize","item":"unmat","schema":"public"}  materialize
+Create  Index  {"database":"materialize","item":"t_primary_idx","schema":"public"}  materialize
+Rename  View  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
+Drop  Index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
+Drop  View  {"database":"materialize","item":"v2","schema":"public"}  materialize
+Create  View  {"database":"materialize","item":"v2","schema":"public"}  materialize
+Create  Index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
+Drop  Index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
+Drop  View  {"database":"materialize","item":"renamed","schema":"public"}  materialize
+Create  Source  {"database":"materialize","item":"s","schema":"public"}  materialize

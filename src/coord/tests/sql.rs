@@ -71,6 +71,7 @@ async fn datadriven() {
                             .clone();
                         catalog
                             .transact(
+                                None,
                                 vec![Op::CreateItem {
                                     id,
                                     oid,

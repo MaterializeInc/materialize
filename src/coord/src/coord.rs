@@ -716,6 +716,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         connector,
                         // The sink should be established on a specific compute instance.
                         sink.compute_instance,
+                        None,
                     )
                     .await?;
                 }
@@ -1108,9 +1109,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
-                    self.handle_sink_connector_ready(id, oid, connector, compute_instance)
-                        .await
-                        .expect("sinks should be validated by sequence_create_sink");
+                    self.handle_sink_connector_ready(
+                        id,
+                        oid,
+                        connector,
+                        compute_instance,
+                        Some(&session),
+                    )
+                    .await
+                    .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connector. Report to the client that
@@ -1123,9 +1130,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => {
                 // Drop the placeholder sink if still present.
                 if self.catalog.try_get_entry(&id).is_some() {
-                    self.catalog_transact(vec![catalog::Op::DropItem(id)], |_| Ok(()))
-                        .await
-                        .expect("deleting placeholder sink cannot fail");
+                    self.catalog_transact(Some(&session), vec![catalog::Op::DropItem(id)], |_| {
+                        Ok(())
+                    })
+                    .await
+                    .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
                     // attempting to create the connector, in which case we don't need to do
@@ -1203,7 +1212,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let plan = CreateRolePlan {
                         name: session.user().to_string(),
                     };
-                    if let Err(err) = self.sequence_create_role(plan).await {
+                    if let Err(err) = self.sequence_create_role(&session, plan).await {
                         let _ = tx.send(Response {
                             result: Err(err),
                             session,
@@ -1758,7 +1767,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn handle_terminate(&mut self, session: &mut Session) {
         self.clear_transaction(session).await;
 
-        self.drop_temp_items(session.conn_id()).await;
+        self.drop_temp_items(&session).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
@@ -1788,9 +1797,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    async fn drop_temp_items(&mut self, conn_id: u32) {
-        let ops = self.catalog.drop_temp_item_ops(conn_id);
-        self.catalog_transact(ops, |_| Ok(()))
+    async fn drop_temp_items(&mut self, session: &Session) {
+        let ops = self.catalog.drop_temp_item_ops(session.conn_id());
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await
             .expect("unable to drop temporary items for conn_id");
     }
@@ -1801,6 +1810,7 @@ impl<S: Append + 'static> Coordinator<S> {
         oid: u32,
         connector: SinkConnector,
         compute_instance: ComputeInstanceId,
+        session: Option<&Session>,
     ) -> Result<(), CoordError> {
         // Update catalog entry with sink connector.
         let entry = self.catalog.get_entry(&id);
@@ -1833,7 +1843,7 @@ impl<S: Append + 'static> Coordinator<S> {
             },
         ];
         let df = self
-            .catalog_transact(ops, |txn| {
+            .catalog_transact(session, ops, |txn| {
                 let mut builder = txn.dataflow_builder(compute_instance);
                 let from_entry = builder.catalog.get_entry(&sink.from);
                 let sink_description = mz_dataflow_types::sinks::SinkDesc {
@@ -1866,23 +1876,30 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         match plan {
             Plan::CreateConnector(plan) => {
-                tx.send(self.sequence_create_connector(plan).await, session);
+                tx.send(
+                    self.sequence_create_connector(&session, plan).await,
+                    session,
+                );
             }
             Plan::CreateDatabase(plan) => {
-                tx.send(self.sequence_create_database(plan).await, session);
+                tx.send(self.sequence_create_database(&session, plan).await, session);
             }
             Plan::CreateSchema(plan) => {
-                tx.send(self.sequence_create_schema(plan).await, session);
+                tx.send(self.sequence_create_schema(&session, plan).await, session);
             }
             Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(plan).await, session);
+                tx.send(self.sequence_create_role(&session, plan).await, session);
             }
             Plan::CreateComputeInstance(plan) => {
-                tx.send(self.sequence_create_compute_instance(plan).await, session);
+                tx.send(
+                    self.sequence_create_compute_instance(&session, plan).await,
+                    session,
+                );
             }
             Plan::CreateComputeInstanceReplica(plan) => {
                 tx.send(
-                    self.sequence_create_compute_instance_replica(plan).await,
+                    self.sequence_create_compute_instance_replica(&session, plan)
+                        .await,
                     session,
                 );
             }
@@ -1914,31 +1931,41 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::CreateIndex(plan) => {
-                tx.send(self.sequence_create_index(plan, depends_on).await, session);
+                tx.send(
+                    self.sequence_create_index(&session, plan, depends_on).await,
+                    session,
+                );
             }
             Plan::CreateType(plan) => {
-                tx.send(self.sequence_create_type(plan, depends_on).await, session);
+                tx.send(
+                    self.sequence_create_type(&session, plan, depends_on).await,
+                    session,
+                );
             }
             Plan::DropDatabase(plan) => {
-                tx.send(self.sequence_drop_database(plan).await, session);
+                tx.send(self.sequence_drop_database(&session, plan).await, session);
             }
             Plan::DropSchema(plan) => {
-                tx.send(self.sequence_drop_schema(plan).await, session);
+                tx.send(self.sequence_drop_schema(&session, plan).await, session);
             }
             Plan::DropRoles(plan) => {
-                tx.send(self.sequence_drop_roles(plan).await, session);
+                tx.send(self.sequence_drop_roles(&session, plan).await, session);
             }
             Plan::DropComputeInstances(plan) => {
-                tx.send(self.sequence_drop_compute_instances(plan).await, session);
+                tx.send(
+                    self.sequence_drop_compute_instances(&session, plan).await,
+                    session,
+                );
             }
             Plan::DropComputeInstanceReplica(plan) => {
                 tx.send(
-                    self.sequence_drop_compute_instance_replica(plan).await,
+                    self.sequence_drop_compute_instance_replica(&session, plan)
+                        .await,
                     session,
                 );
             }
             Plan::DropItems(plan) => {
-                tx.send(self.sequence_drop_items(plan).await, session);
+                tx.send(self.sequence_drop_items(&session, plan).await, session);
             }
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
@@ -2015,7 +2042,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::AlterItemRename(plan) => {
-                tx.send(self.sequence_alter_item_rename(plan).await, session);
+                tx.send(
+                    self.sequence_alter_item_rename(&session, plan).await,
+                    session,
+                );
             }
             Plan::AlterIndexSetOptions(plan) => {
                 tx.send(self.sequence_alter_index_set_options(plan).await, session);
@@ -2030,12 +2060,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             Plan::DiscardTemp => {
-                self.drop_temp_items(session.conn_id()).await;
+                self.drop_temp_items(&session).await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
-                    self.drop_temp_items(session.conn_id()).await;
+                    self.drop_temp_items(&session).await;
                     let drop_sinks = session.reset();
                     self.drop_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
@@ -2150,6 +2180,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_connector(
         &mut self,
+        session: &Session,
         plan: CreateConnectorPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let connector_oid = self.catalog.allocate_oid().await?;
@@ -2163,7 +2194,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 connector: plan.connector.connector,
             }),
         }];
-        match self.catalog_transact(ops, |_| Ok(())).await {
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedConnector { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -2175,6 +2206,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_database(
         &mut self,
+        session: &Session,
         plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let db_oid = self.catalog.allocate_oid().await?;
@@ -2184,7 +2216,7 @@ impl<S: Append + 'static> Coordinator<S> {
             oid: db_oid,
             public_schema_oid: schema_oid,
         }];
-        match self.catalog_transact(ops, |_| Ok(())).await {
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
@@ -2196,6 +2228,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_schema(
         &mut self,
+        session: &Session,
         plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid().await?;
@@ -2204,7 +2237,10 @@ impl<S: Append + 'static> Coordinator<S> {
             schema_name: plan.schema_name,
             oid,
         };
-        match self.catalog_transact(vec![op], |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await
+        {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -2216,6 +2252,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_role(
         &mut self,
+        session: &Session,
         plan: CreateRolePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid().await?;
@@ -2223,13 +2260,14 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name,
             oid,
         };
-        self.catalog_transact(vec![op], |_| Ok(()))
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
 
     async fn sequence_create_compute_instance(
         &mut self,
+        session: &Session,
         CreateComputeInstancePlan {
             name,
             config,
@@ -2248,15 +2286,21 @@ impl<S: Append + 'static> Coordinator<S> {
         }];
 
         for (replica_name, config) in replicas {
+            let logical_size = match &config {
+                ReplicaConfig::Managed { size, .. } => Some(size.clone()),
+                ReplicaConfig::Remote { .. } => None,
+            };
             let config =
                 concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config,
                 on_cluster_name: name.clone(),
+                logical_size,
             });
         }
-        self.catalog_transact(ops, |_| Ok(())).await?;
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
         let instance = self
             .catalog
             .resolve_compute_instance(&name)
@@ -2276,21 +2320,28 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_compute_instance_replica(
         &mut self,
+        session: &Session,
         CreateComputeInstanceReplicaPlan {
             name,
             of_cluster,
             config,
         }: CreateComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let logical_size = match &config {
+            ReplicaConfig::Managed { size, .. } => Some(size.clone()),
+            ReplicaConfig::Remote { .. } => None,
+        };
         let config =
             concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
             on_cluster_name: of_cluster.clone(),
+            logical_size,
         };
 
-        self.catalog_transact(vec![op], |_| Ok(())).await?;
+        self.catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?;
 
         let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
         let replica_id = instance.replica_id_by_name[&name];
@@ -2335,7 +2386,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Secret(secret.clone()),
         }];
 
-        match self.catalog_transact(ops, |_| Ok(())).await {
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
@@ -2392,7 +2443,7 @@ impl<S: Append + 'static> Coordinator<S> {
             name,
             item: CatalogItem::Table(table.clone()),
         }];
-        match self.catalog_transact(ops, |_| Ok(())).await {
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok(()) => {
                 // Determine the initial validity for the table.
                 let since_ts = self.get_local_write_ts();
@@ -2490,7 +2541,7 @@ impl<S: Append + 'static> Coordinator<S> {
             None
         };
         match self
-            .catalog_transact(ops, move |txn| {
+            .catalog_transact(Some(session), ops, move |txn| {
                 if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
                     Ok(Some((
@@ -2608,7 +2659,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         let transact_result = self
-            .catalog_transact(vec![op], |txn| -> Result<(), CoordError> {
+            .catalog_transact(Some(&session), vec![op], |txn| -> Result<(), CoordError> {
                 let from_entry = txn.catalog.get_entry(&sink.from);
                 // Insert a dummy dataflow to trigger validation before we try to actually create
                 // the external sink resources (e.g. Kafka Topics)
@@ -2768,7 +2819,7 @@ impl<S: Append + 'static> Coordinator<S> {
             )
             .await?;
         match self
-            .catalog_transact(ops, |txn| {
+            .catalog_transact(Some(session), ops, |txn| {
                 if let Some((index_id, compute_instance)) = index {
                     let mut builder = txn.dataflow_builder(compute_instance);
                     Ok(Some((
@@ -2819,7 +2870,7 @@ impl<S: Append + 'static> Coordinator<S> {
             indexes.extend(index);
         }
         match self
-            .catalog_transact(ops, |txn| {
+            .catalog_transact(Some(session), ops, |txn| {
                 let mut dfs = HashMap::new();
                 for (index_id, compute_instance) in indexes {
                     let mut builder = txn.dataflow_builder(compute_instance);
@@ -2847,6 +2898,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_index(
         &mut self,
+        session: &Session,
         plan: CreateIndexPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2877,7 +2929,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Index(index),
         };
         match self
-            .catalog_transact(vec![op], |txn| {
+            .catalog_transact(Some(session), vec![op], |txn| {
                 let mut builder = txn.dataflow_builder(compute_instance);
                 let df = builder.build_index_dataflow(id)?;
                 Ok(df)
@@ -2901,6 +2953,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_type(
         &mut self,
+        session: &Session,
         plan: CreateTypePlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
@@ -2920,7 +2973,10 @@ impl<S: Append + 'static> Coordinator<S> {
             name: plan.name,
             item: CatalogItem::Type(typ),
         };
-        match self.catalog_transact(vec![op], |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
@@ -2928,24 +2984,29 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_drop_database(
         &mut self,
+        session: &Session,
         plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(plan.id);
-        self.catalog_transact(ops, |_| Ok(())).await?;
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
     async fn sequence_drop_schema(
         &mut self,
+        session: &Session,
         plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.id);
-        self.catalog_transact(ops, |_| Ok(())).await?;
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
     async fn sequence_drop_roles(
         &mut self,
+        session: &Session,
         plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = plan
@@ -2953,12 +3014,14 @@ impl<S: Append + 'static> Coordinator<S> {
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.catalog_transact(ops, |_| Ok(())).await?;
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
         Ok(ExecuteResponse::DroppedRole)
     }
 
     async fn sequence_drop_compute_instances(
         &mut self,
+        session: &Session,
         plan: DropComputeInstancesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = Vec::new();
@@ -2977,7 +3040,8 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.push(catalog::Op::DropComputeInstance { name });
         }
 
-        self.catalog_transact(ops, |_| Ok(())).await?;
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, config) in replicas {
                 self.dataflow_client
@@ -2996,6 +3060,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_drop_compute_instance_replica(
         &mut self,
+        session: &Session,
         DropComputeInstanceReplicaPlan { names }: DropComputeInstanceReplicaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         if names.is_empty() {
@@ -3018,7 +3083,8 @@ impl<S: Append + 'static> Coordinator<S> {
             ));
         }
 
-        self.catalog_transact(ops, |_| Ok(())).await?;
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
 
         for (compute_id, replica_id, config) in replicas_to_drop {
             self.dataflow_client
@@ -3032,10 +3098,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_drop_items(
         &mut self,
+        session: &Session,
         plan: DropItemsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
-        self.catalog_transact(ops, |_| Ok(())).await?;
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
         Ok(match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
@@ -4574,6 +4642,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_alter_item_rename(
         &mut self,
+        session: &Session,
         plan: AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let op = catalog::Op::RenameItem {
@@ -4581,7 +4650,10 @@ impl<S: Append + 'static> Coordinator<S> {
             current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
-        match self.catalog_transact(vec![op], |_| Ok(())).await {
+        match self
+            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
@@ -4671,7 +4743,12 @@ impl<S: Append + 'static> Coordinator<S> {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
-    async fn catalog_transact<F, R>(&mut self, ops: Vec<catalog::Op>, f: F) -> Result<R, CoordError>
+    async fn catalog_transact<F, R>(
+        &mut self,
+        session: Option<&Session>,
+        ops: Vec<catalog::Op>,
+        f: F,
+    ) -> Result<R, CoordError>
     where
         F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, CoordError>,
     {
@@ -4728,7 +4805,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         let (builtin_table_updates, result) = self
             .catalog
-            .transact(ops, |catalog| {
+            .transact(session, ops, |catalog| {
                 f(CatalogTxn {
                     dataflow_client: &self.dataflow_client,
                     catalog,
