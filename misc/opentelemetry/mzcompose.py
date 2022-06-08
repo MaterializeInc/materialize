@@ -7,10 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
-
-from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Service
 
 SERVICES = [
