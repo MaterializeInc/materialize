@@ -160,7 +160,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             blob_uri: format!("file://{}/persist/blob", data_directory.display()),
             consensus_uri,
         },
-        data_directory: data_directory.clone(),
         catalog_postgres_stash,
         storage_postgres_stash,
         orchestrator: OrchestratorConfig {

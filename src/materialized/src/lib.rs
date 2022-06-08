@@ -91,8 +91,6 @@ pub struct Config {
     pub cors_allowed_origin: AllowOrigin,
 
     // === Storage options. ===
-    /// The directory in which `materialized` should store its own metadata.
-    pub data_directory: PathBuf,
     /// Where the persist library should store its data.
     pub persist_location: PersistLocation,
     /// Postgres connection string for catalog's stash.

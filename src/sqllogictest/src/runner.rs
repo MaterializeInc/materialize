@@ -590,7 +590,6 @@ impl Runner {
         let mz_config = materialized::Config {
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
-            data_directory: temp_dir.path().to_path_buf(),
             persist_location: PersistLocation {
                 blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
                 consensus_uri,
