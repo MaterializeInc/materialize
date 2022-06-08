@@ -9,14 +9,12 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::anyhow;
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 use tokio_postgres::{Client as PostgresClient, NoTls};
@@ -129,7 +127,7 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 #[derive(Debug)]
 pub struct PostgresConsensus {
-    client: Arc<Mutex<PostgresClient>>,
+    client: PostgresClient,
     _handle: JoinHandle<()>,
 }
 
@@ -154,7 +152,7 @@ impl PostgresConsensus {
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
         Ok(PostgresConsensus {
-            client: Arc::new(Mutex::new(client)),
+            client,
             _handle: handle,
         })
     }
@@ -171,8 +169,7 @@ impl Consensus for PostgresConsensus {
 
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let client = self.client.lock().await;
-        let row = client.query_opt(&*q, &[&key]).await?;
+        let row = self.client.query_opt(&*q, &[&key]).await?;
         let row = match row {
             None => return Ok(None),
             Some(row) => row,
@@ -222,10 +219,7 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
                      )
                      ON CONFLICT DO NOTHING";
-
-            let client = self.client.lock().await;
-
-            client
+            self.client
                 .execute(&*q, &[&key, &new.seqno, &new.data.as_ref(), &expected])
                 .await?
         } else {
@@ -235,8 +229,7 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.client.lock().await;
-            client
+            self.client
                 .execute(&*q, &[&key, &new.seqno, &new.data.as_ref()])
                 .await?
         };
@@ -266,8 +259,7 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let client = self.client.lock().await;
-        let rows = client.query(&*q, &[&key, &from]).await?;
+        let rows = self.client.query(&*q, &[&key, &from]).await?;
         let mut results = vec![];
 
         for row in rows {
@@ -301,10 +293,7 @@ impl Consensus for PostgresConsensus {
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 
-        let result = {
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &seqno]).await?
-        };
+        let result = { self.client.execute(&*q, &[&key, &seqno]).await? };
         if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to
             // determine whether the request was valid and there were no records in
