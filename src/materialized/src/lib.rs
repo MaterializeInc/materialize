@@ -21,7 +21,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::{env, fs};
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -39,10 +39,8 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_persist_client::PersistLocation;
-use mz_pid_file::PidFile;
 use mz_secrets::{SecretsController, SecretsReader, SecretsReaderConfig};
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
@@ -247,21 +245,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
-    // Attempt to acquire PID file lock.
-    let pid_file =
-        PidFile::open(config.data_directory.join("materialized.pid")).map_err(|e| match e {
-            // Enhance error with some materialized-specific details.
-            mz_pid_file::Error::AlreadyRunning { pid } => anyhow!(
-                "another materialized process (PID {}) is running with the same data directory\n\
-                data directory: {}\n",
-                pid.display_or("<unknown>"),
-                fs::canonicalize(&config.data_directory)
-                    .unwrap_or_else(|_| config.data_directory.clone())
-                    .display(),
-            ),
-            e => e.into(),
-        })?;
-
     // Initialize network listeners.
     let sql_listener = TcpListener::bind(&config.sql_listen_addr).await?;
     let http_listener = TcpListener::bind(&config.http_listen_addr).await?;
@@ -458,7 +441,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         http_local_addr,
         internal_sql_local_addr,
         internal_http_local_addr,
-        _pid_file: pid_file,
         _internal_sql_drain_trigger: internal_sql_drain_trigger,
         _http_drain_trigger: http_drain_trigger,
         _sql_drain_trigger: sql_drain_trigger,
@@ -472,7 +454,6 @@ pub struct Server {
     http_local_addr: SocketAddr,
     internal_sql_local_addr: Option<SocketAddr>,
     internal_http_local_addr: Option<SocketAddr>,
-    _pid_file: PidFile,
     // Drop order matters for these fields.
     _internal_sql_drain_trigger: Option<oneshot::Sender<()>>,
     _http_drain_trigger: oneshot::Sender<()>,
