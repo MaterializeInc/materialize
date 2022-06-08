@@ -106,8 +106,7 @@ class Materialized(Service):
             {"image": image} if image else {"mzbuild": "materialized"}
         )
 
-        if hostname:
-            config["hostname"] = hostname
+        config["hostname"] = hostname or name
 
         # Depending on the docker-compose version, this may either work or be ignored with a warning
         # Unfortunately no portable way of setting the memory limit is known
