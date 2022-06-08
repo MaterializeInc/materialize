@@ -328,7 +328,7 @@ async fn purify_csr_connector_proto(
             .parse()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
-                &mut normalize::options(&ccsr_options)?,
+                &mut kafka_util::extract_config_ccsr(&mut normalize::options(&ccsr_options)?)?,
                 catalog.secrets_reader(),
             )?;
 
@@ -389,7 +389,7 @@ async fn purify_csr_connector_avro(
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(
                 url,
-                &mut normalize::options(ccsr_options)?,
+                &mut kafka_util::extract_config_ccsr(&mut normalize::options(&ccsr_options)?)?,
                 catalog.secrets_reader(),
             )
         })?;

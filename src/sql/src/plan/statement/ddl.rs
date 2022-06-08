@@ -1265,31 +1265,16 @@ fn get_encoding_inner(
                         },
                 } => {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => {
-                            (normalize::options(&ccsr_options)?, url.into())
-                        }
+                        CsrConnector::Inline { url } => (
+                            kafka_util::extract_config_ccsr(&mut normalize::options(
+                                &ccsr_options,
+                            )?)?,
+                            url.into(),
+                        ),
                         CsrConnector::Reference { connector } => {
                             let item = scx.get_item_by_resolved_name(&connector)?;
                             let connector = item.catalog_connector()?;
-                            let options = connector
-                                .options()
-                                .into_iter()
-                                // XXX(chae): prob not right to go backwards? maybe generate_ccsr_client_config should take MaybeStringId
-                                .map(|(k, v)| {
-                                    (
-                                        k,
-                                        match v {
-                                            StringOrSecret::String(s) => {
-                                                SqlMaybeValueId::Value(Value::String(s))
-                                            }
-                                            StringOrSecret::Secret(id) => {
-                                                SqlMaybeValueId::Secret(id)
-                                            }
-                                        },
-                                    )
-                                })
-                                .collect();
-                            (options, connector.uri())
+                            (connector.options(), connector.uri())
                         }
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -1348,31 +1333,16 @@ fn get_encoding_inner(
                     seed
                 {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => {
-                            (normalize::options(&ccsr_options)?, url.to_string())
-                        }
-                        CsrConnector::Reference { connector, .. } => {
+                        CsrConnector::Inline { url } => (
+                            kafka_util::extract_config_ccsr(&mut normalize::options(
+                                &ccsr_options,
+                            )?)?,
+                            url.to_string(),
+                        ),
+                        CsrConnector::Reference { connector } => {
                             let item = scx.get_item_by_resolved_name(&connector)?;
                             let connector = item.catalog_connector()?;
-                            let options = connector
-                                .options()
-                                .into_iter()
-                                // XXX(chae): prob not right to go backwards? maybe generate_ccsr_client_config should take MaybeStringId
-                                .map(|(k, v)| {
-                                    (
-                                        k,
-                                        match v {
-                                            StringOrSecret::String(s) => {
-                                                SqlMaybeValueId::Value(Value::String(s))
-                                            }
-                                            StringOrSecret::Secret(id) => {
-                                                SqlMaybeValueId::Secret(id)
-                                            }
-                                        },
-                                    )
-                                })
-                                .collect();
-                            (options, connector.uri())
+                            (connector.options(), connector.uri())
                         }
                     };
                     // We validate here instead of in purification, to match the behavior of avro
@@ -1851,7 +1821,8 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
-            let mut ccsr_with_options = normalize::options(&with_options)?;
+            let mut ccsr_with_options =
+                kafka_util::extract_config_ccsr(&mut normalize::options(&with_options)?)?;
 
             let schema_registry_url = url.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -2031,7 +2002,8 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = uri.parse::<Url>()?;
-                let mut ccsr_with_options = normalize::options(&with_options)?;
+                let mut ccsr_with_options =
+                    kafka_util::extract_config_ccsr(&mut normalize::options(&with_options)?)?;
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     &mut ccsr_with_options,
