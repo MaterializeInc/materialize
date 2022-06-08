@@ -675,7 +675,7 @@ where
     ///
     /// This fails if any of the updates in this batch are beyond the given
     /// `upper`.
-    #[instrument(level = "debug", skip_all, fields(shard = %self.shard_id))]
+    #[instrument(level = "debug", name = "batch::finish", skip_all, fields(shard = %self.shard_id))]
     pub async fn finish(self, upper: Antichain<T>) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
         if upper.less_equal(&self.max_ts) {
             return Err(InvalidUsage::UpdateBeyondUpper {
