@@ -2781,7 +2781,6 @@ dependencies = [
  "mz-pgrepr",
  "mz-pgtest",
  "mz-pgwire",
- "mz-pid-file",
  "mz-postgres-util",
  "mz-prof",
  "mz-repr",
