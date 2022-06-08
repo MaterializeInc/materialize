@@ -69,7 +69,7 @@ _join&lowbar;expr_ | A join expression; for more details, see our [`JOIN` docume
 **GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
 **OPTION (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
 **HAVING** _expression_ | Filter aggregations by _expression_.
-**ORDER BY** _col&lowbar;ref_... | Order results in either **ASC** or **DESC** order (_**ASC** is implied default_).<br/><br>
+**ORDER BY** _col&lowbar;ref_... | Sort results in either **ASC** or **DESC** order (_default: **ASC**_).<br/><br/>Use the **NULLS FIRST** and **NULLS LAST** options to determine whether nulls appear before or after non-null values in the sort ordering _(default: **NULLS LAST** for **ASC**, **NULLS FIRST** for **DESC**)_.<br/><br>
 **LIMIT** | Limit the number of returned results to _expr_.
 **OFFSET** | Skip the first _expr_ number of rows.
 **UNION** | Records present in `select_stmt` or `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the sum of the times it occurs in each input statement.

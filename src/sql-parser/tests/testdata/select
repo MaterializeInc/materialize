@@ -358,7 +358,7 @@ SELECT array_agg(b ORDER BY a)
 ----
 SELECT array_agg(b ORDER BY a)
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: UnresolvedObjectName([Ident("array_agg")]), args: Args { args: [Identifier([Ident("b")])], order_by: [OrderByExpr { expr: Identifier([Ident("a")]), asc: None }] }, filter: None, over: None, distinct: false }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Function(Function { name: UnresolvedObjectName([Ident("array_agg")]), args: Args { args: [Identifier([Ident("b")])], order_by: [OrderByExpr { expr: Identifier([Ident("a")]), asc: None, nulls_last: None }] }, filter: None, over: None, distinct: false }), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 
 # Parameters
@@ -470,29 +470,29 @@ SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DES
 ----
 SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DESC, id
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "<" }, expr1: Identifier([Ident("id")]), expr2: Some(Value(Number("5"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "<" }, expr1: Identifier([Ident("id")]), expr2: Some(Value(Number("5"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true), nulls_last: None }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false), nulls_last: None }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None, nulls_last: None }], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
 ----
 SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true), nulls_last: None }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false), nulls_last: None }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None, nulls_last: None }], limit: None, offset: None }, as_of: None })
 
 parse-statement
-SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
+SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id NULLS FIRST
 ----
-SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id
+SELECT id, fname, lname FROM customer ORDER BY lname ASC, fname DESC, id NULLS FIRST
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None }], limit: None, offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true), nulls_last: None }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false), nulls_last: None }, OrderByExpr { expr: Identifier([Ident("id")]), asc: None, nulls_last: Some(false) }], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer WHERE id < 5
-ORDER BY lname ASC, fname DESC LIMIT 2
+ORDER BY lname ASC, fname DESC NULLS LAST LIMIT 2
 ----
-SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DESC LIMIT 2
+SELECT id, fname, lname FROM customer WHERE id < 5 ORDER BY lname ASC, fname DESC NULLS LAST LIMIT 2
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "<" }, expr1: Identifier([Ident("id")]), expr2: Some(Value(Number("5"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true) }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false) }], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("id")]), alias: None }, Expr { expr: Identifier([Ident("fname")]), alias: None }, Expr { expr: Identifier([Ident("lname")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("customer")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "<" }, expr1: Identifier([Ident("id")]), expr2: Some(Value(Number("5"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("lname")]), asc: Some(true), nulls_last: None }, OrderByExpr { expr: Identifier([Ident("fname")]), asc: Some(false), nulls_last: Some(true) }], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, as_of: None })
 
 parse-statement
 SELECT id, fname, lname FROM customer GROUP BY lname, fname
@@ -837,14 +837,14 @@ SELECT foo FROM bar ORDER BY baz OFFSET 2 ROWS
 ----
 SELECT foo FROM bar ORDER BY baz OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None, nulls_last: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ROWS
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None, nulls_last: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2 ROWS) OFFSET 2 ROWS
@@ -893,14 +893,14 @@ SELECT foo FROM bar ORDER BY baz OFFSET 2
 ----
 SELECT foo FROM bar ORDER BY baz OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None, nulls_last: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None, nulls_last: None }], limit: None, offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar OFFSET 2) OFFSET 2
@@ -968,14 +968,14 @@ SELECT foo FROM bar ORDER BY baz FETCH FIRST 2 ROWS ONLY
 ----
 SELECT foo FROM bar ORDER BY baz LIMIT 2
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None, nulls_last: None }], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: None }, as_of: None })
 
 parse-statement
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz FETCH FIRST 2 ROWS WITH TIES
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz FETCH FIRST 2 ROWS WITH TIES
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: Some(Limit { with_ties: true, quantity: Value(Number("2")) }), offset: None }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None, nulls_last: None }], limit: Some(Limit { with_ties: true, quantity: Value(Number("2")) }), offset: None }, as_of: None })
 
 parse-statement
 SELECT foo FROM bar FETCH FIRST 50 PERCENT ROWS ONLY
@@ -989,7 +989,7 @@ SELECT foo FROM bar WHERE foo = 4 ORDER BY baz OFFSET 2 ROWS FETCH FIRST 2 ROWS 
 ----
 SELECT foo FROM bar WHERE foo = 4 ORDER BY baz LIMIT 2 OFFSET 2
 =>
-Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None }], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: Some(Value(Number("2"))) }, as_of: None })
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: Some(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("foo")]), expr2: Some(Value(Number("4"))) }), group_by: [], having: None, options: [] }), order_by: [OrderByExpr { expr: Identifier([Ident("baz")]), asc: None, nulls_last: None }], limit: Some(Limit { with_ties: false, quantity: Value(Number("2")) }), offset: Some(Value(Number("2"))) }, as_of: None })
 
 parse-statement
 SELECT foo FROM (SELECT * FROM bar FETCH FIRST 2 ROWS ONLY) FETCH FIRST 2 ROWS ONLY
