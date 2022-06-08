@@ -396,13 +396,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(
-                scx,
-                format,
-                &envelope,
-                with_options_original,
-                secrets_reader,
-            )?;
+            let encoding = get_encoding(scx, format, &envelope, secrets_reader)?;
 
             // XXX(chae): is this the place to inline? Or should it get delayed until we actually connect to kafka?
             let config_options = kafka_util::inline_secrets(config_options, secrets_reader)?;
@@ -502,13 +496,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(
-                scx,
-                format,
-                &envelope,
-                with_options_original,
-                secrets_reader,
-            )?;
+            let encoding = get_encoding(scx, format, &envelope, secrets_reader)?;
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -551,13 +539,7 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(
-                scx,
-                format,
-                &envelope,
-                with_options_original,
-                secrets_reader,
-            )?;
+            let encoding = get_encoding(scx, format, &envelope, secrets_reader)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -1202,20 +1184,17 @@ fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope<Aug>,
-    with_options: &Vec<WithOption<Aug>>,
     secrets_reader: &SecretsReader,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
-        CreateSourceFormat::Bare(format) => {
-            get_encoding_inner(scx, format, with_options, secrets_reader)?
-        }
+        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format, secrets_reader)?,
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(scx, key, with_options, secrets_reader)? {
+            let key = match get_encoding_inner(scx, key, secrets_reader)? {
                 SourceDataEncoding::Single(key) => key,
                 SourceDataEncoding::KeyValue { key, .. } => key,
             };
-            let value = match get_encoding_inner(scx, value, with_options, secrets_reader)? {
+            let value = match get_encoding_inner(scx, value, secrets_reader)? {
                 SourceDataEncoding::Single(value) => value,
                 SourceDataEncoding::KeyValue { value, .. } => value,
             };
@@ -1238,7 +1217,6 @@ fn get_encoding(
 fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
-    with_options: &Vec<WithOption<Aug>>,
     secrets_reader: &SecretsReader,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
@@ -1290,7 +1268,7 @@ fn get_encoding_inner(
                         CsrConnector::Inline { url } => {
                             (normalize::options(&ccsr_options)?, url.into())
                         }
-                        CsrConnector::Reference { connector, .. } => {
+                        CsrConnector::Reference { connector } => {
                             let item = scx.get_item_by_resolved_name(&connector)?;
                             let connector = item.catalog_connector()?;
                             let options = connector
@@ -1916,7 +1894,6 @@ fn kafka_sink_builder(
     let consistency_config = get_kafka_sink_consistency_config(
         &topic_prefix,
         &format,
-        &config_options,
         reuse_topic,
         consistency,
         consistency_topic,
@@ -2032,7 +2009,6 @@ fn kafka_sink_builder(
 fn get_kafka_sink_consistency_config(
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
-    config_options: &BTreeMap<String, StringOrSecret>,
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
