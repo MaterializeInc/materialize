@@ -70,7 +70,7 @@ use crate::ast::{
     ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
     SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
     TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
-    WithOption, WithOptionValue,
+    WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -1266,12 +1266,15 @@ fn get_encoding_inner(
                         },
                 } => {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (
-                            kafka_util::extract_config_ccsr(&mut normalize::options(
-                                &ccsr_options,
-                            )?)?,
-                            url.into(),
-                        ),
+                        CsrConnector::Inline { url } => {
+                            let mut normalized_options = normalize::options(&ccsr_options)?;
+                            let options = kafka_util::extract_config_ccsr(&mut normalized_options)?;
+                            normalize::ensure_empty_options(
+                                &normalized_options,
+                                "CONFLUENT SCHEMA REGISTRY",
+                            )?;
+                            (options, url.into())
+                        }
                         CsrConnector::Reference { connector } => {
                             let item = scx.get_item_by_resolved_name(&connector)?;
                             let connector = item.catalog_connector()?;
@@ -1334,12 +1337,15 @@ fn get_encoding_inner(
                     seed
                 {
                     let (mut ccsr_with_options, registry_url) = match connector {
-                        CsrConnector::Inline { url } => (
-                            kafka_util::extract_config_ccsr(&mut normalize::options(
-                                &ccsr_options,
-                            )?)?,
-                            url.to_string(),
-                        ),
+                        CsrConnector::Inline { url } => {
+                            let mut normalized_options = normalize::options(&ccsr_options)?;
+                            let options = kafka_util::extract_config_ccsr(&mut normalized_options)?;
+                            normalize::ensure_empty_options(
+                                &normalized_options,
+                                "CONFLUENT SCHEMA REGISTRY",
+                            )?;
+                            (options, url.into())
+                        }
                         CsrConnector::Reference { connector } => {
                             let item = scx.get_item_by_resolved_name(&connector)?;
                             let connector = item.catalog_connector()?;
@@ -1822,8 +1828,10 @@ fn kafka_sink_builder(
             if seed.is_some() {
                 bail!("SEED option does not make sense with sinks");
             }
+            let mut normalized_with_options = normalize::options(&with_options)?;
             let mut ccsr_with_options =
-                kafka_util::extract_config_ccsr(&mut normalize::options(&with_options)?)?;
+                kafka_util::extract_config_ccsr(&mut normalized_with_options)?;
+            normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let schema_registry_url = url.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -1831,6 +1839,8 @@ fn kafka_sink_builder(
                 &mut ccsr_with_options,
                 secrets_reader,
             )?;
+
+            normalize::ensure_empty_options(&ccsr_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let include_transaction =
                 reuse_topic || consistency_topic.is_some() || consistency.is_some();
@@ -1848,8 +1858,6 @@ fn kafka_sink_builder(
             let key_schema = schema_generator
                 .key_writer_schema()
                 .map(|key_schema| key_schema.to_string());
-
-            normalize::ensure_empty_options(&ccsr_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             KafkaSinkFormat::Avro {
                 schema_registry_url,
