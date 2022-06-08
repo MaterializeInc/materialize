@@ -274,6 +274,8 @@ impl Transform for FuseAndCollapse {
 /// the optimizations.
 #[derive(Debug)]
 pub struct Optimizer {
+    /// A logical name identifying this optimizer instance.
+    pub name: &'static str,
     /// The list of transforms to apply to an input relation.
     pub transforms: Vec<Box<dyn crate::Transform>>,
 }
@@ -333,7 +335,10 @@ impl Optimizer {
                 ],
             }),
         ];
-        Self { transforms }
+        Self {
+            name: "mir_logical_optimizer",
+            transforms,
+        }
     }
 
     /// Builds a physical optimizer.
@@ -363,7 +368,10 @@ impl Optimizer {
             Box::new(crate::update_let::UpdateLet::default()),
             Box::new(crate::reduction::FoldConstants { limit: Some(10000) }),
         ];
-        Self { transforms }
+        Self {
+            name: "mir_physical_optimizer",
+            transforms,
+        }
     }
 
     /// Contains the logical optimizations that should run after cross-view
@@ -390,7 +398,10 @@ impl Optimizer {
                 ],
             }),
         ];
-        Self { transforms }
+        Self {
+            name: "mir_logical_cleanup_pass",
+            transforms,
+        }
     }
 
     /// Optimizes the supplied relation expression.
@@ -409,6 +420,7 @@ impl Optimizer {
     ///
     /// This method should only be called with non-empty `indexes` when optimizing a dataflow,
     /// as the optimizations may lock in the use of arrangements that may cease to exist.
+    #[tracing::instrument(level = "debug", name="mir_optimize", skip_all, fields(optimize.pipeline = %self.name))]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,

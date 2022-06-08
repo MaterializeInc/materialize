@@ -95,6 +95,7 @@ pub struct PlannedQuery<E> {
 ///
 /// Note that the returned `RelationDesc` describes the expression after
 /// applying the returned `RowSetFinishing`.
+#[tracing::instrument(level = "debug", name = "ast_to_hir", skip_all)]
 pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query<Aug>,

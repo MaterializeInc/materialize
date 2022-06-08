@@ -1035,6 +1035,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 }
 
 /// Resolves names in an AST node using the provided catalog.
+#[tracing::instrument(level = "debug", name = "ast_resolve_names", skip_all)]
 pub fn resolve<N>(
     catalog: &dyn SessionCatalog,
     node: N,
