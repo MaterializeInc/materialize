@@ -109,32 +109,26 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
     Ok(&op.op)
 }
 
-#[derive(Debug)]
-pub enum SqlMaybeValueId {
+#[derive(Debug, Clone)]
+pub enum SqlValueOrSecret {
     Value(Value),
     Secret(GlobalId),
 }
 
-impl fmt::Display for SqlMaybeValueId {
+impl fmt::Display for SqlValueOrSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SqlMaybeValueId::Value(v) => write!(f, "{}", v),
-            SqlMaybeValueId::Secret(id) => write!(f, "{}", id),
+            SqlValueOrSecret::Value(v) => write!(f, "{}", v),
+            SqlValueOrSecret::Secret(id) => write!(f, "{}", id),
         }
     }
 }
 
-impl SqlMaybeValueId {
-    pub fn try_as_value(&self) -> Option<&Value> {
-        match self {
-            SqlMaybeValueId::Value(v) => Some(v),
-            SqlMaybeValueId::Secret(_id) => None,
-        }
-    }
-    pub fn try_into_value(self) -> Option<Value> {
-        match self {
-            SqlMaybeValueId::Value(v) => Some(v),
-            SqlMaybeValueId::Secret(_id) => None,
+impl From<SqlValueOrSecret> for Option<Value> {
+    fn from(s: SqlValueOrSecret) -> Self {
+        match s {
+            SqlValueOrSecret::Value(v) => Some(v),
+            SqlValueOrSecret::Secret(_id) => None,
         }
     }
 }
@@ -147,19 +141,19 @@ impl SqlMaybeValueId {
 /// - If any `WithOption` has a value of type `WithOptionValue::Secret`.
 pub fn options(
     options: &[WithOption<Aug>],
-) -> Result<BTreeMap<String, SqlMaybeValueId>, anyhow::Error> {
+) -> Result<BTreeMap<String, SqlValueOrSecret>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for option in options {
         let value = match &option.value {
-            Some(WithOptionValue::Value(value)) => SqlMaybeValueId::Value(value.clone()),
+            Some(WithOptionValue::Value(value)) => SqlValueOrSecret::Value(value.clone()),
             Some(WithOptionValue::Ident(id)) => {
-                SqlMaybeValueId::Value(Value::String(ident(id.clone())))
+                SqlValueOrSecret::Value(Value::String(ident(id.clone())))
             }
             Some(WithOptionValue::DataType(data_type)) => {
-                SqlMaybeValueId::Value(Value::String(data_type.to_ast_string()))
+                SqlValueOrSecret::Value(Value::String(data_type.to_ast_string()))
             }
             Some(WithOptionValue::Secret(ResolvedObjectName::Object { id, .. })) => {
-                SqlMaybeValueId::Secret(id.clone())
+                SqlValueOrSecret::Secret(id.clone())
             }
             Some(WithOptionValue::Secret(_)) => {
                 bail!("SECRET option {} must be Object", option.key)
@@ -653,12 +647,12 @@ macro_rules! with_options {
 
 /// Normalizes option values that contain AWS connection parameters.
 pub fn aws_config(
-    options: &mut BTreeMap<String, SqlMaybeValueId>,
+    options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
 ) -> Result<AwsConfig, anyhow::Error> {
     let mut extract = |key| match options.remove(key) {
         // TODO: support secrets in S3
-        Some(SqlMaybeValueId::Value(Value::String(key))) => {
+        Some(SqlValueOrSecret::Value(Value::String(key))) => {
             if !key.is_empty() {
                 Ok(Some(key))
             } else {

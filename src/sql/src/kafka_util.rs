@@ -30,7 +30,7 @@ use tokio::time::Duration;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_sql_parser::ast::Value;
 
-use crate::normalize::SqlMaybeValueId;
+use crate::normalize::SqlValueOrSecret;
 
 enum ValType {
     Path,
@@ -114,19 +114,19 @@ impl Config {
 }
 
 fn extract(
-    input: &mut BTreeMap<String, SqlMaybeValueId>,
+    input: &mut BTreeMap<String, SqlValueOrSecret>,
     configs: &[Config],
 ) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
         let value = match input.remove(config.name) {
-            Some(SqlMaybeValueId::Value(v)) => config
+            Some(SqlValueOrSecret::Value(v)) => config
                 .val_type
                 .process_val(&v)
                 .map(|v| StringOrSecret::String(config.do_transform(v)))
                 .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
-            Some(SqlMaybeValueId::Secret(id)) => StringOrSecret::Secret(id),
+            Some(SqlValueOrSecret::Secret(id)) => StringOrSecret::Secret(id),
             // Check for default values
             None => match &config.default {
                 Some(v) => StringOrSecret::String(config.do_transform(v.to_string())),
@@ -149,7 +149,7 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
+    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
 ) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
@@ -197,7 +197,7 @@ pub fn extract_config(
 }
 
 pub fn extract_config_ccsr(
-    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
+    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
 ) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
@@ -285,18 +285,19 @@ pub async fn create_consumer(
 pub async fn lookup_start_offsets(
     consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
     topic: &str,
-    with_options: &BTreeMap<String, SqlMaybeValueId>,
+    with_options: &BTreeMap<String, SqlValueOrSecret>,
     now: u64,
 ) -> Result<Option<Vec<i64>>, anyhow::Error> {
-    let time_offset = with_options.get("kafka_time_offset");
-    if time_offset.is_none() {
-        return Ok(None);
-    } else if with_options.contains_key("start_offset") {
-        bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
-    }
+    let time_offset = match with_options.get("kafka_time_offset").cloned() {
+        None => return Ok(None),
+        Some(_) if with_options.contains_key("start_offset") => {
+            bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
+        }
+        Some(offset) => offset,
+    };
 
     // Validate and resolve `kafka_time_offset`.
-    let time_offset = match time_offset.unwrap().try_as_value() {
+    let time_offset = match time_offset.into() {
         Some(Value::Number(s)) => match s.parse::<i64>() {
             // Timestamp in millis *before* now (e.g. -10 means 10 millis ago)
             Ok(ts) if ts < 0 => {
