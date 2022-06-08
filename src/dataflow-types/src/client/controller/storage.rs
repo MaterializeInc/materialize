@@ -493,6 +493,7 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn append(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
@@ -596,6 +597,7 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, ChangeBatch<T>)],
@@ -631,6 +633,7 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
