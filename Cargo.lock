@@ -3262,6 +3262,7 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-util",
  "mz-repr",
+ "mz-secrets",
  "mz-stash",
  "once_cell",
  "proptest",

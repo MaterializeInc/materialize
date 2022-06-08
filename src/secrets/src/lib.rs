@@ -87,7 +87,7 @@ impl SecretsReader {
     ///
     /// (N.B. Were we ever to run with Windows / NTFS, this would also work properly _and_ mid-read edits would be
     /// disallowed)
-    pub fn read<T: Borrow<GlobalId>>(&self, id: T) -> Result<Vec<u8>, anyhow::Error> {
+    pub fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
         let file_path = self.config.mount_path.join(id.borrow().to_string());
 
         // Inlined the std::fs::read impl because correctness requires and impl that holds the same `File` handle open
@@ -97,13 +97,13 @@ impl SecretsReader {
         Ok(buf)
     }
 
-    pub fn read_string<T: Borrow<GlobalId>>(&self, id: T) -> anyhow::Result<String> {
+    pub fn read_string(&self, id: GlobalId) -> anyhow::Result<String> {
         String::from_utf8(self.read(id)?).context("converting secret value to string")
     }
 
     /// Returns the path of the secret consisting of a configured base path
     /// and the GlobalId
-    pub fn canonical_path<T: Borrow<GlobalId>>(&self, id: T) -> Result<PathBuf, anyhow::Error> {
+    pub fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error> {
         let path = self.config.mount_path.join(id.borrow().to_string());
         Ok(path)
     }

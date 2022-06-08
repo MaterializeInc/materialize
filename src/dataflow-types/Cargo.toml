@@ -36,6 +36,7 @@ mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
+mz-secrets = { path = "../secrets" }
 mz-stash = { path = "../stash" }
 tonic = "0.7.2"
 once_cell = "1.12.0"

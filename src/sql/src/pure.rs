@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
-use mz_dataflow_types::sources::MaybeStringId;
+use mz_dataflow_types::sources::StringOrSecret;
 use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -199,7 +199,7 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, MaybeStringId>,
+    connector_options: &BTreeMap<String, StringOrSecret>,
     with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
@@ -271,7 +271,7 @@ async fn purify_source_format_single(
     format: &mut Format<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, MaybeStringId>,
+    connector_options: &BTreeMap<String, StringOrSecret>,
     with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     match format {
@@ -389,7 +389,6 @@ async fn purify_csr_connector_proto(
             let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options)?)?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
-                &kafka_options,
                 &mut normalize::options(&ccsr_options)?,
                 catalog.secrets_reader(),
             )?;
@@ -423,7 +422,7 @@ async fn purify_csr_connector_avro(
     connector: &mut CreateSourceConnector<Aug>,
     csr_connector: &mut CsrConnectorAvro<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, MaybeStringId>,
+    connector_options: &BTreeMap<String, StringOrSecret>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
     {
@@ -452,7 +451,6 @@ async fn purify_csr_connector_avro(
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(
                 url,
-                &connector_options,
                 &mut normalize::options(ccsr_options)?,
                 catalog.secrets_reader(),
             )
