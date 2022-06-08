@@ -26,7 +26,7 @@ use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::{debug, debug_span, info, instrument, trace, trace_span, warn, Instrument};
+use tracing::{debug, debug_span, info, instrument, trace, warn, Instrument};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
@@ -730,7 +730,7 @@ where
         };
 
         let mut buf = Vec::new();
-        trace_span!("make_batch::encode").in_scope(|| {
+        debug_span!("make_batch::encode").in_scope(|| {
             batch.encode(&mut buf);
         });
         let buf = Bytes::from(buf);
