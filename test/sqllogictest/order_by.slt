@@ -491,9 +491,127 @@ SELECT * FROM fizzlimitoffsetview2
 21758 fourteen
 12345 three
 
-# NULL should sort last. See #5982.
-query T
+# NULL should sort last by default. See #5982.
+# NULL (default, default)
+query I
 SELECT * FROM (VALUES (NULL), (1)) ORDER BY column1
 ----
 1
 NULL
+
+# NULL (asc, default)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 asc
+----
+1
+2
+3
+NULL
+
+# NULL (desc, default)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 desc
+----
+NULL
+3
+2
+1
+
+# NULL (default, last)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 nulls last
+----
+1
+2
+3
+NULL
+
+# NULL (asc, last)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 asc nulls last
+----
+1
+2
+3
+NULL
+
+# NULL (desc, last)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 desc nulls last
+----
+3
+2
+1
+NULL
+
+# NULL (default, first)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 nulls first
+----
+NULL
+1
+2
+3
+
+# NULL (asc, first)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 asc nulls first
+----
+NULL
+1
+2
+3
+
+# NULL (desc, first)
+query I
+SELECT * FROM (VALUES (1), (NULL), (3), (2)) ORDER BY column1 desc nulls first
+----
+NULL
+3
+2
+1
+
+# Windows
+
+query IT rowsort
+WITH t (x) AS (VALUES ('a'), (NULL), ('b'), ('c'))
+SELECT row_number() OVER (ORDER BY x NULLS FIRST), x FROM t;
+----
+1 NULL
+2 a
+3 b
+4 c
+
+query IT rowsort
+WITH t (x) AS (VALUES ('a'), (NULL), ('b'), ('c'))
+SELECT row_number() OVER (ORDER BY x NULLS LAST), x FROM t;
+----
+1 a
+2 b
+3 c
+4 NULL
+
+statement ok
+DROP TABLE IF EXISTS t;
+
+statement ok
+CREATE TABLE t (x TEXT);
+
+statement ok
+INSERT INTO t VALUES  ('a'), (NULL), ('b'), ('c');
+
+query IT rowsort
+SELECT row_number() OVER (ORDER BY x NULLS FIRST), x FROM t;
+----
+1 NULL
+2 a
+3 b
+4 c
+
+query IT rowsort
+SELECT row_number() OVER (ORDER BY x NULLS LAST), x FROM t;
+----
+1 a
+2 b
+3 c
+4 NULL

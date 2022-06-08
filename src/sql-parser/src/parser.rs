@@ -4633,7 +4633,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an expression, optionally followed by ASC or DESC (used in ORDER BY)
+    /// Parse an expression, optionally followed by ASC or DESC,
+    /// and then `[NULLS { FIRST | LAST }]` (used in ORDER BY)
     fn parse_order_by_expr(&mut self) -> Result<OrderByExpr<Raw>, ParserError> {
         let expr = self.parse_expr()?;
 
@@ -4644,7 +4645,19 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(OrderByExpr { expr, asc })
+
+        let nulls_last = if self.parse_keyword(NULLS) {
+            let last = self.expect_one_of_keywords(&[FIRST, LAST])? == LAST;
+            Some(last)
+        } else {
+            None
+        };
+
+        Ok(OrderByExpr {
+            expr,
+            asc,
+            nulls_last,
+        })
     }
 
     fn parse_values(&mut self) -> Result<Values<Raw>, ParserError> {

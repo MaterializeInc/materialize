@@ -1452,6 +1452,9 @@ pub struct ColumnOrder {
     /// Whether to sort in descending order.
     #[serde(default)]
     pub desc: bool,
+    /// Whether to sort nulls last.
+    #[serde(default)]
+    pub nulls_last: bool,
 }
 
 impl RustType<ProtoColumnOrder> for ColumnOrder {
@@ -1459,6 +1462,7 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
         ProtoColumnOrder {
             column: self.column.into_proto(),
             desc: self.desc,
+            nulls_last: self.nulls_last,
         }
     }
 
@@ -1466,6 +1470,7 @@ impl RustType<ProtoColumnOrder> for ColumnOrder {
         Ok(ColumnOrder {
             column: proto.column.into_rust()?,
             desc: proto.desc,
+            nulls_last: proto.nulls_last,
         })
     }
 }
@@ -1474,9 +1479,14 @@ impl fmt::Display for ColumnOrder {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "#{} {}",
+            "#{} {} {}",
             self.column,
-            if self.desc { "desc" } else { "asc" }
+            if self.desc { "desc" } else { "asc" },
+            if self.nulls_last {
+                "nulls_last"
+            } else {
+                "nulls_first"
+            },
         )
     }
 }
@@ -2087,11 +2097,29 @@ where
     F: Fn() -> Ordering,
 {
     for order in order {
-        let (lval, rval) = (&left[order.column], &right[order.column]);
-        let cmp = if order.desc {
-            rval.cmp(&lval)
-        } else {
-            lval.cmp(&rval)
+        let cmp = match (&left[order.column], &right[order.column]) {
+            (Datum::Null, Datum::Null) => Ordering::Equal,
+            (Datum::Null, _) => {
+                if order.nulls_last {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                }
+            }
+            (_, Datum::Null) => {
+                if order.nulls_last {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                }
+            }
+            (lval, rval) => {
+                if order.desc {
+                    rval.cmp(&lval)
+                } else {
+                    lval.cmp(&rval)
+                }
+            }
         };
         if cmp != Ordering::Equal {
             return cmp;

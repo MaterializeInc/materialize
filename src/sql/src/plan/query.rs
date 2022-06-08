@@ -56,7 +56,7 @@ use mz_repr::{
 
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
+    AsOf, Assignment, AstInfo, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition,
     TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
@@ -1943,10 +1943,7 @@ fn plan_order_by_exprs(
                 ecx.relation_type.arity() + map_exprs.len() - 1
             }
         };
-        order_by.push(ColumnOrder {
-            column,
-            desc: !obe.asc.unwrap_or(true),
-        });
+        order_by.push(resolve_desc_and_nulls_last(obe, column));
     }
     Ok((order_by, map_exprs))
 }
@@ -3496,7 +3493,7 @@ where
         .order_by
         .into_iter()
         .enumerate()
-        .map(|(i, ColumnOrder { column: _, desc })| ColumnOrder { column: i, desc })
+        .map(|(i, order)| ColumnOrder { column: i, ..order })
         .collect();
 
     let reduced_expr = expr
@@ -3726,6 +3723,19 @@ pub fn coerce_homogeneous_exprs(
     Ok(out)
 }
 
+/// Creates a `ColumnOrder` from an `OrderByExpr` and column index.
+/// Column index is specified by the caller, but `desc` and `nulls_last` is figured out here.
+fn resolve_desc_and_nulls_last<T: AstInfo>(obe: &OrderByExpr<T>, column: usize) -> ColumnOrder {
+    let desc = !obe.asc.unwrap_or(true);
+    ColumnOrder {
+        column,
+        desc,
+        /// https://www.postgresql.org/docs/14/queries-order.html
+        ///   "NULLS FIRST is the default for DESC order, and NULLS LAST otherwise"
+        nulls_last: obe.nulls_last.unwrap_or(!desc),
+    }
+}
+
 fn plan_function_order_by(
     ecx: &ExprContext,
     order_by: &[OrderByExpr<Aug>],
@@ -3739,10 +3749,7 @@ fn plan_function_order_by(
             // `plan_expr` directly rather than `plan_order_by_or_distinct_expr`.
             let expr = plan_expr(ecx, &obe.expr)?.type_as_any(ecx)?;
             order_by_exprs.push(expr);
-            col_orders.push(ColumnOrder {
-                column: i,
-                desc: !obe.asc.unwrap_or(true),
-            });
+            col_orders.push(resolve_desc_and_nulls_last(obe, i));
         }
     }
     Ok((order_by_exprs, col_orders))

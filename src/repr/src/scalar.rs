@@ -113,8 +113,12 @@ pub enum Datum<'a> {
     // TODO(benesch): get rid of this variant. With a more capable optimizer, I
     // don't think there would be any need for dummy datums.
     Dummy,
-    // Keep `Null` last so that it sorts last, to match the default sort order
-    // in PostgreSQL.
+    // Keep `Null` last so that calling `<` on Datums sorts nulls last, to
+    // match the default in PostgreSQL. Note that this doesn't have an effect
+    // on ORDER BY, because that is handled by compare_columns. The only
+    // situation it has an effect is array comparisons, e.g.,
+    // `SELECT ARRAY[1] < ARRAY[NULL]::int[]`. In such a situation, we end up
+    // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
 }

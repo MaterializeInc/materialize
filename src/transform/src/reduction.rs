@@ -541,7 +541,11 @@ impl FoldConstants {
                 .iter()
                 .map(|column| ColumnOrder {
                     column: *column,
+                    // desc and nulls_last don't matter: the sorting by cmp_group_key is just to
+                    // make the elements of each group appear next to each other, but the order of
+                    // groups doesn't matter.
                     desc: false,
+                    nulls_last: false,
                 })
                 .collect::<Vec<ColumnOrder>>();
             let mut lhs_datum_vec = mz_repr::DatumVec::new();

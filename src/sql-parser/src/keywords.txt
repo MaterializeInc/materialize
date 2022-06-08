@@ -162,6 +162,7 @@ Kafka
 Key
 Keys
 Kinesis
+Last
 Lateral
 Leading
 Least
@@ -195,6 +196,7 @@ Notice
 Notifications
 Null
 Nullif
+Nulls
 Objects
 Of
 Offset

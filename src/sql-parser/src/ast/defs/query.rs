@@ -31,7 +31,7 @@ use crate::ast::{AstInfo, Expr, FunctionArgs, Ident, UnresolvedObjectName, WithO
 pub struct Query<T: AstInfo> {
     /// WITH (common table expressions, or CTEs)
     pub ctes: Vec<Cte<T>>,
-    /// SELECT or UNION / EXCEPT / INTECEPT
+    /// SELECT or UNION / EXCEPT / INTERSECT
     pub body: SetExpr<T>,
     /// ORDER BY
     pub order_by: Vec<OrderByExpr<T>>,
@@ -588,6 +588,7 @@ pub enum JoinConstraint<T: AstInfo> {
 pub struct OrderByExpr<T: AstInfo> {
     pub expr: Expr<T>,
     pub asc: Option<bool>,
+    pub nulls_last: Option<bool>,
 }
 
 impl<T: AstInfo> AstDisplay for OrderByExpr<T> {
@@ -596,6 +597,11 @@ impl<T: AstInfo> AstDisplay for OrderByExpr<T> {
         match self.asc {
             Some(true) => f.write_str(" ASC"),
             Some(false) => f.write_str(" DESC"),
+            None => {}
+        }
+        match self.nulls_last {
+            Some(true) => f.write_str(" NULLS LAST"),
+            Some(false) => f.write_str(" NULLS FIRST"),
             None => {}
         }
     }
