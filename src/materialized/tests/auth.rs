@@ -236,6 +236,22 @@ enum TestCase<'a> {
     },
 }
 
+fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
+    Assert::Err(Box::new(|code, message| {
+        const ALLOWED_MESSAGES: [&str; 2] = [
+            "Connection reset by peer",
+            "connection closed before message completed",
+        ];
+        assert_eq!(code, None);
+        if !ALLOWED_MESSAGES
+            .iter()
+            .any(|allowed| message.contains(allowed))
+        {
+            panic!("TLS rejected with unexpected error message: {}", message)
+        }
+    }))
+}
+
 fn run_tests<'a>(header: &str, server: &util::Server, tests: &[TestCase<'a>]) {
     println!("==> {}", header);
     let runtime = Runtime::new().unwrap();
@@ -825,10 +841,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTP,
                 headers: &frontegg_header_basic,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
-                assert: Assert::Err(Box::new(|code, message| {
-                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
-                    assert_eq!(message, "HTTPS is required");
-                })),
+                assert: assert_http_rejected(),
             },
             // Wrong, but existing, username.
             TestCase::Pgwire {
@@ -1066,10 +1079,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
-                assert: Assert::Err(Box::new(|code, message| {
-                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
-                    assert_eq!(message, "HTTPS is required");
-                })),
+                assert: assert_http_rejected(),
             },
             // Preferring TLS should succeed.
             TestCase::Pgwire {
@@ -1137,10 +1147,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
-                assert: Assert::Err(Box::new(|code, message| {
-                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
-                    assert_eq!(message, "HTTPS is required");
-                })),
+                assert: assert_http_rejected(),
             },
             // Connecting with TLS without providing a client certificate should
             // fail.
@@ -1277,10 +1284,7 @@ fn test_auth() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
                 configure: Box::new(|_| Ok(())),
-                assert: Assert::Err(Box::new(|code, message| {
-                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
-                    assert_eq!(message, "HTTPS is required");
-                })),
+                assert: assert_http_rejected(),
             },
             // Connecting with TLS without providing a client certificate should
             // fail.
