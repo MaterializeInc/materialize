@@ -150,7 +150,7 @@ fn extract(
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &mut BTreeMap<String, SqlMaybeValueId>,
-) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
+) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
         &[
@@ -192,6 +192,21 @@ pub fn extract_config(
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 1_000_000_000),
             ),
+        ],
+    )
+}
+
+pub fn extract_config_ccsr(
+    with_options: &mut BTreeMap<String, SqlMaybeValueId>,
+) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
+    extract(
+        with_options,
+        &[
+            Config::string("ssl_ca_location"),
+            Config::string("ssl_key_location"),
+            Config::string("ssl_certificate_location"),
+            Config::string("username"),
+            Config::string("password"),
         ],
     )
 }
@@ -400,38 +415,31 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    ccsr_options: &mut BTreeMap<String, SqlMaybeValueId>,
+    ccsr_options: &mut BTreeMap<String, StringOrSecret>,
     secrets_reader: &SecretsReader,
 ) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
-    if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
-        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
-        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(*id)?),
-        Some(_) => bail!("ssl_ca_location must be a string or secret"),
-        None => None,
-    } {
+    if let Some(ca_path) = ccsr_options
+        .remove("ssl_ca_location")
+        .map(|v| v.get_string(secrets_reader))
+        .transpose()?
+    {
         let mut ca_buf = Vec::new();
         File::open(ca_path)?.read_to_end(&mut ca_buf)?;
         let cert = Certificate::from_pem(&ca_buf)?;
         client_config = client_config.add_root_certificate(cert);
     }
 
-    let ssl_key_location = ccsr_options.remove("ssl_key_location");
-    let key_path = match &&ssl_key_location {
-        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
-        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(*id)?),
-        Some(_) => bail!("ssl_key_location must be a string or secret"),
-        None => None,
-    };
-    let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
-    let cert_path = match &ssl_certificate_location {
-        Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
-        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(*id)?),
-        Some(_) => bail!("ssl_certificate_location must be a string or secret"),
-        None => None,
-    };
+    let key_path = ccsr_options
+        .remove("ssl_key_location")
+        .map(|v| v.get_string(secrets_reader))
+        .transpose()?;
+    let cert_path = ccsr_options
+        .remove("ssl_certificate_location")
+        .map(|v| v.get_string(secrets_reader))
+        .transpose()?;
     match (key_path, cert_path) {
         (Some(key_path), Some(cert_path)) => {
             // `reqwest` expects identity `pem` files to contain one key and
@@ -450,11 +458,6 @@ pub fn generate_ccsr_client_config(
              requires both ssl.key.location and ssl.certificate.location"
         ),
     }
-
-    let mut ccsr_options = extract(
-        ccsr_options,
-        &[Config::string("username"), Config::string("password")],
-    )?;
 
     if let Some(username) = ccsr_options.remove("username") {
         let username = username.get_string(secrets_reader)?;
