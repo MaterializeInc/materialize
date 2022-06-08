@@ -40,7 +40,7 @@ use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
 use openssl::x509::X509;
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -48,7 +48,6 @@ use tracing::{error, warn};
 
 use mz_coord::session::Session;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggError};
-use mz_ore::netio::SniffingStream;
 
 use crate::BUILD_INFO;
 
@@ -58,12 +57,6 @@ mod root;
 mod sql;
 
 const SYSTEM_USER: &str = "mz_system";
-
-const TLS_HANDSHAKE_START: u8 = 22;
-
-fn sniff_tls(buf: &[u8]) -> bool {
-    !buf.is_empty() && buf[0] == TLS_HANDSHAKE_START
-}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -148,12 +141,8 @@ impl Server {
     }
 
     pub async fn handle_connection(&self, conn: TcpStream) -> Result<(), anyhow::Error> {
-        let mut ss = SniffingStream::new(conn);
-        let mut buf = [0; 1];
-        ss.read_exact(&mut buf).await?;
-        let conn = ss.into_sniffed();
-        let (conn, conn_protocol) = match (&self.tls_context(), sniff_tls(&buf)) {
-            (Some(tls_context), true) => {
+        let (conn, conn_protocol) = match &self.tls_context() {
+            Some(tls_context) => {
                 let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
                 if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
                     let _ = ssl_stream.get_mut().shutdown().await;
