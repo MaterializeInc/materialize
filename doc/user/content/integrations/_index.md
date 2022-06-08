@@ -56,11 +56,9 @@ Being Kafka API-compatible, Redpanda is supported as a [**source**](/overview/ke
 
 ### Kinesis Data Streams
 
-Kinesis Data Streams is supported as a [**source**](/overview/key-concepts/#sources), but not as a sink {{% gh 2372 %}}.
-
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
-| AWS Kinesis Data Streams | {{< supportLevel beta >}} | See the [source documentation](/sql/create-source/kinesis/) for more details. | [](#notify) |
+| AWS Kinesis Data Streams | {{< supportLevel in-progress >}} | Subscribe via “Notify Me” to register interest. | [](#notify) |
 
 ### Other message brokers
 
@@ -121,11 +119,9 @@ Debezium has an extensive ecosystem of connectors, but each database has its own
 
 ### S3
 
-S3 is supported as a [**source**](/overview/key-concepts/#sources), but not as a sink {{% gh 7256 %}}.
-
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
-| Amazon S3 | {{< supportLevel beta >}} | See the [source documentation](/sql/create-source/s3/) for more details. | [](#notify) |
+| Amazon S3 | {{< supportLevel in-progress >}} | Subscribe via “Notify Me” to register interest. | [](#notify) |
 | MinIO Object Storage | {{< supportLevel researching >}} | Not supported yet {{% gh 6568 %}}. <br> MinIO provides a [S3-compatible API](https://min.io/product/s3-compatibility) that may enable interoperability with Materialize, but this hasn't been officially tested. | [](#notify) |
 
 ### Other object storage services

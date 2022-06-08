@@ -15,7 +15,7 @@ aliases:
     - /sql/create-source/csv-kinesis
 ---
 
-[//]: # "NOTE(morsapaes) Once we're ready to bring the KDS source back, check # to restore the previous docs state."
+[//]: # "NOTE(morsapaes) Once we're ready to bring the KDS source back, check #12991 to restore the previous docs state."
 
 {{< beta />}}
 

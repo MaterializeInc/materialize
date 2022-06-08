@@ -37,7 +37,7 @@ Field | Meaning
 **type** | Whether the source was created by the `user` or the `system`.
 **materialized** | Does the source have an in-memory index? For more details, see [`CREATE INDEX`](../create-index).
 **volatility** | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
-**connector_type** | The type of the source: `file`, `kafka`, `kinesis`, `s3`, `postgres`, or `pubnub`.
+**connector_type** | The type of the source:  `kafka`, `postgres`, or `pubnub`.
 
 ### Internal statistic sources
 

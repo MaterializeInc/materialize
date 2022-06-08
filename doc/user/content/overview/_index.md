@@ -101,7 +101,7 @@ Ultimately, this lets you refresh answers to your queries very quickly because M
 
 While we've covered the high-level details above, this section gives some of the more specific details about Materialize itself.
 
-Materialize ingests streams of data from Kafka, Kinesis, PostgreSQL, S3, or local files that you
+Materialize ingests streams of data from external systems like Kafka and PostgreSQL that you
 declare as "sources". These sources monitor changes in the upstream data and
 automatically pull new records into your Materialize instance. You can interact
 with this data in Materialize as if it were in a SQL table.

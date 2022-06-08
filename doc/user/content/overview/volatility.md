@@ -15,16 +15,13 @@ repeatedly. In other words, if Materialize restarts, it must be able to replay
 the source from the beginning of time and receive exactly the same data.
 
 We call a source that cannot uphold this guarantee a *volatile* source. Many
-common sources of streaming data are volatile. For example, [Amazon
-Kinesis](https://aws.amazon.com/kinesis/) streams are volatile, because (by
-default) data is only retained for 24 hours. If Materialize restarts after
-reading a Kinesis stream for 25 hours, it will be unable to recover the first
-hour of data.
+common sources of streaming data are volatile. For example, [Kafka](/sql/create-source/kafka) streams not configured with infinite retention are volatile, because (by
+default) data is only retained for 7 days. If Materialize restarts after
+reading a Kafka stream for longer than this retention period, it might be unable to recover part of the data.
 
 While it is possible to connect to volatile sources in Materialize, the system
-internally tracks the volatility. Forthcoming features that rely on
-deterministic replay, like [exactly-once
-sinks](https://github.com/MaterializeInc/materialize/issues/2915), will not
+internally tracks the volatility. Features that rely on
+deterministic replay, like [exactly-once sinks](/sql/create-sink/#exactly-once-sinks-with-topic-reuse-after-restart), will not
 support construction atop volatile sources.
 
 ## Rules
@@ -40,19 +37,15 @@ These rules will evolve in future versions of Materialize.
 
 At present, the following source types are always considered volatile:
 
-  * [Kinesis sources](/sql/create-source/text-kinesis/)
   * [PubNub sources](/sql/create-source/text-pubnub/)
 
 The following source types are always considered to be of unknown volatility:
 
   * [Kafka sources](/sql/create-source/avro-kafka/)
-  * [S3 sources](/sql/create-source/text-s3/)
 
-In the future, Materialize will let you configure whether a given Kafka, S3, or
-file source is considered volatile or nonvolatile, as their volatility depends
-on their configuration. Common ways to introduce volatility include configuring
-a retention policy on a Kafka topic used in a Kafka source, deleting an object
-from an S3 bucket used in an S3 source, or editing a file used in a file source.
+In the future, Materialize will let you configure whether a given source is considered volatile or nonvolatile, as their volatility depends
+on their configuration. A common way to introduce volatility is, for example, to configure
+a retention policy on a Kafka topic used in a Kafka source.
 
 ### Views, indexes, and sinks
 
