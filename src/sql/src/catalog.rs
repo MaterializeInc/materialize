@@ -23,7 +23,7 @@ use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sources::{MaybeStringId, SourceConnector};
+use mz_dataflow_types::sources::{SourceConnector, StringOrSecret};
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
@@ -276,7 +276,7 @@ pub trait CatalogConnector {
     fn uri(&self) -> String;
 
     /// Returns the options associated with this connector as a Vec, if the type does not support options or none were specified this will be empty
-    fn options(&self) -> std::collections::BTreeMap<String, MaybeStringId>;
+    fn options(&self) -> std::collections::BTreeMap<String, StringOrSecret>;
 }
 
 /// An item in a [`SessionCatalog`].

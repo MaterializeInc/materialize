@@ -40,9 +40,9 @@ use mz_dataflow_types::sources::encoding::{
 use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MaybeStringId,
-    MzOffset, PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
-    SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MzOffset,
+    PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
+    SourceEnvelope, StringOrSecret, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -1301,10 +1301,10 @@ fn get_encoding_inner(
                                     (
                                         k,
                                         match v {
-                                            MaybeStringId::String(s) => {
+                                            StringOrSecret::String(s) => {
                                                 SqlMaybeValueId::Value(Value::String(s))
                                             }
-                                            MaybeStringId::Secret(id) => {
+                                            StringOrSecret::Secret(id) => {
                                                 SqlMaybeValueId::Secret(id)
                                             }
                                         },
@@ -1316,7 +1316,6 @@ fn get_encoding_inner(
                     };
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options)?)?,
                         &mut ccsr_with_options,
                         secrets_reader,
                     )?;
@@ -1385,10 +1384,10 @@ fn get_encoding_inner(
                                     (
                                         k,
                                         match v {
-                                            MaybeStringId::String(s) => {
+                                            StringOrSecret::String(s) => {
                                                 SqlMaybeValueId::Value(Value::String(s))
                                             }
-                                            MaybeStringId::Secret(id) => {
+                                            StringOrSecret::Secret(id) => {
                                                 SqlMaybeValueId::Secret(id)
                                             }
                                         },
@@ -1401,7 +1400,6 @@ fn get_encoding_inner(
                     // We validate here instead of in purification, to match the behavior of avro
                     let _ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
-                        &kafka_util::extract_config(&mut normalize::options(with_options)?)?,
                         &mut ccsr_with_options,
                         secrets_reader,
                     )?;
@@ -1880,7 +1878,6 @@ fn kafka_sink_builder(
             let schema_registry_url = url.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 schema_registry_url.clone(),
-                &config_options,
                 &mut ccsr_with_options,
                 secrets_reader,
             )?;
@@ -2035,7 +2032,7 @@ fn kafka_sink_builder(
 fn get_kafka_sink_consistency_config(
     topic_prefix: &str,
     sink_format: &KafkaSinkFormat,
-    config_options: &BTreeMap<String, MaybeStringId>,
+    config_options: &BTreeMap<String, StringOrSecret>,
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
@@ -2061,7 +2058,6 @@ fn get_kafka_sink_consistency_config(
                 let mut ccsr_with_options = normalize::options(&with_options)?;
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
-                    config_options,
                     &mut ccsr_with_options,
                     secrets_reader,
                 )?;
@@ -2964,8 +2960,8 @@ pub fn plan_create_connector(
                         (
                             k.to_owned(),
                             match v {
-                                SqlMaybeValueId::Value(v) => MaybeStringId::String(v.to_string()),
-                                SqlMaybeValueId::Secret(id) => MaybeStringId::Secret(id.clone()),
+                                SqlMaybeValueId::Value(v) => StringOrSecret::String(v.to_string()),
+                                SqlMaybeValueId::Secret(id) => StringOrSecret::Secret(id.clone()),
                             },
                         )
                     })

@@ -34,7 +34,7 @@ use mz_dataflow_types::client::{
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{
-    ConnectorInner, ExternalSourceConnector, MaybeStringId, SourceConnector, Timeline,
+    ConnectorInner, ExternalSourceConnector, SourceConnector, StringOrSecret, Timeline,
 };
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -3777,7 +3777,7 @@ impl mz_sql::catalog::CatalogConnector for Connector {
         self.connector.uri()
     }
 
-    fn options(&self) -> std::collections::BTreeMap<String, MaybeStringId> {
+    fn options(&self) -> std::collections::BTreeMap<String, StringOrSecret> {
         self.connector.options()
     }
 }

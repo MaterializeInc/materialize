@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 
-use mz_dataflow_types::sources::MaybeStringId;
+use mz_dataflow_types::sources::StringOrSecret;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
@@ -116,7 +116,7 @@ impl Config {
 fn extract(
     input: &mut BTreeMap<String, SqlMaybeValueId>,
     configs: &[Config],
-) -> Result<BTreeMap<String, MaybeStringId>, anyhow::Error> {
+) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
@@ -124,12 +124,12 @@ fn extract(
             Some(SqlMaybeValueId::Value(v)) => config
                 .val_type
                 .process_val(&v)
-                .map(|v| MaybeStringId::String(config.do_transform(v)))
+                .map(|v| StringOrSecret::String(config.do_transform(v)))
                 .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
-            Some(SqlMaybeValueId::Secret(id)) => MaybeStringId::Secret(id),
+            Some(SqlMaybeValueId::Secret(id)) => StringOrSecret::Secret(id),
             // Check for default values
             None => match &config.default {
-                Some(v) => MaybeStringId::String(config.do_transform(v.to_string())),
+                Some(v) => StringOrSecret::String(config.do_transform(v.to_string())),
                 None => continue,
             },
         };
@@ -150,7 +150,7 @@ fn extract(
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &mut BTreeMap<String, SqlMaybeValueId>,
-) -> Result<BTreeMap<String, MaybeStringId>, anyhow::Error> {
+) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
     extract(
         with_options,
         &[
@@ -197,19 +197,13 @@ pub fn extract_config(
 }
 
 pub fn inline_secrets(
-    config: BTreeMap<String, MaybeStringId>,
+    config: BTreeMap<String, StringOrSecret>,
     secrets_reader: &SecretsReader,
 ) -> anyhow::Result<BTreeMap<String, String>> {
     config
         .into_iter()
-        .map(|(k, v)| {
-            let inlined_value = match v {
-                MaybeStringId::String(s) => s,
-                // TODO: Support more than just strings?
-                MaybeStringId::Secret(id) => secrets_reader.read_string(id)?,
-            };
-            Ok((k, inlined_value))
-        })
+        // TODO: Support more than just strings?
+        .map(|(k, v)| Ok((k, v.get_string(secrets_reader)?)))
         .collect()
 }
 
@@ -225,17 +219,14 @@ pub fn inline_secrets(
 pub async fn create_consumer(
     broker: &str,
     topic: &str,
-    options: &BTreeMap<String, MaybeStringId>,
+    options: &BTreeMap<String, StringOrSecret>,
     librdkafka_log_level: tracing::Level,
     secrets_reader: &SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
     let mut config = create_new_client_config(librdkafka_log_level);
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
-        match v {
-            MaybeStringId::String(s) => config.set(k, s),
-            MaybeStringId::Secret(id) => config.set(k, secrets_reader.read_string(id)?),
-        };
+        config.set(k, v.get_string(secrets_reader)?);
     }
 
     let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> =
@@ -409,8 +400,6 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    // XXX(chae): make these use the same types??
-    _kafka_options: &BTreeMap<String, MaybeStringId>,
     ccsr_options: &mut BTreeMap<String, SqlMaybeValueId>,
     secrets_reader: &SecretsReader,
 ) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
@@ -419,7 +408,7 @@ pub fn generate_ccsr_client_config(
     // If provided, prefer SSL options from the schema registry configuration
     if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
         Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
-        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(id)?),
+        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(*id)?),
         Some(_) => bail!("ssl_ca_location must be a string or secret"),
         None => None,
     } {
@@ -432,14 +421,14 @@ pub fn generate_ccsr_client_config(
     let ssl_key_location = ccsr_options.remove("ssl_key_location");
     let key_path = match &&ssl_key_location {
         Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
-        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(id)?),
+        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(*id)?),
         Some(_) => bail!("ssl_key_location must be a string or secret"),
         None => None,
     };
     let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
     let cert_path = match &ssl_certificate_location {
         Some(SqlMaybeValueId::Value(Value::String(path))) => Some(path.clone()),
-        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(id)?),
+        Some(SqlMaybeValueId::Secret(id)) => Some(secrets_reader.read_string(*id)?),
         Some(_) => bail!("ssl_certificate_location must be a string or secret"),
         None => None,
     };
@@ -468,15 +457,11 @@ pub fn generate_ccsr_client_config(
     )?;
 
     if let Some(username) = ccsr_options.remove("username") {
-        let username = match username {
-            MaybeStringId::String(s) => s,
-            MaybeStringId::Secret(id) => secrets_reader.read_string(id)?,
-        };
-        let password = match ccsr_options.remove("password") {
-            Some(MaybeStringId::String(s)) => Some(s),
-            Some(MaybeStringId::Secret(id)) => Some(secrets_reader.read_string(id)?),
-            None => None,
-        };
+        let username = username.get_string(secrets_reader)?;
+        let password = ccsr_options
+            .remove("password")
+            .map(|v| v.get_string(secrets_reader))
+            .transpose()?;
         client_config = client_config.auth(username, password);
     }
 
