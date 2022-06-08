@@ -161,7 +161,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             consensus_uri,
         },
         data_directory: data_directory.clone(),
-        catalog_postgres_stash: Some(catalog_postgres_stash),
+        catalog_postgres_stash,
         storage_postgres_stash,
         orchestrator: OrchestratorConfig {
             backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {

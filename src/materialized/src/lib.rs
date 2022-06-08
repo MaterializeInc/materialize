@@ -97,9 +97,8 @@ pub struct Config {
     pub data_directory: PathBuf,
     /// Where the persist library should store its data.
     pub persist_location: PersistLocation,
-    /// Optional Postgres connection string which will use Postgres as the metadata
-    /// stash instead of sqlite from the `data_directory`.
-    pub catalog_postgres_stash: Option<String>,
+    /// Postgres connection string for catalog's stash.
+    pub catalog_postgres_stash: String,
     /// Postgres connection string for storage's stash.
     pub storage_postgres_stash: String,
 
@@ -204,24 +203,12 @@ pub enum SecretsControllerConfig {
 
 /// Start a `materialized` server.
 pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
-    match &config.catalog_postgres_stash {
-        Some(s) => {
-            let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(s)?)?;
-            let stash = mz_stash::Postgres::new(s.to_string(), None, tls).await?;
-            let stash = mz_stash::Memory::new(stash);
-            serve_stash(config, stash).await
-        }
-        None => {
-            let stash = mz_stash::Sqlite::open(None)?;
-            serve_stash(config, stash).await
-        }
-    }
-}
+    let tls = mz_postgres_util::make_tls(&tokio_postgres::config::Config::from_str(
+        &config.catalog_postgres_stash,
+    )?)?;
+    let stash = mz_stash::Postgres::new(config.catalog_postgres_stash.clone(), None, tls).await?;
+    let stash = mz_stash::Memory::new(stash);
 
-async fn serve_stash<S: mz_stash::Append + 'static>(
-    config: Config,
-    stash: S,
-) -> Result<Server, anyhow::Error> {
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
         None => (None, None),

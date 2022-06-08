@@ -584,7 +584,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         },
         consensus_uri: args.persist_consensus_url.to_string(),
     };
-    let catalog_postgres_stash = Some(args.catalog_postgres_stash);
+    let catalog_postgres_stash = args.catalog_postgres_stash;
     let storage_postgres_stash = args.storage_postgres_stash;
 
     // When inside a cgroup with a cpu limit,
