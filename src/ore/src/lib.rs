@@ -32,6 +32,9 @@ pub mod cgroup;
 pub mod cli;
 pub mod codegen;
 pub mod collections;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "concurrency")))]
+#[cfg(feature = "concurrency")]
+pub mod concurrency;
 pub mod display;
 pub mod env;
 pub mod fmt;
