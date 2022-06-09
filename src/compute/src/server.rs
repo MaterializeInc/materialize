@@ -21,6 +21,7 @@ use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
 use timely::WorkerConfig;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
 use mz_dataflow_types::ConnectorContext;
@@ -227,8 +228,19 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     _ => (),
                 }
 
-                self.activate_compute().unwrap().handle_compute_command(cmd);
-
+                if self.compute_state.is_none() {
+                    // STOP-GAP for #12233 FIXME
+                    // We should never reach this branch, but due to a bug in the controller,
+                    // we don't start the protocol correctly and might send messages in the window
+                    // between establishing the connection and hydrating this instance. We need to
+                    // ignore these messages until the controller produces a correct instance of
+                    // the communication protocol. It seems that this is the case when we see a
+                    // `CreateInstance` command floating by, from which point on we're confident we
+                    // won't drop messages anymore.
+                    warn!("Received command without initialization (stop-gap for #12233): {cmd:?}");
+                } else {
+                    self.activate_compute().unwrap().handle_compute_command(cmd);
+                }
                 if should_drop_compute {
                     self.compute_state = None;
                 }
