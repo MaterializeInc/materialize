@@ -57,15 +57,19 @@ steps:
 
   - id: feature-benchmark
     label: "Feature benchmark against latest release"
-    timeout_in_minutes: 180
+    timeout_in_minutes: 360
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: feature-benchmark
           args:
+            - --this-nodes
+            - 4
             - --other-tag
             - latest
+            - --other-options
+            - --workers 4
 
   - id: coverage
     label: Code coverage
