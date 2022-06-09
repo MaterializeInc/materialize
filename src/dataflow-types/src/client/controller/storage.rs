@@ -437,8 +437,8 @@ where
                                     assigned.listen_host, assigned.ports["controller"]
                                 ),
                                 format!(
-                                    "--http-console-addr={}:{}",
-                                    assigned.listen_host, assigned.ports["http"]
+                                    "--internal-http-listen-addr={}:{}",
+                                    assigned.listen_host, assigned.ports["internal-http"]
                                 ),
                                 format!("--opentelemetry-resource=storage_id={}", ingestion.id),
                             ]
@@ -449,8 +449,8 @@ where
                                 port_hint: 2100,
                             },
                             ServicePort {
-                                name: "http".into(),
-                                port_hint: 6875,
+                                name: "internal-http".into(),
+                                port_hint: 6877,
                             },
                         ],
                         // TODO: limits?

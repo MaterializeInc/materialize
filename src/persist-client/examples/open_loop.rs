@@ -85,21 +85,24 @@ pub struct Args {
     #[clap(short, long, value_name = "I")]
     shard_id: Option<String>,
 
-    /// The address of the HTTP profiling UI.
-    #[clap(long, value_name = "HOST:PORT")]
-    http_console_addr: Option<SocketAddr>,
+    /// The address of the internal HTTP server.
+    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
+    internal_http_listen_addr: SocketAddr,
 }
 
 const MIB: u64 = 1024 * 1024;
 
 pub async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
-    if let Some(addr) = args.http_console_addr {
+    {
         let metrics_registry = metrics_registry.clone();
-        info!("serving HTTP server on {}", addr);
+        info!(
+            "serving internal HTTP server on {}",
+            args.internal_http_listen_addr
+        );
         mz_ore::task::spawn(
             || "http_server",
-            axum::Server::bind(&addr).serve(
+            axum::Server::bind(&args.internal_http_listen_addr).serve(
                 axum::Router::new()
                     .route(
                         "/metrics",
