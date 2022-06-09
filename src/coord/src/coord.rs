@@ -276,6 +276,8 @@ enum PendingWriteTxn {
     },
     /// Periodic table advancements.
     TableAdvancement { id: GlobalId },
+    /// Client session being terminated.
+    SessionTermination { session: Session },
 }
 
 /// Different forms of write transactions
@@ -1125,6 +1127,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 PendingWriteTxn::TableAdvancement { id } => {
                     appends.entry(id).or_insert(Vec::new());
                 }
+                PendingWriteTxn::SessionTermination { session } => {
+                    let builtin_table_update = self.drop_temp_items(&session).await;
+                    builtin_table_updates.extend(builtin_table_update.into_iter());
+                }
             }
         }
 
@@ -1930,29 +1936,6 @@ impl<S: Append + 'static> Coordinator<S> {
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, mut session: Session) {
         self.clear_transaction(&mut session).await;
-
-        let builtin_updates = self.drop_temp_items(&session).await;
-        let writes = builtin_updates
-            .into_iter()
-            .map(|update| WriteOp {
-                id: update.id,
-                rows: vec![(update.row, update.diff)],
-            })
-            .collect();
-        let (tx, rx) = oneshot::channel();
-        let client_transmitter = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
-        self.submit_write(PendingWriteTxn::User {
-            write_txn: WriteTxn::Write {
-                writes,
-                response: ExecuteResponse::DiscardedTemp,
-            },
-            client_transmitter,
-            session,
-        });
-        let Response { session, .. } = rx
-            .blocking_recv()
-            .expect("system table update must succeed");
-
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
@@ -1962,6 +1945,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 conn_id: session.conn_id(),
             }))
             .expect("sending to internal_cmd_tx cannot fail");
+        self.submit_write(PendingWriteTxn::SessionTermination { session });
     }
 
     /// Handle removing in-progress transaction state regardless of the end action
