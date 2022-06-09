@@ -23,8 +23,10 @@ use std::collections::HashMap;
 use std::io;
 #[cfg(feature = "tokio-console")]
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::bail;
 #[cfg(feature = "tokio-console")]
 use console_subscriber::ConsoleLayer;
 use http::HeaderMap;
@@ -44,6 +46,7 @@ use tracing_subscriber::fmt::format::{format, Writer};
 use tracing_subscriber::fmt::{self, FmtContext, FormatEvent, FormatFields};
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::reload;
 use tracing_subscriber::util::SubscriberInitExt;
 
 /// Application tracing configuration.
@@ -54,6 +57,8 @@ pub struct TracingConfig {
     /// Configuration of the stderr log.
     pub stderr_log: StderrLogConfig,
     /// Optional configuration for the [`opentelemetry`] library.
+    /// The boolean specifies if you wish to enable the OpenTelemetry
+    /// collector by default
     pub opentelemetry: Option<OpenTelemetryConfig>,
     /// Optional configuration for the [Tokio console] integration.
     ///
@@ -87,6 +92,34 @@ pub struct OpenTelemetryConfig {
     /// `opentelemetry::sdk::resource::Resource` to include with all
     /// traces.
     pub resource: Resource,
+    /// Whether to startup with the dynamic OpenTelemetry layer enabled
+    pub start_enabled: bool,
+}
+
+/// A callback that can be used to enable or disable the OpenTelemetry
+/// layer.
+pub struct OpenTelemetryEnableCallback(
+    pub Arc<dyn Fn(bool) -> Result<(), anyhow::Error> + Send + Sync>,
+);
+
+impl OpenTelemetryEnableCallback {
+    /// A callback that does nothing. Useful for tests.
+    pub fn none() -> Self {
+        Self(Arc::new(|_| Ok(())))
+    }
+}
+
+impl std::fmt::Debug for OpenTelemetryEnableCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("OpenTelemetryEnableCallback")
+            .finish_non_exhaustive()
+    }
+}
+
+impl Clone for OpenTelemetryEnableCallback {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
 }
 
 /// Configuration of the [Tokio console] integration.
@@ -131,10 +164,15 @@ pub struct TokioConsoleConfig {
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
-pub async fn configure<C>(service_name: &str, config: C) -> Result<(), anyhow::Error>
+pub async fn configure<C>(
+    service_name: &str,
+    config: C,
+) -> Result<OpenTelemetryEnableCallback, anyhow::Error>
 where
     C: Into<TracingConfig>,
 {
+    let service_name = service_name.to_string();
+
     let config = config.into();
     let stderr_log_layer = fmt::layer()
         .event_format(PrefixFormat {
@@ -145,7 +183,7 @@ where
         .with_ansi(atty::is(atty::Stream::Stderr))
         .with_filter(config.stderr_log.filter);
 
-    let otel_layer = if let Some(otel_config) = config.opentelemetry {
+    let (otel_layer, otel_reloader) = if let Some(otel_config) = config.opentelemetry {
         // TODO(guswynn): figure out where/how to call
         // opentelemetry::global::shutdown_tracer_provider();
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
@@ -182,19 +220,44 @@ where
                 trace::config().with_resource(
                     // The latter resources wins, so if the user specifies `service.name` on the
                     // cli, it wins
-                    Resource::new([KeyValue::new("service.name", service_name.to_string())])
+                    Resource::new([KeyValue::new("service.name", service_name)])
                         .merge(&otel_config.resource),
                 ),
             )
             .with_exporter(exporter)
             .install_batch(opentelemetry::runtime::Tokio)
             .unwrap();
+        let (filter, filter_handle) = reload::Layer::new(if otel_config.start_enabled {
+            otel_config.filter.clone()
+        } else {
+            // the default `Targets` has everything disabled
+            Targets::default()
+        });
         let layer = tracing_opentelemetry::layer()
             .with_tracer(tracer)
-            .with_filter(otel_config.filter);
-        Some(layer)
+            .with_filter(filter);
+        let reloader = OpenTelemetryEnableCallback(Arc::new(move |enable| {
+            filter_handle.modify(|filter| {
+                // This code should be kept panic-free to
+                // avoid weird poisoning issues in our subscriber
+                // stack.
+                if enable {
+                    *filter = otel_config.filter.clone()
+                } else {
+                    *filter = Targets::default()
+                }
+            })?;
+            Ok(())
+        }));
+        (Some(layer), reloader)
     } else {
-        None
+        let reloader = OpenTelemetryEnableCallback(Arc::new(move |enable| {
+            bail!(
+                "Tried to {} the otel collector but there is no endpoint",
+                if enable { "enable" } else { "disable" },
+            );
+        }));
+        (None, reloader)
     };
 
     #[cfg(feature = "tokio-console")]
@@ -224,7 +287,7 @@ where
         );
     }
 
-    Ok(())
+    Ok(otel_reloader)
 }
 
 /// Shutdown any tracing infra, if any.

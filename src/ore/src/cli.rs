@@ -16,7 +16,7 @@
 //! Command-line parsing utilities.
 
 use std::ffi::OsString;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use clap::Parser;
@@ -109,5 +109,34 @@ where
             key: key.parse().map_err(|e| format!("parsing key: {}", e))?,
             value: value.parse().map_err(|e| format!("parsing value: {}", e))?,
         })
+    }
+}
+
+/// A command-line argument that defaults to `true`
+/// that can be falsified with `--flag=false`
+// TODO: replace with `SetTrue` when available in clap.
+#[derive(Debug, Clone)]
+pub struct DefaultTrue {
+    /// The value for this flag
+    pub value: bool,
+}
+
+impl Default for DefaultTrue {
+    fn default() -> Self {
+        Self { value: true }
+    }
+}
+
+impl fmt::Display for DefaultTrue {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.value.fmt(f)
+    }
+}
+
+impl FromStr for DefaultTrue {
+    type Err = std::str::ParseBoolError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self { value: s.parse()? })
     }
 }

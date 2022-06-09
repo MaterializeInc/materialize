@@ -116,7 +116,7 @@ fn create_communication_config(args: &Args) -> Result<CommunicationConfig, anyho
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::set_abort_on_panic();
-    mz_ore::tracing::configure("computed", &args.tracing).await?;
+    let otel_collector_enabler = mz_ore::tracing::configure("computed", &args.tracing).await?;
 
     let mut _pid_file = None;
     if let Some(pid_file_location) = &args.pid_file_location {
@@ -149,6 +149,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                         "/metrics",
                         routing::get(move || async move {
                             mz_http_util::handle_prometheus(&metrics_registry).await
+                        }),
+                    )
+                    .route(
+                        "/api/opentelemetry/config",
+                        routing::put(move |payload| async move {
+                            mz_http_util::handle_enable_otel(otel_collector_enabler, payload).await
                         }),
                     )
                     .into_make_service(),
