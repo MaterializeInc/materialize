@@ -86,6 +86,43 @@ Larger writes are expected to take the above latency floor plus however long it
 takes to write the extra data to e.g s3. TODO: Get real numbers for larger
 batches.
 
+
+## Memory Usage
+
+_Note: This is provisional and based on mental modeling, it is yet to be
+empirically tested._
+
+A persist writer uses at most `B * (2N+1)` memory per [BatchBuilder] (available
+for direct use and also used internally in the `batch`, `compare_and_append`,
+and `append` sugar methods). This is true even when writing data that is far
+bigger than this cap.
+
+- `B` is [blob_target_size]
+- `N` is [batch_builder_max_outstanding_parts]
+- `2N` because there is a moment that we have both a ColumnarRecords and its
+  encoded representation in memory.
+- `+1` because we're building the next part while we have `N` of them
+  outstanding.
+
+[BatchBuilder]: crate::batch::BatchBuilder
+[blob_target_size]: crate::PersistConfig::blob_target_size
+[batch_builder_max_outstanding_parts]: crate::PersistConfig::batch_builder_max_outstanding_parts
+
+A persist reader uses as most `3B` memory per [Listen] and per [SnapshotIter].
+
+- `B` is [blob_target_size]
+- We have one part fetched that is being iterated
+- In the future, we'll pipeline the fetch of a second part. Like writing there
+  is a moment where both a ColumnarRecords and its encoded representation are in
+  memory.
+
+[Listen]: crate::read::Listen
+[SnapshotIter]: crate::read::SnapshotIter
+
+Both of these might have _small_ additive and multiplicative constants. This is
+true even when reading data that is far bigger than this cap.
+
+
 ## OpenTelemetry Tracing Spans
 
 Persist offers introspection into performance and behavior through integration

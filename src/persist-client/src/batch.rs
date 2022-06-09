@@ -229,7 +229,7 @@ where
 
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(self.lower, upper, since);
-        let batch = Batch::new(Arc::clone(&self.blob), self.shard_id.clone(), desc, keys);
+        let batch = Batch::new(self.blob, self.shard_id.clone(), desc, keys);
 
         Ok(batch)
     }
@@ -360,6 +360,9 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     move || {
                         let mut buf = Vec::new();
                         batch.encode(&mut buf);
+
+                        // Drop batch as soon as we can to reclaim its memory.
+                        drop(batch);
                         Bytes::from(buf)
                     },
                 )
@@ -396,17 +399,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
+    #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
     async fn finish(self) -> Vec<String> {
         let mut keys = self.finished_parts;
-        if !self.writing_parts.is_empty() {
-            async {
-                for (key, handle) in self.writing_parts {
-                    let () = handle.await.expect("part upload task failed");
-                    keys.push(key);
-                }
-            }
-            .instrument(debug_span!("batch::upload"))
-            .await
+        for (key, handle) in self.writing_parts {
+            let () = handle.await.expect("part upload task failed");
+            keys.push(key);
         }
         keys
     }
@@ -460,7 +458,7 @@ mod tests {
         assert_eq!(builder.parts.writing_parts.len(), 1);
         assert_eq!(builder.parts.finished_parts.len(), 0);
 
-        // We set batch_builder_max_outstanding_parts to 2, so we are allow to
+        // We set batch_builder_max_outstanding_parts to 2, so we are allowed to
         // pipeline a second part.
         builder
             .add(&data[1].0 .0, &data[1].0 .1, &data[1].1, &data[1].2)
