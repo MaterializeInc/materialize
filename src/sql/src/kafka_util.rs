@@ -131,7 +131,7 @@ fn extract(
                 .val_type
                 .process_val(&Value::String(secrets_reader.read_string(id)?))
                 .map(|_| StringOrSecret::Secret(id))
-                .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, id, e))?,
+                .map_err(|e| anyhow!("Invalid WITH option {}={:?}: {}", config.name, id, e))?,
             // Check for default values
             None => match &config.default {
                 Some(v) => StringOrSecret::String(config.do_transform(v.to_string())),
