@@ -298,7 +298,6 @@ pub fn describe_create_source(
 pub fn plan_create_source(
     scx: &StatementContext,
     stmt: CreateSourceStatement<Aug>,
-    secrets_reader: &SecretsReader,
 ) -> Result<Plan, anyhow::Error> {
     let CreateSourceStatement {
         name,
@@ -356,7 +355,7 @@ pub fn plan_create_source(
             let config_options = if let Some(opts) = options {
                 opts
             } else {
-                kafka_util::extract_config(&mut with_options)?
+                kafka_util::extract_config(&mut with_options, scx.catalog.secrets_reader())?
             };
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
@@ -397,10 +396,11 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(scx, format, &envelope, secrets_reader)?;
+            let encoding = get_encoding(scx, format, &envelope)?;
 
             // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
-            let config_options = kafka_util::inline_secrets(config_options, secrets_reader)?;
+            let config_options =
+                kafka_util::inline_secrets(config_options, scx.catalog.secrets_reader())?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -497,7 +497,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(scx, format, &envelope, secrets_reader)?;
+            let encoding = get_encoding(scx, format, &envelope)?;
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -540,7 +540,7 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(scx, format, &envelope, secrets_reader)?;
+            let encoding = get_encoding(scx, format, &envelope)?;
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
@@ -1185,17 +1185,16 @@ fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope<Aug>,
-    secrets_reader: &SecretsReader,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
-        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format, secrets_reader)?,
+        CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
         CreateSourceFormat::KeyValue { key, value } => {
-            let key = match get_encoding_inner(scx, key, secrets_reader)? {
+            let key = match get_encoding_inner(scx, key)? {
                 SourceDataEncoding::Single(key) => key,
                 SourceDataEncoding::KeyValue { key, .. } => key,
             };
-            let value = match get_encoding_inner(scx, value, secrets_reader)? {
+            let value = match get_encoding_inner(scx, value)? {
                 SourceDataEncoding::Single(value) => value,
                 SourceDataEncoding::KeyValue { value, .. } => value,
             };
@@ -1218,7 +1217,6 @@ fn get_encoding(
 fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
-    secrets_reader: &SecretsReader,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
     Ok(SourceDataEncoding::Single(match format {
@@ -1268,7 +1266,10 @@ fn get_encoding_inner(
                     let (mut ccsr_with_options, registry_url) = match connector {
                         CsrConnector::Inline { url } => {
                             let mut normalized_options = normalize::options(&ccsr_options)?;
-                            let options = kafka_util::extract_config_ccsr(&mut normalized_options)?;
+                            let options = kafka_util::extract_config_ccsr(
+                                &mut normalized_options,
+                                scx.catalog.secrets_reader(),
+                            )?;
                             normalize::ensure_empty_options(
                                 &normalized_options,
                                 "CONFLUENT SCHEMA REGISTRY",
@@ -1284,7 +1285,7 @@ fn get_encoding_inner(
                     let ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
                         &mut ccsr_with_options,
-                        secrets_reader,
+                        scx.catalog.secrets_reader(),
                     )?;
                     normalize::ensure_empty_options(
                         &ccsr_with_options,
@@ -1339,7 +1340,10 @@ fn get_encoding_inner(
                     let (mut ccsr_with_options, registry_url) = match connector {
                         CsrConnector::Inline { url } => {
                             let mut normalized_options = normalize::options(&ccsr_options)?;
-                            let options = kafka_util::extract_config_ccsr(&mut normalized_options)?;
+                            let options = kafka_util::extract_config_ccsr(
+                                &mut normalized_options,
+                                scx.catalog.secrets_reader(),
+                            )?;
                             normalize::ensure_empty_options(
                                 &normalized_options,
                                 "CONFLUENT SCHEMA REGISTRY",
@@ -1356,7 +1360,7 @@ fn get_encoding_inner(
                     let _ccsr_config = kafka_util::generate_ccsr_client_config(
                         registry_url.parse()?,
                         &mut ccsr_with_options,
-                        secrets_reader,
+                        scx.catalog.secrets_reader(),
                     )?;
                     normalize::ensure_empty_options(
                         &ccsr_with_options,
@@ -1775,7 +1779,6 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
-    secrets_reader: &SecretsReader,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
@@ -1792,7 +1795,7 @@ fn kafka_sink_builder(
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
-    let config_options = kafka_util::extract_config(with_options)?;
+    let config_options = kafka_util::extract_config(with_options, scx.catalog.secrets_reader())?;
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
@@ -1829,15 +1832,17 @@ fn kafka_sink_builder(
                 bail!("SEED option does not make sense with sinks");
             }
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let mut ccsr_with_options =
-                kafka_util::extract_config_ccsr(&mut normalized_with_options)?;
+            let mut ccsr_with_options = kafka_util::extract_config_ccsr(
+                &mut normalized_with_options,
+                scx.catalog.secrets_reader(),
+            )?;
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let schema_registry_url = url.parse::<Url>()?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 schema_registry_url.clone(),
                 &mut ccsr_with_options,
-                secrets_reader,
+                scx.catalog.secrets_reader(),
             )?;
 
             normalize::ensure_empty_options(&ccsr_with_options, "CONFLUENT SCHEMA REGISTRY")?;
@@ -1877,7 +1882,7 @@ fn kafka_sink_builder(
         reuse_topic,
         consistency,
         consistency_topic,
-        secrets_reader,
+        scx.catalog.secrets_reader(),
     )?;
 
     let broker_addrs = broker.parse()?;
@@ -1958,7 +1963,7 @@ fn kafka_sink_builder(
     let consistency_format = consistency_config.map(|config| config.1);
 
     // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
-    let config_options = kafka_util::inline_secrets(config_options, secrets_reader)?;
+    let config_options = kafka_util::inline_secrets(config_options, scx.catalog.secrets_reader())?;
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
         format,
@@ -2011,8 +2016,10 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = uri.parse::<Url>()?;
-                let mut ccsr_with_options =
-                    kafka_util::extract_config_ccsr(&mut normalize::options(&with_options)?)?;
+                let mut ccsr_with_options = kafka_util::extract_config_ccsr(
+                    &mut normalize::options(&with_options)?,
+                    secrets_reader,
+                )?;
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     &mut ccsr_with_options,
@@ -2117,7 +2124,6 @@ pub fn describe_create_sink(
 pub fn plan_create_sink(
     scx: &StatementContext,
     mut stmt: CreateSinkStatement<Aug>,
-    secrets_reader: &SecretsReader,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_unsafe_mode("CREATE SINK")?;
     let compute_instance = match &stmt.in_cluster {
@@ -2264,7 +2270,6 @@ pub fn plan_create_sink(
             envelope,
             suffix_nonce,
             &root_user_dependencies,
-            secrets_reader,
         )?,
         CreateSinkConnector::Persist {
             consensus_uri,
@@ -2902,7 +2907,10 @@ pub fn plan_create_connector(
             let mut with_options = normalize::options(&with_options)?;
             ConnectorInner::Kafka {
                 broker: broker.parse()?,
-                config_options: kafka_util::extract_config(&mut with_options)?,
+                config_options: kafka_util::extract_config(
+                    &mut with_options,
+                    scx.catalog.secrets_reader(),
+                )?,
             }
         }
         CreateConnector::CSR {

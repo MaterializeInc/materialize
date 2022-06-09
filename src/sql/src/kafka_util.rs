@@ -116,6 +116,7 @@ impl Config {
 fn extract(
     input: &mut BTreeMap<String, SqlValueOrSecret>,
     configs: &[Config],
+    secrets_reader: &SecretsReader,
 ) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
@@ -126,7 +127,11 @@ fn extract(
                 .process_val(&v)
                 .map(|v| StringOrSecret::String(config.do_transform(v)))
                 .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
-            Some(SqlValueOrSecret::Secret(id)) => StringOrSecret::Secret(id),
+            Some(SqlValueOrSecret::Secret(id)) => config
+                .val_type
+                .process_val(&Value::String(secrets_reader.read_string(id)?))
+                .map(|_| StringOrSecret::Secret(id))
+                .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, id, e))?,
             // Check for default values
             None => match &config.default {
                 Some(v) => StringOrSecret::String(config.do_transform(v.to_string())),
@@ -150,6 +155,7 @@ fn extract(
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
+    secrets_reader: &SecretsReader,
 ) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
@@ -193,21 +199,24 @@ pub fn extract_config(
                 ValType::Number(0, 1_000_000_000),
             ),
         ],
+        secrets_reader,
     )
 }
 
 pub fn extract_config_ccsr(
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
+    secrets_reader: &SecretsReader,
 ) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
         &[
-            Config::string("ssl_ca_location"),
-            Config::string("ssl_key_location"),
-            Config::string("ssl_certificate_location"),
+            Config::path("ssl_ca_location"),
+            Config::path("ssl_key_location"),
+            Config::path("ssl_certificate_location"),
             Config::string("username"),
             Config::string("password"),
         ],
+        secrets_reader,
     )
 }
 
