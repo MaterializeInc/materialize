@@ -134,59 +134,6 @@ impl AstDisplay for Value {
 }
 impl_display!(Value);
 
-impl TryFrom<Value> for String {
-    type Error = anyhow::Error;
-
-    fn try_from(v: Value) -> Result<Self, Self::Error> {
-        match v {
-            Value::String(v) => Ok(v),
-            _ => anyhow::bail!("cannot use value as string"),
-        }
-    }
-}
-
-impl TryFrom<Value> for bool {
-    type Error = anyhow::Error;
-
-    fn try_from(v: Value) -> Result<Self, Self::Error> {
-        match v {
-            Value::Boolean(v) => Ok(v),
-            _ => anyhow::bail!("cannot use value as boolean"),
-        }
-    }
-}
-
-impl TryFrom<Value> for i32 {
-    type Error = anyhow::Error;
-    fn try_from(v: Value) -> Result<Self, Self::Error> {
-        match v {
-            Value::Number(v) => v
-                .parse::<i32>()
-                .map_err(|_| anyhow::anyhow!("invalid numeric value")),
-            _ => anyhow::bail!("cannot use value as number"),
-        }
-    }
-}
-
-impl<X: TryFrom<Value>> TryFrom<Value> for Vec<X> {
-    type Error = anyhow::Error;
-    fn try_from(v: Value) -> Result<Self, Self::Error> {
-        match v {
-            Value::Array(a) => {
-                let mut out = Vec::with_capacity(a.len());
-                for i in a {
-                    out.push(
-                        i.try_into()
-                            .map_err(|_| anyhow::anyhow!("cannot use value in array"))?,
-                    )
-                }
-                Ok(out)
-            }
-            _ => anyhow::bail!("cannot use value as array"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum DateTimeField {
     Millennium,

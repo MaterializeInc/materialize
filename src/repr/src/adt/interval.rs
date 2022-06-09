@@ -69,66 +69,6 @@ impl RustType<ProtoInterval> for Interval {
     }
 }
 
-use mz_sql_parser::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
-
-impl TryFrom<Value> for Interval {
-    type Error = anyhow::Error;
-
-    fn try_from(v: Value) -> Result<Self, Self::Error> {
-        Ok(match v {
-            Value::Interval(IntervalValue { value, .. })
-            | Value::Number(value)
-            | Value::String(value) => crate::strconv::parse_interval(&value)?,
-            _ => bail!("cannot use value as interval"),
-        })
-    }
-}
-
-impl<T: AstInfo> TryFrom<WithOptionValue<T>> for Interval {
-    type Error = anyhow::Error;
-
-    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
-        match v {
-            WithOptionValue::Value(v) => v.try_into(),
-            _ => anyhow::bail!("cannot use value as interval"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
-pub struct OptionalInterval(pub Option<Interval>);
-
-impl TryFrom<Value> for OptionalInterval {
-    type Error = anyhow::Error;
-
-    fn try_from(v: Value) -> Result<Self, Self::Error> {
-        let inner = match v {
-            Value::Null => None,
-            v => {
-                let d: Interval = v.try_into()?;
-                // An interval of 0 disables the setting.
-                if d == Interval::default() {
-                    None
-                } else {
-                    Some(d)
-                }
-            }
-        };
-        Ok(OptionalInterval(inner))
-    }
-}
-
-impl<T: AstInfo> TryFrom<WithOptionValue<T>> for OptionalInterval {
-    type Error = anyhow::Error;
-
-    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
-        match v {
-            WithOptionValue::Value(v) => v.try_into(),
-            _ => anyhow::bail!("cannot use value as interval"),
-        }
-    }
-}
-
 impl num_traits::ops::checked::CheckedNeg for Interval {
     fn checked_neg(&self) -> Option<Self> {
         if let (Some(months), Some(days), Some(micros)) = (
