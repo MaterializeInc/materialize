@@ -1470,8 +1470,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 let _ = tx.send(Response { result, session });
             }
 
-            Command::Terminate { mut session } => {
-                self.handle_terminate(&mut session).await;
+            Command::Terminate { session } => {
+                self.handle_terminate(session).await;
             }
 
             Command::StartTransaction {
