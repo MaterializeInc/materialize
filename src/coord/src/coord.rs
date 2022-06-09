@@ -265,13 +265,18 @@ pub enum PeekResponseUnary {
 }
 
 /// A pending write transaction that will be committing during the next group commit.
-struct PendingWriteTxn {
-    /// Write transaction contents.
-    write_txn: WriteTxn,
-    /// Transmitter used to send a response back to the client.
-    client_transmitter: ClientTransmitter<ExecuteResponse>,
-    /// Session of the client who initiated the transaction.
-    session: Session,
+enum PendingWriteTxn {
+    /// User initiated transaction.
+    User {
+        /// Write transaction contents.
+        write_txn: WriteTxn,
+        /// Transmitter used to send a response back to the client.
+        client_transmitter: ClientTransmitter<ExecuteResponse>,
+        /// Session of the client who initiated the transaction.
+        session: Session,
+    },
+    /// Periodic table advancements.
+    TableAdvancement { id: GlobalId },
 }
 
 /// Different forms of write transactions
@@ -310,7 +315,7 @@ impl From<SinkConnectorReady> for PendingWriteTxn {
             compute_instance,
         }: SinkConnectorReady,
     ) -> Self {
-        PendingWriteTxn {
+        PendingWriteTxn::User {
             write_txn: WriteTxn::SinkConnectorReady {
                 id,
                 oid,
@@ -557,10 +562,6 @@ impl<S: Append + 'static> Coordinator<S> {
             timestamp,
             advance_to,
         }
-    }
-
-    fn local_fast_forward(&mut self, lower_bound: Timestamp) {
-        self.global_timeline.fast_forward(lower_bound);
     }
 
     fn now(&self) -> EpochMillis {
@@ -928,17 +929,15 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
-                    // Fast forwarding puts the `TimestampOracle` in write mode,
-                    // which means the next read will have to advance a table
-                    // after reading from it. To prevent this we explicitly put
-                    // the `TimestampOracle` in read mode. Writes will always
-                    // advance a table no matter what mode the `TimestampOracle`
-                    // is in. We step back the value of `now()` so that the
-                    // next write can happen at `now()` and not a value above
-                    // `now()`
-                    let now = self.now();
-                    self.local_fast_forward(now.step_back().unwrap_or(now));
-                    let _ = self.get_local_read_ts();
+                    let table_ids: Vec<_> = self
+                        .catalog
+                        .entries()
+                        .filter(|e| e.is_table())
+                        .map(|e| e.id())
+                        .collect();
+                    for id in table_ids {
+                        self.submit_write(PendingWriteTxn::TableAdvancement { id });
+                    }
                 }
                 Message::GroupCommit(write_timestamp) => {
                     self.try_group_commit(write_timestamp).await;
@@ -1043,7 +1042,8 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut ddl = Vec::new();
         let mut writes = Vec::new();
         for write in self.pending_writes.drain(..) {
-            if matches!(write.write_txn, WriteTxn::DDL { .. }) {
+            if matches!(&write, PendingWriteTxn::User {write_txn, ..} if matches!(write_txn, WriteTxn::DDL {..}))
+            {
                 ddl.push(write);
             } else {
                 writes.push(write);
@@ -1054,69 +1054,75 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         let mut responses = Vec::new();
 
-        // It's important to process DDLs first, because some write may depend on an object that's
+        // It's important to process DDLs first, because some writes may depend on an object that's
         // deleted in a DDL.
-        for PendingWriteTxn {
-            write_txn,
-            client_transmitter,
-            session,
-        } in ddl.into_iter().chain(writes.into_iter())
-        {
-            match write_txn {
-                WriteTxn::DDL { plan, depends_on } => {
-                    let response = self
-                        .sequence_ddl_plan(client_transmitter, session, plan, depends_on)
-                        .await;
-                    match response {
-                        Ok((builtin_table_update, None)) => {
-                            builtin_table_updates.extend(builtin_table_update.into_iter());
-                        }
-                        Ok((
-                            builtin_table_update,
-                            Some((client_transmitter, response, session)),
-                        )) => {
-                            builtin_table_updates.extend(builtin_table_update.into_iter());
-                            responses.push((client_transmitter, Ok(response), session))
-                        }
-                        Err(DdlError {
-                            tx: client_transmitter,
-                            error,
-                            session,
-                        }) => responses.push((client_transmitter, Err(error), session)),
-                    }
-                }
-                WriteTxn::Write { writes, response } => {
-                    for WriteOp { id, rows } in writes {
-                        // If the object that some write was targeting has been deleted by a DDL,
-                        // then the write will be ignored and we respond to the client that the
-                        // write was successful. This is only possible if the write and the delete
-                        // were concurrent. Therefore, we are free to order the write before the
-                        // delete without violating any consistency guarantees.
-                        if self.catalog.try_get_entry(&id).is_some() {
-                            let updates = rows
-                                .into_iter()
-                                .map(|(row, diff)| Update {
-                                    row,
-                                    diff,
-                                    timestamp,
-                                })
-                                .collect::<Vec<_>>();
-                            appends.entry(id).or_default().extend(updates);
-                        }
-                    }
-                    responses.push((client_transmitter, Ok(response), session));
-                }
-                WriteTxn::SinkConnectorReady {
-                    id,
-                    oid,
-                    result,
-                    compute_instance,
+        for pending_write_txn in ddl.into_iter().chain(writes.into_iter()) {
+            match pending_write_txn {
+                PendingWriteTxn::User {
+                    write_txn,
+                    client_transmitter,
+                    session,
                 } => {
-                    let (builtin_table_update, response) = self
-                        .sink_connector_ready(id, oid, result, compute_instance, &session)
-                        .await;
-                    builtin_table_updates.extend(builtin_table_update.into_iter());
-                    responses.push((client_transmitter, response, session));
+                    match write_txn {
+                        WriteTxn::DDL { plan, depends_on } => {
+                            let response = self
+                                .sequence_ddl_plan(client_transmitter, session, plan, depends_on)
+                                .await;
+                            match response {
+                                Ok((builtin_table_update, None)) => {
+                                    builtin_table_updates.extend(builtin_table_update.into_iter());
+                                }
+                                Ok((
+                                    builtin_table_update,
+                                    Some((client_transmitter, response, session)),
+                                )) => {
+                                    builtin_table_updates.extend(builtin_table_update.into_iter());
+                                    responses.push((client_transmitter, Ok(response), session))
+                                }
+                                Err(DdlError {
+                                    tx: client_transmitter,
+                                    error,
+                                    session,
+                                }) => responses.push((client_transmitter, Err(error), session)),
+                            }
+                        }
+                        WriteTxn::Write { writes, response } => {
+                            for WriteOp { id, rows } in writes {
+                                // If the object that some write was targeting has been deleted by a DDL,
+                                // then the write will be ignored and we respond to the client that the
+                                // write was successful. This is only possible if the write and the delete
+                                // were concurrent. Therefore, we are free to order the write before the
+                                // delete without violating any consistency guarantees.
+                                if self.catalog.try_get_entry(&id).is_some() {
+                                    let updates = rows
+                                        .into_iter()
+                                        .map(|(row, diff)| Update {
+                                            row,
+                                            diff,
+                                            timestamp,
+                                        })
+                                        .collect::<Vec<_>>();
+                                    appends.entry(id).or_default().extend(updates);
+                                }
+                            }
+                            responses.push((client_transmitter, Ok(response), session));
+                        }
+                        WriteTxn::SinkConnectorReady {
+                            id,
+                            oid,
+                            result,
+                            compute_instance,
+                        } => {
+                            let (builtin_table_update, response) = self
+                                .sink_connector_ready(id, oid, result, compute_instance, &session)
+                                .await;
+                            builtin_table_updates.extend(builtin_table_update.into_iter());
+                            responses.push((client_transmitter, response, session));
+                        }
+                    }
+                }
+                PendingWriteTxn::TableAdvancement { id } => {
+                    appends.entry(id).or_insert(Vec::new());
                 }
             }
         }
@@ -1228,7 +1234,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        self.submit_write(PendingWriteTxn {
+        self.submit_write(PendingWriteTxn::User {
             write_txn: WriteTxn::DDL { plan, depends_on },
             client_transmitter: tx,
             session,
@@ -1862,14 +1868,15 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Some(idx) = self
                 .pending_writes
                 .iter()
-                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
+                .position(|pending_write_txn| matches!(pending_write_txn, PendingWriteTxn::User {session, ..} if session.conn_id() == conn_id))
             {
-                let PendingWriteTxn {
+                if let PendingWriteTxn::User {
                     client_transmitter,
                     session,
                     ..
-                } = self.pending_writes.remove(idx);
-                let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                } = self.pending_writes.remove(idx) {
+                    let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                }
             }
 
             // Cancel deferred writes. There is at most one deferred write per session.
@@ -2051,7 +2058,7 @@ impl<S: Append + 'static> Coordinator<S> {
             | plan @ Plan::DropComputeInstances(_)
             | plan @ Plan::DropComputeInstanceReplica(_)
             | plan @ Plan::DropItems(_) => {
-                self.submit_write(PendingWriteTxn {
+                self.submit_write(PendingWriteTxn::User {
                     write_txn: WriteTxn::DDL { plan, depends_on },
                     client_transmitter: tx,
                     session,
@@ -2133,7 +2140,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             plan @ Plan::AlterItemRename(_) => {
-                self.submit_write(PendingWriteTxn {
+                self.submit_write(PendingWriteTxn::User {
                     write_txn: WriteTxn::DDL { plan, depends_on },
                     client_transmitter: tx,
                     session,
@@ -2152,7 +2159,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             plan @ Plan::DiscardTemp | plan @ Plan::DiscardAll => {
-                self.submit_write(PendingWriteTxn {
+                self.submit_write(PendingWriteTxn::User {
                     write_txn: WriteTxn::DDL { plan, depends_on },
                     client_transmitter: tx,
                     session,
@@ -3480,7 +3487,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
 
         match result {
-            Ok(Some(writes)) => self.submit_write(PendingWriteTxn {
+            Ok(Some(writes)) => self.submit_write(PendingWriteTxn::User {
                 write_txn: WriteTxn::Write { writes, response },
                 client_transmitter: tx,
                 session,
@@ -6225,7 +6232,7 @@ mod timeline {
         ///
         /// If `lower_bound` is strictly greater than the current time (of either state), the
         /// resulting state will be `Writing(lower_bound)`.
-        pub fn fast_forward(&mut self, lower_bound: T) {
+        pub fn _fast_forward(&mut self, lower_bound: T) {
             match &self.state {
                 TimestampOracleState::Writing(ts) => {
                     if ts.less_than(&lower_bound) {
