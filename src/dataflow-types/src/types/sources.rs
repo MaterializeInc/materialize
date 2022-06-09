@@ -80,6 +80,31 @@ pub struct MzOffset {
     pub offset: u64,
 }
 
+impl differential_dataflow::difference::Semigroup for MzOffset {
+    fn plus_equals(&mut self, rhs: &Self) {
+        self.offset.plus_equals(&rhs.offset)
+    }
+    fn is_zero(&self) -> bool {
+        self.offset.is_zero()
+    }
+}
+
+impl mz_persist_types::Codec64 for MzOffset {
+    fn codec_name() -> String {
+        "MzOffset".to_string()
+    }
+
+    fn encode(&self) -> [u8; 8] {
+        mz_persist_types::Codec64::encode(&self.offset)
+    }
+
+    fn decode(buf: [u8; 8]) -> Self {
+        Self {
+            offset: mz_persist_types::Codec64::decode(buf),
+        }
+    }
+}
+
 impl RustType<ProtoMzOffset> for MzOffset {
     fn into_proto(&self) -> ProtoMzOffset {
         ProtoMzOffset {
