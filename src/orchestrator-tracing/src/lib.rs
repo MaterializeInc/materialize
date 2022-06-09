@@ -31,7 +31,7 @@ use mz_orchestrator::ServicePort;
 use mz_orchestrator::{
     NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
 };
-use mz_ore::cli::KeyValueArg;
+use mz_ore::cli::{DefaultTrue, KeyValueArg};
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{OpenTelemetryConfig, StderrLogConfig, TracingConfig};
@@ -129,6 +129,17 @@ pub struct TracingCliArgs {
         use_value_delimiter = true
     )]
     pub opentelemetry_resource: Vec<KeyValueArg<String, String>>,
+    /// Default the OpenTelemetry tracing collector to off, but allow it to be
+    /// dynamically turned on.
+    ///
+    /// Requires that the `--opentelemetry-endpoint` option is specified.
+    #[clap(
+        long,
+        env = "OPENTELEMETRY_ENABLED",
+        default_value_t = DefaultTrue::default(),
+        requires = "opentelemetry-endpoint"
+    )]
+    pub opentelemetry_enabled: DefaultTrue,
     /// The address on which to listen for Tokio console connections.
     ///
     /// For details about Tokio console, see: <https://github.com/tokio-rs/console>
@@ -193,6 +204,7 @@ impl From<&TracingCliArgs> for TracingConfig {
                             .cloned()
                             .map(|kv| KeyValue::new(kv.key, kv.value)),
                     ),
+                    start_enabled: args.opentelemetry_enabled.value,
                 }
             }),
             #[cfg(feature = "tokio-console")]
@@ -266,6 +278,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 opentelemetry_header,
                 opentelemetry_filter,
                 opentelemetry_resource,
+                opentelemetry_enabled,
                 #[cfg(feature = "tokio-console")]
                     tokio_console_listen_addr: _,
                 #[cfg(feature = "tokio-console")]
@@ -292,6 +305,8 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
                 for kv in opentelemetry_resource {
                     args.push(format!("--opentelemetry-resource={}={}", kv.key, kv.value));
                 }
+
+                args.push(format!("--opentelemetry-enabled={}", opentelemetry_enabled));
             }
             #[cfg(feature = "tokio-console")]
             if let Some(port) = tokio_console_port {

@@ -35,6 +35,7 @@ use mz_frontegg_auth::FronteggAuthentication;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryEnableCallback;
 use mz_secrets::SecretsController;
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
@@ -112,6 +113,9 @@ pub struct Config {
     pub replica_sizes: ClusterReplicaSizeMap,
     /// Availability zones compute resources may be deployed in.
     pub availability_zones: Vec<String>,
+
+    /// A callback used to enable or disable the OpenTelemetry tracing collector.
+    pub otel_collector_enabler: OpenTelemetryEnableCallback,
 }
 
 /// Configures TLS encryption for connections.
@@ -271,7 +275,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();
-        let server = http::InternalServer::new(metrics_registry);
+        let server = http::InternalServer::new(metrics_registry, config.otel_collector_enabler);
         let bound_server = server.bind(config.internal_http_listen_addr);
         let internal_http_local_addr = bound_server.local_addr();
         task::spawn(|| "internal_http_server", {

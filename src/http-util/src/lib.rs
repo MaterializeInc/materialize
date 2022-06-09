@@ -10,12 +10,14 @@
 //! HTTP utilities.
 
 use askama::Template;
+use axum::extract::Json;
 use axum::http::status::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
 use prometheus::Encoder;
+use serde::{Deserialize, Serialize};
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -104,4 +106,27 @@ pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse 
         .encode(&registry.gather(), &mut buffer)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DynamicOtelConfig {
+    enabled: bool,
+}
+
+/// Allows dynamic control of the OpenTelemetry `tracing` subscriber.
+#[allow(clippy::unused_async)]
+pub async fn handle_enable_otel(
+    callback: mz_ore::tracing::OpenTelemetryEnableCallback,
+    Json(cfg): Json<DynamicOtelConfig>,
+) -> impl IntoResponse {
+    match callback.0(cfg.enabled) {
+        Ok(()) => (
+            StatusCode::OK,
+            format!(
+                "Otel collector successfully {}",
+                if cfg.enabled { "enabled" } else { "disabled" }
+            ),
+        ),
+        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+    }
 }

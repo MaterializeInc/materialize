@@ -420,7 +420,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    runtime.block_on(mz_ore::tracing::configure("environmentd", &args.tracing))?;
+    let otel_collector_enabler =
+        runtime.block_on(mz_ore::tracing::configure("environmentd", &args.tracing))?;
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -691,6 +692,7 @@ max log level: {max_log_level}",
             args.aws_external_id_prefix,
             secrets_path,
         ),
+        otel_collector_enabler,
     }))?;
 
     println!(

@@ -3331,12 +3331,14 @@ dependencies = [
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "askama",
  "axum",
  "headers",
  "include_dir",
  "mz-ore",
  "prometheus",
+ "serde",
 ]
 
 [[package]]
