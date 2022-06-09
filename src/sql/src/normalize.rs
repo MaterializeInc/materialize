@@ -501,7 +501,7 @@ macro_rules! generate_extracted_config {
                             $(
                                 $option_name => {
                                     extracted.[<$option_name:snake>] = Some(
-                                        <$t>::try_from(option.value)
+                                        <$t>::try_from_value(option.value)
                                             .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?
                                     );
                                 }

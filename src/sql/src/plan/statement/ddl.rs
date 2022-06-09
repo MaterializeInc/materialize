@@ -48,7 +48,7 @@ use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::TableInfo;
-use mz_repr::adt::interval::{Interval, OptionalInterval};
+use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 
@@ -82,6 +82,7 @@ use crate::normalize::ident;
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::with_options::{OptionalInterval, ProcessOption};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, Connector,
@@ -2688,8 +2689,7 @@ pub fn plan_create_cluster(
                     bail!("INTROSPECTION DEBUGGING specified more than once");
                 }
                 introspection_debugging = Some(
-                    enabled
-                        .try_into()
+                    bool::try_from_value(enabled)
                         .map_err(|e| anyhow!("invalid INTROSPECTION DEBUGGING: {}", e))?,
                 );
             }
@@ -2698,7 +2698,7 @@ pub fn plan_create_cluster(
                     bail!("INTROSPECTION GRANULARITY specified more than once");
                 }
                 introspection_granularity = Some(
-                    OptionalInterval::try_from(interval)
+                    OptionalInterval::try_from_value(interval)
                         .map_err(|e| anyhow!("invalid INTROSPECTION GRANULARITY: {}", e))?
                         .0,
                 );
