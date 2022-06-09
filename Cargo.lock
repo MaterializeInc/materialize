@@ -3500,6 +3500,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytesize",
+ "chrono",
  "derivative",
  "futures-core",
  "serde",
@@ -3511,6 +3512,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "clap",
  "futures",
  "k8s-openapi",
@@ -3527,6 +3529,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "chrono",
  "futures",
  "itertools",
  "mz-orchestrator",

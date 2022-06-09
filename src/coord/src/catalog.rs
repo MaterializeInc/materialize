@@ -25,7 +25,7 @@ use tracing::{info, trace};
 
 use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::client::controller::ComputeInstanceStatus;
+use mz_dataflow_types::client::controller::ComputeInstanceEvent;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
@@ -532,7 +532,8 @@ impl CatalogState {
             .is_none());
     }
 
-    /// Try inserting/updating the status of the given compute instance process.
+    /// Try inserting/updating the status of a compute instance process as
+    /// described by the given event.
     ///
     /// This method returns `true` if the insert was successful. It returns
     /// `false` if the insert was unsuccessful, i.e., the given compute instance
@@ -541,17 +542,11 @@ impl CatalogState {
     /// This treatment of non-existing replicas allows us to gracefully handle
     /// scenarios where we receive status updates for replicas that we have
     /// already removed from the catalog.
-    fn try_insert_compute_instance_status(
-        &mut self,
-        instance_id: ComputeInstanceId,
-        replica_id: ReplicaId,
-        process_id: ProcessId,
-        status: ComputeInstanceStatus,
-    ) -> bool {
+    fn try_insert_compute_instance_status(&mut self, event: ComputeInstanceEvent) -> bool {
         self.compute_instances_by_id
-            .get_mut(&instance_id)
-            .and_then(|instance| instance.replicas_by_id.get_mut(&replica_id))
-            .map(|replica| replica.process_status.insert(process_id, status))
+            .get_mut(&event.instance_id)
+            .and_then(|instance| instance.replicas_by_id.get_mut(&event.replica_id))
+            .map(|replica| replica.process_status.insert(event.process_id, event))
             .is_some()
     }
 
@@ -569,12 +564,12 @@ impl CatalogState {
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         process_id: ProcessId,
-    ) -> Option<ComputeInstanceStatus> {
+    ) -> Option<ComputeInstanceEvent> {
         self.compute_instances_by_id
             .get(&instance_id)
             .and_then(|instance| instance.replicas_by_id.get(&replica_id))
             .and_then(|replica| replica.process_status.get(&process_id))
-            .copied()
+            .cloned()
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -1002,7 +997,7 @@ pub struct ComputeInstance {
 #[derive(Debug, Serialize, Clone)]
 pub struct ComputeInstanceReplica {
     pub config: ConcreteComputeInstanceReplicaConfig,
-    pub process_status: HashMap<ProcessId, ComputeInstanceStatus>,
+    pub process_status: HashMap<ProcessId, ComputeInstanceEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -2530,10 +2525,7 @@ impl<S: Append> Catalog<S> {
                 to_item: CatalogItem,
             },
             UpdateComputeInstanceStatus {
-                compute_id: ComputeInstanceId,
-                replica_id: ReplicaId,
-                process_id: ProcessId,
-                status: ComputeInstanceStatus,
+                event: ComputeInstanceEvent,
             },
         }
 
@@ -2950,32 +2942,29 @@ impl<S: Append> Catalog<S> {
                     });
                     actions
                 }
-                Op::UpdateComputeInstanceStatus {
-                    compute_id,
-                    replica_id,
-                    process_id,
-                    status,
-                } => {
+                Op::UpdateComputeInstanceStatus { event } => {
                     // When we receive the first status update for a given
                     // replica process, there is no entry in the builtin table
                     // yet, so we must make sure to not try to delete one.
                     let status_known = self
                         .state
-                        .try_get_compute_instance_status(compute_id, replica_id, process_id)
+                        .try_get_compute_instance_status(
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                        )
                         .is_some();
                     if status_known {
                         let update = self.state.pack_compute_instance_status_update(
-                            compute_id, replica_id, process_id, -1,
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                            -1,
                         );
                         builtin_table_updates.push(update);
                     }
 
-                    vec![Action::UpdateComputeInstanceStatus {
-                        compute_id,
-                        replica_id,
-                        process_id,
-                        status,
-                    }]
+                    vec![Action::UpdateComputeInstanceStatus { event }]
                 }
             });
         }
@@ -3229,21 +3218,17 @@ impl<S: Append> Catalog<S> {
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
                 }
 
-                Action::UpdateComputeInstanceStatus {
-                    compute_id,
-                    replica_id,
-                    process_id,
-                    status,
-                } => {
+                Action::UpdateComputeInstanceStatus { event } => {
                     // It is possible that we receive a status update for a
                     // replica that has already been dropped from the catalog.
                     // In this case, `try_insert_compute_instance_status`
                     // returns `false` and we ignore the event.
-                    if state.try_insert_compute_instance_status(
-                        compute_id, replica_id, process_id, status,
-                    ) {
+                    if state.try_insert_compute_instance_status(event.clone()) {
                         let update = state.pack_compute_instance_status_update(
-                            compute_id, replica_id, process_id, 1,
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                            1,
                         );
                         builtin_table_updates.push(update);
                     }
@@ -3503,10 +3488,7 @@ pub enum Op {
         to_name: String,
     },
     UpdateComputeInstanceStatus {
-        compute_id: ComputeInstanceId,
-        replica_id: ReplicaId,
-        process_id: ProcessId,
-        status: ComputeInstanceStatus,
+        event: ComputeInstanceEvent,
     },
 }
 

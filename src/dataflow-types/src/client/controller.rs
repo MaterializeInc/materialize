@@ -26,6 +26,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use anyhow::anyhow;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
@@ -162,12 +163,13 @@ fn parse_replica_service_name(
 }
 
 /// An event describing a change in status of a compute process.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ComputeInstanceEvent {
     pub instance_id: ComputeInstanceId,
     pub replica_id: ReplicaId,
     pub process_id: ProcessId,
     pub status: ComputeInstanceStatus,
+    pub time: DateTime<Utc>,
 }
 
 enum UnderlyingControllerResponse<T> {
@@ -374,6 +376,7 @@ where
                 replica_id,
                 process_id: event.process_id,
                 status: event.status,
+                time: event.time,
             })
         }
 

@@ -1400,12 +1400,7 @@ impl<S: Append + 'static> Coordinator<S> {
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
         self.catalog_transact(
             None,
-            vec![catalog::Op::UpdateComputeInstanceStatus {
-                compute_id: event.instance_id,
-                replica_id: event.replica_id,
-                process_id: event.process_id,
-                status: event.status,
-            }],
+            vec![catalog::Op::UpdateComputeInstanceStatus { event }],
             |_| Ok(()),
         )
         .await

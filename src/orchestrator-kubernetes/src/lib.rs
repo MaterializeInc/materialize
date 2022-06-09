@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
+use chrono::Utc;
 use clap::ArgEnum;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
@@ -441,23 +442,29 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
                 .clone();
 
-            let pod_ready = pod
+            let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
                 .and_then(|conditions| conditions.into_iter().find(|c| c.type_ == "Ready"))
-                .map(|c| c.status == "True")
-                .unwrap_or(false);
+                .map(|c| (c.status == "True", c.last_probe_time))
+                .unwrap_or((false, None));
 
             let status = if pod_ready {
                 ServiceStatus::Ready
             } else {
                 ServiceStatus::NotReady
             };
+            let time = if let Some(time) = last_probe_time {
+                time.0
+            } else {
+                Utc::now()
+            };
 
             Ok(ServiceEvent {
                 service_id,
                 process_id,
                 status,
+                time,
             })
         }
 

@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use futures_core::stream::BoxStream;
 use serde::de::Unexpected;
@@ -69,6 +70,7 @@ pub struct ServiceEvent {
     pub service_id: String,
     pub process_id: i64,
     pub status: ServiceStatus,
+    pub time: DateTime<Utc>,
 }
 
 /// Describes the status of an orchestrated service.

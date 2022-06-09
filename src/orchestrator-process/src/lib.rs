@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use chrono::Utc;
 use futures::stream::BoxStream;
 use itertools::Itertools;
 use scopeguard::defer;
@@ -276,6 +277,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                                 service_id: service.to_string(),
                                 process_id: process_idx as i64,
                                 status: ServiceStatus::Unknown,
+                                time: Utc::now(),
                             });
                         }
                     }
