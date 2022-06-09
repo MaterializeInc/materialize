@@ -199,8 +199,13 @@ where
 
     /// Attempt to pull out the next values of this subscription.
     ///
-    /// The returned updates might or might not be consolidated. If you have a
-    /// use for consolidated listen output, given that snapshots can't be
+    /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
+    /// and not necessarily consolidated. However, the timestamp of each individual update will be
+    /// greater than or equal to the last received [ListenEvent::Progress] frontier (or this
+    /// [Listen]'s initial `as_of` frontier if no progress event has been emitted yet) and less
+    /// than the next [ListenEvent::Progress] fronteir.
+    ///
+    /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
