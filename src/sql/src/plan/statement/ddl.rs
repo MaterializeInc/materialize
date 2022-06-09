@@ -399,7 +399,7 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(scx, format, &envelope, secrets_reader)?;
 
-            // XXX(chae): is this the place to inline? Or should it get delayed until we actually connect to kafka?
+            // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
             let config_options = kafka_util::inline_secrets(config_options, secrets_reader)?;
 
             let mut connector = KafkaSourceConnector {
@@ -1957,7 +1957,7 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
-    // XXX(chae): is this where secrets should be inlined for kafka sinks??  "End of planning"?
+    // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
     let config_options = kafka_util::inline_secrets(config_options, secrets_reader)?;
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
