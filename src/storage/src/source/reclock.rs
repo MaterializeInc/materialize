@@ -25,7 +25,7 @@ use mz_ore::now::NowFn;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
-use mz_repr::{Diff, Timestamp};
+use mz_repr::Timestamp;
 use tracing::{error, info};
 
 pub struct ReclockOperator {
@@ -38,9 +38,9 @@ pub struct ReclockOperator {
     persisted_timestamp_bindings: HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>,
     // Max offset we've returned (or have committed to returning at the end of the current invocation).
     read_cursors: HashMap<PartitionId, MzOffset>,
-    write_handle: WriteHandle<(), PartitionId, Timestamp, Diff>,
+    write_handle: WriteHandle<(), PartitionId, Timestamp, MzOffset>,
     timestamp_bindings_listener:
-        Pin<Box<dyn Stream<Item = ListenEvent<(), PartitionId, Timestamp, Diff>>>>,
+        Pin<Box<dyn Stream<Item = ListenEvent<(), PartitionId, Timestamp, MzOffset>>>>,
     now: NowFn,
     update_interval: Duration,
     last_timestamp: Timestamp,
@@ -64,7 +64,7 @@ impl ReclockOperator {
             .with_context(|| "error creating persist client")?;
 
         let (write_handle, read_handle) = persist_client
-            .open::<_, _, _, i64>(timestamp_shard_id)
+            .open::<_, _, _, MzOffset>(timestamp_shard_id)
             .await
             .expect("persist handles open err");
 
@@ -113,9 +113,7 @@ impl ReclockOperator {
                         .entry(partition)
                         .or_insert((0, MzOffset::default()));
 
-                    let pos_diff: u64 =
-                        diff.try_into().expect("reclock offset diff to be positive");
-                    *current_offset += pos_diff;
+                    *current_offset += diff;
                     *current_ts = timestamp;
                 }
             }
@@ -370,13 +368,9 @@ impl ReclockOperator {
             let compare_and_append_result = self
                 .write_handle
                 .compare_and_append(
-                    new_bindings.iter().map(|(partition, diff)| {
-                        let diff: i64 = diff
-                            .offset
-                            .try_into()
-                            .expect("reclock offset diff to be positive and < u64::MAX");
-                        ((&(), *partition), &new_ts, diff)
-                    }),
+                    new_bindings
+                        .iter()
+                        .map(|(partition, diff)| ((&(), *partition), &new_ts, diff)),
                     self.write_upper.clone(),
                     new_upper.clone(),
                 )
@@ -414,14 +408,7 @@ impl ReclockOperator {
                             self.persisted_timestamp_bindings
                                 .entry(partition)
                                 .or_insert_with(VecDeque::new)
-                                .push_back((
-                                    timestamp,
-                                    MzOffset {
-                                        offset: diff
-                                            .try_into()
-                                            .expect("reclock offset diff to be positive"),
-                                    },
-                                ));
+                                .push_back((timestamp, diff));
                         }
                     }
                 }
