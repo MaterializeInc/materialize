@@ -222,8 +222,8 @@ where
                                         assigned.listen_host, assigned.ports["controller"]
                                     ),
                                     format!(
-                                        "--http-console-addr={}:{}",
-                                        assigned.listen_host, assigned.ports["http"]
+                                        "--internal-http-listen-addr={}:{}",
+                                        assigned.listen_host, assigned.ports["internal-http"]
                                     ),
                                     format!("--workers={}", size_config.workers),
                                     format!("--opentelemetry-resource=instance_id={}", instance_id),
@@ -256,7 +256,7 @@ where
                                     port_hint: 2102,
                                 },
                                 ServicePort {
-                                    name: "http".into(),
+                                    name: "internal-http".into(),
                                     port_hint: 6875,
                                 },
                             ],

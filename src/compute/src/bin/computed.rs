@@ -76,9 +76,9 @@ struct Args {
     /// Enable command reconciliation.
     #[clap(long, requires = "linger")]
     reconcile: bool,
-    /// The address of the HTTP profiling UI.
-    #[clap(long, value_name = "HOST:PORT")]
-    http_console_addr: Option<String>,
+    /// The address of the internal HTTP server.
+    #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
+    internal_http_listen_addr: String,
 
     /// Where to write a pid lock file. Should only be used for local process orchestrators.
     #[clap(long, value_name = "PATH")]
@@ -135,12 +135,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     info!("about to bind to {:?}", args.listen_addr);
 
     let metrics_registry = MetricsRegistry::new();
-    if let Some(addr) = args.http_console_addr {
+    {
         let metrics_registry = metrics_registry.clone();
-        tracing::info!("serving computed HTTP server on {}", addr);
+        tracing::info!(
+            "serving internal HTTP server on {}",
+            args.internal_http_listen_addr
+        );
         mz_ore::task::spawn(
-            || "computed_http_server",
-            axum::Server::bind(&addr.parse()?).serve(
+            || "computed_internal_http_server",
+            axum::Server::bind(&args.internal_http_listen_addr.parse()?).serve(
                 mz_prof::http::router(&BUILD_INFO)
                     .route(
                         "/api/livez",

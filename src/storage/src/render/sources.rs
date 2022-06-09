@@ -13,6 +13,7 @@
 
 use std::any::Any;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::consolidate::ConsolidateStream;
@@ -318,10 +319,13 @@ where
                                             "dependent source missing from ingestion description",
                                         )
                                         .clone();
+                                    let persist_clients =
+                                        Arc::clone(&storage_state.persist_clients);
                                     let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                         persist_source::persist_source(
                                             scope,
                                             tx_storage_metadata,
+                                            persist_clients,
                                             ingestion.since.clone(),
                                         );
                                     let (tx_source_ok, tx_source_err) = (

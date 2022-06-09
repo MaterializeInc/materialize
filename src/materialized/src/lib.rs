@@ -21,7 +21,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use std::{env, fs};
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
@@ -39,10 +39,8 @@ use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::option::OptionExt;
 use mz_ore::task;
 use mz_persist_client::PersistLocation;
-use mz_pid_file::PidFile;
 use mz_secrets::{SecretsController, SecretsReader, SecretsReaderConfig};
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
@@ -81,9 +79,9 @@ pub struct Config {
     pub http_listen_addr: SocketAddr,
     /// The IP address and port to listen for pgwire connections from the cloud
     /// system on.
-    pub internal_sql_listen_addr: Option<SocketAddr>,
+    pub internal_sql_listen_addr: SocketAddr,
     /// The IP address and port to serve the metrics registry from.
-    pub internal_http_listen_addr: Option<SocketAddr>,
+    pub internal_http_listen_addr: SocketAddr,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
     /// Materialize Cloud configuration to enable Frontegg JWT user authentication.
@@ -247,21 +245,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     };
 
-    // Attempt to acquire PID file lock.
-    let pid_file =
-        PidFile::open(config.data_directory.join("materialized.pid")).map_err(|e| match e {
-            // Enhance error with some materialized-specific details.
-            mz_pid_file::Error::AlreadyRunning { pid } => anyhow!(
-                "another materialized process (PID {}) is running with the same data directory\n\
-                data directory: {}\n",
-                pid.display_or("<unknown>"),
-                fs::canonicalize(&config.data_directory)
-                    .unwrap_or_else(|_| config.data_directory.clone())
-                    .display(),
-            ),
-            e => e.into(),
-        })?;
-
     // Initialize network listeners.
     let sql_listener = TcpListener::bind(&config.sql_listen_addr).await?;
     let http_listener = TcpListener::bind(&config.http_listen_addr).await?;
@@ -365,11 +348,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     })
     .await?;
 
-    // Listen on the internal HTTP API port if we are configured for it.
-    let internal_http_local_addr = if let Some(addr) = config.internal_http_listen_addr {
+    // Listen on the internal HTTP API port.
+    let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();
         let server = http::InternalServer::new(metrics_registry);
-        let bound_server = server.bind(addr);
+        let bound_server = server.bind(config.internal_http_listen_addr);
         let internal_http_local_addr = bound_server.local_addr();
         task::spawn(|| "internal_http_server", {
             async move {
@@ -378,9 +361,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 }
             }
         });
-        Some(internal_http_local_addr)
-    } else {
-        None
+        internal_http_local_addr
     };
 
     // TODO(benesch): replace both `TCPListenerStream`s below with
@@ -410,32 +391,26 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         }
     });
 
-    // Listen on the internal SQL port if we are configured for it.
-    let (internal_sql_drain_trigger, internal_sql_local_addr) =
-        if let Some(addr) = config.internal_sql_listen_addr {
-            let (internal_sql_drain_trigger, internal_sql_drain_tripwire) = oneshot::channel();
-            let internal_sql_listener = TcpListener::bind(&addr).await?;
-            let internal_sql_local_addr = internal_sql_listener.local_addr()?;
-            task::spawn(|| "internal_pgwire_server", {
-                let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
-                    tls: None,
-                    coord_client: coord_client.clone(),
-                    frontegg: None,
-                });
-                let mut incoming = TcpListenerStream::new(internal_sql_listener);
-                async move {
-                    internal_pgwire_server
-                        .serve(incoming.by_ref().take_until(internal_sql_drain_tripwire))
-                        .await
-                }
+    // Listen on the internal SQL port.
+    let (internal_sql_drain_trigger, internal_sql_local_addr) = {
+        let (internal_sql_drain_trigger, internal_sql_drain_tripwire) = oneshot::channel();
+        let internal_sql_listener = TcpListener::bind(&config.internal_sql_listen_addr).await?;
+        let internal_sql_local_addr = internal_sql_listener.local_addr()?;
+        task::spawn(|| "internal_pgwire_server", {
+            let internal_pgwire_server = mz_pgwire::Server::new(mz_pgwire::Config {
+                tls: None,
+                coord_client: coord_client.clone(),
+                frontegg: None,
             });
-            (
-                Some(internal_sql_drain_trigger),
-                Some(internal_sql_local_addr),
-            )
-        } else {
-            (None, None)
-        };
+            let mut incoming = TcpListenerStream::new(internal_sql_listener);
+            async move {
+                internal_pgwire_server
+                    .serve(incoming.by_ref().take_until(internal_sql_drain_tripwire))
+                    .await
+            }
+        });
+        (internal_sql_drain_trigger, internal_sql_local_addr)
+    };
 
     let (http_drain_trigger, http_drain_tripwire) = oneshot::channel();
     task::spawn(|| "http_server", {
@@ -458,7 +433,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         http_local_addr,
         internal_sql_local_addr,
         internal_http_local_addr,
-        _pid_file: pid_file,
         _internal_sql_drain_trigger: internal_sql_drain_trigger,
         _http_drain_trigger: http_drain_trigger,
         _sql_drain_trigger: sql_drain_trigger,
@@ -470,11 +444,10 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 pub struct Server {
     sql_local_addr: SocketAddr,
     http_local_addr: SocketAddr,
-    internal_sql_local_addr: Option<SocketAddr>,
-    internal_http_local_addr: Option<SocketAddr>,
-    _pid_file: PidFile,
+    internal_sql_local_addr: SocketAddr,
+    internal_http_local_addr: SocketAddr,
     // Drop order matters for these fields.
-    _internal_sql_drain_trigger: Option<oneshot::Sender<()>>,
+    _internal_sql_drain_trigger: oneshot::Sender<()>,
     _http_drain_trigger: oneshot::Sender<()>,
     _sql_drain_trigger: oneshot::Sender<()>,
     _coord_handle: mz_coord::Handle,
@@ -489,11 +462,11 @@ impl Server {
         self.http_local_addr
     }
 
-    pub fn internal_sql_local_addr(&self) -> Option<SocketAddr> {
+    pub fn internal_sql_local_addr(&self) -> SocketAddr {
         self.internal_sql_local_addr
     }
 
-    pub fn internal_http_local_addr(&self) -> Option<SocketAddr> {
+    pub fn internal_http_local_addr(&self) -> SocketAddr {
         self.internal_http_local_addr
     }
 }

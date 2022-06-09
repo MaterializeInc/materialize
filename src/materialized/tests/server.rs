@@ -97,38 +97,6 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[test]
-fn test_pid_file() -> Result<(), Box<dyn Error>> {
-    let data_dir = tempfile::tempdir()?;
-    let config = util::Config::default().data_directory(data_dir.path());
-
-    // While `server1` is running, it should not be possible to start another
-    // server against the same data directory.
-    let server1 = util::start_server(config.clone())?;
-    match util::start_server(config.clone()) {
-        Ok(_) => panic!("unexpected success"),
-        Err(e) => {
-            if !e
-                .to_string()
-                .contains("running with the same data directory")
-            {
-                return Err(e.into());
-            }
-        }
-    }
-
-    // But it should be possible to start a server against a *different*
-    // data directory.
-    let _server2 = util::start_server(util::Config::default())?;
-
-    // Stopping `server1` should allow starting another server against the
-    // `server1`'s old data directory.
-    drop(server1);
-    util::start_server(config)?;
-
-    Ok(())
-}
-
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {

@@ -316,7 +316,7 @@ where
                             .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
                             .await
                     })
-                    .instrument(trace_span!("apply_unbatched_cmd::truncate"))
+                    .instrument(debug_span!("apply_unbatched_cmd::truncate"))
                     .await;
 
                     return Ok((self.state.seqno(), Ok(work_ret)));

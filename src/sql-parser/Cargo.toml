@@ -9,7 +9,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.57"
-enum-kinds = "0.5.1"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 # TODO(aljoscha): persist/storage sinks should have a human-readable

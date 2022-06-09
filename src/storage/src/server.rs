@@ -10,9 +10,10 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
 
@@ -75,6 +76,8 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
 
     let tokio_executor = tokio::runtime::Handle::current();
     let now = config.now;
+    let persist_clients = PersistClientCache::new(&config.metrics_registry);
+    let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
 
     let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
         let timely_worker_index = timely_worker.index();
@@ -91,6 +94,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
             .take()
             .unwrap();
         let (source_metrics, decode_metrics) = metrics_bundle.clone();
+        let persist_clients = Arc::clone(&persist_clients);
         Worker {
             timely_worker,
             command_rx,
@@ -104,6 +108,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
                 timely_worker_index,
                 timely_worker_peers,
                 connector_context: config.connector_context.clone(),
+                persist_clients,
             },
             response_tx,
         }

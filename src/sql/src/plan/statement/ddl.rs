@@ -64,11 +64,12 @@ use crate::ast::{
     CsrConnector, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
     CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, Op,
-    ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, Select, SelectItem,
-    SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement, SubscriptPosition,
-    TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    Value, ViewDefinition, WithOption, WithOptionValue,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
+    KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
+    SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -88,8 +89,8 @@ use crate::plan::{
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, IndexOption, IndexOptionName, Params,
-    Plan, ReplicaConfig, Secret, Sink, Source, Table, Type, View,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink,
+    Source, Table, Type, View,
 };
 use crate::pure::Schema;
 
@@ -2745,45 +2746,31 @@ const DEFAULT_INTROSPECTION_GRANULARITY: Interval = Interval {
     days: 0,
 };
 
+generate_extracted_config!(
+    ReplicaOption,
+    (AvailabilityZone, String),
+    (Size, String),
+    (Remote, Vec<String>)
+);
+
 fn plan_replica_config(
     scx: &StatementContext,
     options: Vec<ReplicaOption<Aug>>,
 ) -> Result<ReplicaConfig, anyhow::Error> {
-    let mut remote_replicas = BTreeSet::new();
-    let mut size = None;
-    let mut availability_zone = None;
+    let ReplicaOptionExtracted {
+        availability_zone,
+        size,
+        remote,
+    }: ReplicaOptionExtracted = options.try_into()?;
 
-    for option in options {
-        match option {
-            ReplicaOption::Remote { hosts } => {
-                scx.require_unsafe_mode("REMOTE cluster replica option")?;
-                if !remote_replicas.is_empty() {
-                    bail!("REMOTE specified more than once");
-                }
-                for host in hosts {
-                    remote_replicas.insert(
-                        host.try_into()
-                            .map_err(|e| anyhow!("invalid REMOTE host: {}", e))?,
-                    );
-                }
-            }
-            ReplicaOption::Size(s) => {
-                if size.is_some() {
-                    bail!("SIZE specified more than once");
-                }
-                size = Some(s.try_into().map_err(|e| anyhow!("invalid SIZE: {}", e))?);
-            }
-            ReplicaOption::AvailabilityZone(s) => {
-                if availability_zone.is_some() {
-                    bail!("AVAILABILITY ZONE specified more than once");
-                }
-                availability_zone = Some(
-                    s.try_into()
-                        .map_err(|e| anyhow!("invalid AVAILABILITY ZONE: {}", e))?,
-                );
-            }
-        }
+    if remote.is_some() {
+        scx.require_unsafe_mode("REMOTE cluster replica option")?;
     }
+
+    let remote_replicas = remote
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<BTreeSet<String>>();
 
     match (remote_replicas.len() > 0, size) {
         (true, None) => {
@@ -3268,18 +3255,22 @@ pub fn describe_alter_index_options(
     Ok(StatementDesc::new(None))
 }
 
-fn plan_index_options(with_opts: Vec<WithOption<Aug>>) -> Result<Vec<IndexOption>, anyhow::Error> {
-    let with_opts = IndexWithOptions::try_from(with_opts)?;
-    let mut out = vec![];
+generate_extracted_config!(IndexOption, (LogicalCompactionWindow, OptionalInterval));
 
-    match with_opts.logical_compaction_window.as_deref() {
-        None => (),
-        Some("off") => out.push(IndexOption::LogicalCompactionWindow(None)),
-        Some(s) => {
-            let window = Some(mz_repr::util::parse_duration(s)?);
-            out.push(IndexOption::LogicalCompactionWindow(window))
-        }
-    };
+fn plan_index_options(
+    with_opts: Vec<IndexOption<Aug>>,
+) -> Result<Vec<crate::plan::IndexOption>, anyhow::Error> {
+    let IndexOptionExtracted {
+        logical_compaction_window,
+    }: IndexOptionExtracted = with_opts.try_into()?;
+
+    let mut out = Vec::with_capacity(1);
+
+    if let Some(OptionalInterval(lcw)) = logical_compaction_window {
+        out.push(crate::plan::IndexOption::LogicalCompactionWindow(
+            lcw.map(|interval| interval.duration()).transpose()?,
+        ))
+    }
 
     Ok(out)
 }
@@ -3315,25 +3306,15 @@ pub fn plan_alter_index_options(
 
     match actions {
         AlterIndexAction::ResetOptions(options) => {
-            let options = options
-                .into_iter()
-                .filter_map(|o| match normalize::ident(o).as_str() {
-                    "logical_compaction_window" => Some(IndexOptionName::LogicalCompactionWindow),
-                    // Follow Postgres and don't complain if unknown parameters
-                    // are passed into `ALTER INDEX ... RESET`.
-                    _ => None,
-                })
-                .collect();
             Ok(Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan {
                 id,
-                options,
+                options: options.into_iter().collect::<HashSet<IndexOptionName>>(),
             }))
         }
         AlterIndexAction::SetOptions(options) => {
-            let options = plan_index_options(options)?;
             Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
                 id,
-                options,
+                options: plan_index_options(options)?,
             }))
         }
     }

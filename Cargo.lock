@@ -2781,7 +2781,6 @@ dependencies = [
  "mz-pgrepr",
  "mz-pgtest",
  "mz-pgwire",
- "mz-pid-file",
  "mz-postgres-util",
  "mz-prof",
  "mz-repr",
@@ -3880,6 +3879,7 @@ dependencies = [
  "mz-repr",
  "mz-sql-parser",
  "once_cell",
+ "paste",
  "prost",
  "protobuf-native",
  "rdkafka",
@@ -3900,7 +3900,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
- "enum-kinds",
  "itertools",
  "mz-ore",
  "mz-persist-client",
