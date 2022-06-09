@@ -116,9 +116,10 @@ pub struct Args {
         long,
         hide = true,
         value_name = "HOST:PORT",
-        env = "MZ_INTERNAL_SQL_LISTEN_ADDR"
+        env = "MZ_INTERNAL_SQL_LISTEN_ADDR",
+        default_value = "127.0.0.1:6877"
     )]
-    internal_sql_listen_addr: Option<SocketAddr>,
+    internal_sql_listen_addr: SocketAddr,
 
     /// The address on which to listen for trusted HTTP connections.
     ///
@@ -129,9 +130,10 @@ pub struct Args {
         long,
         hide = true,
         value_name = "HOST:PORT",
-        env = "MZ_INTERNAL_HTTP_LISTEN_ADDR"
+        env = "MZ_INTERNAL_HTTP_LISTEN_ADDR",
+        default_value = "127.0.0.1:6878"
     )]
-    internal_http_listen_addr: Option<SocketAddr>,
+    internal_http_listen_addr: SocketAddr,
 
     // === Platform options. ===
     /// The service orchestrator implementation to use.
@@ -708,12 +710,14 @@ max log level: {max_log_level}",
     );
     println!(" SQL address: {}", server.sql_local_addr());
     println!(" HTTP address: {}", server.http_local_addr());
-    if let Some(internal_sql_local_addr) = server.internal_sql_local_addr() {
-        println!(" Internal SQL address: {}", internal_sql_local_addr);
-    }
-    if let Some(internal_http_local_address) = server.internal_http_local_addr() {
-        println!(" Internal HTTP address: {}", internal_http_local_address);
-    }
+    println!(
+        " Internal SQL address: {}",
+        server.internal_sql_local_addr()
+    );
+    println!(
+        " Internal HTTP address: {}",
+        server.internal_http_local_addr()
+    );
 
     // Block forever.
     loop {
