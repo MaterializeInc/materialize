@@ -432,7 +432,7 @@ pub fn generate_ccsr_client_config(
 
     // If provided, prefer SSL options from the schema registry configuration
     if let Some(ca_path) = ccsr_options
-        .remove("ssl_ca_location")
+        .remove("ssl.ca.location")
         .map(|v| v.get_string(secrets_reader))
         .transpose()?
     {
@@ -443,11 +443,11 @@ pub fn generate_ccsr_client_config(
     }
 
     let key_path = ccsr_options
-        .remove("ssl_key_location")
+        .remove("ssl.key.location")
         .map(|v| v.get_string(secrets_reader))
         .transpose()?;
     let cert_path = ccsr_options
-        .remove("ssl_certificate_location")
+        .remove("ssl.certificate.location")
         .map(|v| v.get_string(secrets_reader))
         .transpose()?;
     match (key_path, cert_path) {
