@@ -276,4 +276,4 @@ That's it! You just created your first materialized view and tried out some comm
 
 **Next steps**
 
-When you're done with this guide, you can move on to the [case-specific quickstarts](/quickstarts/) to learn how to use Materialize with other external systems for different use cases.
+When you're done with this guide, you can move on to ["Quickstarts"](/quickstarts/) to learn how to use Materialize with other external systems for different use cases.
