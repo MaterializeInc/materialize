@@ -630,7 +630,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// `Coordinator::serve` method.
     async fn bootstrap(
         &mut self,
-        builtin_table_updates: Vec<BuiltinTableUpdate>,
+        mut builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), CoordError> {
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
@@ -768,15 +768,17 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await
                     .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    self.handle_sink_connector_ready(
-                        entry.id(),
-                        entry.oid(),
-                        connector,
-                        // The sink should be established on a specific compute instance.
-                        sink.compute_instance,
-                        None,
-                    )
-                    .await?;
+                    let builtin_updates = self
+                        .handle_sink_connector_ready(
+                            entry.id(),
+                            entry.oid(),
+                            connector,
+                            // The sink should be established on a specific compute instance.
+                            sink.compute_instance,
+                            None,
+                        )
+                        .await?;
+                    builtin_table_updates.extend(builtin_updates.into_iter());
                 }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
@@ -1926,10 +1928,31 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
-    async fn handle_terminate(&mut self, session: &mut Session) {
-        self.clear_transaction(session).await;
+    async fn handle_terminate(&mut self, mut session: Session) {
+        self.clear_transaction(&mut session).await;
 
-        self.drop_temp_items(&session).await;
+        let builtin_updates = self.drop_temp_items(&session).await;
+        let writes = builtin_updates
+            .into_iter()
+            .map(|update| WriteOp {
+                id: update.id,
+                rows: vec![(update.row, update.diff)],
+            })
+            .collect();
+        let (tx, rx) = oneshot::channel();
+        let client_transmitter = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
+        self.submit_write(PendingWriteTxn::User {
+            write_txn: WriteTxn::Write {
+                writes,
+                response: ExecuteResponse::DiscardedTemp,
+            },
+            client_transmitter,
+            session,
+        });
+        let Response { session, .. } = rx
+            .blocking_recv()
+            .expect("system table update must succeed");
+
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
@@ -2923,7 +2946,7 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .await;
         let builtin_updates = match transact_result {
-            Ok((builtin_updates, ())) => builtin_updates,
+            Ok((builtin_updates, _)) => builtin_updates,
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..

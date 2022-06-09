@@ -30,7 +30,7 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 > SELECT COUNT(*) FROM exactly_once;
 10
 
-# We expect just the 6 new messages, having consumed the older ones in xactly-once-sink-before.td
+# We expect just the 6 new messages, having consumed the older ones in exactly-once-sink-before.td
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 $ kafka-verify format=avro sink=materialize.public.exactly_once_sink sort-messages=true
 {"before":null,"after":{"row":{"f1":20,"f2":20}},"transaction":{"id":"<TIMESTAMP>"}}
