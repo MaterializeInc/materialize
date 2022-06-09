@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Borrow;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
@@ -77,8 +76,8 @@ impl SecretsReader {
 
     /// Returns the contents of a secret identified by GlobalId
     ///
-    /// This `read` will return a complete version of the secret even though `SecretsReader` is `Clone` and we could
-    /// have concurrent reads.  It will not return, e.g., one block from v1 and another from v2.
+    /// This `read` will return a complete version of the secret. It will not return, e.g., one block from v1 and
+    /// another from v2.
     ///
     /// - On Linux / OSX filesystems, `File::open` will hold a handle open so that even if the file is deleted, we still
     ///   continue to read from it.  This means a SecretOp::Delete followed by a SecretOp::Ensure can never "swap out"
@@ -88,7 +87,7 @@ impl SecretsReader {
     /// (N.B. Were we ever to run with Windows / NTFS, this would also work properly _and_ mid-read edits would be
     /// disallowed)
     pub fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
-        let file_path = self.config.mount_path.join(id.borrow().to_string());
+        let file_path = self.config.mount_path.join(id.to_string());
 
         // Inlined the std::fs::read impl because correctness requires and impl that holds the same `File` handle open
         let mut file = File::open(file_path)?;
@@ -104,7 +103,7 @@ impl SecretsReader {
     /// Returns the path of the secret consisting of a configured base path
     /// and the GlobalId
     pub fn canonical_path(&self, id: GlobalId) -> Result<PathBuf, anyhow::Error> {
-        let path = self.config.mount_path.join(id.borrow().to_string());
+        let path = self.config.mount_path.join(id.to_string());
         Ok(path)
     }
 }

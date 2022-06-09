@@ -188,7 +188,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// at 0.
     fn now(&self) -> EpochMillis;
 
-    /// Returns SecretsReader for catalog
+    /// Returns a secrets reader associated with the catalog.
     fn secrets_reader(&self) -> &SecretsReader;
 }
 
