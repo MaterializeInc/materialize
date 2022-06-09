@@ -729,7 +729,9 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-class KafkaRestart(Kafka):
+# The scenario is currently not compatible with Platform, as restarting Mz alone causes the computeds to exit and
+# there is no code to restart them as well.
+class KafkaRestart(ScenarioDisabled):
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
