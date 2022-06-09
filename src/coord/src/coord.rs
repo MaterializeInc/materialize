@@ -1060,9 +1060,6 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
         }: CreateSourceStatementReady,
     ) {
-        // TODO: verify that the dependent objects are still present. They may
-        // have been dropped while we were purifying the statement.
-
         let stmt = match result {
             Ok(stmt) => stmt,
             Err(e) => return tx.send(Err(e), session),
@@ -1076,6 +1073,15 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok(_) => unreachable!("planning CREATE SOURCE must result in a Plan::CreateSource"),
             Err(e) => return tx.send(Err(e), session),
         };
+
+        // Check just before sequence_create_source.  This mirrors the handling of other sequence_* that are not
+        // handled specially.
+        if !depends_on
+            .iter()
+            .all(|id| self.catalog.try_get_entry(id).is_some())
+        {
+            return tx.send(Err(CoordError::ChangedPlan), session);
+        }
 
         let result = self
             .sequence_create_source(&mut session, plan, depends_on)
@@ -1653,6 +1659,12 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         let depends_on = depends_on.into_iter().collect();
         let params = portal.parameters.clone();
+        // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
+        // purification.  This should be done back on the main thread.  We do the validation in two places:
+        //   1. At the top of sequence_plan, where all plans _except_ Plan::CreateSource are sequenced.
+        //   2. In the handler for `Message::CreateSourceStatementReady`, before we sequence the create source
+        // If we add special handling for more types of `Statement`s, we'll need to ensure similar verficiation
+        // continues to be completed.
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
@@ -1870,6 +1882,12 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: Plan,
         depends_on: Vec<GlobalId>,
     ) {
+        if !depends_on
+            .iter()
+            .all(|id| self.catalog.try_get_entry(id).is_some())
+        {
+            return tx.send(Err(CoordError::ChangedPlan), session);
+        }
         match plan {
             Plan::CreateConnector(plan) => {
                 tx.send(
