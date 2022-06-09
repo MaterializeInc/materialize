@@ -97,10 +97,10 @@ SERVICES = [
 def start_services(
     c: Composition, args: argparse.Namespace, instance: str
 ) -> List[Service]:
-    tag, options, nodes = (
-        (args.this_tag, args.this_options, args.this_nodes)
+    tag, options, nodes, workers = (
+        (args.this_tag, args.this_options, args.this_nodes, args.this_workers)
         if instance == "this"
-        else (args.other_tag, args.other_options, args.other_nodes)
+        else (args.other_tag, args.other_options, args.other_nodes, args.other_workers)
     )
 
     cluster_services: List[Service] = []
@@ -117,6 +117,7 @@ def start_services(
             cluster_services.append(
                 Computed(
                     name=node_names[node_id],
+                    workers=workers,
                     options=options,
                     peers=node_names,
                     image=f"materialize/computed:{tag}" if tag else None,
@@ -126,6 +127,7 @@ def start_services(
         cluster_services.append(
             Materialized(
                 image=f"materialize/materialized:{tag}" if tag else None,
+                workers=workers,
                 options=options,
             )
         )
@@ -283,6 +285,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         default=None,
         help="Start a cluster with that many nodes for 'OTHER'",
+    )
+
+    parser.add_argument(
+        "--this-workers",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Number of workers to use for 'THIS'",
+    )
+
+    parser.add_argument(
+        "--other-workers",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Number of workers to use for 'OTHER'",
     )
 
     args = parser.parse_args()
