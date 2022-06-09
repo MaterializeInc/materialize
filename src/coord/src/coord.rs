@@ -988,7 +988,10 @@ impl<S: Append + 'static> Coordinator<S> {
             return;
         }
 
-        let write_timestamp = match write_timestamp {
+        let WriteTimestamp {
+            timestamp,
+            advance_to,
+        } = match write_timestamp {
             Some(write_timestamp) => write_timestamp,
             None => self.get_and_step_local_write_ts(),
         };
@@ -1004,11 +1007,18 @@ impl<S: Append + 'static> Coordinator<S> {
             task::spawn(|| "group_commit", async move {
                 tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
                 internal_cmd_tx
-                    .send(Message::GroupCommit(Some(write_timestamp)))
+                    .send(Message::GroupCommit(Some(WriteTimestamp {
+                        timestamp,
+                        advance_to,
+                    })))
                     .expect("sending to internal_cmd_tx cannot fail");
             });
         } else {
-            self.group_commit(write_timestamp).await;
+            self.group_commit(WriteTimestamp {
+                timestamp,
+                advance_to,
+            })
+            .await;
         }
     }
 
