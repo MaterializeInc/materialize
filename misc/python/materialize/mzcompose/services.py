@@ -44,6 +44,7 @@ class Materialized(Service):
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
         timestamp_frequency: str = "1s",
+        workers: Optional[int] = None,
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -95,6 +96,9 @@ class Materialized(Service):
             if version.parse(requested_version) < version.parse("0.27.0"):
                 # HTTP and SQL ports in older versions of Materialize are the same
                 config_ports.pop()
+
+        if workers:
+            command_list.append(f"--workers {workers}")
 
         if options:
             if isinstance(options, str):
