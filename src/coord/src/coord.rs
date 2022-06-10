@@ -760,44 +760,40 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        self.send_builtin_table_updates(builtin_table_updates).await;
+        self.submit_write(PendingWriteTxn::System {
+            writes: builtin_table_updates,
+        });
 
         // Announce primary and foreign key relationships.
         let mz_view_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_KEYS);
         for log in BUILTINS::logs() {
             let log_id = &self.catalog.resolve_builtin_log(log).to_string();
-            self.send_builtin_table_updates(
-                log.variant
-                    .desc()
-                    .typ()
-                    .keys
-                    .iter()
-                    .enumerate()
-                    .flat_map(move |(index, key)| {
-                        key.iter().map(move |k| {
-                            let row = Row::pack_slice(&[
-                                Datum::String(log_id),
-                                Datum::Int64(*k as i64),
-                                Datum::Int64(index as i64),
-                            ]);
-                            BuiltinTableUpdate {
-                                id: mz_view_keys,
-                                row,
-                                diff: 1,
-                            }
-                        })
+            let mut builtin_table_updates: Vec<_> = log
+                .variant
+                .desc()
+                .typ()
+                .keys
+                .iter()
+                .enumerate()
+                .flat_map(move |(index, key)| {
+                    key.iter().map(move |k| {
+                        let row = Row::pack_slice(&[
+                            Datum::String(log_id),
+                            Datum::Int64(*k as i64),
+                            Datum::Int64(index as i64),
+                        ]);
+                        BuiltinTableUpdate {
+                            id: mz_view_keys,
+                            row,
+                            diff: 1,
+                        }
                     })
-                    .collect(),
-            )
-            .await;
-
+                })
+                .collect();
             let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
-            self.send_builtin_table_updates(
-                log.variant
-                    .foreign_keys()
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(|(index, (parent, pairs))| {
+            builtin_table_updates.extend(
+                log.variant.foreign_keys().into_iter().enumerate().flat_map(
+                    |(index, (parent, pairs))| {
                         let parent_log =
                             BUILTINS::logs().find(|src| src.variant == parent).unwrap();
                         let parent_id = self.catalog.resolve_builtin_log(parent_log).to_string();
@@ -815,10 +811,12 @@ impl<S: Append + 'static> Coordinator<S> {
                                 diff: 1,
                             }
                         })
-                    })
-                    .collect(),
-            )
-            .await;
+                    },
+                ),
+            );
+            self.submit_write(PendingWriteTxn::System {
+                writes: builtin_table_updates,
+            });
         }
 
         Ok(())
@@ -5286,34 +5284,6 @@ impl<S: Append + 'static> Coordinator<S> {
         .await;
 
         Ok(result)
-    }
-
-    /// Send updates to builtin system tables.
-    ///
-    /// WARNING: This method should only be used during bootstrapping. All other builtin table
-    /// updates should go through group commit.
-    async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
-        let WriteTimestamp {
-            timestamp,
-            advance_to,
-        } = self.get_and_step_local_write_ts();
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-        for u in updates {
-            appends.entry(u.id).or_default().push(Update {
-                row: u.row,
-                diff: u.diff,
-                timestamp,
-            });
-        }
-        let appends = appends
-            .into_iter()
-            .map(|(id, updates)| (id, updates, advance_to))
-            .collect();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
     }
 
     async fn drop_sinks(&mut self, sinks: Vec<(ComputeInstanceId, GlobalId)>) {
