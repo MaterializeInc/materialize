@@ -3153,7 +3153,7 @@ pub fn plan_drop_cluster_replica(
             Err(_) if if_exists => continue,
             Err(e) => return Err(e.into()),
         };
-        let replica_name = replica.to_string();
+        let replica_name = replica.into_string();
         // Check to see if name exists
         if instance.replica_names().contains(&replica_name) {
             names_out.push((instance.name().to_string(), replica_name))
@@ -3166,7 +3166,7 @@ pub fn plan_drop_cluster_replica(
                 bail!(
                     "CLUSTER {} has no CLUSTER REPLICA named {}",
                     instance.name(),
-                    replica.to_string()
+                    replica_name.quoted(),
                 )
             }
         }
