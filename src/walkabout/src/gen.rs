@@ -73,9 +73,7 @@ pub fn gen_fold_root(ir: &Ir) -> String {
                         let generics2 = item_generics(item, "2");
                         let fn_name = fold_fn_name(name);
                         buf.write_block(
-                            format!(
-                        "fn {fn_name}(&mut self, node: {name}{generics}) -> {name}{generics2}"
-                    ),
+                            format!("fn {fn_name}(&mut self, node: {name}{generics}) -> {name}{generics2}"),
                             |buf| buf.writeln(format!("{fn_name}(self, node)")),
                         );
                     }
