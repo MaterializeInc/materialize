@@ -313,7 +313,10 @@ fn concretize_replica_config(
                     )| (*scale, *cpu_limit),
                 );
                 let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                CoordError::InvalidClusterReplicaSize { size, expected }
+                CoordError::InvalidClusterReplicaSize {
+                    size: size.clone(),
+                    expected,
+                }
             })?;
 
             if let Some(az) = &availability_zone {
@@ -326,6 +329,7 @@ fn concretize_replica_config(
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config: *size_config,
+                size_name: size,
                 availability_zone,
             }
         }
