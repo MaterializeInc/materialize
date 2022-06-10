@@ -2998,6 +2998,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_kw_options<T, F>(&mut self, f: F) -> Result<Vec<T>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
+        Ok(if self.parse_keyword(WITH) {
+            let expect_rparen = self.consume_token(&Token::LParen);
+            let o = self.parse_comma_separated(f)?;
+            if expect_rparen {
+                self.expect_token(&Token::RParen)?;
+            }
+            o
+        } else {
+            vec![]
+        })
+    }
+
     fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_with_options(true)
@@ -4777,13 +4793,28 @@ impl<'a> Parser<'a> {
         } else {
             TailRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_opt_with_options()?;
+        let options = self.parse_kw_options(Parser::parse_tail_options)?;
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail(TailStatement {
             relation,
             options,
             as_of,
         }))
+    }
+
+    fn parse_tail_options(&mut self) -> Result<TailOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
+            PROGRESS => TailOptionName::Progress,
+            SNAPSHOT => TailOptionName::Snapshot,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+
+        Ok(TailOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token

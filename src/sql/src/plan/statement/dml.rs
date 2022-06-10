@@ -12,9 +12,9 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
@@ -22,15 +22,18 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::AstInfo;
 
+use crate::ast::display::AstDisplay;
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
     ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement,
-    Statement, TailRelation, TailStatement, UpdateStatement, ViewDefinition,
+    Statement, TailOption, TailOptionName, TailRelation, TailStatement, UpdateStatement,
+    ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::{query, QueryContext};
 use crate::plan::{
     CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
@@ -271,12 +274,7 @@ pub fn plan_query(
     })
 }
 
-with_options! {
-    struct TailOptions {
-        snapshot: bool,
-        progress: bool,
-     }
-}
+generate_extracted_config!(TailOption, (Snapshot, bool), (Progress, bool));
 
 pub fn describe_tail(
     scx: &StatementContext,
@@ -294,8 +292,8 @@ pub fn describe_tail(
             desc
         }
     };
-    let options = TailOptions::try_from(stmt.options)?;
-    let progress = options.progress.unwrap_or(false);
+    let TailOptionExtracted { progress, .. } = stmt.options.try_into()?;
+    let progress = progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_column(
         "mz_timestamp",
         ScalarType::Numeric {
@@ -365,13 +363,13 @@ pub fn plan_tail(
     };
 
     let when = query::plan_as_of(scx, as_of)?;
-    let options = TailOptions::try_from(options)?;
+    let TailOptionExtracted { progress, snapshot } = options.try_into()?;
     Ok(Plan::Tail(TailPlan {
         from,
         when,
-        with_snapshot: options.snapshot.unwrap_or(true),
+        with_snapshot: snapshot.unwrap_or(true),
         copy_to,
-        emit_progress: options.progress.unwrap_or(false),
+        emit_progress: progress.unwrap_or(false),
     }))
 }
 
