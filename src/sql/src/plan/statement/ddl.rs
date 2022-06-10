@@ -654,7 +654,7 @@ pub fn plan_create_source(
                                     );
                                 }
                                 tx_metadata_collection =
-                                    Some(with_option_type!(Some(data_collection.clone()), String));
+                                    Some(String::try_from_value(data_collection.clone())?);
                             }
                         }
                     }
@@ -3257,12 +3257,6 @@ pub fn plan_drop_item(
         }
     }
     Ok(Some(catalog_entry.id()))
-}
-
-with_options! {
-    struct IndexWithOptions {
-        logical_compaction_window: String,
-    }
 }
 
 pub fn describe_alter_index_options(
