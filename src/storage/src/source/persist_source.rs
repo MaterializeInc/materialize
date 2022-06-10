@@ -33,6 +33,11 @@ use mz_repr::{Diff, Row, Timestamp};
 use crate::source::{SourceStatus, YIELD_INTERVAL};
 
 /// Creates a new source that reads from a persist shard.
+///
+/// All times emitted will have been [advanced by] the given `as_of` frontier.
+///
+/// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
+//
 // TODO(aljoscha): We need to change the `shard_id` parameter to be a `Vec<ShardId>` and teach the
 // operator to concurrently poll from multiple `Listen` instances. This will require us to put in
 // place the code that allows selecting from multiple `Listen`s, potentially by implementing async
@@ -153,6 +158,9 @@ where
                             None => return SourceStatus::Done,
                         },
                         Some(Ok(ListenEvent::Updates(mut updates))) => {
+                            // This operator guarantees that its output has been advanced by `as_of.
+                            // The persist SnapshotIter already has this contract, so nothing to do
+                            // here.
                             let cap = cap.delayed(&current_ts);
                             let mut session = output.session(&cap);
                             session.give_vec(&mut updates);
