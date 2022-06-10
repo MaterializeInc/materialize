@@ -3220,7 +3220,6 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         };
-        let mut options = vec![];
         // WITH must be followed by LParen. The WITH in COPY is optional for backward
         // compat with Postgres but is required elsewhere, which is why we don't use
         // parse_with_options here.
@@ -3230,16 +3229,35 @@ impl<'a> Parser<'a> {
         } else {
             self.consume_token(&Token::LParen)
         };
-        if has_options {
-            self.prev_token();
-            options = self.parse_with_options(false)?;
-        }
+        let options = if has_options {
+            let o = self.parse_comma_separated(Parser::parse_copy_options)?;
+            self.expect_token(&Token::RParen)?;
+            o
+        } else {
+            vec![]
+        };
         Ok(Statement::Copy(CopyStatement {
             relation,
             direction,
             target,
             options,
         }))
+    }
+
+    fn parse_copy_options(&mut self) -> Result<CopyOption<Raw>, ParserError> {
+        let name =
+            match self.expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER])? {
+                FORMAT => CopyOptionName::Format,
+                DELIMITER => CopyOptionName::Delimiter,
+                NULL => CopyOptionName::Null,
+                ESCAPE => CopyOptionName::Escape,
+                QUOTE => CopyOptionName::Quote,
+                HEADER => CopyOptionName::Header,
+                _ => unreachable!(),
+            };
+        let _ = self.consume_token(&Token::Eq);
+        let value = self.parse_opt_with_option_value(false)?;
+        Ok(CopyOption { name, value })
     }
 
     /// Parse a literal value (numbers, strings, date/time, booleans)

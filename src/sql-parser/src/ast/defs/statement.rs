@@ -240,6 +240,45 @@ impl AstDisplay for CopyTarget {
 }
 impl_display!(CopyTarget);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CopyOptionName {
+    Format,
+    Delimiter,
+    Null,
+    Escape,
+    Quote,
+    Header,
+}
+
+impl AstDisplay for CopyOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            CopyOptionName::Format => "FORMAT",
+            CopyOptionName::Delimiter => "DELIMITER",
+            CopyOptionName::Null => "NULL",
+            CopyOptionName::Escape => "ESCAPE",
+            CopyOptionName::Quote => "QUOTE",
+            CopyOptionName::Header => "HEADER",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CopyOption<T: AstInfo> {
+    pub name: CopyOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CopyOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `COPY`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CopyStatement<T: AstInfo> {
@@ -250,7 +289,7 @@ pub struct CopyStatement<T: AstInfo> {
     // TARGET
     pub target: CopyTarget,
     // OPTIONS
-    pub options: Vec<WithOption<T>>,
+    pub options: Vec<CopyOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CopyStatement<T> {

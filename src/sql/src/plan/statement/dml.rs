@@ -24,10 +24,10 @@ use mz_sql_parser::ast::AstInfo;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
-    CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
-    ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement,
-    Statement, TailOption, TailOptionName, TailRelation, TailStatement, UpdateStatement,
-    ViewDefinition,
+    CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
+    CreateViewStatement, DeleteStatement, ExplainStage, ExplainStatement, Explainee, Ident,
+    InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
+    TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{self, Aug, ResolvedObjectName};
@@ -382,17 +382,6 @@ pub fn describe_table(
     Ok(StatementDesc::new(Some(desc)))
 }
 
-with_options! {
-    struct CopyOptions {
-        format: String,
-        delimiter: String,
-        null: String,
-        escape: String,
-        quote: String,
-        header: bool,
-    }
-}
-
 pub fn describe_copy(
     scx: &StatementContext,
     CopyStatement { relation, .. }: CopyStatement<Aug>,
@@ -419,6 +408,16 @@ fn plan_copy_from(
     }))
 }
 
+generate_extracted_config!(
+    CopyOption,
+    (Format, String),
+    (Delimiter, String),
+    (Null, String),
+    (Escape, String),
+    (Quote, String),
+    (Header, bool)
+);
+
 pub fn plan_copy(
     scx: &StatementContext,
     CopyStatement {
@@ -428,23 +427,34 @@ pub fn plan_copy(
         options,
     }: CopyStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let options = CopyOptions::try_from(options)?;
-    let mut copy_params = CopyParams {
-        format: CopyFormat::Text,
-        delimiter: options.delimiter,
-        null: options.null,
-        escape: options.escape,
-        quote: options.quote,
-        header: options.header,
+    let CopyOptionExtracted {
+        format,
+        delimiter,
+        null,
+        escape,
+        quote,
+        header,
+    } = CopyOptionExtracted::try_from(options)?;
+
+    let copy_params = CopyParams {
+        format: format
+            .map(|f| {
+                Ok(match f.to_lowercase().as_str() {
+                    "text" => CopyFormat::Text,
+                    "csv" => CopyFormat::Csv,
+                    "binary" => CopyFormat::Binary,
+                    _ => bail!("unknown FORMAT: {}", f),
+                })
+            })
+            .transpose()?
+            .unwrap_or(CopyFormat::Text),
+        delimiter,
+        null,
+        escape,
+        quote,
+        header,
     };
-    if let Some(format) = options.format {
-        copy_params.format = match format.to_lowercase().as_str() {
-            "text" => CopyFormat::Text,
-            "csv" => CopyFormat::Csv,
-            "binary" => CopyFormat::Binary,
-            _ => bail!("unknown FORMAT: {}", format),
-        };
-    }
+
     if let CopyDirection::To = direction {
         if copy_params.delimiter.is_some() {
             bail!("COPY TO does not support DELIMITER option yet");

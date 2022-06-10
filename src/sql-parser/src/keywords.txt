@@ -95,6 +95,7 @@ Decorrelated
 Default
 Delete
 Delimited
+Delimiter
 Desc
 Details
 Discard
@@ -228,6 +229,7 @@ Protobuf
 Publication
 Pubnub
 Query
+Quote
 Raise
 Range
 Raw
