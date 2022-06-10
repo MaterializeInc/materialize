@@ -102,6 +102,14 @@ impl std::fmt::Display for Indeterminate {
 
 impl std::error::Error for Indeterminate {}
 
+/// An impl of PartialEq purely for convenience in tests and debug assertions.
+#[cfg(any(test, debug_assertions))]
+impl PartialEq for Indeterminate {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_string() == other.to_string()
+    }
+}
+
 /// An error coming from an underlying durability system (e.g. s3) or from
 /// invalid data received from one.
 #[derive(Debug)]

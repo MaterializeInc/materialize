@@ -2468,7 +2468,7 @@ impl<'a> Parser<'a> {
     fn parse_index_option(&mut self) -> Result<IndexOption<Raw>, ParserError> {
         let name = self.parse_index_option_name()?;
         let _ = self.consume_token(&Token::Eq);
-        let value = self.parse_with_option_value()?;
+        let value = self.parse_opt_with_option_value(false)?;
         Ok(IndexOption { name, value })
     }
 
@@ -2597,7 +2597,7 @@ impl<'a> Parser<'a> {
             SIZE => ReplicaOptionName::Size,
             _ => unreachable!(),
         };
-        let value = self.parse_with_option_value()?;
+        let value = self.parse_opt_with_option_value(false)?;
         Ok(ReplicaOption { name, value })
     }
 
@@ -2998,6 +2998,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_kw_options<T, F>(&mut self, f: F) -> Result<Vec<T>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
+        Ok(if self.parse_keyword(WITH) {
+            let expect_rparen = self.consume_token(&Token::LParen);
+            let o = self.parse_comma_separated(f)?;
+            if expect_rparen {
+                self.expect_token(&Token::RParen)?;
+            }
+            o
+        } else {
+            vec![]
+        })
+    }
+
     fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_with_options(true)
@@ -3021,21 +3037,32 @@ impl<'a> Parser<'a> {
     /// `KEY`. If require_equals is false, additionally support `KEY VALUE` (but still the others).
     fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption<Raw>, ParserError> {
         let key = self.parse_identifier()?;
+        let value = self.parse_opt_with_option_value(require_equals)?;
+        Ok(WithOption { key, value })
+    }
+
+    fn parse_opt_with_option_value(
+        &mut self,
+        require_equals: bool,
+    ) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         let has_eq = self.consume_token(&Token::Eq);
-        // No = was encountered and require_equals is false, so the next token might be
-        // a value and might not. The only valid things that indicate no value would
-        // be `)` for end-of-options or `,` for another-option. Either of those means
-        // there's no value, anything else means we expect a valid value.
-        let has_value = !matches!(self.peek_token(), Some(Token::RParen) | Some(Token::Comma));
+        // No = was encountered and require_equals is false, so the next token
+        // might be a value and might not. The only valid things that indicate
+        // no value would be `)` for end-of-options , `,` for another-option, or
+        // ';'/nothing for end-of-statement. Either of those means there's no
+        // value, anything else means we expect a valid value.
+        let has_value = !matches!(
+            self.peek_token(),
+            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None
+        );
         if has_value && !has_eq && require_equals {
             return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
         }
-        let value = if has_value {
+        Ok(if has_value {
             Some(self.parse_with_option_value()?)
         } else {
             None
-        };
-        Ok(WithOption { key, value })
+        })
     }
 
     fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
@@ -4766,13 +4793,28 @@ impl<'a> Parser<'a> {
         } else {
             TailRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_opt_with_options()?;
+        let options = self.parse_kw_options(Parser::parse_tail_options)?;
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail(TailStatement {
             relation,
             options,
             as_of,
         }))
+    }
+
+    fn parse_tail_options(&mut self) -> Result<TailOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
+            PROGRESS => TailOptionName::Progress,
+            SNAPSHOT => TailOptionName::Snapshot,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+
+        Ok(TailOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token

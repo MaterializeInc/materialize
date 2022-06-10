@@ -302,6 +302,18 @@ where
         Ok(Ok(batches))
     }
 
+    // NB: Unlike the other methods here, this one is read-only.
+    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
+        if PartialOrder::less_than(as_of, &self.collections.since) {
+            return Err(Since(self.collections.since.clone()));
+        }
+        let upper = self.collections.upper();
+        if PartialOrder::less_equal(&upper, as_of) {
+            return Ok(Err(Upper(upper)));
+        }
+        Ok(Ok(()))
+    }
+
     pub fn next_listen_batch(
         &self,
         frontier: &Antichain<T>,

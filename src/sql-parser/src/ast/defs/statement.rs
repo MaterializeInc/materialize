@@ -761,14 +761,16 @@ impl AstDisplay for IndexOptionName {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IndexOption<T: AstInfo> {
     pub name: IndexOptionName,
-    pub value: WithOptionValue<T>,
+    pub value: Option<WithOptionValue<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for IndexOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
-        f.write_str(" = ");
-        f.write_node(&self.value);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
     }
 }
 
@@ -998,14 +1000,16 @@ impl AstDisplay for ReplicaOptionName {
 /// An option in a `CREATE CLUSTER` or `CREATE CLUSTER REPLICA` statement.
 pub struct ReplicaOption<T: AstInfo> {
     pub name: ReplicaOptionName,
-    pub value: WithOptionValue<T>,
+    pub value: Option<WithOptionValue<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
-        f.write_str(" ");
-        f.write_node(&self.value);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
     }
 }
 
@@ -1671,11 +1675,44 @@ impl AstDisplay for RollbackStatement {
 }
 impl_display!(RollbackStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TailOptionName {
+    Snapshot,
+    Progress,
+}
+
+impl AstDisplay for TailOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            TailOptionName::Snapshot => f.write_str("SNAPSHOT"),
+            TailOptionName::Progress => f.write_str("PROGRESS"),
+        }
+    }
+}
+impl_display!(TailOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TailOption<T: AstInfo> {
+    pub name: TailOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for TailOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(TailOption);
+
 /// `TAIL`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TailStatement<T: AstInfo> {
     pub relation: TailRelation<T>,
-    pub options: Vec<WithOption<T>>,
+    pub options: Vec<TailOption<T>>,
     pub as_of: Option<AsOf<T>>,
 }
 

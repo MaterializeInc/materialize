@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::location::{BlobMulti, ExternalError, Indeterminate};
+use mz_persist::location::{BlobMulti, Indeterminate};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -164,22 +164,18 @@ where
     /// in the caller. See <http://sled.rs/errors.html> for details.
     ///
     /// SUBTLE! Unlike the other methods on WriteHandle, it is not always safe
-    /// to retry [ExternalError]s in compare_and_append (depends on the usage
+    /// to retry [Indeterminate]s in compare_and_append (depends on the usage
     /// pattern). We should be able to structure timestamp binding, source, and
-    /// sink code so it is always safe to retry [ExternalError]s, but SQL txns
+    /// sink code so it is always safe to retry [Indeterminate]s, but SQL txns
     /// will have to pass the error back to the user (or risk double committing
     /// the txn).
-    ///
-    /// TODO: This already retries [mz_persist::location::Determinate] errors,
-    /// so the signature could be changed to only return Indeterminate, but
-    /// leaving it as ExternalError for now to save churn on storage PR rebases.
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -205,7 +201,6 @@ where
         match self
             .compare_and_append_batch(&mut batch, expected_upper, new_upper)
             .await
-            .map_err(ExternalError::from)
         {
             ok @ Ok(Ok(Ok(()))) => ok,
             err @ _ => {
@@ -359,14 +354,10 @@ where
     /// in the caller. See <http://sled.rs/errors.html> for details.
     ///
     /// SUBTLE! Unlike the other methods, it is not always safe to retry
-    /// [ExternalError]s in compare_and_append (depends on the usage pattern).
+    /// [Indeterminate]s in compare_and_append (depends on the usage pattern).
     /// We should be able to structure timestamp binding, source, and sink code
-    /// so it is always safe to retry [ExternalError]s, but SQL txns will have
+    /// so it is always safe to retry [Indeterminate]s, but SQL txns will have
     /// to pass the error back to the user (or risk double committing the txn).
-    ///
-    /// TODO: This already retries [mz_persist::location::Determinate] errors,
-    /// so the signature could be changed to only return Indeterminate, but
-    /// leaving it as ExternalError for now to save churn on storage PR rebases.
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append_batch(
         &mut self,
@@ -451,7 +442,7 @@ where
     /// Uploads the given `updates` as one `Batch` to the blob store and returns
     /// a handle to the batch.
     #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
-    async fn batch<SB, KB, VB, TB, DB, I>(
+    pub async fn batch<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
         lower: Antichain<T>,

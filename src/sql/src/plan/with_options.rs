@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Tooling to handle `WITH` options and other, similar constructs.
+//! Provides tooling to handle `WITH` options.
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
@@ -17,15 +17,16 @@ use mz_repr::strconv;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
 
-pub trait ProcessOption<T>: Sized {
-    type Error;
-    fn try_from_value(v: T) -> Result<Self, Self::Error>;
+pub trait TryFromValue<T>: Sized {
+    fn try_from_value(v: T) -> Result<Self, anyhow::Error>;
 }
 
-impl ProcessOption<Value> for Interval {
-    type Error = anyhow::Error;
+pub trait ImpliedValue: Sized {
+    fn implied_value() -> Result<Self, anyhow::Error>;
+}
 
-    fn try_from_value(v: Value) -> Result<Self, Self::Error> {
+impl TryFromValue<Value> for Interval {
+    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
         Ok(match v {
             Value::Interval(IntervalValue { value, .. })
             | Value::Number(value)
@@ -35,13 +36,17 @@ impl ProcessOption<Value> for Interval {
     }
 }
 
+impl ImpliedValue for Interval {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide an interval value")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
 pub struct OptionalInterval(pub Option<Interval>);
 
-impl ProcessOption<Value> for OptionalInterval {
-    type Error = anyhow::Error;
-
-    fn try_from_value(v: Value) -> Result<Self, Self::Error> {
+impl TryFromValue<Value> for OptionalInterval {
+    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
         let inner = match v {
             Value::Null => None,
             v => {
@@ -58,10 +63,14 @@ impl ProcessOption<Value> for OptionalInterval {
     }
 }
 
-impl ProcessOption<Value> for String {
-    type Error = anyhow::Error;
+impl ImpliedValue for OptionalInterval {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide an interval value")
+    }
+}
 
-    fn try_from_value(v: Value) -> Result<Self, Self::Error> {
+impl TryFromValue<Value> for String {
+    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
         match v {
             Value::String(v) => Ok(v),
             _ => anyhow::bail!("cannot use value as string"),
@@ -69,10 +78,14 @@ impl ProcessOption<Value> for String {
     }
 }
 
-impl ProcessOption<Value> for bool {
-    type Error = anyhow::Error;
+impl ImpliedValue for String {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide a string value")
+    }
+}
 
-    fn try_from_value(v: Value) -> Result<Self, Self::Error> {
+impl TryFromValue<Value> for bool {
+    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
         match v {
             Value::Boolean(v) => Ok(v),
             _ => anyhow::bail!("cannot use value as boolean"),
@@ -80,9 +93,14 @@ impl ProcessOption<Value> for bool {
     }
 }
 
-impl ProcessOption<Value> for i32 {
-    type Error = anyhow::Error;
-    fn try_from_value(v: Value) -> Result<Self, Self::Error> {
+impl ImpliedValue for bool {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        Ok(true)
+    }
+}
+
+impl TryFromValue<Value> for i32 {
+    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
         match v {
             Value::Number(v) => v
                 .parse::<i32>()
@@ -92,9 +110,14 @@ impl ProcessOption<Value> for i32 {
     }
 }
 
-impl<V: ProcessOption<Value, Error = anyhow::Error>> ProcessOption<Value> for Vec<V> {
-    type Error = anyhow::Error;
-    fn try_from_value(v: Value) -> Result<Self, Self::Error> {
+impl ImpliedValue for i32 {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide an integer value")
+    }
+}
+
+impl<V: TryFromValue<Value>> TryFromValue<Value> for Vec<V> {
+    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
         match v {
             Value::Array(a) => {
                 let mut out = Vec::with_capacity(a.len());
@@ -111,14 +134,26 @@ impl<V: ProcessOption<Value, Error = anyhow::Error>> ProcessOption<Value> for Ve
     }
 }
 
-impl<V: ProcessOption<Value, Error = anyhow::Error>, T: AstInfo> ProcessOption<WithOptionValue<T>>
-    for V
-{
-    type Error = anyhow::Error;
-    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
+impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide an array value")
+    }
+}
+
+impl<V: TryFromValue<Value>, T: AstInfo> TryFromValue<WithOptionValue<T>> for V {
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, anyhow::Error> {
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
             _ => bail!("incompatible value types"),
+        }
+    }
+}
+
+impl<T, V: TryFromValue<T> + ImpliedValue> TryFromValue<Option<T>> for V {
+    fn try_from_value(v: Option<T>) -> Result<Self, anyhow::Error> {
+        match v {
+            Some(v) => V::try_from_value(v),
+            None => V::implied_value(),
         }
     }
 }
