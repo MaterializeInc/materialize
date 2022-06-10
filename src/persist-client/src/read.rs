@@ -102,6 +102,11 @@ where
 
     /// Attempt to pull out the next values of this iterator.
     ///
+    /// All times emitted will have been [advanced by] the [Self::as_of]
+    /// frontier.
+    ///
+    /// [advanced by]: Lattice::advance_by
+    ///
     /// The returned updates are not consolidated. In the presence of
     /// compaction, consolidation can take an unbounded amount of memory so it's
     /// not safe for persist to consolidate in the general case. Persist users
