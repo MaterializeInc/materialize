@@ -177,7 +177,7 @@ Now all the components should be up and running.
     SELECT * FROM historical_performance ORDER BY average_performance LIMIT 5;
     ```
 
-## Check Captura Data Change (CDC) in action
+### Check CDC in action
 
 1. Open your browser and go to the application `localhost:3000`
 
