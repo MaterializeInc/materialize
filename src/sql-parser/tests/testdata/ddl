@@ -438,11 +438,11 @@ CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' KEY FORMAT AVRO 
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [], format: KeyValue { key: Avro(InlineSchema { schema: Inline("long"), with_options: [] }), value: Avro(InlineSchema { schema: Inline("string"), with_options: [] }) }, envelope: Some(Upsert), if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (confluent_wire_format = false) ENVELOPE NONE
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false) ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (confluent_wire_format = false)
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (CONFLUENT WIRE FORMAT = false)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(InlineSchema { schema: Inline("string"), with_options: [WithOption { key: Ident("confluent_wire_format"), value: Some(Value(Boolean(false))) }] })), envelope: Some(None), if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka(KafkaSourceConnector { connector: Inline { broker: "zubat" }, topic: "hoothoot", key: None }), with_options: [], include_metadata: [], format: Bare(Avro(InlineSchema { schema: Inline("string"), with_options: [AvroSchemaOption { name: ConfluentWireFormat, value: Some(Value(Boolean(false))) }] })), envelope: Some(None), if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
