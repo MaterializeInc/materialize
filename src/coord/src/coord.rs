@@ -1056,7 +1056,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
         }
-
         let appends = appends
             .into_iter()
             .map(|(id, updates)| (id, updates, advance_to))
@@ -1187,7 +1186,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         Some((tx, session)),
                     )
                     .await
-                    .expect("sinks should be validated by sequence_create_sink")
+                    .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
                     // creating the connector. Report to the client that
@@ -1206,10 +1205,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         |_| Ok(()),
                         tx,
                         Err(e),
-                        |e| Err(e),
+                        Err,
                     )
                     .await
-                    .expect("deleting placeholder sink cannot fail")
+                    .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
                     // attempting to create the connector, in which case we don't need to do
@@ -1883,16 +1882,9 @@ impl<S: Append + 'static> Coordinator<S> {
         let ops = self.catalog.drop_temp_item_ops(session.conn_id());
         match client_response {
             Some((tx, response)) => {
-                self.client_catalog_transact(
-                    session,
-                    ops,
-                    |_| Ok(()),
-                    tx,
-                    Ok(response),
-                    |e| Err(e),
-                )
-                .await
-                .expect("unable to drop temporary items for conn_id");
+                self.client_catalog_transact(session, ops, |_| Ok(()), tx, Ok(response), Err)
+                    .await
+                    .expect("unable to drop temporary items for conn_id");
             }
             None => {
                 self.system_catalog_transact(Some(&session), ops, |_| Ok(()))
@@ -1967,7 +1959,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     txn,
                     tx,
                     Ok(ExecuteResponse::CreatedSink { existed: false }),
-                    |e| Err(e),
+                    Err,
                 )
                 .await
             }
@@ -2010,6 +2002,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
             }
             Plan::CreateSecret(plan) => self.sequence_create_secret(tx, session, plan).await,
+            Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateSink(plan) => {
                 self.sequence_create_sink(tx, session, plan, depends_on)
                     .await
@@ -2042,7 +2035,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
             }
             Plan::DropItems(plan) => self.sequence_drop_items(tx, session, plan).await,
-            Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
             }
@@ -2404,7 +2396,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     |_| Ok(()),
                     tx,
                     Ok(ExecuteResponse::CreatedRole),
-                    |e| Err(e),
+                    Err,
                 )
                 .await;
             }
@@ -2464,7 +2456,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 |_| Ok(()),
                 tx,
                 Ok(ExecuteResponse::CreatedComputeInstance { existed: false }),
-                |e| Err(e),
+                Err,
             )
             .await
         {
@@ -2521,7 +2513,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 |_| Ok(()),
                 tx,
                 Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false }),
-                |e| Err(e),
+                Err,
             )
             .await
         {
@@ -3257,7 +3249,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
             tx,
             Ok(ExecuteResponse::CreatedType),
-            |e| Err(e),
+            Err,
         )
         .await;
     }
@@ -3299,7 +3291,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
             tx,
             Ok(ExecuteResponse::DroppedDatabase),
-            |e| Err(e),
+            Err,
         )
         .await;
     }
@@ -3317,7 +3309,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
             tx,
             Ok(ExecuteResponse::DroppedSchema),
-            |e| Err(e),
+            Err,
         )
         .await;
     }
@@ -3339,7 +3331,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
             tx,
             Ok(ExecuteResponse::DroppedRole),
-            |e| Err(e),
+            Err,
         )
         .await;
     }
@@ -3374,7 +3366,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
             tx,
             Ok(ExecuteResponse::DroppedComputeInstance),
-            |e| Err(e),
+            Err,
         )
         .await;
         for (instance_id, replicas) in instance_replica_drop_sets {
@@ -3425,7 +3417,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
             tx,
             Ok(ExecuteResponse::DroppedComputeInstanceReplicas),
-            |e| Err(e),
+            Err,
         )
         .await;
 
@@ -3458,7 +3450,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         };
-        self.client_catalog_transact(session, ops, |_| Ok(()), tx, Ok(response), |e| Err(e))
+        self.client_catalog_transact(session, ops, |_| Ok(()), tx, Ok(response), Err)
             .await;
     }
 
@@ -3561,10 +3553,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
         match result {
             Ok(Some(writes)) => self.submit_write(PendingWriteTxn::User {
-                writes: writes
-                    .into_iter()
-                    .map(|write| Write::WriteOp(write))
-                    .collect(),
+                writes: writes.into_iter().map(|write| write.into()).collect(),
                 response,
                 client_transmitter: tx,
                 session,
@@ -4975,7 +4964,7 @@ impl<S: Append + 'static> Coordinator<S> {
             |_| Ok(()),
             tx,
             Ok(ExecuteResponse::AlteredObject(plan.object_type)),
-            |e| Err(e),
+            Err,
         )
         .await;
     }
@@ -5073,14 +5062,14 @@ impl<S: Append + 'static> Coordinator<S> {
         let result = self.catalog_transact_inner(Some(&session), ops, f).await;
         let (builtin_updates, result) = match result {
             Ok((builtin_updates, result)) => (Ok(builtin_updates), Some(result)),
-            Err(e) => ((Err(e), None)),
+            Err(e) => (Err(e), None),
         };
 
         match builtin_updates {
             Ok(builtin_updates) => self.submit_write(PendingWriteTxn::User {
                 writes: builtin_updates
                     .into_iter()
-                    .map(|builtin_updates| Write::BuiltinTableUpdate(builtin_updates))
+                    .map(|builtin_updates| builtin_updates.into())
                     .collect(),
                 client_transmitter: tx,
                 response,
@@ -5104,7 +5093,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let result = self.catalog_transact_inner(session, ops, f).await;
         let (builtin_updates, result) = match result {
             Ok((builtin_updates, result)) => (Some(builtin_updates), Ok(result)),
-            Err(e) => ((None, Err(e))),
+            Err(e) => (None, Err(e)),
         };
 
         if let Some(builtin_updates) = builtin_updates {
