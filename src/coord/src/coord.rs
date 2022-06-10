@@ -933,10 +933,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     self.message_compute_instance_status(status).await
                 }
             }
-
-            if let Some(timestamp) = self.global_timeline.should_advance_to() {
-                self.advance_local_inputs(timestamp).await;
-            }
         }
     }
 
@@ -6324,7 +6320,7 @@ mod timeline {
     /// and strictly less than all subsequently emitted write timestamps.
     pub struct TimestampOracle<T> {
         state: TimestampOracleState<T>,
-        advance_to: Option<T>,
+        _advance_to: Option<T>,
         next: Box<dyn Fn() -> T>,
     }
 
@@ -6338,7 +6334,7 @@ mod timeline {
         {
             Self {
                 state: TimestampOracleState::Writing(initially.clone()),
-                advance_to: Some(initially),
+                _advance_to: Some(initially),
                 next: Box::new(next),
             }
         }
@@ -6358,7 +6354,7 @@ mod timeline {
                     }
                     assert!(ts.less_than(&next));
                     self.state = TimestampOracleState::Writing(next.clone());
-                    self.advance_to = Some(next.clone());
+                    self._advance_to = Some(next.clone());
                     next
                 }
             }
@@ -6374,7 +6370,7 @@ mod timeline {
                     // Avoid rust borrow complaint.
                     let ts = ts.clone();
                     self.state = TimestampOracleState::Reading(ts.clone());
-                    self.advance_to = Some(ts.step_forward());
+                    self._advance_to = Some(ts.step_forward());
                     ts
                 }
             }
@@ -6388,7 +6384,7 @@ mod timeline {
             match &self.state {
                 TimestampOracleState::Writing(ts) => {
                     if ts.less_than(&lower_bound) {
-                        self.advance_to = Some(lower_bound.clone());
+                        self._advance_to = Some(lower_bound.clone());
                         self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
@@ -6396,7 +6392,7 @@ mod timeline {
                     if ts.less_than(&lower_bound) {
                         // This may result in repetition in the case `lower_bound == ts + 1`.
                         // This is documented as fine, and concerned users can protect themselves.
-                        self.advance_to = Some(lower_bound.clone());
+                        self._advance_to = Some(lower_bound.clone());
                         self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
@@ -6406,8 +6402,8 @@ mod timeline {
         ///
         /// This method may produce the same value multiple times, and should not be used as a test for whether
         /// a write-to-read transition has occurred, so much as an advisory signal that write capabilities can advance.
-        pub fn should_advance_to(&mut self) -> Option<T> {
-            self.advance_to.take()
+        pub fn _should_advance_to(&mut self) -> Option<T> {
+            self._advance_to.take()
         }
     }
 }
