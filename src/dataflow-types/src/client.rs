@@ -62,6 +62,9 @@ pub type ComputeInstanceId = i64;
 /// An abstraction allowing us to name different replicas.
 pub type ReplicaId = i64;
 
+/// Identifier of a process within a replica.
+pub type ProcessId = i64;
+
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConcreteComputeInstanceReplicaConfig {

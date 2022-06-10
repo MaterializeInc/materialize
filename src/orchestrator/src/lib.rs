@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use futures_core::stream::BoxStream;
 use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -57,6 +59,29 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
+
+    /// Watch for status changes of all known services.
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;
+}
+
+/// An event describing a status change of an orchestrated service.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceEvent {
+    pub service_id: String,
+    pub process_id: i64,
+    pub status: ServiceStatus,
+    pub time: DateTime<Utc>,
+}
+
+/// Describes the status of an orchestrated service.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum ServiceStatus {
+    /// Service is ready to accept requests.
+    Ready,
+    /// Service is not ready to accept requests.
+    NotReady,
+    /// Service status is unknown.
+    Unknown,
 }
 
 /// Describes a running service managed by an `Orchestrator`.

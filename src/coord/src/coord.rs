@@ -76,6 +76,7 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
+use futures::StreamExt;
 use itertools::Itertools;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -90,7 +91,7 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::{
-    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ReadPolicy,
+    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent, ReadPolicy,
 };
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
@@ -181,6 +182,7 @@ pub enum Message {
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
     GroupCommit,
+    ComputeInstanceStatus(ComputeInstanceEvent),
 }
 
 #[derive(Derivative)]
@@ -578,9 +580,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
-            for (replica_id, config) in instance.replicas_by_id.clone() {
+            for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.dataflow_client
-                    .add_replica_to_instance(instance.id, replica_id, config)
+                    .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -821,6 +823,23 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         }
 
+        // Spawn a watcher task that listens for compute service status changes and
+        // reports them to the coordinator.
+        task::spawn(|| "compute_service_watcher", {
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let mut events = self.dataflow_client.watch_compute_services();
+            async move {
+                while let Some(event) = events.next().await {
+                    if internal_cmd_tx
+                        .send(Message::ComputeInstanceStatus(event))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+
         loop {
             let msg = select! {
                 // Order matters here. We want to process internal commands
@@ -883,6 +902,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Message::GroupCommit => {
                     self.try_group_commit().await;
+                }
+                Message::ComputeInstanceStatus(status) => {
+                    self.message_compute_instance_status(status).await
                 }
             }
 
@@ -1373,6 +1395,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
         }
+    }
+
+    async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
+        self.catalog_transact(
+            None,
+            vec![catalog::Op::UpdateComputeInstanceStatus { event }],
+            |_| Ok(()),
+        )
+        .await
+        .expect("updating compute instance status cannot fail");
     }
 
     async fn handle_statement(
@@ -2308,9 +2340,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .create_instance(instance.id, instance.logging.clone())
             .await
             .unwrap();
-        for (replica_id, config) in instance.replicas_by_id.clone() {
+        for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.dataflow_client
-                .add_replica_to_instance(instance.id, replica_id, config)
+                .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -3042,9 +3074,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
-            for (replica_id, config) in replicas {
+            for (replica_id, replica) in replicas {
                 self.dataflow_client
-                    .drop_replica(instance_id, replica_id, config)
+                    .drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3085,9 +3117,9 @@ impl<S: Append + 'static> Coordinator<S> {
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
 
-        for (compute_id, replica_id, config) in replicas_to_drop {
+        for (compute_id, replica_id, replica) in replicas_to_drop {
             self.dataflow_client
-                .drop_replica(compute_id, replica_id, config)
+                .drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }

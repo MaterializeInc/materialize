@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use itertools::Itertools;
-use mz_stash::{Append, Postgres, Sqlite};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -26,8 +25,9 @@ use tracing::{info, trace};
 
 use mz_audit_log::{EventDetails, EventType, FullNameV1, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_dataflow_types::client::controller::ComputeInstanceEvent;
 use mz_dataflow_types::client::{
-    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
@@ -58,6 +58,7 @@ use mz_sql::plan::{
     Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
+use mz_stash::{Append, Postgres, Sqlite};
 use mz_transform::Optimizer;
 use uuid::Uuid;
 
@@ -516,6 +517,10 @@ impl CatalogState {
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
     ) {
+        let replica = ComputeInstanceReplica {
+            config,
+            process_status: HashMap::new(),
+        };
         let compute_instance = self.compute_instances_by_id.get_mut(&on_instance).unwrap();
         assert!(compute_instance
             .replica_id_by_name
@@ -523,8 +528,48 @@ impl CatalogState {
             .is_none());
         assert!(compute_instance
             .replicas_by_id
-            .insert(replica_id, config)
+            .insert(replica_id, replica)
             .is_none());
+    }
+
+    /// Try inserting/updating the status of a compute instance process as
+    /// described by the given event.
+    ///
+    /// This method returns `true` if the insert was successful. It returns
+    /// `false` if the insert was unsuccessful, i.e., the given compute instance
+    /// replica is not found.
+    ///
+    /// This treatment of non-existing replicas allows us to gracefully handle
+    /// scenarios where we receive status updates for replicas that we have
+    /// already removed from the catalog.
+    fn try_insert_compute_instance_status(&mut self, event: ComputeInstanceEvent) -> bool {
+        self.compute_instances_by_id
+            .get_mut(&event.instance_id)
+            .and_then(|instance| instance.replicas_by_id.get_mut(&event.replica_id))
+            .map(|replica| replica.process_status.insert(event.process_id, event))
+            .is_some()
+    }
+
+    /// Try getting the status of the given compute instance process.
+    ///
+    /// This method returns `None` if no status was found for the given
+    /// compute instance process because:
+    ///   * The given compute instance replica is not found. This can occur
+    ///     if we already dropped the replica from the catalog, but we still
+    ///     receive status updates.
+    ///   * The given replica process is not found. This is the case when we
+    ///     receive the first status update for a new replica process.
+    fn try_get_compute_instance_status(
+        &self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        process_id: ProcessId,
+    ) -> Option<ComputeInstanceEvent> {
+        self.compute_instances_by_id
+            .get(&instance_id)
+            .and_then(|instance| instance.replicas_by_id.get(&replica_id))
+            .and_then(|replica| replica.process_status.get(&process_id))
+            .cloned()
     }
 
     /// Gets the schema map for the database matching `database_spec`.
@@ -946,7 +991,13 @@ pub struct ComputeInstance {
     // does not include introspection source indexes
     pub indexes: HashSet<GlobalId>,
     pub replica_id_by_name: HashMap<String, ReplicaId>,
-    pub replicas_by_id: HashMap<ReplicaId, ConcreteComputeInstanceReplicaConfig>,
+    pub replicas_by_id: HashMap<ReplicaId, ComputeInstanceReplica>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ComputeInstanceReplica {
+    pub config: ConcreteComputeInstanceReplicaConfig,
+    pub process_status: HashMap<ProcessId, ComputeInstanceEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -2473,6 +2524,9 @@ impl<S: Append> Catalog<S> {
                 to_name: QualifiedObjectName,
                 to_item: CatalogItem,
             },
+            UpdateComputeInstanceStatus {
+                event: ComputeInstanceEvent,
+            },
         }
 
         let drop_ids: HashSet<_> = ops
@@ -2729,15 +2783,25 @@ impl<S: Append> Catalog<S> {
                 }
                 Op::DropComputeInstanceReplica { name, compute_id } => {
                     tx.remove_compute_instance_replica(&name, compute_id)?;
+
+                    let instance = &self.state.compute_instances_by_id[&compute_id];
+                    let replica_id = instance.replica_id_by_name[&name];
+                    let replica = &instance.replicas_by_id[&replica_id];
+                    for process_id in replica.process_status.keys() {
+                        let update = self.state.pack_compute_instance_status_update(
+                            compute_id,
+                            replica_id,
+                            *process_id,
+                            -1,
+                        );
+                        builtin_table_updates.push(update);
+                    }
+
                     builtin_table_updates.push(
                         self.state
                             .pack_compute_instance_replica_update(compute_id, &name, -1),
                     );
-                    let instance = self
-                        .state
-                        .compute_instances_by_id
-                        .get(&compute_id)
-                        .expect("must exist");
+
                     let details = EventDetails::DropComputeInstanceReplicaV1(
                         mz_audit_log::DropComputeInstanceReplicaV1 {
                             cluster_name: instance.name.clone(),
@@ -2752,6 +2816,7 @@ impl<S: Append> Catalog<S> {
                         ObjectType::ClusterReplica,
                         details,
                     )?;
+
                     vec![Action::DropComputeInstanceReplica { name, compute_id }]
                 }
                 Op::DropItem(id) => {
@@ -2876,6 +2941,30 @@ impl<S: Append> Catalog<S> {
                         to_item: item,
                     });
                     actions
+                }
+                Op::UpdateComputeInstanceStatus { event } => {
+                    // When we receive the first status update for a given
+                    // replica process, there is no entry in the builtin table
+                    // yet, so we must make sure to not try to delete one.
+                    let status_known = self
+                        .state
+                        .try_get_compute_instance_status(
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                        )
+                        .is_some();
+                    if status_known {
+                        let update = self.state.pack_compute_instance_status_update(
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                            -1,
+                        );
+                        builtin_table_updates.push(update);
+                    }
+
+                    vec![Action::UpdateComputeInstanceStatus { event }]
                 }
             });
         }
@@ -3127,6 +3216,22 @@ impl<S: Append> Catalog<S> {
                     schema.items.insert(new_entry.name().item.clone(), id);
                     state.entry_by_id.insert(id, new_entry.clone());
                     builtin_table_updates.extend(state.pack_item_update(id, 1));
+                }
+
+                Action::UpdateComputeInstanceStatus { event } => {
+                    // It is possible that we receive a status update for a
+                    // replica that has already been dropped from the catalog.
+                    // In this case, `try_insert_compute_instance_status`
+                    // returns `false` and we ignore the event.
+                    if state.try_insert_compute_instance_status(event.clone()) {
+                        let update = state.pack_compute_instance_status_update(
+                            event.instance_id,
+                            event.replica_id,
+                            event.process_id,
+                            1,
+                        );
+                        builtin_table_updates.push(update);
+                    }
                 }
             }
         }
@@ -3381,6 +3486,9 @@ pub enum Op {
         id: GlobalId,
         current_full_name: FullObjectName,
         to_name: String,
+    },
+    UpdateComputeInstanceStatus {
+        event: ComputeInstanceEvent,
     },
 }
 
