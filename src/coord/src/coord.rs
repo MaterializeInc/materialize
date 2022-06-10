@@ -1886,16 +1886,15 @@ impl<S: Append + 'static> Coordinator<S> {
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, mut session: Session) {
         self.clear_transaction(&mut session).await;
-        self.catalog
-            .drop_temporary_schema(session.conn_id())
-            .expect("unable to drop temporary schema");
-        self.active_conns.remove(&session.conn_id());
-        self.internal_cmd_tx
-            .send(Message::Command(Command::RemovePendingPeeks {
-                conn_id: session.conn_id(),
-            }))
-            .expect("sending to internal_cmd_tx cannot fail");
+        let conn_id = session.conn_id();
         self.drop_temp_items(None, session).await;
+        self.catalog
+            .drop_temporary_schema(conn_id)
+            .expect("unable to drop temporary schema");
+        self.active_conns.remove(&conn_id);
+        self.internal_cmd_tx
+            .send(Message::Command(Command::RemovePendingPeeks { conn_id }))
+            .expect("sending to internal_cmd_tx cannot fail");
     }
 
     /// Handle removing in-progress transaction state regardless of the end action
