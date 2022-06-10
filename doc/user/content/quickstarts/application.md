@@ -16,6 +16,8 @@ aliases:
     alt="Materialize real-time application"
 >}}
 
+<figcaption style='margin: auto; color: gray; width: fit-content;'>Real-time application in action (localhost:3000)</figcaption>
+
 ## Overview
 
 An infrastructure working safe and healthy is critical. We, developers, know this very well. In other businesses, there are different vital infrastructures, such as mobile antennas (4G, 5G) in telecommunications companies. If there is an issue, then addressing and fixing it quickly is a must; otherwise, customers will complain or, even worse, churn.
@@ -102,7 +104,8 @@ GraphQL with sockets is one of the many options available. [Graphql-ws](https://
 
 The React front-end communicates using one of the most known clients for the framework, the [Apollo client](https://www.apollographql.com/docs/react/), with a custom [Link](https://github.com/MaterializeInc/demos/blob/main/antennas-postgres/frontend/src/link.ts) to support the subscriptions.
 
-A microservice communicates to the GraphQL back-end using `graphql-ws` client with the NodeJS `ws` socket library.
+A [microservice](https://github.com/MaterializeInc/demos/blob/main/antennas-postgres/microservice/src/app.ts) communicates to the GraphQL back-end using `graphql-ws` client with the NodeJS `ws` socket library. When it detects
+an unhealthy antenna will deploy a set of helper antennas.
 
 ## Run the demo
 
@@ -145,64 +148,66 @@ Now all the components should be up and running.
     psql postgresql://materialize:materialize@localhost:6875/materialize
     ```
 
-1. Within the CLI, check how data flows for an antenna using `TAIL`
+1. Within the CLI, check how an antenna's performance is doing using `TAIL`
 
     ```sql
     COPY ( TAIL ( SELECT * FROM last_half_minute_performance_per_antenna WHERE antenna_id = 1 )) TO STDOUT;
     ```
 
-1. Check the most unhealthy antenna
+1. Check the average performance per antenna since they are on:
 
     ```sql
-        SELECT *
-        FROM ...
+    SELECT antenna_id, AVG(performance) as average_performance
+    FROM antennas_performance
+    GROUP BY antenna_id;
     ```
 
 1. Turn the query into a Materialized View:
 
     ```sql
-        CREATE MATERIALIZED VIEW most_unhealthy AS
-        SELECT * FROM query01;
+    CREATE MATERIALIZED VIEW historical_performance AS
+    SELECT antenna_id, AVG(performance) as average_performance
+    FROM antennas_performance
+    GROUP BY antenna_id;
     ```
 
 1. Check the results:
 
     ```sql
-    SELECT * FROM most_unhealthy;
+    SELECT * FROM historical_performance ORDER BY average_performance LIMIT 5;
     ```
 
-## Check how fast it reacts
+## Check Captura Data Change (CDC) in action
+
+1. Open your browser and go to the application `localhost:3000`
 
 1. Launch the `psql` shell against the Postgres source by running:
 
     ```shell
-        psql postgresql://postgres:pg_password@localhost:5432/postgres
+    psql postgresql://postgres:pg_password@localhost:5432/postgres
     ```
 
-1. Check all the available antennas
+1. Check the main antennas data
 
     ```sql
-    SELECT * FROM query01;
+    SELECT * FROM antennas LIMIT 7;
     ```
 
-1. Delete the most unhealthy antenna
+1. Delete one antenna while keeping an eye on the application and see how it disappears
 
     ```sql
-    DELETE FROM antennas WHERE antenna_id = 4;
+    DELETE FROM antennas WHERE antenna_id = 1;
     ```
 
-1. Check in the front how it dissapeared
+### Check the stack health
 
-### Check the infrastructure
+1. Open your browser and head to `localhost:3001`
 
-1. Head to `localhost:3001`
-
-1. Check memory utilization
-
-1. Check consumption
-
-[Grafana picture]
-
+1. Check uptime and SQL Query Timing
+{{< figure
+    src="https://materialize.com/wp-content/uploads/2022/06/Screen-Shot-2022-06-10-at-15.30.43.png"
+    alt="Grafana health check"
+>}}
 ## Recap
 
 In this demo, we saw:
