@@ -76,20 +76,22 @@ impl SecretsReader {
 
     /// Returns the contents of a secret identified by GlobalId
     ///
-    /// This `read` will return a complete version of the secret. It will not return, e.g., one block from v1 and
-    /// another from v2.
+    /// This `read` will return a complete version of the secret. It will not
+    /// return, e.g., one block from v1 and another from v2.
     ///
-    /// - On Linux / OSX filesystems, `File::open` will hold a handle open so that even if the file is deleted, we still
-    ///   continue to read from it.  This means a SecretOp::Delete followed by a SecretOp::Ensure can never "swap out"
-    ///   data mid-`read_to_end`.
+    /// - On Linux / OSX filesystems, `File::open` will hold a handle open so
+    ///   that even if the file is deleted, we still continue to read from it.
+    ///   This means a SecretOp::Delete followed by a SecretOp::Ensure can never
+    ///   "swap out" data mid-`read_to_end`.
     /// - We do not allow editing secrets which _would_ expose us to this issue.
     ///
-    /// (N.B. Were we ever to run with Windows / NTFS, this would also work properly _and_ mid-read edits would be
-    /// disallowed)
+    /// (N.B. Were we ever to run with Windows / NTFS, this would also work
+    /// properly _and_ mid-read edits would be disallowed)
     pub fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
         let file_path = self.config.mount_path.join(id.to_string());
 
-        // Inlined the std::fs::read impl because correctness requires and impl that holds the same `File` handle open
+        // Use a `File` handle directly to make clear that we are upholding our documented guarantee
+        // of opening and reading from the file only once.
         let mut file = File::open(file_path)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;

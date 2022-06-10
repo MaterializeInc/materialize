@@ -156,7 +156,7 @@ pub fn options(
                 SqlValueOrSecret::Secret(id.clone())
             }
             Some(WithOptionValue::Secret(_)) => {
-                bail!("SECRET option {} must be Object", option.key)
+                panic!("SECRET option {} must be Object", option.key)
             }
             None => {
                 bail!("option {} requires a value", option.key);
