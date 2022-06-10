@@ -2468,7 +2468,7 @@ impl<'a> Parser<'a> {
     fn parse_index_option(&mut self) -> Result<IndexOption<Raw>, ParserError> {
         let name = self.parse_index_option_name()?;
         let _ = self.consume_token(&Token::Eq);
-        let value = self.parse_with_option_value()?;
+        let value = self.parse_opt_with_option_value(false)?;
         Ok(IndexOption { name, value })
     }
 
@@ -2597,7 +2597,7 @@ impl<'a> Parser<'a> {
             SIZE => ReplicaOptionName::Size,
             _ => unreachable!(),
         };
-        let value = self.parse_with_option_value()?;
+        let value = self.parse_opt_with_option_value(false)?;
         Ok(ReplicaOption { name, value })
     }
 
@@ -3021,21 +3021,32 @@ impl<'a> Parser<'a> {
     /// `KEY`. If require_equals is false, additionally support `KEY VALUE` (but still the others).
     fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption<Raw>, ParserError> {
         let key = self.parse_identifier()?;
+        let value = self.parse_opt_with_option_value(require_equals)?;
+        Ok(WithOption { key, value })
+    }
+
+    fn parse_opt_with_option_value(
+        &mut self,
+        require_equals: bool,
+    ) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
         let has_eq = self.consume_token(&Token::Eq);
-        // No = was encountered and require_equals is false, so the next token might be
-        // a value and might not. The only valid things that indicate no value would
-        // be `)` for end-of-options or `,` for another-option. Either of those means
-        // there's no value, anything else means we expect a valid value.
-        let has_value = !matches!(self.peek_token(), Some(Token::RParen) | Some(Token::Comma));
+        // No = was encountered and require_equals is false, so the next token
+        // might be a value and might not. The only valid things that indicate
+        // no value would be `)` for end-of-options , `,` for another-option, or
+        // ';'/nothing for end-of-statement. Either of those means there's no
+        // value, anything else means we expect a valid value.
+        let has_value = !matches!(
+            self.peek_token(),
+            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None
+        );
         if has_value && !has_eq && require_equals {
             return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
         }
-        let value = if has_value {
+        Ok(if has_value {
             Some(self.parse_with_option_value()?)
         } else {
             None
-        };
-        Ok(WithOption { key, value })
+        })
     }
 
     fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {

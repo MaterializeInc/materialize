@@ -761,14 +761,16 @@ impl AstDisplay for IndexOptionName {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IndexOption<T: AstInfo> {
     pub name: IndexOptionName,
-    pub value: WithOptionValue<T>,
+    pub value: Option<WithOptionValue<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for IndexOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
-        f.write_str(" = ");
-        f.write_node(&self.value);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
     }
 }
 
@@ -998,14 +1000,16 @@ impl AstDisplay for ReplicaOptionName {
 /// An option in a `CREATE CLUSTER` or `CREATE CLUSTER REPLICA` statement.
 pub struct ReplicaOption<T: AstInfo> {
     pub name: ReplicaOptionName,
-    pub value: WithOptionValue<T>,
+    pub value: Option<WithOptionValue<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ReplicaOption<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
-        f.write_str(" ");
-        f.write_node(&self.value);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
     }
 }
 

@@ -252,6 +252,9 @@ SELECT COUNT(name) FROM mz_indexes;
 ----
 17
 
+statement error nvalid SIZE: must provide a string value
+CREATE CLUSTER REPLICA default.size_1 SIZE;
+
 statement ok
 CREATE CLUSTER REPLICA default.size_1 SIZE '1';
 
