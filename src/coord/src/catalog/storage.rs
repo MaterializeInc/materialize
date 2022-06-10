@@ -150,19 +150,25 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                 )],
                     )
                     .await?;
-                COLLECTION_COMPUTE_INSTANCE_REPLICAS.upsert(
-                    stash,
-                    vec![
-                        (
-                            ComputeInstanceReplicaKey { id: 1},
+                COLLECTION_COMPUTE_INSTANCE_REPLICAS
+                    .upsert(
+                        stash,
+                        vec![(
+                            ComputeInstanceReplicaKey { id: 1 },
                             ComputeInstanceReplicaValue {
                                 compute_instance_id: 1,
                                 name: "default_replica".into(),
-                                config: "{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1}}}".into(),
-                            }
-                        )
-                    ]
-                ).await?;
+                                config: "{ \
+                                    \"Managed\": { \
+                                        \"size_config\": {\"scale\": 1, \"workers\": 1}, \
+                                        \"size_name\": \"default\" \
+                                    } \
+                                }"
+                                .into(),
+                            },
+                        )],
+                    )
+                    .await?;
                 Ok(())
             })
         },

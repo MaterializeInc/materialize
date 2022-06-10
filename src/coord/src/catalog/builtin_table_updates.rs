@@ -125,12 +125,10 @@ impl CatalogState {
 
         let (size, az) = match &replica.config {
             ConcreteComputeInstanceReplicaConfig::Managed {
-                size_config,
+                size_config: _,
+                size_name,
                 availability_zone,
-            } => (
-                Some(format!("{}-{}", size_config.scale, size_config.workers)),
-                availability_zone.as_deref(),
-            ),
+            } => (Some(&**size_name), availability_zone.as_deref()),
             ConcreteComputeInstanceReplicaConfig::Remote { .. } => (None, None),
         };
 
@@ -140,7 +138,7 @@ impl CatalogState {
                 Datum::Int64(compute_instance_id),
                 Datum::Int64(id),
                 Datum::String(&name),
-                Datum::from(size.as_deref()),
+                Datum::from(size),
                 Datum::from(az),
             ]),
             diff,

@@ -235,6 +235,7 @@ where
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config,
+                size_name: _,
                 availability_zone,
             } => {
                 let OrchestratorConfig {
@@ -328,8 +329,9 @@ where
         config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let ConcreteComputeInstanceReplicaConfig::Managed {
-            size_config: _size_config,
-            availability_zone: _az,
+            size_config: _,
+            size_name: _,
+            availability_zone: _,
         } = config
         {
             let OrchestratorConfig { orchestrator, .. } = &self.orchestrator;
