@@ -23,10 +23,11 @@ use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sources::SourceConnector;
+use mz_dataflow_types::sources::{SourceConnector, StringOrSecret};
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
+use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
@@ -186,6 +187,9 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// this means the Unix epoch. This can safely be mocked in tests and start
     /// at 0.
     fn now(&self) -> EpochMillis;
+
+    /// Returns a secrets reader associated with the catalog.
+    fn secrets_reader(&self) -> &SecretsReader;
 }
 
 /// Configuration associated with a catalog.
@@ -272,7 +276,7 @@ pub trait CatalogConnector {
     fn uri(&self) -> String;
 
     /// Returns the options associated with this connector as a Vec, if the type does not support options or none were specified this will be empty
-    fn options(&self) -> std::collections::BTreeMap<String, String>;
+    fn options(&self) -> std::collections::BTreeMap<String, StringOrSecret>;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -694,6 +698,10 @@ impl SessionCatalog for DummyCatalog {
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         name
+    }
+
+    fn secrets_reader(&self) -> &SecretsReader {
+        unimplemented!()
     }
 }
 

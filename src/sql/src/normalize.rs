@@ -15,24 +15,26 @@
 //! [`ast`]: crate::ast
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use anyhow::{bail, Context};
 use itertools::Itertools;
 
 use mz_dataflow_types::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
-use mz_repr::ColumnName;
+use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AstInfo, CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op,
-    Query, Statement, TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName,
-    Value, ViewDefinition, WithOption, WithOptionValue,
+    CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
+    TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
 };
 
 use crate::names::{
     Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
+    ResolvedObjectName,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
@@ -107,23 +109,54 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
     Ok(&op.op)
 }
 
+#[derive(Debug, Clone)]
+pub enum SqlValueOrSecret {
+    Value(Value),
+    Secret(GlobalId),
+}
+
+impl fmt::Display for SqlValueOrSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SqlValueOrSecret::Value(v) => write!(f, "{}", v),
+            SqlValueOrSecret::Secret(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl From<SqlValueOrSecret> for Option<Value> {
+    fn from(s: SqlValueOrSecret) -> Self {
+        match s {
+            SqlValueOrSecret::Value(v) => Some(v),
+            SqlValueOrSecret::Secret(_id) => None,
+        }
+    }
+}
+
 /// Normalizes a list of `WITH` options.
 ///
 /// # Errors
 /// - If any `WithOption`'s `value` is `None`. You can prevent generating these
 ///   values during parsing.
 /// - If any `WithOption` has a value of type `WithOptionValue::Secret`.
-pub fn options<T: AstInfo>(
-    options: &[WithOption<T>],
-) -> Result<BTreeMap<String, Value>, anyhow::Error> {
+pub fn options(
+    options: &[WithOption<Aug>],
+) -> Result<BTreeMap<String, SqlValueOrSecret>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for option in options {
         let value = match &option.value {
-            Some(WithOptionValue::Value(value)) => value.clone(),
-            Some(WithOptionValue::Ident(id)) => Value::String(ident(id.clone())),
-            Some(WithOptionValue::DataType(data_type)) => Value::String(data_type.to_ast_string()),
+            Some(WithOptionValue::Value(value)) => SqlValueOrSecret::Value(value.clone()),
+            Some(WithOptionValue::Ident(id)) => {
+                SqlValueOrSecret::Value(Value::String(ident(id.clone())))
+            }
+            Some(WithOptionValue::DataType(data_type)) => {
+                SqlValueOrSecret::Value(Value::String(data_type.to_ast_string()))
+            }
+            Some(WithOptionValue::Secret(ResolvedObjectName::Object { id, .. })) => {
+                SqlValueOrSecret::Secret(id.clone())
+            }
             Some(WithOptionValue::Secret(_)) => {
-                bail!("secret references not yet supported");
+                panic!("SECRET option {} must be Object", option.key)
             }
             None => {
                 bail!("option {} requires a value", option.key);
@@ -614,11 +647,12 @@ macro_rules! with_options {
 
 /// Normalizes option values that contain AWS connection parameters.
 pub fn aws_config(
-    options: &mut BTreeMap<String, Value>,
+    options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
 ) -> Result<AwsConfig, anyhow::Error> {
     let mut extract = |key| match options.remove(key) {
-        Some(Value::String(key)) => {
+        // TODO: support secrets in S3
+        Some(SqlValueOrSecret::Value(Value::String(key))) => {
             if !key.is_empty() {
                 Ok(Some(key))
             } else {

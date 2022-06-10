@@ -17,8 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 
+use mz_dataflow_types::sources::StringOrSecret;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
+use mz_secrets::SecretsReader;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -27,6 +29,8 @@ use tokio::time::Duration;
 
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_sql_parser::ast::Value;
+
+use crate::normalize::SqlValueOrSecret;
 
 enum ValType {
     Path,
@@ -110,24 +114,30 @@ impl Config {
 }
 
 fn extract(
-    input: &mut BTreeMap<String, Value>,
+    input: &mut BTreeMap<String, SqlValueOrSecret>,
     configs: &[Config],
-) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    secrets_reader: &SecretsReader,
+) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
         let value = match input.remove(config.name) {
-            Some(v) => config
+            Some(SqlValueOrSecret::Value(v)) => config
                 .val_type
                 .process_val(&v)
+                .map(|v| StringOrSecret::String(config.do_transform(v)))
                 .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
+            Some(SqlValueOrSecret::Secret(id)) => config
+                .val_type
+                .process_val(&Value::String(secrets_reader.read_string(id)?))
+                .map(|_| StringOrSecret::Secret(id))
+                .map_err(|e| anyhow!("Invalid WITH option {}={:?}: {}", config.name, id, e))?,
             // Check for default values
             None => match &config.default {
-                Some(v) => v.to_string(),
+                Some(v) => StringOrSecret::String(config.do_transform(v.to_string())),
                 None => continue,
             },
         };
-        let value = config.do_transform(value);
         out.insert(config.get_kafka_config_key(), value);
     }
     Ok(out)
@@ -144,8 +154,9 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    with_options: &mut BTreeMap<String, Value>,
-) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
+    secrets_reader: &SecretsReader,
+) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
         &[
@@ -188,7 +199,36 @@ pub fn extract_config(
                 ValType::Number(0, 1_000_000_000),
             ),
         ],
+        secrets_reader,
     )
+}
+
+pub fn extract_config_ccsr(
+    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
+    secrets_reader: &SecretsReader,
+) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
+    extract(
+        with_options,
+        &[
+            Config::path("ssl_ca_location"),
+            Config::path("ssl_key_location"),
+            Config::path("ssl_certificate_location"),
+            Config::string("username"),
+            Config::string("password"),
+        ],
+        secrets_reader,
+    )
+}
+
+pub fn inline_secrets(
+    config: BTreeMap<String, StringOrSecret>,
+    secrets_reader: &SecretsReader,
+) -> anyhow::Result<BTreeMap<String, String>> {
+    config
+        .into_iter()
+        // TODO: Support more than just strings?
+        .map(|(k, v)| Ok((k, v.get_string(secrets_reader)?)))
+        .collect()
 }
 
 /// Create a new `rdkafka::ClientConfig` with the provided
@@ -203,13 +243,14 @@ pub fn extract_config(
 pub async fn create_consumer(
     broker: &str,
     topic: &str,
-    options: &BTreeMap<String, String>,
+    options: &BTreeMap<String, StringOrSecret>,
     librdkafka_log_level: tracing::Level,
+    secrets_reader: &SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
     let mut config = create_new_client_config(librdkafka_log_level);
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
-        config.set(k, v);
+        config.set(k, v.get_string(secrets_reader)?);
     }
 
     let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> =
@@ -253,19 +294,20 @@ pub async fn create_consumer(
 pub async fn lookup_start_offsets(
     consumer: Arc<BaseConsumer<KafkaErrCheckContext>>,
     topic: &str,
-    with_options: &BTreeMap<String, Value>,
+    with_options: &BTreeMap<String, SqlValueOrSecret>,
     now: u64,
 ) -> Result<Option<Vec<i64>>, anyhow::Error> {
-    let time_offset = with_options.get("kafka_time_offset");
-    if time_offset.is_none() {
-        return Ok(None);
-    } else if with_options.contains_key("start_offset") {
-        bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
-    }
+    let time_offset = match with_options.get("kafka_time_offset").cloned() {
+        None => return Ok(None),
+        Some(_) if with_options.contains_key("start_offset") => {
+            bail!("`start_offset` and `kafka_time_offset` cannot be set at the same time.")
+        }
+        Some(offset) => offset,
+    };
 
     // Validate and resolve `kafka_time_offset`.
-    let time_offset = match time_offset.unwrap() {
-        Value::Number(s) => match s.parse::<i64>() {
+    let time_offset = match time_offset.into() {
+        Some(Value::Number(s)) => match s.parse::<i64>() {
             // Timestamp in millis *before* now (e.g. -10 means 10 millis ago)
             Ok(ts) if ts < 0 => {
                 let now: i64 = now.try_into()?;
@@ -383,41 +425,31 @@ impl ClientContext for KafkaErrCheckContext {
 // `extract_security_config()`. Currently only supports SSL auth.
 pub fn generate_ccsr_client_config(
     csr_url: Url,
-    _kafka_options: &BTreeMap<String, String>,
-    ccsr_options: &mut BTreeMap<String, Value>,
+    ccsr_options: &mut BTreeMap<String, StringOrSecret>,
+    secrets_reader: &SecretsReader,
 ) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
     let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
-    if let Some(ca_path) = match ccsr_options.remove("ssl_ca_location").as_ref() {
-        Some(Value::String(path)) => Some(path),
-        Some(_) => {
-            bail!("ssl_ca_location must be a string");
-        }
-        None => None,
-    } {
+    if let Some(ca_path) = ccsr_options
+        .remove("ssl.ca.location")
+        .map(|v| v.get_string(secrets_reader))
+        .transpose()?
+    {
         let mut ca_buf = Vec::new();
         File::open(ca_path)?.read_to_end(&mut ca_buf)?;
         let cert = Certificate::from_pem(&ca_buf)?;
         client_config = client_config.add_root_certificate(cert);
     }
 
-    let ssl_key_location = ccsr_options.remove("ssl_key_location");
-    let key_path = match &&ssl_key_location {
-        Some(Value::String(path)) => Some(path),
-        Some(_) => {
-            bail!("ssl_key_location must be a string");
-        }
-        None => None,
-    };
-    let ssl_certificate_location = ccsr_options.remove("ssl_certificate_location");
-    let cert_path = match &ssl_certificate_location {
-        Some(Value::String(path)) => Some(path),
-        Some(_) => {
-            bail!("ssl_certificate_location must be a string");
-        }
-        None => None,
-    };
+    let key_path = ccsr_options
+        .remove("ssl.key.location")
+        .map(|v| v.get_string(secrets_reader))
+        .transpose()?;
+    let cert_path = ccsr_options
+        .remove("ssl.certificate.location")
+        .map(|v| v.get_string(secrets_reader))
+        .transpose()?;
     match (key_path, cert_path) {
         (Some(key_path), Some(cert_path)) => {
             // `reqwest` expects identity `pem` files to contain one key and
@@ -437,13 +469,13 @@ pub fn generate_ccsr_client_config(
         ),
     }
 
-    let mut ccsr_options = extract(
-        ccsr_options,
-        &[Config::string("username"), Config::string("password")],
-    )?;
-
     if let Some(username) = ccsr_options.remove("username") {
-        client_config = client_config.auth(username, ccsr_options.remove("password"));
+        let username = username.get_string(secrets_reader)?;
+        let password = ccsr_options
+            .remove("password")
+            .map(|v| v.get_string(secrets_reader))
+            .transpose()?;
+        client_config = client_config.auth(username, password);
     }
 
     Ok(client_config)

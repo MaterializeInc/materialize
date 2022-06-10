@@ -10,8 +10,6 @@
 //! SQL purification.
 //!
 //! See the [crate-level documentation](crate) for details.
-
-use std::collections::BTreeMap;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
@@ -30,7 +28,6 @@ use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::ConnectorContext;
-
 use mz_repr::strconv;
 
 use crate::ast::{
@@ -72,7 +69,6 @@ pub async fn purify_create_source(
     let _ = catalog;
 
     let mut with_options_map = normalize::options(with_options)?;
-    let mut config_options = BTreeMap::new();
 
     match connector {
         CreateSourceConnector::Kafka(KafkaSourceConnector {
@@ -83,24 +79,19 @@ pub async fn purify_create_source(
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connector)?;
                     let connector = item.catalog_connector()?;
-                    (connector.uri(), Some(connector.options()))
+                    (connector.uri(), connector.options())
                 }
-                KafkaConnector::Inline { broker } => (broker.to_string(), None),
-            };
-            config_options = if let Some(options) = connector_options {
-                options
-                    .iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect::<BTreeMap<String, String>>()
-            } else {
-                // Verify that the provided security options are valid and then test them.
-                kafka_util::extract_config(&mut with_options_map)?
+                KafkaConnector::Inline { broker } => (
+                    broker.to_string(),
+                    kafka_util::extract_config(&mut with_options_map, catalog.secrets_reader())?,
+                ),
             };
             let consumer = kafka_util::create_consumer(
                 &broker,
                 &topic,
-                &config_options,
+                &connector_options,
                 connector_context.librdkafka_log_level,
+                catalog.secrets_reader(),
             )
             .await
             .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
@@ -181,15 +172,7 @@ pub async fn purify_create_source(
         CreateSourceConnector::PubNub { .. } => (),
     }
 
-    purify_source_format(
-        &*catalog,
-        format,
-        connector,
-        &envelope,
-        &config_options,
-        with_options,
-    )
-    .await?;
+    purify_source_format(&*catalog, format, connector, &envelope).await?;
 
     Ok(stmt)
 }
@@ -199,8 +182,6 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(connector, CreateSourceConnector::Kafka { .. })
@@ -231,36 +212,12 @@ async fn purify_source_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(
-                catalog,
-                format,
-                connector,
-                envelope,
-                connector_options,
-                with_options,
-            )
-            .await?;
+            purify_source_format_single(catalog, format, connector, envelope).await?;
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            purify_source_format_single(
-                catalog,
-                key,
-                connector,
-                envelope,
-                connector_options,
-                with_options,
-            )
-            .await?;
-            purify_source_format_single(
-                catalog,
-                val,
-                connector,
-                envelope,
-                connector_options,
-                with_options,
-            )
-            .await?;
+            purify_source_format_single(catalog, key, connector, envelope).await?;
+            purify_source_format_single(catalog, val, connector, envelope).await?;
         }
     }
     Ok(())
@@ -271,20 +228,11 @@ async fn purify_source_format_single(
     format: &mut Format<Aug>,
     connector: &mut CreateSourceConnector<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connector } => {
-                purify_csr_connector_avro(
-                    catalog,
-                    connector,
-                    csr_connector,
-                    envelope,
-                    connector_options,
-                )
-                .await?
+                purify_csr_connector_avro(catalog, connector, csr_connector, envelope).await?
             }
             AvroSchema::InlineSchema {
                 schema: mz_sql_parser::ast::Schema::File(path),
@@ -314,14 +262,7 @@ async fn purify_source_format_single(
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connector } => {
-                purify_csr_connector_proto(
-                    catalog,
-                    connector,
-                    csr_connector,
-                    envelope,
-                    with_options,
-                )
-                .await?;
+                purify_csr_connector_proto(catalog, connector, csr_connector, envelope).await?;
             }
             ProtobufSchema::InlineSchema {
                 message_name: _,
@@ -360,7 +301,6 @@ async fn purify_csr_connector_proto(
     connector: &mut CreateSourceConnector<Aug>,
     csr_connector: &mut CsrConnectorProto<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    with_options: &Vec<WithOption<Aug>>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
     {
@@ -386,11 +326,13 @@ async fn purify_csr_connector_proto(
                 }
             }
             .parse()?;
-            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options)?)?;
             let ccsr_config = kafka_util::generate_ccsr_client_config(
                 url,
-                &kafka_options,
-                &mut normalize::options(&ccsr_options)?,
+                &mut kafka_util::extract_config_ccsr(
+                    &mut normalize::options(&ccsr_options)?,
+                    catalog.secrets_reader(),
+                )?,
+                catalog.secrets_reader(),
             )?;
 
             let value =
@@ -422,7 +364,6 @@ async fn purify_csr_connector_avro(
     connector: &mut CreateSourceConnector<Aug>,
     csr_connector: &mut CsrConnectorAvro<Aug>,
     envelope: &Option<Envelope<Aug>>,
-    connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
     {
@@ -451,8 +392,11 @@ async fn purify_csr_connector_avro(
         let ccsr_config = task::block_in_place(|| {
             kafka_util::generate_ccsr_client_config(
                 url,
-                &connector_options,
-                &mut normalize::options(ccsr_options)?,
+                &mut kafka_util::extract_config_ccsr(
+                    &mut normalize::options(&ccsr_options)?,
+                    catalog.secrets_reader(),
+                )?,
+                catalog.secrets_reader(),
             )
         })?;
 

@@ -397,9 +397,6 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
-    /// Handle to secrets reader that gives us access to user secrets
-    #[allow(dead_code)]
-    secrets_reader: SecretsReader,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -1089,13 +1086,18 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
         }: CreateSourceStatementReady,
     ) {
-        // TODO: verify that the dependent objects are still present. They may
-        // have been dropped while we were purifying the statement.
-
         let stmt = match result {
             Ok(stmt) => stmt,
             Err(e) => return tx.send(Err(e), session),
         };
+
+        // Ensure that all dependencies still exist after purification.
+        if !depends_on
+            .iter()
+            .all(|id| self.catalog.try_get_entry(id).is_some())
+        {
+            return tx.send(Err(CoordError::ChangedPlan), session);
+        }
 
         let plan = match self
             .handle_statement(&mut session, Statement::CreateSource(stmt), &params)
@@ -1692,6 +1694,12 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         let depends_on = depends_on.into_iter().collect();
         let params = portal.parameters.clone();
+        // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
+        // purification.  This should be done back on the main thread.
+        // We do the validation:
+        //   - In the handler for `Message::CreateSourceStatementReady`, before we handle the purified statement.
+        // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
+        // occurs.
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
@@ -5273,6 +5281,7 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
+        secrets_reader,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -5307,7 +5316,6 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
-                secrets_reader,
                 replica_sizes,
                 availability_zones,
                 connector_context,
