@@ -315,7 +315,8 @@ class Kafka(Service):
         name: str = "kafka",
         image: str = "confluentinc/cp-kafka",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
-        port: int = 9092,
+        port: Union[str, int] = 9092,
+        allow_host_ports: bool = False,
         auto_create_topics: bool = False,
         broker_id: int = 1,
         offsets_topic_replication_factor: int = 1,
@@ -343,6 +344,7 @@ class Kafka(Service):
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
             "ports": [port],
+            "allow_host_ports": allow_host_ports,
             "environment": [
                 *environment,
                 f"KAFKA_AUTO_CREATE_TOPICS_ENABLE={auto_create_topics}",

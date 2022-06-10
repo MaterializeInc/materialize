@@ -182,9 +182,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 .parent()
                 .unwrap()
                 .to_path_buf(),
-            // NOTE(benesch): would be nice to not have to do this, but
-            // the subprocess output wreaks havoc on cargo2junit.
-            suppress_output: true,
+            suppress_output: false,
             environment_id: environment_id.clone(),
             secrets_dir: data_directory.join("secrets"),
             command_wrapper: vec![],

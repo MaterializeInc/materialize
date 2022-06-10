@@ -153,7 +153,7 @@ RUN mkdir rust \
     && rm -rf rust \
     && cargo install --root /usr/local --version "=1.40.5" cargo-deb \
     && cargo install --root /usr/local --version "=0.12.2" cargo-deny \
-    && cargo install --root /usr/local --version "=0.1.12" cargo2junit \
+    && cargo install --root /usr/local --version "=0.9.44" cargo-nextest \
     && cargo install --root /usr/local --version "=0.1.34" cargo-udeps  --features=vendored-openssl \
     && cargo install --root /usr/local --version "=0.2.15" --no-default-features --features=s3,openssl/vendored sccache
 

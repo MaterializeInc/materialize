@@ -341,76 +341,6 @@ class CargoBuild(CargoPreImage):
         return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
 
 
-# TODO(benesch): make this less hardcoded and custom.
-class CargoTest(CargoPreImage):
-    """A pre-image action that builds all test binaries in the Cargo workspace.
-
-    .. todo:: This action does not generalize well.
-        Its implementation currently hardcodes many details about the
-        dependencies of various Rust crates. Ideally these dependencies would
-        instead be captured by configuration in `mzbuild.yml`.
-    """
-
-    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
-        super().__init__(rd, path)
-
-    def run(self) -> None:
-        super().run()
-
-        # NOTE(benesch): The two invocations of `cargo test --no-run` here
-        # deserve some explanation. The first invocation prints error messages
-        # to stdout in a human readable form. If that succeeds, the second
-        # invocation instructs Cargo to dump the locations of the test binaries
-        # it built in a machine readable form. Without the first invocation, the
-        # error messages would also be sent to the output file in JSON, and the
-        # user would only see a vague "could not compile <package>" error.
-        args = [*self.rd.cargo("test", rustflags=[]), "--locked", "--no-run"]
-        spawn.runv(args, cwd=self.rd.root)
-        output = spawn.capture(args + ["--message-format=json"], cwd=self.rd.root)
-
-        tests = []
-        for line in output.split("\n"):
-            if line.strip() == "":
-                continue
-            message = json.loads(line)
-            if message.get("profile", {}).get("test", False):
-                crate_name = message["package_id"].split()[0]
-                target_kind = "".join(message["target"]["kind"])
-                if target_kind == "proc-macro":
-                    continue
-                slug = crate_name + "." + target_kind
-                if target_kind != "lib":
-                    slug += "." + message["target"]["name"]
-                crate_path_match = re.search(
-                    r"\(path\+file://(.*)\)", message["package_id"]
-                )
-                if not crate_path_match:
-                    raise ValueError(f'invalid package_id: {message["package_id"]}')
-                crate_path = Path(crate_path_match.group(1)).relative_to(
-                    self.rd.root.resolve()
-                )
-                executable = self.rd.rewrite_builder_path_for_host(
-                    Path(message["executable"])
-                )
-                tests.append((executable, slug, crate_path))
-
-        os.makedirs(self.path / "tests" / "examples")
-        with open(self.path / "tests" / "manifest", "w") as manifest:
-            for (executable, slug, crate_path) in tests:
-                shutil.copy(executable, self.path / "tests" / slug)
-                spawn.runv(
-                    [*self.rd.tool("strip"), self.path / "tests" / slug],
-                    cwd=self.rd.root,
-                )
-                package = slug.replace(".", "::")
-                manifest.write(f"{slug} {package} {crate_path}\n")
-        shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
-
-    def inputs(self) -> Set[str]:
-        crates = self.rd.cargo_workspace.crates.values()
-        return super().inputs() | set(inp for crate in crates for inp in crate.inputs())
-
-
 class Image:
     """A Docker image whose build and dependencies are managed by mzbuild.
 
@@ -442,8 +372,6 @@ class Image:
                 typ = pre_image.pop("type", None)
                 if typ == "cargo-build":
                     self.pre_images.append(CargoBuild(self.rd, self.path, pre_image))
-                elif typ == "cargo-test":
-                    self.pre_images.append(CargoTest(self.rd, self.path, pre_image))
                 elif typ == "copy":
                     self.pre_images.append(Copy(self.rd, self.path, pre_image))
                 else:

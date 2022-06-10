@@ -428,10 +428,6 @@ publish: true
      has a custom Cargo build script, as Rust crates without a build script do
      not have a build directory.
 
-  * `type: cargo-test` builds a special image that simulates `cargo test`. This
-     plugin is very special-cased at the moment, and unlikely to be generally
-     useful.
-
 * `publish` (bool) specifies whether the image should be automatically published
   to Docker Hub by CI. Non-publishable images can still be *used* by users and
   CI, but they must always be built from source. Use sparingly. The default is

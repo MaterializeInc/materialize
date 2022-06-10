@@ -1,0 +1,12 @@
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "package(mz-environmentd)"
+threads-required = 8
+slow-timeout = { period = "120s", terminate-after = 2 }
+
+[profile.ci]
+junit = { path = "junit_cargo-test.xml" }
+fail-fast = false
+failure-output = "immediate-final"
