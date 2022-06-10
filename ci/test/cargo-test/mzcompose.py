@@ -7,50 +7,58 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize import ROOT, ci_util, spawn
-from materialize.mzcompose import Composition, Service
+import os
+
+from materialize import spawn
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import Kafka, Postgres, SchemaRegistry, Zookeeper
 
 SERVICES = [
     Zookeeper(),
-    Kafka(),
+    Kafka(
+        # We need a stable port to advertise, so pick one that is unlikely to
+        # conflict with a Kafka cluster running on the local machine.
+        port="30123:30123",
+        allow_host_ports=True,
+        extra_environment=[
+            f"KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        ],
+    ),
     SchemaRegistry(),
     Postgres(image="postgres:14.2"),
-    Service(
-        name="ci-cargo-test",
-        config={
-            "mzbuild": "ci-cargo-test",
-            "environment": [
-                "ZOOKEEPER_ADDR=zookeeper:2181",
-                "KAFKA_ADDRS=kafka:9092",
-                "SCHEMA_REGISTRY_URL=http://schema-registry:8081",
-                "POSTGRES_URL=postgres://postgres:postgres@postgres",
-                "MZ_SOFT_ASSERTIONS=1",
-                "MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET=mtlz-test-persist-1d-lifecycle-delete",
-                "MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=postgres://postgres:postgres@postgres",
-                "AWS_DEFAULT_REGION",
-                "AWS_ACCESS_KEY_ID",
-                "AWS_SECRET_ACCESS_KEY",
-                "AWS_SESSION_TOKEN",
-            ],
-            "volumes": ["../../../:/workdir"],
-            "ulimits": {
-                "core": 0,
-            },
-        },
-    ),
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument("args", nargs="*")
+    args = parser.parse_args()
     c.start_and_wait_for_tcp(["zookeeper", "kafka", "schema-registry", "postgres"])
-    try:
-        c.run("ci-cargo-test", "run-tests")
-    finally:
-        junit_report = ci_util.junit_report_filename("cargo-test")
-        spawn.runv(
-            ["cargo2junit"],
-            stdin=(ROOT / "results.json").open("rb"),
-            stdout=junit_report.open("wb"),
+    # Heads up: this intentionally runs on the host rather than in a Docker
+    # image. See #13010.
+    postgres_url = (
+        f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
+    )
+    spawn.runv(
+        [
+            "cargo",
+            "build",
+            "--bin",
+            "storaged",
+            "--bin",
+            "computed",
+        ]
+    )
+    spawn.runv(
+        ["cargo", "nextest", "run", "--profile=ci", *args.args],
+        env=dict(
+            os.environ,
+            ZOOKEEPER_ADDR=f"localhost:{c.default_port('zookeeper')}",
+            KAFKA_ADDRS=f"localhost:30123",
+            SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
+            POSTGRES_URL=postgres_url,
+            MZ_SOFT_ASSERTIONS="1",
+            MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mtlz-test-persist-1d-lifecycle-delete",
+            MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=postgres_url,
         ),
-        ci_util.upload_junit_report("cargo-test", junit_report)
+    )

@@ -599,6 +599,8 @@ fn test_auth_expiry() {
 #[allow(clippy::unit_arg)]
 #[test]
 fn test_auth() {
+    mz_ore::test::init_logging();
+
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -795,6 +797,7 @@ fn test_auth() {
             },
         ],
     );
+    drop(server);
 
     // Test connecting to a server that requires TLS and uses Materialize Cloud for
     // authentication.
@@ -1045,6 +1048,7 @@ fn test_auth() {
             },
         ],
     );
+    drop(server);
 
     // Test TLS modes with a server that does not support TLS.
     let server = util::start_server(util::Config::default()).unwrap();
@@ -1113,6 +1117,7 @@ fn test_auth() {
             },
         ],
     );
+    drop(server);
 
     // Test TLS modes with a server that requires TLS.
     let config = util::Config::default().with_tls(TlsMode::Require, &server_cert, &server_key);
@@ -1199,6 +1204,7 @@ fn test_auth() {
             },
         ],
     );
+    drop(server);
 
     // Test connecting to a server that verifies client certificates.
     let config = util::Config::default().with_tls(
@@ -1358,6 +1364,7 @@ fn test_auth() {
             },
         ],
     );
+    drop(server);
 
     // Test connecting to a server that both verifies client certificates and
     // verifies that the CN matches the pgwire user name.
@@ -1564,6 +1571,7 @@ fn test_auth() {
             },
         ],
     );
+    drop(server);
 }
 
 #[test]
@@ -1622,6 +1630,7 @@ fn test_auth_intermediate_ca() {
             },
         ],
     );
+    drop(server);
 
     // When the server is configured to present the entire certificate chain,
     // the client should be able to verify the chain even though it only knows
@@ -1649,4 +1658,5 @@ fn test_auth_intermediate_ca() {
             },
         ],
     );
+    drop(server);
 }
