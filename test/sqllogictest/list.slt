@@ -2575,3 +2575,281 @@ SELECT LIST[LIST[customer.first_name, customer.last_name], LIST[customer.zip], L
 ----
 {{alice,lasta},{10003},{1}}
 {{charlie,lastc},{11217},{3}}
+
+## Optimization: Reducing ListIndex(ListCreate, literal) and multidimensional variations
+# Most of these tests could also be in src/expr/tests/testdata/reduce, but writing these big ListCreate expressions is a
+# bit cumbersome in that format.
+
+statement ok
+CREATE TABLE t3(f1 int, f2 int, f3 int, f4 int, f5 int, f6 int, f7 int, f8 int, n int, m int, l int list)
+
+statement ok
+CREATE MATERIALIZED VIEW m3 AS SELECT * FROM t3
+
+statement ok
+INSERT INTO t3 VALUES (1, 2, 3, 4, 5, 6, 7, 8, 1, 2, list[42, 43])
+
+statement ok
+INSERT INTO t3 VALUES (11, 12, 13, 14, 15, 16, 17, 18, 11, 12, list[82, 83])
+
+query T multiline
+EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][3] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Project (#2)
+
+EOF
+
+query I rowsort
+SELECT LIST[f1, f2, f3, f4, f5][3] from m3
+----
+3
+13
+
+# Reducing multidimensional ListIndex when all indexes are literals
+
+query T multiline
+EXPLAIN SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Project (#2)
+
+EOF
+
+query I rowsort
+SELECT LIST[[f1, f2], [f3, f4]][2][1] from m3
+----
+3
+13
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Project (#5)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][2] from m3
+----
+6
+16
+
+# Reducing multidimensional ListIndex when some of the indexes are not literals, and therefore can't be removed
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(list_create(list_create(list_create(#0, #1), list_create(#6, #7, #2, #3)), list_create(list_create(#4, #5), list_create(#6, #7))), i32toi64(#8), i32toi64(#9), i32toi64(#8))
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f7, f8, f3, f4]], [[f5, f6], [f7, f8]]] [n][m][n] from m3
+----
+7
+NULL
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(list_create(list_create(#0, #2), list_create(#4, #6)), i32toi64(#8), i32toi64(#9))
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][m][1] from m3
+----
+3
+NULL
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(list_create(list_create(#2, #3), list_create(#6, #7)), i32toi64(#8), i32toi64(#9))
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][m] from m3
+----
+4
+NULL
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(list_create(list_create(#0, #1), list_create(#2, #3)), i32toi64(#8), i32toi64(#9))
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [1][n][m] from m3
+----
+2
+NULL
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(list_create(#4, #5), i32toi64(#8))
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][1][n] from m3
+----
+5
+NULL
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(list_create(#5, #7), i32toi64(#8))
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] from m3
+----
+6
+NULL
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(list_create(#3, #7), i32toi64(#8))
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [n][2][2] from m3
+----
+4
+NULL
+
+# Reducing ListIndex when a literal index is out of bounds
+
+query T multiline
+EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][6] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map null
+| Project (#11)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][0] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map null
+| Project (#11)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT LIST[f1, f2, f3, f4, f5][-1] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map null
+| Project (#11)
+
+EOF
+
+query T
+SELECT LIST[f1, f2, f3, f4, f5][6] from m3
+----
+NULL
+NULL
+
+# Reducing multidimensional ListIndex when a literal index is out of bounds.
+# Also, one of the indexes is `1+1`, which must be evaluated to make it a literal, and then the reduction can take place.
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][-1][2] from m3;
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map null
+| Project (#11)
+
+EOF
+
+# Reducing multidimensional ListIndex when the list doesn't have enough complete layers,
+# but has a NULL instead of a ListCreate.
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [NULL, [f7, f8]]] [1+1][1][2] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map null
+| Project (#11)
+
+EOF
+
+# Reducing multidimensional ListIndex when the list doesn't have enough complete layers,
+# but has a column reference instead of a ListCreate.
+
+query T multiline
+EXPLAIN SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Map list_index(#10, 2)
+| Project (#11)
+
+EOF
+
+query I rowsort
+SELECT LIST[[[f1, f2], [f3, f4]], [l, [f7, f8]]] [1+1][1][2] from m3
+----
+43
+83
+
+# Reducing ListIndex(ListCreate, literal) when this pattern appears after some other optimization (reduce_elision)
+# already took place.
+
+query T multiline
+EXPLAIN SELECT row_number() over () from (select f1 from m3 limit 1)
+----
+%0 =
+| Get materialize.public.m3 (u28)
+| Project (#0)
+| TopK group=() order=() limit=1 offset=0
+| Map list_create(record_create(1, record_create(#0)))
+| Project (#1)
+| FlatMap unnest_list(#0)
+| Map record_get[0](#1)
+| Project (#2)
+
+EOF
