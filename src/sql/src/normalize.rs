@@ -501,6 +501,22 @@ pub fn create_statement(
     Ok(stmt.to_ast_string_stable())
 }
 
+/// Generates a struct capable of taking a `Vec` of types commonly used to
+/// represent `WITH` options into useful data types, such as strings.
+///
+/// # Parameters
+/// - `$option_ty`: Accepts a struct representing a set of `WITH` options, which
+///     must contain the fields `name` and `value`.
+///     - `name` must be of type `$option_tyName`, e.g. if `$option_ty` is
+///       `FooOption`, then `name` must be of type `FooOptionName`.
+///       `$option_tyName` must be an enum representing `WITH` option keys.
+///     - `TryFromValue<value>` must be implemented for the type you want to
+///       take the option to. The `sql::plan::with_option` module contains these
+///       implementations.
+/// - `$option_name` must be an element of `$option_tyName`
+/// - `$t` is the type you want to convert the option's value to. If the
+///   option's value is absent (i.e. the user only entered the option's key),
+///   you can also define a default value.
 macro_rules! generate_extracted_config {
     ($option_ty:ty, $(($option_name:path, $t:ty)),+) => {
         paste::paste! {
