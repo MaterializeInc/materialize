@@ -732,7 +732,7 @@ CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 ----
 CREATE INDEX foo ON myschema.bar (a, b) WITH (LOGICAL COMPACTION WINDOW = 0)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Value(Number("0")) }], if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), in_cluster: None, on_name: Name(UnresolvedObjectName([Ident("myschema"), Ident("bar")])), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [IndexOption { name: LogicalCompactionWindow, value: Some(Value(Number("0"))) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
@@ -961,23 +961,23 @@ Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ide
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT) AS OF now()
 ----
-TAIL foo.bar WITH (snapshot) AS OF now()
+TAIL foo.bar WITH (SNAPSHOT) AS OF now()
 =>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [WithOption { key: Ident("snapshot"), value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
+Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [TailOption { name: Snapshot, value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
 ----
-TAIL foo.bar WITH (snapshot = false, timestamps) AS OF now()
-=>
-Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [WithOption { key: Ident("snapshot"), value: Some(Value(Boolean(false))) }, WithOption { key: Ident("timestamps"), value: None }], as_of: Some(At(Function(Function { name: UnresolvedObjectName([Ident("now")]), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false }))) })
+error: Expected one of PROGRESS or SNAPSHOT, found identifier "timestamps"
+TAIL foo.bar WITH (SNAPSHOT = false, TIMESTAMPS) AS OF now()
+                                     ^
 
 parse-statement
 TAIL foo.bar WITH (SNAPSHOT false)
 ----
-error: Expected equals sign, found FALSE
-TAIL foo.bar WITH (SNAPSHOT false)
-                            ^
+TAIL foo.bar WITH (SNAPSHOT = false)
+=>
+Tail(TailStatement { relation: Name(Name(UnresolvedObjectName([Ident("foo"), Ident("bar")]))), options: [TailOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None })
 
 parse-statement
 TAIL (SELECT * FROM a)
@@ -1187,9 +1187,9 @@ CREATE CLUSTER cluster REPLICAS (), BADOPT
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1']))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }] }])] })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTION GRANULARITY '1s'
@@ -1201,9 +1201,9 @@ CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1']), b (SIZE '1')) INTROSPECTI
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
 ----
-CREATE CLUSTER cluster REPLICAS (a (REMOTE ['host1'], SIZE '1'))
+CREATE CLUSTER cluster REPLICAS (a (REMOTE = ['host1'], SIZE = '1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }, ReplicaOption { name: Size, value: Value(String("1")) }] }])] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [Replicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: Size, value: Some(Value(String("1"))) }] }])] })
 
 parse-statement
 CREATE CLUSTER REPLICA replica REMOTE ['host1']
@@ -1229,30 +1229,30 @@ CREATE CLUSTER REPLICA replica SIZE 'small', (REMOTE ['host1'])
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small'
 ----
-CREATE CLUSTER REPLICA default.replica SIZE 'small'
+CREATE CLUSTER REPLICA default.replica SIZE = 'small'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Value(String("small")) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 ----
-CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica SIZE = 'small', AVAILABILITY ZONE = 'a'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Value(String("small")) }, ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 ----
-CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
+CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE = 'a', AVAILABILITY ZONE = 'b'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }, ReplicaOption { name: AvailabilityZone, value: Value(String("b")) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("b"))) }] } })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 ----
-CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA default.replica REMOTE = ['host1'], AVAILABILITY ZONE = 'a'
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Value(Array([String("host1")])) }, ReplicaOption { name: AvailabilityZone, value: Value(String("a")) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Remote, value: Some(Value(Array([String("host1")]))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
 
 parse-statement
 DROP CLUSTER cluster
