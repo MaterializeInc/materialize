@@ -263,7 +263,7 @@ pub enum PeekResponseUnary {
     Canceled,
 }
 
-/// A pending write transaction that will be committing during the next group commit.
+/// A pending write transaction that will be committed during the next group commit.
 enum PendingWriteTxn {
     /// User initiated transaction.
     User {
@@ -276,10 +276,10 @@ enum PendingWriteTxn {
         /// Session of the client who initiated the transaction.
         session: Session,
     },
+    /// System initiated writes.
+    System { writes: Vec<BuiltinTableUpdate> },
     /// Periodic table advancements.
     TableAdvancement { id: GlobalId },
-    /// TODO(jkosh44)
-    System { writes: Vec<BuiltinTableUpdate> },
 }
 
 enum Write {
@@ -1016,7 +1016,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Commits all pending write transactions at the same timestamp. All pending writes will be
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
-    /// larger than the timestamp of the write.
+    /// larger than the timestamp of the writes.
     /// The timestamps used in this method still might be ahead of `now()` if `now()` has gone
     /// backwards at any point during this method. We will still commit the write without waiting
     /// for `now()` to advance. This is ok because the next batch of writes will trigger the wait
@@ -1041,12 +1041,11 @@ impl<S: Append + 'static> Coordinator<S> {
                     session,
                 } => {
                     for write in writes {
-                        // TODO(jkosh44) probably wrong
-                        // If the object that some write was targeting has been deleted by a DDL,
-                        // then the write will be ignored and we respond to the client that the
-                        // write was successful. This is only possible if the write and the delete
-                        // were concurrent. Therefore, we are free to order the write before the
-                        // delete without violating any consistency guarantees.
+                        // If the object that some write was targeting has been deleted by a DDL
+                        // while waiting, then the write will be ignored and we respond to the
+                        // client that the write was successful. This is only possible if the write
+                        // and the delete were concurrent. Therefore, we are free to order the
+                        // write before the delete without violating any consistency guarantees.
                         let id = write.id();
                         if self.catalog.try_get_entry(&id).is_some() {
                             let updates = write
@@ -2171,7 +2170,6 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::DiscardAll => {
                 if let TransactionStatus::Started(_) = session.transaction() {
-                    //TODO(jkosh44) re-order might be wrong
                     let drop_sinks = session.reset();
                     self.drop_sinks(drop_sinks).await;
                     self.drop_temp_items(Some((tx, ExecuteResponse::DiscardedAll)), session)
@@ -5086,7 +5084,19 @@ impl<S: Append + 'static> Coordinator<S> {
         return Ok(Vec::from(payload));
     }
 
-    //TODO(jkosh44)
+    /// Perform a catalog transaction on behalf of a client. The closure is passed
+    /// a [`CatalogTxn`] made from the prospective [`CatalogState`] (i.e., the
+    /// `Catalog` with `ops` applied but before the transaction is committed). The
+    /// closure can return an error to abort the transaction, or otherwise return a
+    /// value that is returned by this function. This allows callers to error while
+    /// building [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called
+    /// after this function successfully returns on any built `DataflowDesc`.
+    ///
+    /// All errors are consumed and sent back to the client. An additional
+    /// closure can be passed to convert certain errors to responses for CINE
+    /// (CREATE IF NOT EXISTS) usage.
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
     async fn client_catalog_transact<F, R, C>(
         &mut self,
         session: Session,
@@ -5122,6 +5132,17 @@ impl<S: Append + 'static> Coordinator<S> {
         result
     }
 
+    /// Perform a catalog transaction on behalf of the system. The closure is passed
+    /// a [`CatalogTxn`] made from the prospective [`CatalogState`] (i.e., the
+    /// `Catalog` with `ops` applied but before the transaction is committed). The
+    /// closure can return an error to abort the transaction, or otherwise return a
+    /// value that is returned by this function. This allows callers to error while
+    /// building [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called
+    /// after this function successfully returns on any built `DataflowDesc`.
+    ///
+    /// All errors are passed back to the caller.
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
     async fn system_catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
@@ -5145,17 +5166,6 @@ impl<S: Append + 'static> Coordinator<S> {
 
         result
     }
-
-    // TODO(jkosh44) Clean up docs
-    /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
-    /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
-    /// applied but before the transaction is committed). The closure can return
-    /// an error to abort the transaction, or otherwise return a value that is
-    /// returned by this function. This allows callers to error while building
-    /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
-    /// function successfully returns on any built `DataflowDesc`.
-    ///
-    /// [`CatalogState`]: crate::catalog::CatalogState
 
     async fn catalog_transact_inner<F, R>(
         &mut self,
