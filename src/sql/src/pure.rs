@@ -234,31 +234,12 @@ async fn purify_source_format_single(
             AvroSchema::Csr { csr_connector } => {
                 purify_csr_connector_avro(catalog, connector, csr_connector, envelope).await?
             }
-            AvroSchema::InlineSchema {
-                schema: mz_sql_parser::ast::Schema::File(path),
-                with_options,
-            } => {
-                let file_schema = tokio::fs::read_to_string(path).await?;
-                // Explicitly inject `confluent_wire_format = true`, if unset.
-                // This, in combination with the catalog migration that sets
-                // this option to true for sources created before this option
-                // existed, will make it easy to flip the default to `false`
-                // in the future, if we like.
-                if !with_options
-                    .iter()
-                    .any(|option| option.key.as_str() == "confluent_wire_format")
-                {
-                    with_options.push(WithOption {
-                        key: Ident::new("confluent_wire_format"),
-                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
-                    });
+            AvroSchema::InlineSchema { schema, .. } => {
+                if let mz_sql_parser::ast::Schema::File(path) = schema {
+                    let file_schema = tokio::fs::read_to_string(path).await?;
+                    *schema = mz_sql_parser::ast::Schema::Inline(file_schema);
                 }
-                *schema = AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema::Inline(file_schema),
-                    with_options: with_options.clone(),
-                };
             }
-            _ => {}
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connector } => {

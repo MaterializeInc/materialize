@@ -57,14 +57,15 @@ use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
-    AvroSchema, ClusterOption, ColumnOption, Compression, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnector, CreateConnectorStatement, CreateDatabaseStatement,
-    CreateIndexStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnector, CreateSinkStatement, CreateSourceConnector,
-    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
-    CsrConnector, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
-    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnector,
+    CreateConnectorStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
+    CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
+    CreateViewsSourceTarget, CreateViewsStatement, CsrConnector, CsrConnectorAvro,
+    CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
+    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
@@ -1210,6 +1211,8 @@ fn get_encoding(
     Ok(encoding)
 }
 
+generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool));
+
 fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
@@ -1230,19 +1233,15 @@ fn get_encoding_inner(
                     schema: mz_sql_parser::ast::Schema::Inline(schema),
                     with_options,
                 } => {
-                    with_options! {
-                        struct ConfluentMagic {
-                            confluent_wire_format: bool,
-                        }
-                    }
+                    let AvroSchemaOptionExtracted {
+                        confluent_wire_format,
+                    } = with_options.clone().try_into()?;
 
                     Schema {
                         key_schema: None,
                         value_schema: schema.clone(),
                         schema_registry_config: None,
-                        confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
-                            .confluent_wire_format
-                            .unwrap_or(true),
+                        confluent_wire_format: confluent_wire_format.unwrap_or(true),
                     }
                 }
                 AvroSchema::InlineSchema {

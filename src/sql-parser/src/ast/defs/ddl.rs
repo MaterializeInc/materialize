@@ -54,13 +54,43 @@ impl AstDisplay for Schema {
 impl_display!(Schema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AvroSchemaOptionName {
+    /// The `CONFLUENT WIRE FORMAT [=] <bool>` option.
+    ConfluentWireFormat,
+}
+
+impl AstDisplay for AvroSchemaOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            AvroSchemaOptionName::ConfluentWireFormat => f.write_str("CONFLUENT WIRE FORMAT"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AvroSchemaOption<T: AstInfo> {
+    pub name: AvroSchemaOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for AvroSchemaOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema<T: AstInfo> {
     Csr {
         csr_connector: CsrConnectorAvro<T>,
     },
     InlineSchema {
         schema: Schema,
-        with_options: Vec<WithOption<T>>,
+        with_options: Vec<AvroSchemaOption<T>>,
     },
 }
 
