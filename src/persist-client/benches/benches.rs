@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use criterion::measurement::WallTime;
 use criterion::{criterion_group, criterion_main, Bencher, BenchmarkGroup, BenchmarkId, Criterion};
+use mz_ore::metrics::MetricsRegistry;
 use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Runtime;
@@ -22,7 +23,7 @@ use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use mz_persist::s3::{S3BlobConfig, S3BlobMulti};
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, PersistConfig};
+use mz_persist_client::{Metrics, PersistClient, PersistConfig};
 use mz_persist_types::Codec64;
 
 // The "plumbing" and "porcelain" names are from git [1]. Our "plumbing"
@@ -96,7 +97,8 @@ pub fn bench_persist(c: &mut Criterion) {
 async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
-    PersistClient::new(PersistConfig::default(), blob, consensus).await
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await
 }
 
 async fn create_file_pg_client() -> Result<Option<(PersistClient, TempDir)>, ExternalError> {
@@ -110,7 +112,8 @@ async fn create_file_pg_client() -> Result<Option<(PersistClient, TempDir)>, Ext
     let blob = Arc::new(FileBlobMulti::open(file).await?) as Arc<dyn BlobMulti + Send + Sync>;
     let consensus =
         Arc::new(PostgresConsensus::open(pg).await?) as Arc<dyn Consensus + Send + Sync>;
-    let client = PersistClient::new(PersistConfig::default(), blob, consensus).await?;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
     Ok(Some((client, dir)))
 }
 
@@ -127,7 +130,8 @@ async fn create_s3_pg_client() -> Result<Option<PersistClient>, ExternalError> {
     let blob = Arc::new(S3BlobMulti::open(s3).await?) as Arc<dyn BlobMulti + Send + Sync>;
     let consensus =
         Arc::new(PostgresConsensus::open(pg).await?) as Arc<dyn Consensus + Send + Sync>;
-    let client = PersistClient::new(PersistConfig::default(), blob, consensus).await?;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
     Ok(Some(client))
 }
 

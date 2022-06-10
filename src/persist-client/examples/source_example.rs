@@ -28,12 +28,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
+use mz_ore::metrics::MetricsRegistry;
 use tracing::{error, trace};
 
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
-use mz_persist_client::{PersistClient, PersistConfig, PersistLocation};
+use mz_persist_client::{Metrics, PersistClient, PersistConfig, PersistLocation};
 
 use self::impls::ConsensusTimestamper;
 use self::impls::PersistConsensus;
@@ -184,7 +185,8 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         blob_uri: args.blob_uri,
         consensus_uri: args.consensus_uri,
     };
-    let (blob, consensus) = location.open_locations().await?;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let (blob, consensus) = location.open_locations(&metrics).await?;
     let unreliable = UnreliableHandle::default();
     let should_happen = 1.0 - args.unreliability;
     let should_timeout = args.unreliability;
@@ -193,7 +195,7 @@ async fn persist_client(args: Args) -> Result<PersistClient, ExternalError> {
         as Arc<dyn BlobMulti + Send + Sync>;
     let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
         as Arc<dyn Consensus + Send + Sync>;
-    PersistClient::new(PersistConfig::default(), blob, consensus).await
+    PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await
 }
 
 mod api {
