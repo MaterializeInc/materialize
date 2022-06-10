@@ -29,7 +29,7 @@ use regex::Regex;
 use tracing::info;
 
 use mz_ore::assert_contains;
-use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::now::{NowFn, NOW_HUNDRED, NOW_ZERO, SYSTEM_TIME};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
@@ -240,8 +240,10 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
 
-    client_writes.batch_execute("CREATE TABLE t (data text)")?;
-    client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
+    // Advance nowfn enough so that group commit can execute
+    *nowfn.lock().unwrap() = NOW_HUNDRED.clone();
+    client_writes
+        .batch_execute("CREATE TABLE t (data text); CREATE DEFAULT INDEX t_primary_idx ON t")?;
     // Now that the index (and its since) are initialized to 0, we can resume using
     // system time. Do a read to bump the oracle's state so it will read from the
     // system clock during inserts below.
@@ -339,6 +341,8 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         .unwrap_db_error()
         .message()
         .starts_with("Timestamp (1) is not valid for all inputs"));
+
+    client_reads.batch_execute("COMMIT; SELECT * FROM t")?;
 
     Ok(())
 }
@@ -948,7 +952,9 @@ write frontier:[{timestamp_str}]\n"
     assert_eq!(explain, expect);
 
     // Advance the timestamp enough so that group commit can execute
-    *timestamp.lock().expect("lock poisoned") += 100;
+    *timestamp.lock().expect("lock poisoned") += 1;
+
+    client.batch_execute("SELECT * FROM t1")?;
 
     Ok(())
 }

@@ -1089,7 +1089,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Message::ComputeInstanceStatus(status) => {
                     self.message_compute_instance_status(status).await
-                }
+                } // TODO(jkosh44) Think about this for a bit, we never look at should_advance
+                  // anymore, which means we may not advance after a read??? Right now since all
+                  // writes put us in read mode we happen to never need to advance due to a read,
+                  // but that may not always be the case. Maybe there should be a way to modify the
+                  // timestamp of group commit?
+                  // This might be ok right now.
+                  // We also blindly send advancements even if the current time hasn't advanced.
+                  // This might also be ok, because we expect the current time to advance.
             }
         }
     }

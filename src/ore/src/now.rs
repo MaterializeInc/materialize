@@ -77,6 +77,9 @@ fn system_time() -> EpochMillis {
 fn now_zero() -> EpochMillis {
     0
 }
+fn now_hundred() -> EpochMillis {
+    100
+}
 
 /// A [`NowFn`] that returns the actual system time.
 pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
@@ -85,3 +88,8 @@ pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
 ///
 /// For use in tests.
 pub static NOW_ZERO: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_zero));
+
+/// A [`NowFn`] that always returns 100.
+///
+/// For use in tests.
+pub static NOW_HUNDRED: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_hundred));
