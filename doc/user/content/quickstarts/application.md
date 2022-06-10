@@ -16,7 +16,7 @@ aliases:
     alt="Materialize real-time application"
 >}}
 
-<figcaption style='margin: auto; color: gray; width: fit-content;'>Real-time application in action (localhost:3000)</figcaption>
+<figcaption style='margin: auto; color: gray; width: fit-content;'>Real-time application in action</figcaption>
 
 ## Overview
 
