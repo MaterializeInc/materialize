@@ -20,7 +20,7 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 prost = "0.10.1"
 rand = "0.8.5"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 tokio = { version = "1.18.2", features = ["macros"] }

@@ -36,7 +36,7 @@ mz-stash = { path = "../stash" }
 mz-transform = { path = "../transform" }
 prost = "0.10.3"
 rand = "0.8.5"
-rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.5.6"
 rusqlite = { version = "0.27.0", features = ["bundled", "unlock_notify"] }
 semver = "1.0.9"
