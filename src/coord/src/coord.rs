@@ -815,8 +815,8 @@ impl<S: Append + 'static> Coordinator<S> {
             // close on a regular interval. This roughly tracks the behavior of realtime
             // sources that close off timestamps on an interval.
             let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let mut interval = tokio::time::interval(self.catalog.config().timestamp_frequency);
             task::spawn(|| "coordinator_advance_local_inputs", async move {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
                 loop {
                     interval.tick().await;
                     // If sending fails, the main thread has shutdown.
