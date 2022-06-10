@@ -548,35 +548,6 @@ macro_rules! generate_extracted_config {
     }
 }
 
-macro_rules! with_option_type {
-    ($name:expr, String) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
-            Some(crate::ast::WithOptionValue::Ident(id)) => id.into_string(),
-            _ => ::anyhow::bail!("expected String or bare identifier"),
-        }
-    };
-    ($name:expr, bool) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) => value,
-            // Bools, if they have no '= value', are true.
-            None => true,
-            _ => ::anyhow::bail!("expected bool"),
-        }
-    };
-    ($name:expr, Interval) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                mz_repr::strconv::parse_interval(&value)?
-            }
-            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                mz_repr::strconv::parse_interval(&interval.value)?
-            }
-            _ => ::anyhow::bail!("expected Interval"),
-        }
-    };
-}
-
 /// Ensures that the given set of options are empty, useful for validating that
 /// `WITH` options are all real, used options
 pub(crate) fn ensure_empty_options<V>(
@@ -591,58 +562,6 @@ pub(crate) fn ensure_empty_options<V>(
         )
     }
     Ok(())
-}
-
-/// This macro accepts a struct definition and will generate it and a `try_from`
-/// method that takes a `Vec<WithOption>` which will extract and type check
-/// options based on the struct field names and types.
-///
-/// The macro wraps all field types in an `Option` in the generated struct. The
-/// `TryFrom` implementation sets fields to `None` if they are not present in
-/// the provided `WITH` options.
-///
-/// Field names must match exactly the lowercased option name. Supported types
-/// are:
-///
-/// - `String`: expects a SQL string (`WITH (name = "value")`) or identifier
-///   (`WITH (name = text)`).
-/// - `bool`: expects either a SQL bool (`WITH (name = true)`) or a valueless
-///   option which will be interpreted as true: (`WITH (name)`.
-/// - `Interval`: expects either a SQL interval or string that can be parsed as
-///   an interval.
-macro_rules! with_options {
-  (struct $name:ident {
-        $($field_name:ident: $field_type:ident,)*
-    }) => {
-        #[derive(Debug)]
-        pub struct $name {
-            pub $($field_name: Option<$field_type>,)*
-        }
-
-        impl ::std::convert::TryFrom<Vec<mz_sql_parser::ast::WithOption<Aug>>> for $name {
-            type Error = anyhow::Error;
-
-            fn try_from(mut options: Vec<mz_sql_parser::ast::WithOption<Aug>>) -> Result<Self, Self::Error> {
-                let v = Self {
-                    $($field_name: {
-                        match options.iter().position(|opt| opt.key.as_str() == stringify!($field_name)) {
-                            None => None,
-                            Some(pos) => {
-                                let value: Option<mz_sql_parser::ast::WithOptionValue<Aug>> = options.swap_remove(pos).value;
-                                let value: $field_type = with_option_type!(value, $field_type);
-                                Some(value)
-                            },
-                        }
-                    },
-                    )*
-                };
-                if !options.is_empty() {
-                    ::anyhow::bail!("unexpected options");
-                }
-                Ok(v)
-            }
-        }
-    }
 }
 
 /// Normalizes option values that contain AWS connection parameters.
