@@ -23,7 +23,6 @@ use futures::Stream;
 use mz_ore::task::RuntimeExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument};
 use uuid::Uuid;
@@ -340,14 +339,12 @@ where
     #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn listen(&self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
         trace!("ReadHandle::listen as_of={:?}", as_of);
-        if PartialOrder::less_than(&as_of, &self.since) {
-            return Err(Since(self.since.clone()));
-        }
+        let machine = self.machine.verify_listen(&as_of).await?;
         Ok(Listen {
             retry_metrics: Arc::clone(&self.retry_metrics),
             as_of: as_of.clone(),
             frontier: as_of,
-            machine: self.machine.clone(),
+            machine,
             blob: Arc::clone(&self.blob),
         })
     }
@@ -649,4 +646,71 @@ where
         }
         ret
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist::location::Consensus;
+    use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
+
+    use crate::tests::all_ok;
+    use crate::{Metrics, PersistClient, PersistConfig};
+
+    use super::*;
+
+    // Verifies performance optimizations where a SnapshotIter/Listener doesn't
+    // fetch the latest Consensus state if the one it currently has can serve
+    // the next request.
+    #[tokio::test]
+    async fn skip_consensus_fetch_optimization() {
+        mz_ore::test::init_logging();
+        let data = vec![
+            (("0".to_owned(), "zero".to_owned()), 0, 1),
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+        ];
+
+        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
+        let consensus = Arc::new(MemConsensus::default());
+        let unreliable = UnreliableHandle::default();
+        unreliable.totally_available();
+        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
+            as Arc<dyn Consensus + Send + Sync>;
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let (mut write, read) =
+            PersistClient::new(PersistConfig::default(), blob, consensus, metrics)
+                .await
+                .expect("client construction failed")
+                .expect_open::<String, String, u64, i64>(ShardId::new())
+                .await;
+
+        write.expect_compare_and_append(&data[0..1], 0, 1).await;
+        write.expect_compare_and_append(&data[1..2], 1, 2).await;
+        write.expect_compare_and_append(&data[2..3], 2, 3).await;
+
+        let mut snapshot = read.expect_snapshot(2).await;
+        let mut listen = read.expect_listen(0).await;
+
+        // Manually advance the listener's machine so that it has the latest
+        // state by fetching the first events from next. This is awkward but
+        // only necessary because we're about to do some weird things with
+        // unreliable.
+        let mut listen_actual = listen.next().await;
+
+        // At this point, the snapshot and listen's state should have all the
+        // writes. Test this by making consensus completely unavailable.
+        unreliable.totally_unavailable();
+        assert_eq!(snapshot.read_all().await, all_ok(&data, 2));
+        let expected_events = vec![
+            ListenEvent::Progress(Antichain::from_elem(1)),
+            ListenEvent::Updates(all_ok(&data[1..2], 1)),
+            ListenEvent::Progress(Antichain::from_elem(2)),
+            ListenEvent::Updates(all_ok(&data[2..3], 1)),
+            ListenEvent::Progress(Antichain::from_elem(3)),
+        ];
+        listen_actual.append(&mut listen.read_until(&3).await);
+        assert_eq!(listen_actual, expected_events);
+    }
 }

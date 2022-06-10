@@ -390,6 +390,7 @@ impl PersistClient {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::num::NonZeroUsize;
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
@@ -532,6 +533,222 @@ mod tests {
             read1.expect_snapshot(3).await.read_all().await,
             all_ok(&data, 3)
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_usage() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let shard_id0 = "s00000000-0000-0000-0000-000000000000"
+            .parse::<ShardId>()
+            .expect("invalid shard id");
+        let client = new_test_client().await;
+
+        let (mut write0, read0) = client
+            .expect_open::<String, String, u64, i64>(shard_id0)
+            .await;
+
+        write0.expect_compare_and_append(&data, 0, 4).await;
+
+        // InvalidUsage from PersistClient methods.
+        {
+            fn codecs(k: &str, v: &str, t: &str, d: &str) -> (String, String, String, String) {
+                (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned())
+            }
+
+            assert_eq!(
+                client
+                    .open::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("Vec<u8>", "String", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open::<String, Vec<u8>, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("String", "Vec<u8>", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open::<String, String, i64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("String", "String", "i64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open::<String, String, u64, u64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("String", "String", "u64", "u64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+
+            // open_reader and open_writer end up using the same checks, so just
+            // verify one type each to verify the plumbing instead of the full
+            // set.
+            assert_eq!(
+                client
+                    .open_reader::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("Vec<u8>", "String", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open_writer::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("Vec<u8>", "String", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+        }
+
+        // InvalidUsage from ReadHandle methods.
+        {
+            let mut splits = read0
+                .snapshot_splits(Antichain::from_elem(3), NonZeroUsize::new(1).unwrap())
+                .await
+                .expect("cannot serve requested as_of");
+            let split = splits.pop().unwrap();
+
+            let shard_id1 = "s11111111-1111-1111-1111-111111111111"
+                .parse::<ShardId>()
+                .expect("invalid shard id");
+            let (_, read1) = client
+                .expect_open::<String, String, u64, i64>(shard_id1)
+                .await;
+            assert_eq!(
+                read1.snapshot_iter(split).await.unwrap_err(),
+                InvalidUsage::SnapshotNotFromThisShard {
+                    snapshot_shard: shard_id0,
+                    handle_shard: shard_id1,
+                }
+            );
+        }
+
+        // InvalidUsage from WriteHandle methods.
+        {
+            let ts3 = &data[2];
+            assert_eq!(ts3.1, 3);
+            let ts3 = vec![ts3.clone()];
+
+            // WriteHandle::append also covers append_batch,
+            // compare_and_append_batch, compare_and_append.
+            assert_eq!(
+                write0
+                    .append(&ts3, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::UpdateNotBeyondLower {
+                    ts: 3,
+                    lower: Antichain::from_elem(4),
+                },
+            );
+            assert_eq!(
+                write0
+                    .append(&ts3, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::UpdateBeyondUpper {
+                    max_ts: 3,
+                    expected_upper: Antichain::from_elem(3),
+                },
+            );
+            // NB unlike the previous tests, this one has empty updates.
+            assert_eq!(
+                write0
+                    .append(&data[..0], Antichain::from_elem(3), Antichain::from_elem(2))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBounds {
+                    lower: Antichain::from_elem(3),
+                    upper: Antichain::from_elem(2),
+                },
+            );
+
+            // Tests for the BatchBuilder.
+            assert_eq!(
+                write0
+                    .builder(0, Antichain::from_elem(3))
+                    .finish(Antichain::from_elem(2))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBounds {
+                    lower: Antichain::from_elem(3),
+                    upper: Antichain::from_elem(2)
+                },
+            );
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            assert_eq!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBatchBounds {
+                    batch_lower: Antichain::from_elem(3),
+                    batch_upper: Antichain::from_elem(4),
+                    append_lower: Antichain::from_elem(4),
+                    append_upper: Antichain::from_elem(5),
+                },
+            );
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            assert_eq!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBatchBounds {
+                    batch_lower: Antichain::from_elem(3),
+                    batch_upper: Antichain::from_elem(4),
+                    append_lower: Antichain::from_elem(2),
+                    append_upper: Antichain::from_elem(3),
+                },
+            );
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            // NB unlike the others, this one uses matches! because it's
+            // non-deterministic (the key)
+            assert!(matches!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(3), Antichain::from_elem(3))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidEmptyTimeInterval { .. }
+            ));
+        }
     }
 
     #[tokio::test]

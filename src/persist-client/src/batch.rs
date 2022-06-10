@@ -25,6 +25,7 @@ use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::{Atomicity, BlobMulti};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tokio::task::JoinHandle;
 use tracing::{debug_span, instrument, trace_span, warn, Instrument};
 use uuid::Uuid;
@@ -211,6 +212,12 @@ where
         mut self,
         upper: Antichain<T>,
     ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>> {
+        if PartialOrder::less_than(&upper, &self.lower) {
+            return Err(InvalidUsage::InvalidBounds {
+                lower: self.lower.clone(),
+                upper,
+            });
+        }
         if upper.less_equal(&self.max_ts) {
             return Err(InvalidUsage::UpdateBeyondUpper {
                 max_ts: self.max_ts,
