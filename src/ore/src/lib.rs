@@ -59,6 +59,9 @@ pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "network")))]
 #[cfg(feature = "network")]
 pub mod retry;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "select")))]
+#[cfg(feature = "select")]
+pub mod select;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
 pub mod stack;

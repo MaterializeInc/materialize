@@ -35,7 +35,7 @@ use mz_dataflow_types::sources::{
 use mz_dataflow_types::ConnectorContext;
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
-use mz_ore::task;
+use mz_ore::{safe_select, select::Selectable, task};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
@@ -624,7 +624,7 @@ impl PostgresTaskInfo {
         let mut last_keepalive = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
-        let closer = self.sender.clone();
+        let closer = Selectable(self.sender.clone());
         loop {
             // This select is safe because `Sender::closed` is cancel-safe
             // and when `closed` finishes, dropping the `try_next` future is fine,
@@ -633,7 +633,7 @@ impl PostgresTaskInfo {
             // just holds a reference to the stream, so it is cancel-safe.
             //
             // TODO(guswynn): avoid this select! complexity by just moving to `SourceReader::next`
-            tokio::select! {
+            safe_select! {
                 biased;
                 _ = closer.closed() => {
                     return Ok(())
