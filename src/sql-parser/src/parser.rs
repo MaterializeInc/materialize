@@ -5009,12 +5009,21 @@ impl<'a> Parser<'a> {
         };
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
-        let options = self.parse_opt_with_options()?;
+        let options = self.parse_kw_options(Parser::parse_fetch_option)?;
         Ok(Statement::Fetch(FetchStatement {
             name,
             count,
             options,
         }))
+    }
+
+    fn parse_fetch_option(&mut self) -> Result<FetchOption<Raw>, ParserError> {
+        self.expect_keyword(TIMEOUT)?;
+        let _ = self.consume_token(&Token::Eq);
+        Ok(FetchOption {
+            name: FetchOptionName::Timeout,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     /// Parse a `RAISE` statement, assuming that the `RAISE` token

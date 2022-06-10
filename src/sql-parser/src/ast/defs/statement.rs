@@ -2126,12 +2126,41 @@ impl AstDisplay for CloseStatement {
 }
 impl_display!(CloseStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum FetchOptionName {
+    Timeout,
+}
+
+impl AstDisplay for FetchOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            FetchOptionName::Timeout => "TIMEOUT",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FetchOption<T: AstInfo> {
+    pub name: FetchOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for FetchOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+
 /// `FETCH ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FetchStatement<T: AstInfo> {
     pub name: Ident,
     pub count: Option<FetchDirection>,
-    pub options: Vec<WithOption<T>>,
+    pub options: Vec<FetchOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for FetchStatement<T> {
