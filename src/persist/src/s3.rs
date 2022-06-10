@@ -442,12 +442,15 @@ impl BlobMulti for S3BlobMulti {
         _atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // NB: S3 is always atomic, so we're free to ignore the atomic param.
+        let value_len = value.len();
         if self
             .multipart_config
-            .should_multipart(value.len())
+            .should_multipart(value_len)
             .map_err(anyhow::Error::msg)?
         {
-            self.set_multi_part(key, value).await
+            self.set_multi_part(key, value)
+                .instrument(debug_span!("s3set_multi", payload_len = value_len))
+                .await
         } else {
             self.set_single_part(key, value).await
         }
@@ -472,7 +475,7 @@ impl S3BlobMulti {
         let path = self.get_path(key);
 
         let value_len = value.len();
-        let part_span = trace_span!("s3set_single_part", payload_len = value_len);
+        let part_span = trace_span!("s3set_single", payload_len = value_len);
         self.client
             .put_object()
             .bucket(&self.bucket)

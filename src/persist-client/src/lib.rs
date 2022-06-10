@@ -39,6 +39,7 @@ use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
 
+pub mod batch;
 pub mod cache;
 pub mod error;
 pub mod read;
@@ -160,6 +161,57 @@ impl ShardId {
     }
 }
 
+/// The tunable knobs for persist.
+#[derive(Debug, Clone)]
+pub struct PersistConfig {
+    /// A target maximum size of blob payloads in bytes. If a logical "batch" is
+    /// bigger than this, it will be broken up into smaller, independent pieces.
+    /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen
+    /// to always respect it). This target size doesn't apply for an individual
+    /// update that exceeds it in size, but that scenario is almost certainly a
+    /// mis-use of the system.
+    pub blob_target_size: usize,
+    /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
+    /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
+    /// calls on previous ones finishing.
+    pub batch_builder_max_outstanding_parts: usize,
+}
+
+// Tuning inputs:
+// - A larger blob_target_size (capped at KEY_VAL_DATA_MAX_LEN) results in fewer
+//   entries in consensus state. Before we have compaction and/or incremental
+//   state, it is already growing without bound, so this is a concern. OTOH, for
+//   any "reasonable" size (> 100MiB?) of blob_target_size, it seems we'd end up
+//   with a pretty tremendous amount of data in the shard before this became a
+//   real issue.
+// - A larger blob_target_size will results in fewer s3 operations, which are
+//   charged per operation. (Hmm, maybe not if we're charged per call in a
+//   multipart op. The S3BlobMulti impl already chunks things at 8MiB.)
+// - A smaller blob_target_size will result in more even memory usage in
+//   readers.
+// - A larger batch_builder_max_outstanding_parts increases throughput (to a
+//   point).
+// - A smaller batch_builder_max_outstanding_parts provides a bound on the
+//   amount of memory used by a writer.
+//
+// Tuning logic:
+// - blob_target_size was initially selected to be an exact multiple of 8MiB
+//   (the s3 multipart size) that was in the same neighborhood as our initial
+//   max throughput (~250MiB).
+// - batch_builder_max_outstanding_parts was initially selected to be as small
+//   as possible without harming pipelining. 0 means no pipelining, 1 is full
+//   pipelining as long as generating data takes less time than writing to s3
+//   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
+impl Default for PersistConfig {
+    fn default() -> Self {
+        const MB: usize = 1024 * 1024;
+        Self {
+            blob_target_size: 128 * MB,
+            batch_builder_max_outstanding_parts: 2,
+        }
+    }
+}
+
 /// A handle for interacting with the set of persist shard made durable at a
 /// single [PersistLocation].
 ///
@@ -178,6 +230,7 @@ impl ShardId {
 /// ```
 #[derive(Debug, Clone)]
 pub struct PersistClient {
+    cfg: PersistConfig,
     blob: Arc<dyn BlobMulti + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
 }
@@ -189,13 +242,18 @@ impl PersistClient {
     /// This is exposed mostly for testing. Persist users likely want
     /// [PersistClientCache::open].
     pub async fn new(
+        cfg: PersistConfig,
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
     ) -> Result<Self, ExternalError> {
         trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
-        Ok(PersistClient { blob, consensus })
+        Ok(PersistClient {
+            cfg,
+            blob,
+            consensus,
+        })
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -227,6 +285,7 @@ impl PersistClient {
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
+            cfg: self.cfg.clone(),
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
@@ -284,6 +343,7 @@ impl PersistClient {
         let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
         let shard_upper = machine.fetch_upper().await;
         let writer = WriteHandle {
+            cfg: self.cfg.clone(),
             machine,
             blob: Arc::clone(&self.blob),
             upper: shard_upper,
@@ -327,7 +387,13 @@ mod tests {
     use super::*;
 
     pub async fn new_test_client() -> PersistClient {
-        PersistClientCache::new_no_metrics()
+        // Configure an aggressively small blob_target_size so we get some
+        // amount of coverage of that in tests. Similarly, for max_outstanding.
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.blob_target_size = 10;
+        cache.cfg.batch_builder_max_outstanding_parts = 1;
+
+        cache
             .open(PersistLocation {
                 blob_uri: "mem://".to_owned(),
                 consensus_uri: "mem://".to_owned(),

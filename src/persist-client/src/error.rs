@@ -67,7 +67,7 @@ pub enum InvalidUsage<T> {
         /// Set of keys containing updates.
         keys: Vec<String>,
     },
-    /// Bounds of a [crate::write::Batch] are not valid for the attempted append call
+    /// Bounds of a [crate::batch::Batch] are not valid for the attempted append call
     InvalidBatchBounds {
         /// The lower of the batch
         batch_lower: Antichain<T>,
@@ -100,7 +100,7 @@ pub enum InvalidUsage<T> {
         /// The shard of the handle
         handle_shard: ShardId,
     },
-    /// A [crate::write::Batch] was given to a [crate::write::WriteHandle] from
+    /// A [crate::batch::Batch] was given to a [crate::write::WriteHandle] from
     /// a different shard
     BatchNotFromThisShard {
         /// The shard of the batch

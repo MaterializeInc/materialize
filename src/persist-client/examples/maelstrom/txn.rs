@@ -27,7 +27,7 @@ use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_client::{PersistClient, PersistConfig, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
@@ -449,7 +449,7 @@ impl Service for TransactorService {
             as Arc<dyn Consensus + Send + Sync>;
 
         // Wire up the TransactorService.
-        let client = PersistClient::new(blob, consensus).await?;
+        let client = PersistClient::new(PersistConfig::default(), blob, consensus).await?;
         let transactor = Transactor::new(&client, shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

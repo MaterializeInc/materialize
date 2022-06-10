@@ -603,6 +603,10 @@ where
             // if the durable data was corrupted, or if operations messes up
             // deployment. In any case, fail loudly.
             .expect("internal error: invalid encoded state");
+
+        // Drop the encoded representation as soon as we can to reclaim memory.
+        drop(value);
+
         let mut ret = Vec::new();
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {
