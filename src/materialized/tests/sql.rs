@@ -24,14 +24,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use mz_ore::now::NowFn;
-use mz_ore::now::NOW_ZERO;
-use mz_ore::now::SYSTEM_TIME;
 use postgres::Row;
 use regex::Regex;
 use tracing::info;
 
 use mz_ore::assert_contains;
+use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
@@ -922,24 +920,24 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\d{13}").unwrap();
+    let timestamp_re = Regex::new(r"\d{4}").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
+
+    let expect = "     timestamp:          <TIMESTAMP>
+         since:[         <TIMESTAMP>]
+         upper:[         <TIMESTAMP>]
+     has table: true
+ table read ts:          <TIMESTAMP>
+
+source materialize.public.t1 (u1, storage):
+ read frontier:[         <TIMESTAMP>]
+write frontier:[         <TIMESTAMP>]\n";
+
     let row = client.query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])?;
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
-    assert_eq!(
-        explain,
-        "     timestamp:          1037
-         since:[         1037]
-         upper:[         1037]
-     has table: true
- table read ts:          1037
-
-source materialize.public.t1 (u1, storage):
- read frontier:[         1037]
-write frontier:[         1037]\n",
-    );
+    assert_eq!(explain, expect);
 
     Ok(())
 }
