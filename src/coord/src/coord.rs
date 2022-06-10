@@ -1479,7 +1479,7 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
-        self.catalog_transact(
+        self.system_catalog_transact(
             None,
             vec![catalog::Op::UpdateComputeInstanceStatus { event }],
             |_| Ok(()),
