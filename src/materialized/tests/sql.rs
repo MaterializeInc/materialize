@@ -922,23 +922,29 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().with_now(now);
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\d{13}").unwrap();
+    let timestamp_re = Regex::new(r"\d{4}").unwrap();
+
+    // Advance the timestamp enough so that group commit can execute
+    *timestamp.lock().expect("lock poisoned") = 1_037;
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
     let row = client.query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])?;
     let explain: String = row.get(0);
-    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    let timestamp_str = "<TIMESTAMP>";
+    let explain = timestamp_re.replace_all(&explain, timestamp_str);
     assert_eq!(
         explain,
-        "     timestamp:          1037
-         since:[         1037]
-         upper:[         1037]
+        format!(
+            "     timestamp:          {timestamp_str}
+         since:[         {timestamp_str}]
+         upper:[         {timestamp_str}]
      has table: true
- table read ts:          1037
+ table read ts:          {timestamp_str}
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         1037]
-write frontier:[         1037]\n",
+ read frontier:[         {timestamp_str}]
+write frontier:[         {timestamp_str}]\n",
+        )
     );
 
     Ok(())
