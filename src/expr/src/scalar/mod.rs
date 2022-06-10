@@ -766,6 +766,13 @@ impl MirScalarExpr {
                                     e.typ(&relation_type).scalar_type,
                                 ),
                             };
+                        } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
+                        {
+                            // We are looking for ListIndex(ListCreate, literal), and eliminate
+                            // both the ListIndex and the ListCreate. E.g.: LIST[f1,f2][2] --> f2
+                            let ind_exprs = exprs.split_off(1);
+                            let top_list_create = exprs.swap_remove(0);
+                            *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
                         }
                     }
                     MirScalarExpr::If { cond, then, els } => {
@@ -890,6 +897,125 @@ impl MirScalarExpr {
                 }
             },
         );
+
+        /* #region `reduce_list_create_list_index_literal` and helper functions */
+
+        fn list_create_type(list_create: &MirScalarExpr) -> ScalarType {
+            if let MirScalarExpr::CallVariadic {
+                func: VariadicFunc::ListCreate { elem_type: typ },
+                ..
+            } = list_create
+            {
+                (*typ).clone()
+            } else {
+                unreachable!()
+            }
+        }
+
+        fn is_list_create_call(expr: &MirScalarExpr) -> bool {
+            matches!(
+                expr,
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListCreate { .. },
+                    ..
+                }
+            )
+        }
+
+        /// Partial-evaluates a list indexing with a literal directly after a list creation.
+        ///
+        /// Multi-dimensional lists are handled by a single call to this function, with multiple
+        /// elements in index_exprs (of which not all need to be literals), and nested ListCreates
+        /// in list_create_to_reduce.
+        ///
+        /// # Examples
+        ///
+        /// LIST[f1,f2][2] --> f2.
+        ///
+        /// A multi-dimensional list, with only some of the indexes being literals:
+        /// LIST[[[f1, f2], [f3, f4]], [[f5, f6], [f7, f8]]] [2][n][2] --> LIST[f6, f8] [n]
+        ///
+        /// See more examples in list.slt.
+        fn reduce_list_create_list_index_literal(
+            mut list_create_to_reduce: MirScalarExpr,
+            mut index_exprs: Vec<MirScalarExpr>,
+        ) -> MirScalarExpr {
+            // We iterate over the index_exprs and remove literals, but keep non-literals.
+            // When we encounter a non-literal, we need to dig into the nested ListCreates:
+            // `list_create_mut_refs` will contain all the ListCreates of the current level. If an
+            // element of `list_create_mut_refs` is not actually a ListCreate, then we break out of
+            // the loop. When we remove a literal, we need to partial-evaluate all ListCreates
+            // that are at the current level (except those that disappeared due to
+            // literals at earlier levels), and change each element in `list_create_mut_refs`
+            // to the result of the partial evaluation.
+            let mut list_create_mut_refs = vec![&mut list_create_to_reduce];
+            let mut i = 0;
+            while i < index_exprs.len()
+                && list_create_mut_refs
+                    .iter()
+                    .all(|lc| is_list_create_call(lc))
+            {
+                if index_exprs[i].is_literal_ok() {
+                    // We can remove this index.
+                    let removed_index = index_exprs.remove(i);
+                    let index_i64 = match removed_index.as_literal().unwrap().unwrap() {
+                        Datum::Int64(sql_index_i64) => sql_index_i64 - 1,
+                        _ => unreachable!(), // always an Int64, see plan_index_list
+                    };
+                    // For each list_create referenced by list_create_mut_refs, substitute it by its
+                    // `index`th argument (or null).
+                    for list_create in &mut list_create_mut_refs {
+                        let list_create_args = match list_create {
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::ListCreate { .. },
+                                exprs,
+                            } => exprs,
+                            _ => unreachable!(), // func cannot be anything else than a ListCreate
+                        };
+                        // ListIndex gives null on an out-of-bounds index
+                        if index_i64 >= 0 && index_i64 < list_create_args.len().try_into().unwrap()
+                        {
+                            let index: usize = index_i64.try_into().unwrap();
+                            **list_create = list_create_args.swap_remove(index);
+                        } else {
+                            let typ = list_create_type(list_create);
+                            **list_create = MirScalarExpr::literal_null(typ);
+                        }
+                    }
+                } else {
+                    // We can't remove this index, so we can't reduce any of the ListCreates at this
+                    // level. So we change list_create_mut_refs to refer to all the arguments of all
+                    // the ListCreates currently referenced by list_create_mut_refs.
+                    list_create_mut_refs = list_create_mut_refs
+                        .into_iter()
+                        .flat_map(|list_create| match list_create {
+                            MirScalarExpr::CallVariadic {
+                                func: VariadicFunc::ListCreate { .. },
+                                exprs: list_create_args,
+                            } => list_create_args,
+                            // func cannot be anything else than a ListCreate
+                            _ => unreachable!(),
+                        })
+                        .collect();
+                    i += 1; // next index_expr
+                }
+            }
+            // If all list indexes have been evaluated, return the reduced expression.
+            // Otherwise, rebuild the ListIndex call with the remaining ListCreates and indexes.
+            if index_exprs.is_empty() {
+                assert_eq!(list_create_mut_refs.len(), 1);
+                list_create_to_reduce
+            } else {
+                let mut exprs: Vec<MirScalarExpr> = vec![list_create_to_reduce];
+                exprs.append(&mut index_exprs);
+                MirScalarExpr::CallVariadic {
+                    func: VariadicFunc::ListIndex,
+                    exprs,
+                }
+            }
+        }
+
+        /* #endregion */
     }
 
     /// Decompose an IsNull expression into a disjunction of
