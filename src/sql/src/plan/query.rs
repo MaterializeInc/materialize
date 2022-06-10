@@ -66,7 +66,7 @@ use mz_sql_parser::ast::{
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
-use crate::normalize;
+use crate::normalize::{self, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
@@ -1420,7 +1420,7 @@ fn plan_view_select(
     let option = options.remove("expected_group_size");
 
     let expected_group_size = match option {
-        Some(Value::Number(n)) => Some(n.parse::<usize>()?),
+        Some(SqlValueOrSecret::Value(Value::Number(n))) => Some(n.parse::<usize>()?),
         Some(_) => sql_bail!("expected_group_size must be a number"),
         None => None,
     };

@@ -49,6 +49,7 @@ services:
     mzbuild: materialized
     environment:
       - SASL_PASSWORD=sekurity
+      - MZ_UNSAFE_MODE=1
     volumes:
       - secrets:/share/secrets
     depends_on: [test-certs]

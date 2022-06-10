@@ -299,16 +299,25 @@ statement ok
 CREATE CLUSTER REPLICA default.foo_bar SIZE '1'
 
 statement ok
+DROP CLUSTER REPLICA default.foo_bar
+
+statement ok
 CREATE CLUSTER REPLICA default."foo-bar" SIZE '1'
 
 statement ok
-DROP CLUSTER REPLICA default.foo_bar
+DROP CLUSTER REPLICA default."foo-bar"
 
 statement ok
 CREATE CLUSTER REPLICA default."好-好" SIZE '1'
 
 statement ok
+DROP CLUSTER REPLICA default."好-好"
+
+statement ok
 CREATE CLUSTER REPLICA default."好_好" SIZE '1'
+
+statement ok
+DROP CLUSTER REPLICA default."好_好"
 
 # clusters wo replicas cannot service selects
 
@@ -368,6 +377,12 @@ SELECT * FROM t1;
 statement error unknown cluster
 DROP CLUSTER REPLICA no_such_cluster.bar
 
+statement ok
+RESET cluster
+
+statement ok
+DROP CLUSTER foo CASCADE
+
 # Availability zones
 # Note that we don't support availability zones configured with slt, so they
 # can't be meaningfully specified
@@ -386,3 +401,19 @@ CREATE CLUSTER REPLICA default.replica REMOTE ['host1'], AVAILABILITY ZONE 'a'
 
 statement error cannot specify AVAILABILITY ZONE and REMOTE
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', REMOTE ['host1']
+
+# Test that the contents of mz_cluster_replicas look sensible
+
+statement ok
+CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
+
+query TTT
+SELECT name, size, status FROM mz_cluster_replicas ORDER BY name
+----
+default_replica  default  unknown
+size_1           1        unknown
+size_2_2         2-2      unknown
+size_32          32       unknown
+
+statement ok
+DROP CLUSTER foo CASCADE

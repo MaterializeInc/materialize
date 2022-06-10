@@ -1860,37 +1860,6 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
 }
 impl_display_t!(WithOptionValue);
 
-macro_rules! try_from_with_option_value_value {
-    ($t:ty, $ty_name:expr) => {
-        impl<T: AstInfo> TryFrom<WithOptionValue<T>> for $t {
-            type Error = anyhow::Error;
-
-            fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
-                match v {
-                    WithOptionValue::Value(v) => v.try_into(),
-                    _ => anyhow::bail!("cannot use value as {}", $ty_name),
-                }
-            }
-        }
-    };
-}
-
-try_from_with_option_value_value!(String, "string");
-try_from_with_option_value_value!(bool, "boolean");
-
-impl<T: AstInfo, V: TryFrom<WithOptionValue<T>>> TryFrom<WithOptionValue<T>> for Vec<V>
-where
-    Vec<V>: TryFrom<Value, Error = anyhow::Error>,
-{
-    type Error = anyhow::Error;
-    fn try_from(v: WithOptionValue<T>) -> Result<Self, Self::Error> {
-        match v {
-            WithOptionValue::Value(v) => v.try_into(),
-            _ => anyhow::bail!("cannot use value as array"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransactionMode {
     AccessMode(TransactionAccessMode),

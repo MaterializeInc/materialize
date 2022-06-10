@@ -19,19 +19,24 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
-use mz_persist::retry::{Retry, RetryStream};
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 
 use crate::error::InvalidUsage;
+use crate::r#impl::metrics::{
+    CmdMetrics, CmdsMetrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
+};
 use crate::r#impl::state::{ReadCapability, Since, State, StateCollections, Upper};
 use crate::read::ReaderId;
-use crate::ShardId;
+use crate::{Metrics, ShardId};
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
     consensus: Arc<dyn Consensus + Send + Sync>,
+    cmd_metrics: Arc<CmdsMetrics>,
+    retry_metrics: Arc<RetriesMetrics>,
 
     state: State<K, V, T, D>,
 }
@@ -41,6 +46,8 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             consensus: Arc::clone(&self.consensus),
+            cmd_metrics: Arc::clone(&self.cmd_metrics),
+            retry_metrics: Arc::clone(&self.retry_metrics),
             state: self.state.clone(),
         }
     }
@@ -56,9 +63,20 @@ where
     pub async fn new(
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
+        metrics: &Metrics,
     ) -> Result<Self, InvalidUsage<T>> {
-        let state = Self::maybe_init_state(consensus.as_ref(), shard_id).await?;
-        Ok(Machine { consensus, state })
+        let cmd_metrics = Arc::new(metrics.cmds_metrics());
+        let retry_metrics = Arc::new(metrics.retries_metrics());
+        let state = cmd_metrics
+            .init_state
+            .run_cmd(|| Self::maybe_init_state(consensus.as_ref(), &retry_metrics, shard_id))
+            .await?;
+        Ok(Machine {
+            consensus,
+            cmd_metrics,
+            retry_metrics,
+            state,
+        })
     }
 
     pub fn shard_id(&self) -> ShardId {
@@ -75,8 +93,9 @@ where
     }
 
     pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
+        let cmd_metrics = Arc::clone(&self.cmd_metrics);
         let (seqno, (shard_upper, read_cap)) = self
-            .apply_unbatched_idempotent_cmd("register", |seqno, state| {
+            .apply_unbatched_idempotent_cmd(&cmd_metrics.register, |seqno, state| {
                 state.register(seqno, reader_id)
             })
             .await;
@@ -85,8 +104,9 @@ where
     }
 
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
+        let cmd_metrics = Arc::clone(&self.cmd_metrics);
         let (seqno, read_cap) = self
-            .apply_unbatched_idempotent_cmd("clone_reader", |seqno, state| {
+            .apply_unbatched_idempotent_cmd(&cmd_metrics.clone_reader, |seqno, state| {
                 state.clone_reader(seqno, new_reader_id)
             })
             .await;
@@ -99,9 +119,10 @@ where
         keys: &[String],
         desc: &Description<T>,
     ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
+        let cmd_metrics = Arc::clone(&self.cmd_metrics);
         loop {
             let (seqno, res) = self
-                .apply_unbatched_cmd("compare_and_append", |_, state| {
+                .apply_unbatched_cmd(&cmd_metrics.compare_and_append, |_, state| {
                     state.compare_and_append(keys, desc)
                 })
                 .await?;
@@ -141,15 +162,17 @@ where
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
     ) -> (SeqNo, Since<T>) {
-        self.apply_unbatched_idempotent_cmd("downgrade_since", |_, state| {
+        let cmd_metrics = Arc::clone(&self.cmd_metrics);
+        self.apply_unbatched_idempotent_cmd(&cmd_metrics.downgrade_since, |_, state| {
             state.downgrade_since(reader_id, new_since)
         })
         .await
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
+        let cmd_metrics = Arc::clone(&self.cmd_metrics);
         let (seqno, _existed) = self
-            .apply_unbatched_idempotent_cmd("expire_reader", |_, state| {
+            .apply_unbatched_idempotent_cmd(&cmd_metrics.expire_reader, |_, state| {
                 state.expire_reader(reader_id)
             })
             .await;
@@ -160,7 +183,7 @@ where
         &mut self,
         as_of: &Antichain<T>,
     ) -> Result<Vec<(String, Description<T>)>, Since<T>> {
-        let mut retry: Option<RetryStream> = None;
+        let mut retry: Option<MetricsRetryStream> = None;
         loop {
             let upper = match self.state.snapshot(as_of) {
                 Ok(Ok(x)) => return Ok(x),
@@ -173,7 +196,10 @@ where
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.
             retry = Some(match retry.take() {
-                None => Retry::persist_defaults(SystemTime::now()).into_retry_stream(),
+                None => self
+                    .retry_metrics
+                    .snapshot
+                    .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
                 Some(retry) => {
                     // Use a duration based threshold here instead of the usual
                     // INFO_MIN_ATTEMPTS because here we're waiting on an
@@ -207,7 +233,10 @@ where
         // This unconditionally fetches the latest state and uses that to
         // determine if we can serve `as_of`. TODO: We could instead check first
         // and only fetch if necessary.
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+        let mut retry = self
+            .retry_metrics
+            .next_listen_batch
+            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
             self.fetch_and_update_state().await;
             if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
@@ -231,21 +260,24 @@ where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<Infallible, R>,
     >(
         &mut self,
-        name: &str,
+        cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> (SeqNo, R) {
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+        let mut retry = self
+            .retry_metrics
+            .idempotent_cmd
+            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
-            match self.apply_unbatched_cmd(name, &mut work_fn).await {
+            match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
                 Ok((seqno, x)) => match x {
                     Ok(x) => return (seqno, x),
                     Err(infallible) => match infallible {},
                 },
                 Err(err) => {
                     if retry.attempt() >= INFO_MIN_ATTEMPTS {
-                        info!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", name, retry.next_sleep(), err);
+                        info!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", cmd.name, retry.next_sleep(), err);
                     } else {
-                        debug!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", name, retry.next_sleep(), err);
+                        debug!("apply_unbatched_idempotent_cmd {} received an indeterminate error, retrying in {:?}: {}", cmd.name, retry.next_sleep(), err);
                     }
                     retry = retry.sleep().await;
                     continue;
@@ -260,92 +292,102 @@ where
         WorkFn: FnMut(SeqNo, &mut StateCollections<T>) -> ControlFlow<E, R>,
     >(
         &mut self,
-        name: &str,
+        cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>), Indeterminate> {
-        let path = self.shard_id().to_string();
+        cmd.run_cmd(|| async {
+            let path = self.shard_id().to_string();
 
-        loop {
-            let (work_ret, new_state) = match self.state.clone_apply(&mut work_fn) {
-                Continue(x) => x,
-                Break(err) => return Ok((self.state.seqno(), Err(err))),
-            };
-            trace!(
-                "apply_unbatched_cmd {} attempting {}\n  new_state={:?}",
-                name,
-                self.state.seqno(),
-                new_state
-            );
+            loop {
+                let (work_ret, new_state) = match self.state.clone_apply(&mut work_fn) {
+                    Continue(x) => x,
+                    Break(err) => return Ok((self.state.seqno(), Err(err))),
+                };
+                trace!(
+                    "apply_unbatched_cmd {} attempting {}\n  new_state={:?}",
+                    cmd.name,
+                    self.state.seqno(),
+                    new_state
+                );
 
-            let new = VersionedData::from((new_state.seqno(), &new_state));
-            // SUBTLE! Unlike the other consensus and blob uses, we can't
-            // automatically retry indeterminate ExternalErrors here. However,
-            // if the state change itself is _idempotent_, then we're free to
-            // retry even indeterminate errors. See
-            // [Self::apply_unbatched_idempotent_cmd].
-            let payload_len = new.data.len();
-            let cas_res = retry_determinate("apply_unbatched_cmd::cas", || async {
-                self.consensus
-                    .compare_and_set(
-                        Instant::now() + FOREVER,
-                        &path,
-                        Some(self.state.seqno()),
-                        new.clone(),
-                    )
-                    .await
-            })
-            .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
-            .await
-            .map_err(|err| {
-                debug!("apply_unbatched_cmd {} errored: {}", name, err);
-                err
-            })?;
-            match cas_res {
-                Ok(()) => {
-                    trace!(
-                        "apply_unbatched_cmd {} succeeded {}\n  new_state={:?}",
-                        name,
-                        new_state.seqno(),
-                        new_state
-                    );
-                    self.state = new_state;
-
-                    // Bound the number of entries in consensus.
-                    let () = retry_external("apply_unbatched_cmd::truncate", || async {
+                let new = VersionedData::from((new_state.seqno(), &new_state));
+                // SUBTLE! Unlike the other consensus and blob uses, we can't
+                // automatically retry indeterminate ExternalErrors here. However,
+                // if the state change itself is _idempotent_, then we're free to
+                // retry even indeterminate errors. See
+                // [Self::apply_unbatched_idempotent_cmd].
+                let payload_len = new.data.len();
+                let cas_res = retry_determinate(
+                    &self.retry_metrics.determinate.apply_unbatched_cmd_cas,
+                    || async {
                         self.consensus
-                            .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
+                            .compare_and_set(
+                                Instant::now() + FOREVER,
+                                &path,
+                                Some(self.state.seqno()),
+                                new.clone(),
+                            )
                             .await
-                    })
-                    .instrument(debug_span!("apply_unbatched_cmd::truncate"))
-                    .await;
+                    },
+                )
+                .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
+                .await
+                .map_err(|err| {
+                    debug!("apply_unbatched_cmd {} errored: {}", cmd.name, err);
+                    err
+                })?;
+                match cas_res {
+                    Ok(()) => {
+                        trace!(
+                            "apply_unbatched_cmd {} succeeded {}\n  new_state={:?}",
+                            cmd.name,
+                            new_state.seqno(),
+                            new_state
+                        );
+                        self.state = new_state;
 
-                    return Ok((self.state.seqno(), Ok(work_ret)));
-                }
-                Err(current) => {
-                    debug!(
-                        "apply_unbatched_cmd {} lost the CaS race, retrying: {} vs {:?}",
-                        name,
-                        self.state.seqno(),
-                        current.as_ref().map(|x| x.seqno)
-                    );
-                    self.update_state(current).await;
+                        // Bound the number of entries in consensus.
+                        let () = retry_external(
+                            &self.retry_metrics.external.apply_unbatched_cmd_truncate,
+                            || async {
+                                self.consensus
+                                    .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
+                                    .await
+                            },
+                        )
+                        .instrument(debug_span!("apply_unbatched_cmd::truncate"))
+                        .await;
 
-                    // Intentionally don't backoff here. It would only make
-                    // starvation issues even worse.
-                    continue;
+                        return Ok((self.state.seqno(), Ok(work_ret)));
+                    }
+                    Err(current) => {
+                        debug!(
+                            "apply_unbatched_cmd {} lost the CaS race, retrying: {} vs {:?}",
+                            cmd.name,
+                            self.state.seqno(),
+                            current.as_ref().map(|x| x.seqno)
+                        );
+                        self.update_state(current).await;
+
+                        // Intentionally don't backoff here. It would only make
+                        // starvation issues even worse.
+                        continue;
+                    }
                 }
             }
-        }
+        })
+        .await
     }
 
     async fn maybe_init_state(
         consensus: &(dyn Consensus + Send + Sync),
+        retry_metrics: &RetriesMetrics,
         shard_id: ShardId,
     ) -> Result<State<K, V, T, D>, InvalidUsage<T>> {
         debug!("Machine::maybe_init_state shard_id={}", shard_id);
 
         let path = shard_id.to_string();
-        let mut current = retry_external("maybe_init_state::head", || async {
+        let mut current = retry_external(&retry_metrics.external.maybe_init_state_head, || async {
             consensus.head(Instant::now() + FOREVER, &path).await
         })
         .await;
@@ -369,7 +411,7 @@ where
                 new.seqno,
                 state
             );
-            let cas_res = retry_external("maybe_init_state::cas", || async {
+            let cas_res = retry_external(&retry_metrics.external.maybe_init_state_cas, || async {
                 consensus
                     .compare_and_set(Instant::now() + FOREVER, &path, None, new.clone())
                     .await
@@ -401,11 +443,14 @@ where
 
     pub async fn fetch_and_update_state(&mut self) {
         let shard_id = self.shard_id();
-        let current = retry_external("fetch_and_update_state::head", || async {
-            self.consensus
-                .head(Instant::now() + FOREVER, &shard_id.to_string())
-                .await
-        })
+        let current = retry_external(
+            &self.retry_metrics.external.fetch_and_update_state_head,
+            || async {
+                self.consensus
+                    .head(Instant::now() + FOREVER, &shard_id.to_string())
+                    .await
+            },
+        )
         .instrument(trace_span!("fetch_and_update_state::head"))
         .await;
         self.update_state(current).await;
@@ -436,19 +481,19 @@ pub const INFO_MIN_ATTEMPTS: usize = 3;
 
 pub const FOREVER: Duration = Duration::from_secs(1_000_000_000);
 
-pub async fn retry_external<R, F, WorkFn>(name: &str, mut work_fn: WorkFn) -> R
+pub async fn retry_external<R, F, WorkFn>(metrics: &RetryMetrics, mut work_fn: WorkFn) -> R
 where
     F: std::future::Future<Output = Result<R, ExternalError>>,
     WorkFn: FnMut() -> F,
 {
-    let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+    let mut retry = metrics.stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
     loop {
         match work_fn().await {
             Ok(x) => {
                 if retry.attempt() > 0 {
                     debug!(
                         "external operation {} succeeded after failing at least once",
-                        name,
+                        metrics.name,
                     );
                 }
                 return x;
@@ -457,14 +502,14 @@ where
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
                         "external operation {} failed, retrying in {:?}: {:#}",
-                        name,
+                        metrics.name,
                         retry.next_sleep(),
                         err
                     );
                 } else {
                     debug!(
                         "external operation {} failed, retrying in {:?}: {:#}",
-                        name,
+                        metrics.name,
                         retry.next_sleep(),
                         err
                     );
@@ -476,21 +521,21 @@ where
 }
 
 pub async fn retry_determinate<R, F, WorkFn>(
-    name: &str,
+    metrics: &RetryMetrics,
     mut work_fn: WorkFn,
 ) -> Result<R, Indeterminate>
 where
     F: std::future::Future<Output = Result<R, ExternalError>>,
     WorkFn: FnMut() -> F,
 {
-    let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+    let mut retry = metrics.stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
     loop {
         match work_fn().await {
             Ok(x) => {
                 if retry.attempt() > 0 {
                     debug!(
                         "external operation {} succeeded after failing at least once",
-                        name,
+                        metrics.name,
                     );
                 }
                 return Ok(x);
@@ -499,14 +544,14 @@ where
                 if retry.attempt() >= INFO_MIN_ATTEMPTS {
                     info!(
                         "external operation {} failed, retrying in {:?}: {:#}",
-                        name,
+                        metrics.name,
                         retry.next_sleep(),
                         err
                     );
                 } else {
                     debug!(
                         "external operation {} failed, retrying in {:?}: {:#}",
-                        name,
+                        metrics.name,
                         retry.next_sleep(),
                         err
                     );

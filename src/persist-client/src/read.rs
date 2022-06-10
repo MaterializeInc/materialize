@@ -35,6 +35,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
+use crate::r#impl::metrics::RetriesMetrics;
 use crate::r#impl::state::{DescriptionMeta, Since};
 use crate::ShardId;
 
@@ -81,6 +82,7 @@ pub struct SnapshotSplit {
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
+    retry_metrics: Arc<RetriesMetrics>,
     shard_id: ShardId,
     as_of: Antichain<T>,
     batches: Vec<(String, Description<T>)>,
@@ -120,15 +122,16 @@ where
                 None => return None,
             };
 
-            let updates = fetch_batch_part(self.blob.as_ref(), &key, &desc, |t| {
-                // This would get covered by a listen started at the same as_of.
-                let keep = !self.as_of.less_than(&t);
-                if keep {
-                    t.advance_by(self.as_of.borrow());
-                }
-                keep
-            })
-            .await;
+            let updates =
+                fetch_batch_part(self.blob.as_ref(), &self.retry_metrics, &key, &desc, |t| {
+                    // This would get covered by a listen started at the same as_of.
+                    let keep = !self.as_of.less_than(&t);
+                    if keep {
+                        t.advance_by(self.as_of.borrow());
+                    }
+                    keep
+                })
+                .await;
             if updates.is_empty() {
                 // We might have filtered everything.
                 continue;
@@ -173,6 +176,7 @@ pub enum ListenEvent<K, V, T, D> {
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
 pub struct Listen<K, V, T, D> {
+    retry_metrics: Arc<RetriesMetrics>,
     as_of: Antichain<T>,
     frontier: Antichain<T>,
     machine: Machine<K, V, T, D>,
@@ -199,8 +203,13 @@ where
 
     /// Attempt to pull out the next values of this subscription.
     ///
-    /// The returned updates might or might not be consolidated. If you have a
-    /// use for consolidated listen output, given that snapshots can't be
+    /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
+    /// and not necessarily consolidated. However, the timestamp of each individual update will be
+    /// greater than or equal to the last received [ListenEvent::Progress] frontier (or this
+    /// [Listen]'s initial `as_of` frontier if no progress event has been emitted yet) and less
+    /// than the next [ListenEvent::Progress] frontier.
+    ///
+    /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
@@ -209,11 +218,12 @@ where
         let (batch_keys, desc) = self.machine.next_listen_batch(&self.frontier).await;
         let mut updates = Vec::new();
         for key in batch_keys.iter() {
-            let mut updates_part = fetch_batch_part(self.blob.as_ref(), key, &desc, |t| {
-                // This would get covered by a snapshot started at the same as_of.
-                self.as_of.less_than(&t)
-            })
-            .await;
+            let mut updates_part =
+                fetch_batch_part(self.blob.as_ref(), &self.retry_metrics, key, &desc, |t| {
+                    // This would get covered by a snapshot started at the same as_of.
+                    self.as_of.less_than(&t)
+                })
+                .await;
             updates.append(&mut updates_part);
         }
         let mut ret = Vec::with_capacity(2);
@@ -268,6 +278,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64,
 {
+    pub(crate) retry_metrics: Arc<RetriesMetrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -328,6 +339,7 @@ where
             return Err(Since(self.since.clone()));
         }
         Ok(Listen {
+            retry_metrics: Arc::clone(&self.retry_metrics),
             as_of: as_of.clone(),
             frontier: as_of,
             machine: self.machine.clone(),
@@ -444,6 +456,7 @@ where
             .collect();
 
         let iter = SnapshotIter {
+            retry_metrics: Arc::clone(&self.retry_metrics),
             shard_id,
             as_of: Antichain::from(
                 split
@@ -468,6 +481,7 @@ where
         let mut machine = self.machine.clone();
         let read_cap = machine.clone_reader(&self.reader_id).await;
         let new_reader = ReadHandle {
+            retry_metrics: Arc::clone(&self.retry_metrics),
             reader_id: new_reader_id,
             machine,
             blob: Arc::clone(&self.blob),
@@ -551,6 +565,7 @@ where
 
 async fn fetch_batch_part<K, V, T, D, TFn>(
     blob: &(dyn BlobMulti + Send + Sync),
+    metrics: &RetriesMetrics,
     key: &str,
     desc: &Description<T>,
     mut t_fn: TFn,
@@ -562,10 +577,12 @@ where
     D: Semigroup + Codec64,
     TFn: FnMut(&mut T) -> bool,
 {
-    let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
+    let mut retry = metrics
+        .fetch_batch_part
+        .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
     let get_span = debug_span!("fetch_batch::get");
     let value = loop {
-        let value = retry_external("fetch_batch::get", || async {
+        let value = retry_external(&metrics.external.fetch_batch_get, || async {
             blob.get(Instant::now() + FOREVER, key).await
         })
         .instrument(get_span.clone())
@@ -598,6 +615,10 @@ where
             // if the durable data was corrupted, or if operations messes up
             // deployment. In any case, fail loudly.
             .expect("internal error: invalid encoded state");
+
+        // Drop the encoded representation as soon as we can to reclaim memory.
+        drop(value);
+
         let mut ret = Vec::new();
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {

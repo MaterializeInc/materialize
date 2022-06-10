@@ -62,6 +62,9 @@ pub type ComputeInstanceId = i64;
 /// An abstraction allowing us to name different replicas.
 pub type ReplicaId = i64;
 
+/// Identifier of a process within a replica.
+pub type ProcessId = i64;
+
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConcreteComputeInstanceReplicaConfig {
@@ -72,8 +75,10 @@ pub enum ConcreteComputeInstanceReplicaConfig {
     },
     /// A remote but managed replica
     Managed {
-        /// The size of the replica
+        /// The size configuration of the replica.
         size_config: ClusterReplicaSizeConfig,
+        /// A readable name for the replica size.
+        size_name: String,
         /// The replica's availability zone, if `Some`.
         availability_zone: Option<String>,
     },

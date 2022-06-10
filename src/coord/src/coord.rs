@@ -76,6 +76,7 @@ use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
+use futures::StreamExt;
 use itertools::Itertools;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -90,7 +91,7 @@ use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
 use mz_dataflow_types::client::controller::{
-    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ReadPolicy,
+    ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent, ReadPolicy,
 };
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
@@ -180,6 +181,7 @@ pub enum Message {
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
+    ComputeInstanceStatus(ComputeInstanceEvent),
     GroupCommit(Option<WriteTimestamp>),
 }
 
@@ -352,7 +354,10 @@ fn concretize_replica_config(
                     )| (*scale, *cpu_limit),
                 );
                 let expected = entries.into_iter().map(|(name, _)| name.clone()).collect();
-                CoordError::InvalidClusterReplicaSize { size, expected }
+                CoordError::InvalidClusterReplicaSize {
+                    size: size.clone(),
+                    expected,
+                }
             })?;
 
             if let Some(az) = &availability_zone {
@@ -365,6 +370,7 @@ fn concretize_replica_config(
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config: *size_config,
+                size_name: size,
                 availability_zone,
             }
         }
@@ -432,9 +438,6 @@ pub struct Coordinator<S> {
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
     secrets_controller: Box<dyn SecretsController>,
-    /// Handle to secrets reader that gives us access to user secrets
-    #[allow(dead_code)]
-    secrets_reader: SecretsReader,
     /// Map of strings to corresponding compute replica sizes.
     replica_sizes: ClusterReplicaSizeMap,
     /// Valid availability zones for replicas.
@@ -607,9 +610,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
-            for (replica_id, config) in instance.replicas_by_id.clone() {
+            for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.dataflow_client
-                    .add_replica_to_instance(instance.id, replica_id, config)
+                    .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -838,8 +841,8 @@ impl<S: Append + 'static> Coordinator<S> {
             // close on a regular interval. This roughly tracks the behavior of realtime
             // sources that close off timestamps on an interval.
             let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let mut interval = tokio::time::interval(self.catalog.config().timestamp_frequency);
             task::spawn(|| "coordinator_advance_local_inputs", async move {
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1_000));
                 loop {
                     interval.tick().await;
                     // If sending fails, the main thread has shutdown.
@@ -849,6 +852,23 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             });
         }
+
+        // Spawn a watcher task that listens for compute service status changes and
+        // reports them to the coordinator.
+        task::spawn(|| "compute_service_watcher", {
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let mut events = self.dataflow_client.watch_compute_services();
+            async move {
+                while let Some(event) = events.next().await {
+                    if internal_cmd_tx
+                        .send(Message::ComputeInstanceStatus(event))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
 
         loop {
             let msg = select! {
@@ -910,6 +930,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Message::GroupCommit(write_timestamp) => {
                     self.try_group_commit(write_timestamp).await;
+                }
+                Message::ComputeInstanceStatus(status) => {
+                    self.message_compute_instance_status(status).await
                 }
             }
 
@@ -1135,13 +1158,18 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
         }: CreateSourceStatementReady,
     ) {
-        // TODO: verify that the dependent objects are still present. They may
-        // have been dropped while we were purifying the statement.
-
         let stmt = match result {
             Ok(stmt) => stmt,
             Err(e) => return tx.send(Err(e), session),
         };
+
+        // Ensure that all dependencies still exist after purification.
+        if !depends_on
+            .iter()
+            .all(|id| self.catalog.try_get_entry(id).is_some())
+        {
+            return tx.send(Err(CoordError::ChangedPlan), session);
+        }
 
         let plan = match self
             .handle_statement(&mut session, Statement::CreateSource(stmt), &params)
@@ -1450,6 +1478,16 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
+        self.catalog_transact(
+            None,
+            vec![catalog::Op::UpdateComputeInstanceStatus { event }],
+            |_| Ok(()),
+        )
+        .await
+        .expect("updating compute instance status cannot fail");
+    }
+
     async fn handle_statement(
         &mut self,
         session: &mut Session,
@@ -1731,6 +1769,12 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         let depends_on = depends_on.into_iter().collect();
         let params = portal.parameters.clone();
+        // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
+        // purification.  This should be done back on the main thread.
+        // We do the validation:
+        //   - In the handler for `Message::CreateSourceStatementReady`, before we handle the purified statement.
+        // If we add special handling for more types of `Statement`s, we'll need to ensure similar verification
+        // occurs.
         match stmt {
             // `CREATE SOURCE` statements must be purified off the main
             // coordinator thread of control.
@@ -2468,9 +2512,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 .create_instance(instance.id, instance.logging.clone())
                 .await
                 .unwrap();
-            for (replica_id, config) in instance.replicas_by_id.clone() {
+            for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.dataflow_client
-                    .add_replica_to_instance(instance.id, replica_id, config)
+                    .add_replica_to_instance(instance.id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3370,9 +3414,9 @@ impl<S: Append + 'static> Coordinator<S> {
         )
         .await;
         for (instance_id, replicas) in instance_replica_drop_sets {
-            for (replica_id, config) in replicas {
+            for (replica_id, replica) in replicas {
                 self.dataflow_client
-                    .drop_replica(instance_id, replica_id, config)
+                    .drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3421,9 +3465,9 @@ impl<S: Append + 'static> Coordinator<S> {
         )
         .await;
 
-        for (compute_id, replica_id, config) in replicas_to_drop {
+        for (compute_id, replica_id, replica) in replicas_to_drop {
             self.dataflow_client
-                .drop_replica(compute_id, replica_id, config)
+                .drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -5601,6 +5645,7 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
+        secrets_reader,
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;
@@ -5635,7 +5680,6 @@ pub async fn serve<S: Append + 'static>(
                 write_lock_wait_group: VecDeque::new(),
                 pending_writes: Vec::new(),
                 secrets_controller,
-                secrets_reader,
                 replica_sizes,
                 availability_zones,
                 connector_context,

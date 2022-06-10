@@ -930,15 +930,15 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
     assert_eq!(
         explain,
-        "     timestamp:          1036
-         since:[         1036]
-         upper:[         1036]
+        "     timestamp:          1037
+         since:[         1037]
+         upper:[         1037]
      has table: true
- table read ts:          1036
+ table read ts:          1037
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         1036]
-write frontier:[         1036]\n",
+ read frontier:[         1037]
+write frontier:[         1037]\n",
     );
 
     Ok(())

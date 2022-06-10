@@ -24,7 +24,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tower_http::cors::AllowOrigin;
 
-use materialized::{OrchestratorBackend, OrchestratorConfig, TlsMode};
+use materialized::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_orchestrator_tracing::TracingCliArgs;
@@ -160,7 +160,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             blob_uri: format!("file://{}/persist/blob", data_directory.display()),
             consensus_uri,
         },
-        data_directory: data_directory.clone(),
         catalog_postgres_stash,
         storage_postgres_stash,
         orchestrator: OrchestratorConfig {
@@ -175,7 +174,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
                 // NOTE(benesch): would be nice to not have to do this, but
                 // the subprocess output wreaks havoc on cargo2junit.
                 suppress_output: true,
-                data_dir: data_directory,
+                data_dir: data_directory.clone(),
                 command_wrapper: vec![],
             }),
             storaged_image: "storaged".into(),
@@ -183,7 +182,9 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
             linger: false,
             tracing: TracingCliArgs::default(),
         },
-        secrets_controller: None,
+        secrets_controller: SecretsControllerConfig::LocalFileSystem(
+            data_directory.join("secrets"),
+        ),
         sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         http_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         internal_sql_listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),

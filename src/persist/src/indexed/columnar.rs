@@ -527,10 +527,7 @@ impl Default for ColumnarRecordsVecBuilder {
 
 impl ColumnarRecordsVecBuilder {
     /// Create a new ColumnarRecordsVecBuilder with a specified max size.
-    ///
-    /// Only used for testing.
-    #[allow(dead_code)]
-    pub(crate) fn new_with_len(key_val_data_max_len: usize) -> Self {
+    pub fn new_with_len(key_val_data_max_len: usize) -> Self {
         assert!(key_val_data_max_len <= KEY_VAL_DATA_MAX_LEN);
         ColumnarRecordsVecBuilder {
             current: ColumnarRecordsBuilder::default(),

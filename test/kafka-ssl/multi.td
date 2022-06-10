@@ -66,6 +66,47 @@ a
 1
 2
 
+> CREATE SECRET ssl_key_location_kafka AS '/share/secrets/materialized-kafka.key'
+
+> CREATE SECRET ssl_certificate_location_kafka AS '/share/secrets/materialized-kafka.crt'
+
+> CREATE SECRET ssl_key_password_kafka AS 'mzmzmz'
+
+> CREATE SECRET ssl_key_location_csr AS '/share/secrets/materialized-schema-registry.key'
+
+> CREATE SECRET ssl_certificate_location_csr  AS '/share/secrets/materialized-schema-registry.crt'
+
+> CREATE SECRET username_csr AS 'materialize'
+
+> CREATE SECRET password_csr AS 'sekurity'
+
+> CREATE SECRET ssl_ca_location AS '/share/secrets/ca.crt'
+
+> CREATE MATERIALIZED SOURCE data_secret
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      security_protocol = 'SSL',
+      ssl_key_location = SECRET ssl_key_location_kafka,
+      ssl_certificate_location = SECRET ssl_certificate_location_kafka,
+      ssl_ca_location = SECRET ssl_ca_location,
+      ssl_key_password = SECRET ssl_key_password_kafka
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  WITH (
+      ssl_key_location = SECRET ssl_key_location_csr,
+      ssl_certificate_location = SECRET ssl_certificate_location_csr,
+      ssl_ca_location = SECRET ssl_ca_location,
+      username = SECRET username_csr,
+      password = SECRET password_csr
+  )
+  ENVELOPE DEBEZIUM
+
+> SELECT * FROM data_secret
+a
+---
+1
+2
+
 # Ensure that our test infra correctly sets up certs by failing when CSR is not
 # specifically configured
 ! CREATE MATERIALIZED SOURCE data

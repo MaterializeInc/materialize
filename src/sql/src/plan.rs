@@ -60,6 +60,7 @@ pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
+pub(crate) mod with_options;
 
 pub use self::expr::{HirRelationExpr, HirScalarExpr};
 pub use error::PlanError;

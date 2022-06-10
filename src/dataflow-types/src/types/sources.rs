@@ -19,6 +19,7 @@ use bytes::BufMut;
 use chrono::NaiveDateTime;
 
 use globset::{Glob, GlobBuilder};
+use mz_secrets::SecretsReader;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Just, Strategy};
 use proptest::prop_oneof;
 use proptest_derive::Arbitrary;
@@ -1144,14 +1145,29 @@ pub fn provide_default_metadata(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum StringOrSecret {
+    String(String),
+    Secret(GlobalId),
+}
+
+impl StringOrSecret {
+    pub fn get_string(&self, secrets_reader: &SecretsReader) -> anyhow::Result<String> {
+        match self {
+            StringOrSecret::String(s) => Ok(s.clone()),
+            StringOrSecret::Secret(id) => secrets_reader.read_string(*id),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ConnectorInner {
     Kafka {
         broker: KafkaAddrs,
-        config_options: BTreeMap<String, String>,
+        config_options: BTreeMap<String, StringOrSecret>,
     },
     CSR {
         registry: String,
-        with_options: BTreeMap<String, String>,
+        with_options: BTreeMap<String, StringOrSecret>,
     },
 }
 
@@ -1163,7 +1179,7 @@ impl ConnectorInner {
         }
     }
 
-    pub fn options(&self) -> BTreeMap<String, String> {
+    pub fn options(&self) -> BTreeMap<String, StringOrSecret> {
         match self {
             ConnectorInner::Kafka { config_options, .. } => config_options.clone(),
             ConnectorInner::CSR { with_options, .. } => with_options.clone(),
