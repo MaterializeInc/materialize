@@ -143,6 +143,18 @@ impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
     }
 }
 
+impl<V: TryFromValue<Value>> TryFromValue<Value> for Option<V> {
+    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+        Ok(Some(V::try_from_value(v)?))
+    }
+}
+
+impl<V: ImpliedValue> ImpliedValue for Option<V> {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        Ok(Some(V::implied_value()?))
+    }
+}
+
 impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOptionValue<T>> for V {
     fn try_from_value(v: WithOptionValue<T>) -> Result<Self, anyhow::Error> {
         match v {

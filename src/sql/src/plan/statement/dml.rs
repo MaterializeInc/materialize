@@ -410,7 +410,7 @@ fn plan_copy_from(
 
 generate_extracted_config!(
     CopyOption,
-    (Format, String),
+    (Format, String, Default("text")),
     (Delimiter, String),
     (Null, String),
     (Escape, String),
@@ -437,17 +437,12 @@ pub fn plan_copy(
     } = CopyOptionExtracted::try_from(options)?;
 
     let copy_params = CopyParams {
-        format: format
-            .map(|f| {
-                Ok(match f.to_lowercase().as_str() {
-                    "text" => CopyFormat::Text,
-                    "csv" => CopyFormat::Csv,
-                    "binary" => CopyFormat::Binary,
-                    _ => bail!("unknown FORMAT: {}", f),
-                })
-            })
-            .transpose()?
-            .unwrap_or(CopyFormat::Text),
+        format: match format.to_lowercase().as_str() {
+            "text" => CopyFormat::Text,
+            "csv" => CopyFormat::Csv,
+            "binary" => CopyFormat::Binary,
+            _ => bail!("unknown FORMAT: {}", format),
+        },
         delimiter,
         null,
         escape,
