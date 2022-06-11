@@ -517,12 +517,35 @@ pub fn create_statement(
 /// - `$t` is the type you want to convert the option's value to. If the
 ///   option's value is absent (i.e. the user only entered the option's key),
 ///   you can also define a default value.
+/// - `Default($v)` is an optional parameter that sets the default value of the
+///   field to `$v`. `$v` must be convertible to `$t` using `.into`. This also
+///   converts the struct's type from `Option<$t>` to `<$t>`.
 macro_rules! generate_extracted_config {
-    ($option_ty:ty, $(($option_name:path, $t:ty)),+) => {
+    // No default specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)], $(
+            $tail
+        ),*);
+    };
+    // No default specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)]);
+    };
+    // Default specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)], $(
+            $tail
+        ),*);
+    };
+    // Default specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)]);
+    };
+    ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr))+]) => {
         paste::paste! {
             pub struct [<$option_ty Extracted>] {
                 $(
-                    [<$option_name:snake>]: Option<$t>,
+                    [<$option_name:snake>]: $t,
                 )*
             }
 
@@ -530,7 +553,7 @@ macro_rules! generate_extracted_config {
                 fn default() -> Self {
                     [<$option_ty Extracted>] {
                         $(
-                            [<$option_name:snake>]: None,
+                            [<$option_name:snake>]: $v.into(),
                         )*
                     }
                 }
@@ -549,10 +572,9 @@ macro_rules! generate_extracted_config {
                         match option.name {
                             $(
                                 $option_name => {
-                                    extracted.[<$option_name:snake>] = Some(
+                                    extracted.[<$option_name:snake>] =
                                         <$t>::try_from_value(option.value)
-                                            .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?
-                                    );
+                                            .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?;
                                 }
                             )*
                         }
@@ -561,7 +583,10 @@ macro_rules! generate_extracted_config {
                 }
             }
         }
-    }
+    };
+    ($option_ty:ty, $($h:tt),+) => {
+        generate_extracted_config!{$option_ty, [], $($h),+}
+    };
 }
 
 /// Ensures that the given set of options are empty, useful for validating that

@@ -1211,7 +1211,7 @@ fn get_encoding(
     Ok(encoding)
 }
 
-generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool));
+generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
 fn get_encoding_inner(
     scx: &StatementContext,
@@ -1241,7 +1241,7 @@ fn get_encoding_inner(
                         key_schema: None,
                         value_schema: schema.clone(),
                         schema_registry_config: None,
-                        confluent_wire_format: confluent_wire_format.unwrap_or(true),
+                        confluent_wire_format,
                     }
                 }
                 AvroSchema::InlineSchema {
