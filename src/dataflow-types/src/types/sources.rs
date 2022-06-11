@@ -38,7 +38,6 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 pub mod encoding;
 
 use crate::aws::AwsConfig;
-use crate::postgres_source::PostgresSourceDetails;
 use crate::DataflowError;
 
 include!(concat!(
@@ -1681,7 +1680,6 @@ impl RustType<ProtoKinesisSourceConnector> for KinesisSourceConnector {
 pub struct PostgresSourceConnector {
     pub conn: String,
     pub publication: String,
-    pub slot_name: String,
     pub details: PostgresSourceDetails,
 }
 
@@ -1690,8 +1688,7 @@ impl RustType<ProtoPostgresSourceConnector> for PostgresSourceConnector {
         ProtoPostgresSourceConnector {
             conn: self.conn.clone(),
             publication: self.publication.clone(),
-            slot_name: self.slot_name.clone(),
-            details: Some(self.details.clone()),
+            details: Some(self.details.into_proto()),
         }
     }
 
@@ -1699,11 +1696,35 @@ impl RustType<ProtoPostgresSourceConnector> for PostgresSourceConnector {
         Ok(PostgresSourceConnector {
             conn: proto.conn,
             publication: proto.publication,
-            slot_name: proto.slot_name,
-            // try_into_if_some doesn't work because PostgresSourceDetails doesn't implement ToString/Display
-            details: proto.details.ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoPostgresSourceConnector::details")
-            })?,
+            details: proto
+                .details
+                .into_rust_if_some("ProtoPostgresSourceConnector::details")?,
+        })
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PostgresSourceDetails {
+    pub tables: Vec<mz_postgres_util::desc::PostgresTableDesc>,
+    pub slot: String,
+}
+
+impl RustType<ProtoPostgresSourceDetails> for PostgresSourceDetails {
+    fn into_proto(&self) -> ProtoPostgresSourceDetails {
+        ProtoPostgresSourceDetails {
+            tables: self.tables.iter().map(|t| t.into_proto()).collect(),
+            slot: self.slot.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoPostgresSourceDetails) -> Result<Self, TryFromProtoError> {
+        Ok(PostgresSourceDetails {
+            tables: proto
+                .tables
+                .into_iter()
+                .map(mz_postgres_util::desc::PostgresTableDesc::from_proto)
+                .collect::<Result<_, _>>()?,
+            slot: proto.slot,
         })
     }
 }

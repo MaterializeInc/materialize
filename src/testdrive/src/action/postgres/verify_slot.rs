@@ -61,7 +61,7 @@ impl Action for VerifySlotAction {
                 println!(">> checking for postgres replication slot {}", &self.slot);
                 let rows = client
                     .query(
-                        "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
+                        "SELECT active_pid FROM pg_replication_slots WHERE slot_name LIKE $1::TEXT",
                         &[&self.slot],
                     )
                     .await

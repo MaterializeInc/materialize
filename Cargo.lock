@@ -3778,9 +3778,15 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
+ "mz-repr",
  "openssl",
  "postgres-openssl",
+ "proptest",
+ "proptest-derive",
+ "prost",
+ "serde",
  "tokio-postgres",
+ "tonic-build",
 ]
 
 [[package]]
@@ -3917,7 +3923,6 @@ dependencies = [
  "anyhow",
  "aws-arn",
  "aws-sdk-sts",
- "bytes",
  "chrono",
  "datadriven",
  "enum-kinds",

@@ -17,10 +17,10 @@ import "repr/src/proto.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
-import "dataflow-types/src/postgres_source.proto";
 import "dataflow-types/src/types/aws.proto";
 import "dataflow-types/src/types/sources/encoding.proto";
 import "kafka-util/src/addr.proto";
+import "postgres-util/src/desc.proto";
 
 package mz_dataflow_types.types.sources;
 
@@ -218,8 +218,12 @@ message ProtoKinesisSourceConnector {
 message ProtoPostgresSourceConnector {
     string conn = 1;
     string publication = 2;
-    string slot_name = 3;
-    mz_dataflow_types.postgres_source.PostgresSourceDetails details = 4;
+    ProtoPostgresSourceDetails details = 4;
+}
+
+message ProtoPostgresSourceDetails {
+    repeated mz_postgres_util.desc.ProtoPostgresTableDesc tables = 1;
+    string slot = 2;
 }
 
 message ProtoPubNubSourceConnector {

@@ -571,7 +571,7 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=tea
 ----
 CREATE SOURCE psychic FROM POSTGRES CONNECTION 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None, details: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", details: None }, with_options: [], include_metadata: [], format: None, envelope: None, if_not_exists: false, materialized: false, key_constraint: None })
 
 parse-statement
 CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel';

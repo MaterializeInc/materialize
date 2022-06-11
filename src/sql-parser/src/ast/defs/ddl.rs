@@ -609,8 +609,6 @@ pub enum CreateSourceConnector<T: AstInfo> {
         conn: String,
         /// The name of the publication to sync
         publication: String,
-        /// The replication slot name that will be created upstream
-        slot: Option<String>,
         /// Hex encoded string of binary serialization of `dataflow_types::PostgresSourceDetails`
         details: Option<String>,
     },
@@ -665,17 +663,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
             CreateSourceConnector::Postgres {
                 conn,
                 publication,
-                slot,
                 details,
             } => {
                 f.write_str("POSTGRES CONNECTION '");
                 f.write_str(&display::escape_single_quote_string(conn));
                 f.write_str("' PUBLICATION '");
                 f.write_str(&display::escape_single_quote_string(publication));
-                if let Some(slot) = slot {
-                    f.write_str("' SLOT '");
-                    f.write_str(&display::escape_single_quote_string(slot));
-                }
                 if let Some(details) = details {
                     f.write_str("' DETAILS '");
                     f.write_str(&display::escape_single_quote_string(details));

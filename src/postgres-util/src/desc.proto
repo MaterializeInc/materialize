@@ -9,25 +9,19 @@
 
 syntax = "proto3";
 
-package mz_dataflow_types.postgres_source;
+package mz_postgres_util.desc;
 
-message PostgresTable {
+message ProtoPostgresTableDesc {
     string name = 1;
     string namespace = 2;
-    uint32 relation_id = 3;
-    repeated PostgresColumn columns = 4;
+    uint32 oid = 3;
+    repeated ProtoPostgresColumnDesc columns = 4;
 }
 
-message PostgresColumn {
+message ProtoPostgresColumnDesc {
     string name = 1;
-    // NOTE: no hard questions about how to string-format the type; we just store its OID.
-    int32 type_oid = 2;
+    uint32 type_oid = 2;
     int32 type_mod = 3;
     bool nullable = 4;
     bool primary_key = 5;
-}
-
-message PostgresSourceDetails {
-    repeated PostgresTable tables = 1;
-    string slot = 2;
 }

@@ -16,6 +16,7 @@ fn main() {
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_kafka_util.addr", "::mz_kafka_util")
         .extern_path(".mz_persist.gen.persist", "::mz_persist::gen::persist")
+        .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
         .extern_path(".mz_repr.adt.regex", "::mz_repr::adt::regex")
         .extern_path(".mz_repr.chrono", "::mz_repr::chrono")
         .extern_path(".mz_repr.global_id", "::mz_repr::global_id")
@@ -32,7 +33,6 @@ fn main() {
                 "dataflow-types/src/client/controller/storage.proto",
                 "dataflow-types/src/errors.proto",
                 "dataflow-types/src/logging.proto",
-                "dataflow-types/src/postgres_source.proto",
                 "dataflow-types/src/types/aws.proto",
                 "dataflow-types/src/types/sinks.proto",
                 "dataflow-types/src/types/sources.proto",
