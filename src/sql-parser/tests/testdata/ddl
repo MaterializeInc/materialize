@@ -1379,7 +1379,7 @@ CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WIT
 ----
 CREATE CONNECTOR conn1 FOR CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (username = 'user', password = 'word')
 =>
-CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: CSR { registry: "http://localhost:8081", with_options: [WithOption { key: Ident("username"), value: Some(Value(String("user"))) }, WithOption { key: Ident("password"), value: Some(Value(String("word"))) }] }, if_not_exists: false })
+CreateConnector(CreateConnectorStatement { name: UnresolvedObjectName([Ident("conn1")]), connector: Csr { url: "http://localhost:8081", with_options: [WithOption { key: Ident("username"), value: Some(Value(String("user"))) }, WithOption { key: Ident("password"), value: Some(Value(String("word"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTOR conn1 TOPIC 'baz' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR conn2 ENVELOPE DEBEZIUM

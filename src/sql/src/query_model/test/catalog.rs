@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_dataflow_types::connectors::Connector;
 use mz_dataflow_types::sources::SourceConnector;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
@@ -26,9 +27,8 @@ use mz_secrets::SecretsReader;
 
 use crate::ast::Expr;
 use crate::catalog::{
-    CatalogComputeInstance, CatalogConfig, CatalogConnector, CatalogDatabase, CatalogError,
-    CatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference,
-    SessionCatalog,
+    CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
+    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{
@@ -139,7 +139,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, CatalogError> {
+    fn connector(&self) -> Result<&Connector, CatalogError> {
         unimplemented!()
     }
 }

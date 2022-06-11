@@ -521,8 +521,8 @@ pub enum CreateConnector<T: AstInfo> {
         broker: String,
         with_options: Vec<WithOption<T>>,
     },
-    CSR {
-        registry: String,
+    Csr {
+        url: String,
         with_options: Vec<WithOption<T>>,
     },
 }
@@ -543,8 +543,8 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
                     f.write_str(")");
                 }
             }
-            Self::CSR {
-                registry,
+            Self::Csr {
+                url: registry,
                 with_options,
             } => {
                 f.write_str("CONFLUENT SCHEMA REGISTRY '");

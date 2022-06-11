@@ -27,6 +27,7 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
+use mz_dataflow_types::connectors::{Connector, KafkaConnector};
 use mz_dataflow_types::sinks::{
     KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
     PersistSinkConnectorBuilder, SinkConnectorBuilder, SinkEnvelope,
@@ -36,12 +37,12 @@ use mz_dataflow_types::sources::encoding::{
     RegexEncoding, SourceDataEncoding,
 };
 use mz_dataflow_types::sources::{
-    provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
-    DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
+    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
+    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
     IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MzOffset,
     PostgresSourceConnector, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, StringOrSecret,
-    Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
+    UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -86,13 +87,13 @@ use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::{OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
-    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, Connector,
-    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink,
-    Source, Table, Type, View,
+    AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink, Source, Table,
+    Type, View,
 };
 use crate::pure::Schema;
 
@@ -342,20 +343,20 @@ pub fn plan_create_source(
 
     let (external_connector, encoding) = match connector {
         CreateSourceConnector::Kafka(kafka) => {
-            let (broker, options) = match &kafka.connector {
-                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (broker.to_owned(), None),
+            let (broker, config_options) = match &kafka.connector {
+                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (
+                    broker.to_string(),
+                    kafka_util::extract_config(&mut with_options, scx.catalog.secrets_reader())?,
+                ),
                 mz_sql_parser::ast::KafkaConnector::Reference { connector, .. } => {
                     let item = scx.get_item_by_resolved_name(&connector)?;
-                    let connector = item.catalog_connector()?;
-                    (connector.uri(), Some(connector.options()))
+                    match item.connector()? {
+                        Connector::Kafka(connector) => {
+                            (connector.broker.to_string(), connector.options.clone())
+                        }
+                        _ => bail!("{} is not a kafka connector", item.name()),
+                    }
                 }
-            };
-
-            // If we got options from a connector then use those, they have already had kafka_util::extract_config run on them
-            let config_options = if let Some(opts) = options {
-                opts
-            } else {
-                kafka_util::extract_config(&mut with_options, scx.catalog.secrets_reader())?
             };
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
@@ -1258,32 +1259,29 @@ fn get_encoding_inner(
                             with_options: ccsr_options,
                         },
                 } => {
-                    let (mut ccsr_with_options, registry_url) = match connector {
+                    let mut normalized_options = normalize::options(&ccsr_options)?;
+                    let ccsr_config = match connector {
                         CsrConnector::Inline { url } => {
-                            let mut normalized_options = normalize::options(&ccsr_options)?;
-                            let options = kafka_util::extract_config_ccsr(
+                            let mut options = kafka_util::extract_config_ccsr(
                                 &mut normalized_options,
                                 scx.catalog.secrets_reader(),
                             )?;
-                            normalize::ensure_empty_options(
-                                &normalized_options,
-                                "CONFLUENT SCHEMA REGISTRY",
-                            )?;
-                            (options, url.into())
+                            kafka_util::generate_ccsr_client_config(
+                                url.parse()?,
+                                &mut options,
+                                scx.catalog.secrets_reader(),
+                            )?
                         }
                         CsrConnector::Reference { connector } => {
                             let item = scx.get_item_by_resolved_name(&connector)?;
-                            let connector = item.catalog_connector()?;
-                            (connector.options(), connector.uri())
+                            match item.connector()? {
+                                Connector::Csr(config) => config.clone(),
+                                _ => bail!("{} is not a schema registry connector", item.name()),
+                            }
                         }
                     };
-                    let ccsr_config = kafka_util::generate_ccsr_client_config(
-                        registry_url.parse()?,
-                        &mut ccsr_with_options,
-                        scx.catalog.secrets_reader(),
-                    )?;
                     normalize::ensure_empty_options(
-                        &ccsr_with_options,
+                        &normalized_options,
                         "CONFLUENT SCHEMA REGISTRY",
                     )?;
                     if let Some(seed) = seed {
@@ -1332,36 +1330,34 @@ fn get_encoding_inner(
                 if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
                     seed
                 {
-                    let (mut ccsr_with_options, registry_url) = match connector {
+                    // We validate to match the behavior of Avro CSR connectors,
+                    // even though we don't actually use the connector. (It
+                    // was used during purification.)
+                    let mut normalized_options = normalize::options(&ccsr_options)?;
+                    let _ = match connector {
                         CsrConnector::Inline { url } => {
-                            let mut normalized_options = normalize::options(&ccsr_options)?;
-                            let options = kafka_util::extract_config_ccsr(
+                            let mut options = kafka_util::extract_config_ccsr(
                                 &mut normalized_options,
                                 scx.catalog.secrets_reader(),
                             )?;
-                            normalize::ensure_empty_options(
-                                &normalized_options,
-                                "CONFLUENT SCHEMA REGISTRY",
-                            )?;
-                            (options, url.into())
+                            kafka_util::generate_ccsr_client_config(
+                                url.parse()?,
+                                &mut options,
+                                scx.catalog.secrets_reader(),
+                            )?
                         }
                         CsrConnector::Reference { connector } => {
                             let item = scx.get_item_by_resolved_name(&connector)?;
-                            let connector = item.catalog_connector()?;
-                            (connector.options(), connector.uri())
+                            match item.connector()? {
+                                Connector::Csr(config) => config.clone(),
+                                _ => bail!("{} is not a schema registry connector", item.name()),
+                            }
                         }
                     };
-                    // We validate here instead of in purification, to match the behavior of avro
-                    let _ccsr_config = kafka_util::generate_ccsr_client_config(
-                        registry_url.parse()?,
-                        &mut ccsr_with_options,
-                        scx.catalog.secrets_reader(),
-                    )?;
                     normalize::ensure_empty_options(
-                        &ccsr_with_options,
+                        &normalized_options,
                         "CONFLUENT SCHEMA REGISTRY",
                     )?;
-
                     let value = DataEncoding::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: value.message_name.clone(),
@@ -2896,49 +2892,39 @@ pub fn plan_create_connector(
         connector,
         if_not_exists,
     } = stmt;
-    let connector_inner = match connector {
+    let connector = match connector {
         CreateConnector::Kafka {
             broker,
             with_options,
         } => {
             let mut with_options = normalize::options(&with_options)?;
-            ConnectorInner::Kafka {
+            Connector::Kafka(KafkaConnector {
                 broker: broker.parse()?,
-                config_options: kafka_util::extract_config(
+                options: kafka_util::extract_config(
                     &mut with_options,
                     scx.catalog.secrets_reader(),
                 )?,
-            }
+            })
         }
-        CreateConnector::CSR {
-            registry,
-            with_options,
-        } => {
-            let with_options = normalize::options(&with_options)?;
-            ConnectorInner::CSR {
-                registry,
-                with_options: with_options
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            k.to_owned(),
-                            match v {
-                                SqlValueOrSecret::Value(v) => StringOrSecret::String(v.to_string()),
-                                SqlValueOrSecret::Secret(id) => StringOrSecret::Secret(id.clone()),
-                            },
-                        )
-                    })
-                    .collect::<BTreeMap<_, _>>(),
-            }
+        CreateConnector::Csr { url, with_options } => {
+            let connector = kafka_util::generate_ccsr_client_config(
+                url.parse()?,
+                &mut kafka_util::extract_config_ccsr(
+                    &mut normalize::options(&with_options)?,
+                    scx.catalog.secrets_reader(),
+                )?,
+                scx.catalog.secrets_reader(),
+            )?;
+            Connector::Csr(connector)
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     let plan = CreateConnectorPlan {
         name,
         if_not_exists,
-        connector: Connector {
+        connector: crate::plan::Connector {
             create_sql,
-            connector: connector_inner,
+            connector,
         },
     };
     Ok(Plan::CreateConnector(plan))

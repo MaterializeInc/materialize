@@ -32,9 +32,7 @@ use mz_dataflow_types::client::{
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::{
-    ConnectorInner, ExternalSourceConnector, SourceConnector, StringOrSecret, Timeline,
-};
+use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -45,9 +43,9 @@ use mz_secrets::{SecretsReader, SecretsReaderConfig};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogConnector, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogSchema,
-    CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, TypeReference,
+    CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, CatalogSchema, CatalogType, CatalogTypeDetails,
+    IdReference, NameReference, SessionCatalog, TypeReference,
 };
 use mz_sql::names::{
     Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
@@ -1116,7 +1114,7 @@ pub struct Secret {
 #[derive(Debug, Clone, Serialize)]
 pub struct Connector {
     pub create_sql: String,
-    pub connector: ConnectorInner,
+    pub connector: mz_dataflow_types::connectors::Connector,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1368,7 +1366,7 @@ impl CatalogEntry {
         }
     }
 
-    pub fn catalog_connector(&self) -> Result<&Connector, SqlCatalogError> {
+    pub fn connector(&self) -> Result<&Connector, SqlCatalogError> {
         match self.item() {
             CatalogItem::Connector(connector) => Ok(connector),
             _ => Err(SqlCatalogError::UnknownConnector(self.name().to_string())),
@@ -3880,16 +3878,6 @@ impl mz_sql::catalog::CatalogComputeInstance<'_> for ComputeInstance {
     }
 }
 
-impl mz_sql::catalog::CatalogConnector for Connector {
-    fn uri(&self) -> String {
-        self.connector.uri()
-    }
-
-    fn options(&self) -> std::collections::BTreeMap<String, StringOrSecret> {
-        self.connector.options()
-    }
-}
-
 impl mz_sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &QualifiedObjectName {
         self.name()
@@ -3915,8 +3903,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.source_connector()?)
     }
 
-    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, SqlCatalogError> {
-        Ok(self.catalog_connector()?)
+    fn connector(&self) -> Result<&mz_dataflow_types::connectors::Connector, SqlCatalogError> {
+        Ok(&self.connector()?.connector)
     }
 
     fn create_sql(&self) -> &str {

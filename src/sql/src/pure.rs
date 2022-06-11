@@ -20,12 +20,12 @@ use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
-use tokio::task;
 use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_dataflow_types::connectors::Connector;
 use mz_dataflow_types::sources::PostgresSourceDetails;
 use mz_dataflow_types::ConnectorContext;
 use mz_repr::proto::RustType;
@@ -79,8 +79,12 @@ pub async fn purify_create_source(
                 KafkaConnector::Reference { connector } => {
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connector)?;
-                    let connector = item.catalog_connector()?;
-                    (connector.uri(), connector.options())
+                    match item.connector()? {
+                        Connector::Kafka(connector) => {
+                            (connector.broker.to_string(), connector.options.clone())
+                        }
+                        _ => bail!("{} is not a kafka connector", item.name()),
+                    }
                 }
                 KafkaConnector::Inline { broker } => (
                     broker.to_string(),
@@ -312,24 +316,24 @@ async fn purify_csr_connector_proto(
     } = csr_connector;
     match seed {
         None => {
-            let url = match connector {
-                CsrConnector::Inline { url } => url.to_string(),
+            let ccsr_config = match connector {
+                CsrConnector::Inline { url } => kafka_util::generate_ccsr_client_config(
+                    url.parse()?,
+                    &mut kafka_util::extract_config_ccsr(
+                        &mut normalize::options(&ccsr_options)?,
+                        catalog.secrets_reader(),
+                    )?,
+                    catalog.secrets_reader(),
+                )?,
                 CsrConnector::Reference { connector } => {
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connector)?;
-                    let connector = item.catalog_connector()?;
-                    connector.uri()
+                    match item.connector()? {
+                        Connector::Csr(config) => config.clone(),
+                        _ => bail!("{} is not a schema registry connector", item.name()),
+                    }
                 }
-            }
-            .parse()?;
-            let ccsr_config = kafka_util::generate_ccsr_client_config(
-                url,
-                &mut kafka_util::extract_config_ccsr(
-                    &mut normalize::options(&ccsr_options)?,
-                    catalog.secrets_reader(),
-                )?,
-                catalog.secrets_reader(),
-            )?;
+            };
 
             let value =
                 compile_proto(&format!("{}-value", topic), ccsr_config.clone().build()?).await?;
@@ -374,27 +378,24 @@ async fn purify_csr_connector_avro(
         with_options: ccsr_options,
     } = csr_connector;
     if seed.is_none() {
-        let url = match connector {
-            CsrConnector::Inline { url } => url.to_string(),
-            CsrConnector::Reference { connector } => {
-                let scx = StatementContext::new(None, &*catalog);
-                let item = scx.get_item_by_resolved_name(&connector)?;
-                let connector = item.catalog_connector()?;
-                connector.uri()
-            }
-        }
-        .parse()?;
-
-        let ccsr_config = task::block_in_place(|| {
-            kafka_util::generate_ccsr_client_config(
-                url,
+        let ccsr_config = match connector {
+            CsrConnector::Inline { url } => kafka_util::generate_ccsr_client_config(
+                url.parse()?,
                 &mut kafka_util::extract_config_ccsr(
                     &mut normalize::options(&ccsr_options)?,
                     catalog.secrets_reader(),
                 )?,
                 catalog.secrets_reader(),
-            )
-        })?;
+            )?,
+            CsrConnector::Reference { connector } => {
+                let scx = StatementContext::new(None, &*catalog);
+                let item = scx.get_item_by_resolved_name(&connector)?;
+                match item.connector()? {
+                    Connector::Csr(config) => config.clone(),
+                    _ => bail!("{} is not a schema registry connector", item.name()),
+                }
+            }
+        };
 
         let Schema {
             key_schema,

@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail};
 
-use mz_dataflow_types::sources::StringOrSecret;
+use mz_dataflow_types::connectors::StringOrSecret;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
