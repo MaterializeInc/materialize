@@ -81,6 +81,20 @@ Field      | Type       | Meaning
 `records`  | [`bigint`] | The number of records in the arrangement.
 `batches`  | [`bigint`] | The number of batches in the arrangement.
 
+### `mz_audit_events`
+
+The `mz_audit_events` table records create, alter, and drop events for the
+other objects in the system catalog.
+
+Field           | Type                         | Meaning
+----------------|------------------------------|--------
+`uuid`          | [`uuid`]                     | A unique identifier for the event.
+`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, or `rename`.
+`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `index`, `sink`, `source`, or `view`.
+`event_details` | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
+`user`          | [`text`]                     | The user who triggered the event.
+`occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
+
 ### `mz_base_types`
 
 The `mz_base_types` table contains a row for each base type in the system.

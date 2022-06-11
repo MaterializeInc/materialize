@@ -632,8 +632,8 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
             row: Row::pack_slice(&[
                 Datum::Uuid(id),
-                Datum::String(&format!("{:?}", event_type)),
-                Datum::String(&format!("{:?}", object_type)),
+                Datum::String(&format!("{}", event_type)),
+                Datum::String(&format!("{}", object_type)),
                 event_details,
                 Datum::String(user),
                 Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
