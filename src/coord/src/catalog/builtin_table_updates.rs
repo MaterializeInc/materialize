@@ -15,7 +15,6 @@ use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
 use mz_dataflow_types::sinks::KafkaSinkConnector;
-use mz_dataflow_types::sources::ConnectorInner;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
@@ -294,8 +293,10 @@ impl CatalogState {
                 Datum::Int64(schema_id.into()),
                 Datum::String(name),
                 Datum::String(match connector.connector {
-                    ConnectorInner::Kafka { .. } => "kafka",
-                    ConnectorInner::CSR { .. } => "schema registry",
+                    mz_dataflow_types::connectors::Connector::Kafka { .. } => "kafka",
+                    mz_dataflow_types::connectors::Connector::Csr { .. } => {
+                        "confluent-schema-registry"
+                    }
                 }),
             ]),
             diff,

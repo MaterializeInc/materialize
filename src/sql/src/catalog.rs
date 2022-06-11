@@ -23,7 +23,8 @@ use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sources::{SourceConnector, StringOrSecret};
+use mz_dataflow_types::connectors::Connector;
+use mz_dataflow_types::sources::SourceConnector;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
@@ -270,15 +271,6 @@ pub trait CatalogComputeInstance<'a> {
     fn replica_names(&self) -> HashSet<&String>;
 }
 
-/// A connector in a [`SessionCatalog`]
-pub trait CatalogConnector {
-    /// Returns the connection URI for this connector regardless of type
-    fn uri(&self) -> String;
-
-    /// Returns the options associated with this connector as a Vec, if the type does not support options or none were specified this will be empty
-    fn options(&self) -> std::collections::BTreeMap<String, StringOrSecret>;
-}
-
 /// An item in a [`SessionCatalog`].
 ///
 /// Note that "item" has a very specific meaning in the context of a SQL
@@ -315,7 +307,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that implements `CatalogConnector`
     /// it returns an error
-    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, CatalogError>;
+    fn connector(&self) -> Result<&Connector, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;

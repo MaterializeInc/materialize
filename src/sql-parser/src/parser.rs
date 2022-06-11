@@ -1925,8 +1925,8 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
-                CreateConnector::CSR {
-                    registry,
+                CreateConnector::Csr {
+                    url: registry,
                     with_options,
                 }
             }

@@ -38,6 +38,7 @@ use crate::Plan;
 use proto_dataflow_description::*;
 
 pub mod aws;
+pub mod connectors;
 pub mod sinks;
 pub mod sources;
 

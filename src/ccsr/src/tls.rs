@@ -23,7 +23,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_ccsr.tls.rs"));
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Identity`].
 ///
 /// [Serde]: serde
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Identity {
     der: Vec<u8>,
     pass: String,
@@ -88,7 +88,7 @@ impl RustType<ProtoIdentity> for Identity {
 /// A [Serde][serde]-enabled wrapper around [`reqwest::Certificate`].
 ///
 /// [Serde]: serde
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Certificate {
     der: Vec<u8>,
 }
