@@ -86,7 +86,7 @@ impl<T: AstInfo> AstDisplay for AvroSchemaOption<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AvroSchema<T: AstInfo> {
     Csr {
-        csr_connector: CsrConnectorAvro<T>,
+        csr_connection: CsrConnectionAvro<T>,
     },
     InlineSchema {
         schema: Schema,
@@ -97,8 +97,8 @@ pub enum AvroSchema<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for AvroSchema<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Csr { csr_connector } => {
-                f.write_node(csr_connector);
+            Self::Csr { csr_connection } => {
+                f.write_node(csr_connection);
             }
             Self::InlineSchema {
                 schema,
@@ -120,7 +120,7 @@ impl_display_t!(AvroSchema);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProtobufSchema<T: AstInfo> {
     Csr {
-        csr_connector: CsrConnectorProto<T>,
+        csr_connection: CsrConnectionProto<T>,
     },
     InlineSchema {
         message_name: String,
@@ -131,8 +131,8 @@ pub enum ProtobufSchema<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Csr { csr_connector } => {
-                f.write_node(csr_connector);
+            Self::Csr { csr_connection } => {
+                f.write_node(csr_connection);
             }
             Self::InlineSchema {
                 message_name,
@@ -149,30 +149,30 @@ impl<T: AstInfo> AstDisplay for ProtobufSchema<T> {
 impl_display_t!(ProtobufSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CsrConnector<T: AstInfo> {
+pub enum CsrConnection<T: AstInfo> {
     Inline { url: String },
-    Reference { connector: T::ObjectName },
+    Reference { connection: T::ObjectName },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrConnectorAvro<T: AstInfo> {
-    pub connector: CsrConnector<T>,
+pub struct CsrConnectionAvro<T: AstInfo> {
+    pub connection: CsrConnection<T>,
     pub seed: Option<CsrSeed>,
     pub with_options: Vec<WithOption<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
+impl<T: AstInfo> AstDisplay for CsrConnectionAvro<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connector {
-            CsrConnector::Inline { url: uri, .. } => {
+        match &self.connection {
+            CsrConnection::Inline { url: uri, .. } => {
                 f.write_str("'");
                 f.write_node(&display::escape_single_quote_string(uri));
                 f.write_str("'");
             }
-            CsrConnector::Reference { connector, .. } => {
-                f.write_str("CONNECTOR ");
-                f.write_node(connector);
+            CsrConnection::Reference { connection, .. } => {
+                f.write_str("CONNECTION ");
+                f.write_node(connection);
             }
         }
         if let Some(seed) = &self.seed {
@@ -186,27 +186,27 @@ impl<T: AstInfo> AstDisplay for CsrConnectorAvro<T> {
         }
     }
 }
-impl_display_t!(CsrConnectorAvro);
+impl_display_t!(CsrConnectionAvro);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrConnectorProto<T: AstInfo> {
-    pub connector: CsrConnector<T>,
+pub struct CsrConnectionProto<T: AstInfo> {
+    pub connection: CsrConnection<T>,
     pub seed: Option<CsrSeedCompiledOrLegacy>,
     pub with_options: Vec<WithOption<T>>,
 }
 
-impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
+impl<T: AstInfo> AstDisplay for CsrConnectionProto<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("USING CONFLUENT SCHEMA REGISTRY ");
-        match &self.connector {
-            CsrConnector::Inline { url: uri, .. } => {
+        match &self.connection {
+            CsrConnection::Inline { url: uri, .. } => {
                 f.write_str("'");
                 f.write_node(&display::escape_single_quote_string(uri));
                 f.write_str("'");
             }
-            CsrConnector::Reference { connector, .. } => {
-                f.write_str("CONNECTOR ");
-                f.write_node(connector);
+            CsrConnection::Reference { connection, .. } => {
+                f.write_str("CONNECTION ");
+                f.write_node(connection);
             }
         }
 
@@ -222,7 +222,7 @@ impl<T: AstInfo> AstDisplay for CsrConnectorProto<T> {
         }
     }
 }
-impl_display_t!(CsrConnectorProto);
+impl_display_t!(CsrConnectionProto);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -546,7 +546,7 @@ impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
 impl_display_t!(DbzTxMetadataOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateConnector<T: AstInfo> {
+pub enum CreateConnection<T: AstInfo> {
     Kafka {
         broker: String,
         with_options: Vec<WithOption<T>>,
@@ -557,7 +557,7 @@ pub enum CreateConnector<T: AstInfo> {
     },
 }
 
-impl<T: AstInfo> AstDisplay for CreateConnector<T> {
+impl<T: AstInfo> AstDisplay for CreateConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::Kafka {
@@ -589,41 +589,41 @@ impl<T: AstInfo> AstDisplay for CreateConnector<T> {
         }
     }
 }
-impl_display_t!(CreateConnector);
+impl_display_t!(CreateConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KafkaConnector<T: AstInfo> {
+pub enum KafkaConnection<T: AstInfo> {
     Inline { broker: String },
-    Reference { connector: T::ObjectName },
+    Reference { connection: T::ObjectName },
 }
 
-impl<T: AstInfo> AstDisplay for KafkaConnector<T> {
+impl<T: AstInfo> AstDisplay for KafkaConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            KafkaConnector::Inline { broker } => {
+            KafkaConnection::Inline { broker } => {
                 f.write_str("BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
                 f.write_str("'");
             }
-            KafkaConnector::Reference { connector, .. } => {
-                f.write_str("CONNECTOR ");
-                f.write_node(connector);
+            KafkaConnection::Reference { connection, .. } => {
+                f.write_str("CONNECTION ");
+                f.write_node(connection);
             }
         }
     }
 }
-impl_display_t!(KafkaConnector);
+impl_display_t!(KafkaConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaSourceConnector<T: AstInfo> {
-    pub connector: KafkaConnector<T>,
+pub struct KafkaSourceConnection<T: AstInfo> {
+    pub connection: KafkaConnection<T>,
     pub topic: String,
     pub key: Option<Vec<Ident>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateSourceConnector<T: AstInfo> {
-    Kafka(KafkaSourceConnector<T>),
+pub enum CreateSourceConnection<T: AstInfo> {
+    Kafka(KafkaSourceConnection<T>),
     Kinesis {
         arn: String,
     },
@@ -650,16 +650,16 @@ pub enum CreateSourceConnector<T: AstInfo> {
     },
 }
 
-impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
+impl<T: AstInfo> AstDisplay for CreateSourceConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSourceConnector::Kafka(KafkaSourceConnector {
-                connector,
+            CreateSourceConnection::Kafka(KafkaSourceConnection {
+                connection,
                 topic,
                 key,
             }) => {
                 f.write_str("KAFKA ");
-                f.write_node(connector);
+                f.write_node(connection);
                 f.write_str(" TOPIC '");
                 f.write_node(&display::escape_single_quote_string(topic));
                 f.write_str("'");
@@ -669,12 +669,12 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
                     f.write_str(")");
                 }
             }
-            CreateSourceConnector::Kinesis { arn } => {
+            CreateSourceConnection::Kinesis { arn } => {
                 f.write_str("KINESIS ARN '");
                 f.write_node(&display::escape_single_quote_string(arn));
                 f.write_str("'");
             }
-            CreateSourceConnector::S3 {
+            CreateSourceConnection::S3 {
                 key_sources,
                 pattern,
                 compression,
@@ -690,7 +690,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
                 f.write_str(" COMPRESSION ");
                 f.write_node(compression);
             }
-            CreateSourceConnector::Postgres {
+            CreateSourceConnection::Postgres {
                 conn,
                 publication,
                 details,
@@ -705,7 +705,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
                 }
                 f.write_str("'");
             }
-            CreateSourceConnector::PubNub {
+            CreateSourceConnection::PubNub {
                 subscribe_key,
                 channel,
             } => {
@@ -718,10 +718,10 @@ impl<T: AstInfo> AstDisplay for CreateSourceConnector<T> {
         }
     }
 }
-impl_display_t!(CreateSourceConnector);
+impl_display_t!(CreateSourceConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateSinkConnector<T: AstInfo> {
+pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
         broker: String,
         topic: String,
@@ -735,10 +735,10 @@ pub enum CreateSinkConnector<T: AstInfo> {
     },
 }
 
-impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
+impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            CreateSinkConnector::Kafka {
+            CreateSinkConnection::Kafka {
                 broker,
                 topic,
                 key,
@@ -757,7 +757,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
                     f.write_node(consistency);
                 }
             }
-            CreateSinkConnector::Persist {
+            CreateSinkConnection::Persist {
                 blob_uri,
                 consensus_uri,
                 shard_id,
@@ -773,7 +773,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnector<T> {
         }
     }
 }
-impl_display_t!(CreateSinkConnector);
+impl_display_t!(CreateSinkConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct KafkaConsistency<T: AstInfo> {

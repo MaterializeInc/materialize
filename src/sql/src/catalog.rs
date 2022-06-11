@@ -23,8 +23,8 @@ use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::connectors::Connector;
-use mz_dataflow_types::sources::SourceConnector;
+use mz_dataflow_types::connections::Connection;
+use mz_dataflow_types::sources::SourceConnection;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
@@ -297,17 +297,16 @@ pub trait CatalogItem {
     /// anything other than a function), it returns an error.
     fn func(&self) -> Result<&'static Func, CatalogError>;
 
-    /// Returns the resolved source connector.
+    /// Returns the resolved source connection.
     ///
-    /// If the catalog item is not of a type that contains a `SourceConnector`
+    /// If the catalog item is not of a type that contains a `SourceConnection`
     /// (i.e., anything other than sources), it returns an error.
-    fn source_connector(&self) -> Result<&SourceConnector, CatalogError>;
+    fn source_connection(&self) -> Result<&SourceConnection, CatalogError>;
 
-    /// Returns the resolved connector, called a catalog connector to disambiguate
+    /// Returns the resolved connection.
     ///
-    /// If the catalog item is not of a type that implements `CatalogConnector`
-    /// it returns an error
-    fn connector(&self) -> Result<&Connector, CatalogError>;
+    /// If the catalog item is not a connection, it returns an error.
+    fn connection(&self) -> Result<&Connection, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
@@ -353,10 +352,10 @@ pub enum CatalogItemType {
     Type,
     /// A func.
     Func,
-    /// A Secret.
+    /// A secret.
     Secret,
-    /// A Connector.
-    Connector,
+    /// A connection.
+    Connection,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -370,7 +369,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
-            CatalogItemType::Connector => f.write_str("connector"),
+            CatalogItemType::Connection => f.write_str("connection"),
         }
     }
 }
@@ -539,8 +538,8 @@ pub enum CatalogError {
     UnknownFunction(String),
     /// Unknown source.
     UnknownSource(String),
-    /// Unknown connector.
-    UnknownConnector(String),
+    /// Unknown connection.
+    UnknownConnection(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -556,7 +555,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
-            Self::UnknownConnector(name) => write!(f, "connector \"{}\" does not exist", name),
+            Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),

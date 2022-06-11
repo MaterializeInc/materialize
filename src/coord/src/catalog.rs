@@ -31,8 +31,8 @@ use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use mz_dataflow_types::sinks::{SinkConnector, SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector, Timeline};
+use mz_dataflow_types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -53,7 +53,7 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, CreateConnectorPlan, CreateIndexPlan, CreateSecretPlan,
+    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
     Plan, PlanContext, StatementDesc,
 };
@@ -162,18 +162,18 @@ impl CatalogState {
 
         match entry.item() {
             CatalogItem::Table(table) => {
-                let connector = SourceConnector::Local {
+                let connection = SourceConnection::Local {
                     timeline: table.timeline(),
                 };
                 Some(mz_dataflow_types::sources::SourceDesc {
-                    connector,
+                    connection,
                     desc: table.desc.clone(),
                 })
             }
             CatalogItem::Source(source) => {
-                let connector = source.connector.clone();
+                let connection = source.connection.clone();
                 Some(mz_dataflow_types::sources::SourceDesc {
-                    connector,
+                    connection,
                     desc: source.desc.clone(),
                 })
             }
@@ -224,7 +224,7 @@ impl CatalogState {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connector(_) => (),
+            | CatalogItem::Connection(_) => (),
         }
     }
 
@@ -239,7 +239,7 @@ impl CatalogState {
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connector(_) => false,
+            | CatalogItem::Connection(_) => false,
         }
     }
 
@@ -700,13 +700,13 @@ impl CatalogState {
 
         let item = self.get_entry(&id).item();
         match item {
-            CatalogItem::Source(source) => match &source.connector {
-                SourceConnector::External { connector, .. } => match &connector {
-                    ExternalSourceConnector::PubNub(_) => Volatile,
-                    ExternalSourceConnector::Kinesis(_) => Volatile,
+            CatalogItem::Source(source) => match &source.connection {
+                SourceConnection::External { connection, .. } => match &connection {
+                    ExternalSourceConnection::PubNub(_) => Volatile,
+                    ExternalSourceConnection::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local { .. } => Volatile,
+                SourceConnection::Local { .. } => Volatile,
             },
             CatalogItem::Log(_) => Volatile,
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
@@ -728,7 +728,7 @@ impl CatalogState {
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
             CatalogItem::Secret(_) => Nonvolatile,
-            CatalogItem::Connector(_) => Unknown,
+            CatalogItem::Connection(_) => Unknown,
         }
     }
 
@@ -1021,7 +1021,7 @@ pub enum CatalogItem {
     Type(Type),
     Func(Func),
     Secret(Secret),
-    Connector(Connector),
+    Connection(Connection),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1045,14 +1045,14 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub connector: SourceConnector,
+    pub connection: SourceConnection,
     pub desc: RelationDesc,
     pub depends_on: Vec<GlobalId>,
 }
 
 impl Source {
     pub fn requires_single_materialization(&self) -> bool {
-        self.connector.requires_single_materialization()
+        self.connection.requires_single_materialization()
     }
 }
 
@@ -1060,7 +1060,7 @@ impl Source {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connector: SinkConnectorState,
+    pub connection: SinkConnectionState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub depends_on: Vec<GlobalId>,
@@ -1068,9 +1068,9 @@ pub struct Sink {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub enum SinkConnectorState {
-    Pending(SinkConnectorBuilder),
-    Ready(SinkConnector),
+pub enum SinkConnectionState {
+    Pending(SinkConnectionBuilder),
+    Ready(SinkConnection),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1112,9 +1112,9 @@ pub struct Secret {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct Connector {
+pub struct Connection {
     pub create_sql: String,
-    pub connector: mz_dataflow_types::connectors::Connector,
+    pub connection: mz_dataflow_types::connections::Connection,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1147,7 +1147,7 @@ impl CatalogItem {
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
             CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
-            CatalogItem::Connector(_) => mz_sql::catalog::CatalogItemType::Connector,
+            CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
         }
     }
 
@@ -1162,7 +1162,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connector(_) => Err(SqlCatalogError::InvalidDependency {
+            | CatalogItem::Connection(_) => Err(SqlCatalogError::InvalidDependency {
                 name: name.to_string(),
                 typ: self.typ(),
             }),
@@ -1179,12 +1179,12 @@ impl CatalogItem {
         }
     }
 
-    pub fn source_connector(
+    pub fn source_connection(
         &self,
         name: &QualifiedObjectName,
-    ) -> Result<&SourceConnector, SqlCatalogError> {
+    ) -> Result<&SourceConnection, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => Ok(&source.connector),
+            CatalogItem::Source(source) => Ok(&source.connection),
             _ => Err(SqlCatalogError::UnknownSource(name.item.clone())),
         }
     }
@@ -1202,7 +1202,7 @@ impl CatalogItem {
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
             CatalogItem::Secret(_) => &[],
-            CatalogItem::Connector(_) => &[],
+            CatalogItem::Connection(_) => &[],
         }
     }
 
@@ -1218,10 +1218,10 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::View(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connector(_) => false,
-            CatalogItem::Sink(s) => match s.connector {
-                SinkConnectorState::Pending(_) => true,
-                SinkConnectorState::Ready(_) => false,
+            | CatalogItem::Connection(_) => false,
+            CatalogItem::Sink(s) => match s.connection {
+                SinkConnectionState::Pending(_) => true,
+                SinkConnectionState::Ready(_) => false,
             },
         }
     }
@@ -1239,7 +1239,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => None,
             CatalogItem::Type(_) => None,
             CatalogItem::Func(_) => None,
-            CatalogItem::Connector(_) => None,
+            CatalogItem::Connection(_) => None,
         }
     }
 
@@ -1302,21 +1302,21 @@ impl CatalogItem {
             CatalogItem::Func(_) | CatalogItem::Type(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
             }
-            CatalogItem::Connector(i) => {
+            CatalogItem::Connection(i) => {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::Connector(i))
+                Ok(CatalogItem::Connection(i))
             }
         }
     }
 
     pub fn requires_single_materialization(&self) -> bool {
         if let CatalogItem::Source(Source {
-            connector: SourceConnector::External { ref connector, .. },
+            connection: SourceConnection::External { ref connection, .. },
             ..
         }) = self
         {
-            connector.requires_single_materialization()
+            connection.requires_single_materialization()
         } else {
             false
         }
@@ -1366,17 +1366,17 @@ impl CatalogEntry {
         }
     }
 
-    pub fn connector(&self) -> Result<&Connector, SqlCatalogError> {
+    pub fn connection(&self) -> Result<&Connection, SqlCatalogError> {
         match self.item() {
-            CatalogItem::Connector(connector) => Ok(connector),
-            _ => Err(SqlCatalogError::UnknownConnector(self.name().to_string())),
+            CatalogItem::Connection(connection) => Ok(connection),
+            _ => Err(SqlCatalogError::UnknownConnection(self.name().to_string())),
         }
     }
 
-    /// Returns the [`mz_dataflow_types::sources::SourceConnector`] associated with
+    /// Returns the [`mz_dataflow_types::sources::SourceConnection`] associated with
     /// this `CatalogEntry`.
-    pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
-        self.item.source_connector(self.name())
+    pub fn source_connection(&self) -> Result<&SourceConnection, SqlCatalogError> {
+        self.item.source_connection(self.name())
     }
 
     /// Reports whether this catalog entry is a table.
@@ -3294,8 +3294,8 @@ impl<S: Append> Catalog<S> {
                 create_sql: secret.create_sql.clone(),
                 eval_env: None,
             },
-            CatalogItem::Connector(connector) => SerializedCatalogItem::V1 {
-                create_sql: connector.create_sql.clone(),
+            CatalogItem::Connection(connection) => SerializedCatalogItem::V1 {
+                create_sql: connection.create_sql.clone(),
                 eval_env: None,
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
@@ -3332,7 +3332,7 @@ impl<S: Append> Catalog<S> {
             }),
             Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
                 create_sql: source.create_sql,
-                connector: source.connector,
+                connection: source.connection,
                 desc: source.desc,
                 depends_on,
             }),
@@ -3363,7 +3363,7 @@ impl<S: Append> Catalog<S> {
             }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connector: SinkConnectorState::Pending(sink.connector_builder),
+                connection: SinkConnectionState::Pending(sink.connection_builder),
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
@@ -3380,10 +3380,10 @@ impl<S: Append> Catalog<S> {
             Plan::CreateSecret(CreateSecretPlan { secret, .. }) => CatalogItem::Secret(Secret {
                 create_sql: secret.create_sql,
             }),
-            Plan::CreateConnector(CreateConnectorPlan { connector, .. }) => {
-                CatalogItem::Connector(Connector {
-                    create_sql: connector.create_sql,
-                    connector: connector.connector,
+            Plan::CreateConnection(CreateConnectionPlan { connection, .. }) => {
+                CatalogItem::Connection(Connection {
+                    create_sql: connection.create_sql,
+                    connection: connection.connection,
                 })
             }
             _ => bail!("catalog entry generated inappropriate plan"),
@@ -3899,12 +3899,12 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.func()?)
     }
 
-    fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
-        Ok(self.source_connector()?)
+    fn source_connection(&self) -> Result<&SourceConnection, SqlCatalogError> {
+        Ok(self.source_connection()?)
     }
 
-    fn connector(&self) -> Result<&mz_dataflow_types::connectors::Connector, SqlCatalogError> {
-        Ok(&self.connector()?.connector)
+    fn connection(&self) -> Result<&mz_dataflow_types::connections::Connection, SqlCatalogError> {
+        Ok(&self.connection()?.connection)
     }
 
     fn create_sql(&self) -> &str {
@@ -3916,7 +3916,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,
-            CatalogItem::Connector(Connector { create_sql, .. }) => create_sql,
+            CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
         }

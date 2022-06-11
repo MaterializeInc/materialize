@@ -13,11 +13,11 @@ use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 
 use mz_dataflow_types::sinks::{
-    KafkaSinkConnector, KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention,
-    KafkaSinkConsistencyConnector, PersistSinkConnector, PersistSinkConnectorBuilder,
-    PublishedSchemaInfo, SinkConnector, SinkConnectorBuilder,
+    KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
+    KafkaSinkConsistencyConnection, PersistSinkConnection, PersistSinkConnectionBuilder,
+    PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
 };
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;
@@ -25,13 +25,13 @@ use mz_repr::GlobalId;
 use crate::error::CoordError;
 
 pub async fn build(
-    builder: SinkConnectorBuilder,
+    builder: SinkConnectionBuilder,
     id: GlobalId,
-    connector_context: ConnectorContext,
-) -> Result<SinkConnector, CoordError> {
+    connector_context: ConnectionContext,
+) -> Result<SinkConnection, CoordError> {
     match builder {
-        SinkConnectorBuilder::Kafka(k) => build_kafka(k, id, connector_context).await,
-        SinkConnectorBuilder::Persist(p) => build_persist_sink(p, id),
+        SinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connector_context).await,
+        SinkConnectionBuilder::Persist(p) => build_persist_sink(p, id),
     }
 }
 
@@ -41,7 +41,7 @@ async fn register_kafka_topic(
     mut partition_count: i32,
     mut replication_factor: i32,
     succeed_if_exists: bool,
-    retention: KafkaSinkConnectorRetention,
+    retention: KafkaSinkConnectionRetention,
 ) -> Result<(), CoordError> {
     // if either partition count or replication factor should be defaulted to the broker's config
     // (signaled by a value of -1), explicitly poll the broker to discover the defaults.
@@ -203,10 +203,10 @@ async fn publish_kafka_schemas(
 }
 
 async fn build_kafka(
-    builder: KafkaSinkConnectorBuilder,
+    builder: KafkaSinkConnectionBuilder,
     id: GlobalId,
-    connector_context: ConnectorContext,
-) -> Result<SinkConnector, CoordError> {
+    connector_context: ConnectionContext,
+) -> Result<SinkConnection, CoordError> {
     let maybe_append_nonce = {
         let reuse_topic = builder.reuse_topic;
         let topic_suffix_nonce = builder.topic_suffix_nonce;
@@ -292,7 +292,7 @@ async fn build_kafka(
                 1,
                 builder.replication_factor,
                 builder.reuse_topic,
-                KafkaSinkConnectorRetention::default(),
+                KafkaSinkConnectionRetention::default(),
             )
             .await
             .context("error registering kafka consistency topic for sink")?;
@@ -309,7 +309,7 @@ async fn build_kafka(
             .await
             .context("error publishing kafka consistency schemas for sink")?;
 
-            Some(KafkaSinkConsistencyConnector {
+            Some(KafkaSinkConsistencyConnection {
                 topic: consistency_topic,
                 schema_id: consistency_schema_id,
             })
@@ -318,7 +318,7 @@ async fn build_kafka(
         _ => None,
     };
 
-    Ok(SinkConnector::Kafka(KafkaSinkConnector {
+    Ok(SinkConnection::Kafka(KafkaSinkConnection {
         topic,
         topic_prefix: builder.topic_prefix,
         addrs: builder.broker_addrs,
@@ -335,10 +335,10 @@ async fn build_kafka(
 }
 
 fn build_persist_sink(
-    builder: PersistSinkConnectorBuilder,
+    builder: PersistSinkConnectionBuilder,
     _id: GlobalId,
-) -> Result<SinkConnector, CoordError> {
-    Ok(SinkConnector::Persist(PersistSinkConnector {
+) -> Result<SinkConnection, CoordError> {
+    Ok(SinkConnection::Persist(PersistSinkConnection {
         consensus_uri: builder.consensus_uri,
         blob_uri: builder.blob_uri,
         shard_id: builder.shard_id,

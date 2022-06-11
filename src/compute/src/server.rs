@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
@@ -54,9 +54,9 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// Configuration for sink connectors.
+    /// Configuration for sink connections.
     // TODO: remove when sinks move to storage.
-    pub connector_context: ConnectorContext,
+    pub connection_context: ConnectionContext,
 }
 
 /// A handle to a running dataflow server.
@@ -123,7 +123,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Err
                 compute_state: None,
                 compute_response_tx,
                 metrics_bundle: metrics_bundle.clone(),
-                connector_context: config.connector_context.clone(),
+                connection_context: config.connection_context.clone(),
                 persist_clients,
             }
             .run()
@@ -157,9 +157,9 @@ struct Worker<'w, A: Allocate> {
     compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
     metrics_bundle: (SinkBaseMetrics, TraceMetrics),
-    /// Configuration for sink connectors.
+    /// Configuration for sink connections.
     // TODO: remove when sinks move to storage.
-    pub connector_context: ConnectorContext,
+    pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
@@ -218,7 +218,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             reported_frontiers: HashMap::new(),
                             sink_metrics: self.metrics_bundle.0.clone(),
                             materialized_logger: None,
-                            connector_context: self.connector_context.clone(),
+                            connection_context: self.connection_context.clone(),
                             persist_clients: Arc::clone(&self.persist_clients),
                         });
                     }

@@ -25,7 +25,7 @@ use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
@@ -174,7 +174,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         timely_config,
         metrics_registry,
         now: SYSTEM_TIME.clone(),
-        connector_context: ConnectorContext::from_cli_args(
+        connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id,
         ),

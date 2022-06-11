@@ -21,7 +21,7 @@ package mz_dataflow_types.types.sinks;
 message ProtoSinkDesc {
     mz_repr.global_id.ProtoGlobalId from = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc from_desc = 2;
-    ProtoSinkConnector connector = 3;
+    ProtoSinkConnection connection = 3;
     optional ProtoSinkEnvelope envelope = 4;
     ProtoSinkAsOf as_of = 5;
 }
@@ -34,15 +34,15 @@ message ProtoSinkEnvelope {
     }
 }
 
-message ProtoSinkConnector {
+message ProtoSinkConnection {
     oneof kind {
-        ProtoKafkaSinkConnector kafka = 1;
+        ProtoKafkaSinkConnection kafka = 1;
         google.protobuf.Empty tail = 2;
-        ProtoPersistSinkConnector persist = 3;
+        ProtoPersistSinkConnection persist = 3;
     }
 }
 
-message ProtoKafkaSinkConsistencyConnector {
+message ProtoKafkaSinkConsistencyConnection {
     string topic = 1;
     int32 schema_id = 2;
 }
@@ -52,7 +52,7 @@ message ProtoSinkAsOf {
     bool strict = 2;
 }
 
-message ProtoKafkaSinkConnector {
+message ProtoKafkaSinkConnection {
     message ProtoKeyDescAndIndices {
         mz_repr.relation_and_scalar.ProtoRelationDesc desc = 1;
         repeated uint64 indices = 2;
@@ -69,7 +69,7 @@ message ProtoKafkaSinkConnector {
     optional ProtoRelationKeyIndicesVec relation_key_indices = 5;
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 6;
     optional ProtoPublishedSchemaInfo published_schema_info = 7;
-    ProtoKafkaSinkConsistencyConnector consistency = 8;
+    ProtoKafkaSinkConsistencyConnection consistency = 8;
     bool exactly_once = 9;
     repeated mz_repr.global_id.ProtoGlobalId transitive_source_dependencies = 10;
     uint64 fuel = 11;
@@ -81,7 +81,7 @@ message ProtoPublishedSchemaInfo {
     int32 value_schema_id = 2;
 }
 
-message ProtoPersistSinkConnector {
+message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
     string shard_id = 2;
     string consensus_uri = 3;

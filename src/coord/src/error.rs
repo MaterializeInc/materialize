@@ -14,7 +14,7 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use tokio::sync::oneshot;
 
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection};
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -513,10 +513,10 @@ impl RematerializedSourceType {
     ///
     /// If the source is of a type that is allowed to be rematerialized
     pub fn for_source(source: &catalog::Source) -> RematerializedSourceType {
-        match &source.connector {
-            SourceConnector::External { connector, .. } => match connector {
-                ExternalSourceConnector::S3(_) => RematerializedSourceType::S3,
-                ExternalSourceConnector::Postgres(_) => RematerializedSourceType::Postgres,
+        match &source.connection {
+            SourceConnection::External { connection, .. } => match connection {
+                ExternalSourceConnection::S3(_) => RematerializedSourceType::S3,
+                ExternalSourceConnection::Postgres(_) => RematerializedSourceType::Postgres,
                 _ => unreachable!(),
             },
             _ => unreachable!(),

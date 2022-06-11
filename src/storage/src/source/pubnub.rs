@@ -17,8 +17,10 @@ use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport, PubNub};
 use timely::scheduling::SyncActivator;
 use tracing::info;
 
-use mz_dataflow_types::sources::{encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset};
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::sources::{
+    encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset,
+};
+use mz_dataflow_types::ConnectionContext;
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
@@ -43,17 +45,17 @@ impl SourceReader for PubNubSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         _: crate::source::metrics::SourceBaseMetrics,
-        _: ConnectorContext,
+        _: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let pubnub_conn = match connector {
-            ExternalSourceConnector::PubNub(pubnub_conn) => pubnub_conn,
+        let pubnub_conn = match connection {
+            ExternalSourceConnection::PubNub(pubnub_conn) => pubnub_conn,
             _ => {
                 panic!(
-                    "PubNub is the only legitimate ExternalSourceConnector for PubNubSourceReader"
+                    "PubNub is the only legitimate ExternalSourceConnection for PubNubSourceReader"
                 )
             }
         };

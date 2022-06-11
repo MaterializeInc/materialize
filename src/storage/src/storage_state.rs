@@ -21,8 +21,8 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
 use mz_dataflow_types::client::{StorageCommand, StorageResponse};
-use mz_dataflow_types::sources::SourceConnector;
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::sources::SourceConnection;
+use mz_dataflow_types::ConnectionContext;
 use mz_ore::now::NowFn;
 
 use mz_repr::{GlobalId, Timestamp};
@@ -68,8 +68,8 @@ pub struct StorageState {
     pub timely_worker_index: usize,
     /// Peers in the associated timely dataflow worker.
     pub timely_worker_peers: usize,
-    /// Configuration for source and sink connectors.
-    pub connector_context: ConnectorContext,
+    /// Configuration for source and sink connections.
+    pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     pub persist_clients: Arc<Mutex<PersistClientCache>>,
@@ -112,13 +112,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
         match cmd {
             StorageCommand::CreateSources(sources) => {
                 for source in sources {
-                    match &source.desc.connector {
-                        SourceConnector::Local { .. } => {
+                    match &source.desc.connection {
+                        SourceConnection::Local { .. } => {
                             // TODO(benesch): fix the types here so that we can
                             // enforce this statically.
                             unreachable!("local sources are handled entirely by controller");
                         }
-                        SourceConnector::External { .. } => {
+                        SourceConnection::External { .. } => {
                             // Initialize shared frontier tracking.
                             self.storage_state.source_uppers.insert(
                                 source.id,

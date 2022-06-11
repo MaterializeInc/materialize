@@ -11,7 +11,7 @@
 //!
 //! Raw sources are streams (currently, Timely streams) of data directly produced by the
 //! upstream service. The main export of this module is [`create_raw_source`],
-//! which turns [`RawSourceCreationConfig`]s, [`ExternalSourceConnector`]s,
+//! which turns [`RawSourceCreationConfig`]s, [`ExternalSourceConnection`]s,
 //! and [`SourceReader`] implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the actual object
@@ -51,8 +51,8 @@ use tracing::error;
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{ExternalSourceConnector, MzOffset};
-use mz_dataflow_types::{ConnectorContext, DecodeError, SourceError, SourceErrorDetails};
+use mz_dataflow_types::sources::{ExternalSourceConnection, MzOffset};
+use mz_dataflow_types::{ConnectionContext, DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
@@ -165,11 +165,11 @@ where
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
-        connector_context: ConnectorContext,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         S::new(
             source_name,
@@ -177,11 +177,11 @@ where
             worker_id,
             worker_count,
             consumer_activator,
-            connector,
+            connection,
             restored_offsets,
             encoding,
             metrics,
-            connector_context,
+            connection_context,
         )
         .map(Self)
     }
@@ -403,11 +403,11 @@ pub trait SourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
-        connector_context: ConnectorContext,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
@@ -687,9 +687,9 @@ impl PartitionMetrics {
     }
 }
 
-/// Creates a raw source dataflow operator from a connector that has a corresponding [`SourceReader`]
-/// implentation. The type of ExternalSourceConnector determines the type of
-/// connector that _should_ be created.
+/// Creates a raw source dataflow operator from a connection that has a corresponding [`SourceReader`]
+/// implentation. The type of ExternalSourceConnection determines the type of
+/// connection that _should_ be created.
 ///
 /// This is also the place where _reclocking_
 /// (<https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md>)
@@ -699,8 +699,8 @@ impl PartitionMetrics {
 /// raw sources are used.
 pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
-    source_connector: &ExternalSourceConnector,
-    connector_context: ConnectorContext,
+    source_connection: &ExternalSourceConnection,
+    connection_context: ConnectionContext,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
@@ -741,7 +741,7 @@ where
 
         let sync_activator = scope.sync_activator_for(&info.address[..]);
         let base_metrics = base_metrics.clone();
-        let source_connector = source_connector.clone();
+        let source_connection = source_connection.clone();
         let mut source_reader = Box::pin(async_stream::stream!({
             let mut timestamper = match ReclockOperator::new(
                 name.clone(),
@@ -768,11 +768,11 @@ where
                 worker_id,
                 worker_count,
                 sync_activator,
-                source_connector.clone(),
+                source_connection.clone(),
                 start_offsets,
                 encoding,
                 base_metrics,
-                connector_context.clone(),
+                connection_context.clone(),
             );
             let source_stream = match source_reader {
                 Ok(s) => s.into_stream(timestamp_frequency).fuse(),

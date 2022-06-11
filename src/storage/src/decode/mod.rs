@@ -253,7 +253,7 @@ fn get_decoder(
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    is_connector_delimited: bool,
+    is_connection_delimited: bool,
     metrics: DecodeMetrics,
 ) -> DataDecoder {
     match encoding {
@@ -292,7 +292,7 @@ fn get_decoder(
                 DataEncoding::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
-            let inner = if is_connector_delimited {
+            let inner = if is_connection_delimited {
                 DataDecoderInner::PreDelimited(after_delimiting)
             } else {
                 DataDecoderInner::DelimitedBytes {
@@ -345,7 +345,7 @@ fn try_decode(
 /// that have already separated the stream into records/messages/etc. before we
 /// decode them.
 ///
-/// Because we expect the upstream connector to have already delimited the data,
+/// Because we expect the upstream connection to have already delimited the data,
 /// we return an error here if the decoder does not consume all the bytes. This
 /// often lets us, for example, detect when Avro decoding has gone off the rails
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
@@ -439,12 +439,12 @@ where
 
 /// Decode arbitrary chunks of bytes into rows.
 ///
-/// This decode API is used for upstream connectors
+/// This decode API is used for upstream connections
 /// that don't discover delimiters themselves; i.e., those
 /// (like CSV files) that need help from the decoding stage to discover where
 /// one record ends and another begins.
 ///
-/// As such, the connectors simply present arbitrary chunks of bytes about which
+/// As such, the connections simply present arbitrary chunks of bytes about which
 /// we can't assume any alignment properties. The `DataDecoder` API accepts these,
 /// and returns `None` if it needs more bytes to discover the boundary between messages.
 /// In that case, this function remembers the already-seen bytes and waits for new ones

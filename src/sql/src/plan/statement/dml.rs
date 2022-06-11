@@ -335,7 +335,7 @@ pub fn plan_tail(
                 | CatalogItemType::Sink
                 | CatalogItemType::Type
                 | CatalogItemType::Secret
-                | CatalogItemType::Connector => bail!(
+                | CatalogItemType::Connection => bail!(
                     "'{}' cannot be tailed because it is a {}",
                     name.full_name_str(),
                     entry.item_type(),

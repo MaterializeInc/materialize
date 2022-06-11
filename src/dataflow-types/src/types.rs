@@ -38,7 +38,7 @@ use crate::Plan;
 use proto_dataflow_description::*;
 
 pub mod aws;
-pub mod connectors;
+pub mod connections;
 pub mod sinks;
 pub mod sources;
 
@@ -457,20 +457,20 @@ impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timest
     }
 }
 
-/// Extra context to pass through when instantiating a connector for a source or
-/// sink.
+/// Extra context to pass through when instantiating a connection for a source
+/// or sink.
 ///
 /// Should be kept cheaply cloneable.
 #[derive(Debug, Clone)]
-pub struct ConnectorContext {
+pub struct ConnectionContext {
     /// The level for librdkafka's logs.
     pub librdkafka_log_level: tracing::Level,
     /// A prefix for an external ID to use for all AWS AssumeRole operations.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
 }
 
-impl ConnectorContext {
-    /// Constructs a new connector context from command line arguments.
+impl ConnectionContext {
+    /// Constructs a new connection context from command line arguments.
     ///
     /// **WARNING:** it is critical for security that the `aws_external_id` be
     /// provided by the operator of the Materialize service (i.e., via a CLI
@@ -480,17 +480,17 @@ impl ConnectorContext {
     pub fn from_cli_args(
         filter: &tracing_subscriber::filter::Targets,
         aws_external_id_prefix: Option<String>,
-    ) -> ConnectorContext {
-        ConnectorContext {
+    ) -> ConnectionContext {
+        ConnectionContext {
             librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
             aws_external_id_prefix: aws_external_id_prefix.map(AwsExternalIdPrefix),
         }
     }
 }
 
-impl Default for ConnectorContext {
-    fn default() -> ConnectorContext {
-        ConnectorContext {
+impl Default for ConnectionContext {
+    fn default() -> ConnectionContext {
+        ConnectionContext {
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
         }

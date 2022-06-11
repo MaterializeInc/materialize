@@ -1011,15 +1011,15 @@ pub static MZ_TABLES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false)),
 });
-pub static MZ_CONNECTORS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
-    name: "mz_connectors",
+pub static MZ_CONNECTIONS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_connections",
     schema: MZ_CATALOG_SCHEMA,
     desc: RelationDesc::empty()
         .with_column("id", ScalarType::String.nullable(false))
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("connector_type", ScalarType::String.nullable(false)),
+        .with_column("connection_type", ScalarType::String.nullable(false)),
 });
 pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_sources",
@@ -1029,7 +1029,7 @@ pub static MZ_SOURCES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("connector_type", ScalarType::String.nullable(false))
+        .with_column("connection_type", ScalarType::String.nullable(false))
         .with_column("volatility", ScalarType::String.nullable(false)),
 });
 pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
@@ -1040,7 +1040,7 @@ pub static MZ_SINKS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("oid", ScalarType::Oid.nullable(false))
         .with_column("schema_id", ScalarType::Int64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column("connector_type", ScalarType::String.nullable(false))
+        .with_column("connection_type", ScalarType::String.nullable(false))
         .with_column("volatility", ScalarType::String.nullable(false))
         .with_column("cluster_id", ScalarType::Int64.nullable(false)),
 });
@@ -2095,7 +2095,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::Table(&MZ_SECRETS),
-        Builtin::Table(&MZ_CONNECTORS),
+        Builtin::Table(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS_BASE),
         Builtin::Table(&MZ_CLUSTER_REPLICAS_STATUS),
         Builtin::Table(&MZ_AUDIT_EVENTS),

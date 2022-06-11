@@ -197,7 +197,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         cors_allowed_origin: AllowOrigin::list([]),
         replica_sizes: Default::default(),
         availability_zones: Default::default(),
-        connector_context: Default::default(),
+        connection_context: Default::default(),
     }))?;
     let server = Server {
         inner,

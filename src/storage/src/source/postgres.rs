@@ -28,9 +28,9 @@ use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset, PostgresSourceConnector,
+    encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset, PostgresSourceConnection,
 };
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::task;
@@ -144,7 +144,7 @@ pub struct PostgresSourceReader {
 /// An internal struct held by the spawned tokio task
 struct PostgresTaskInfo {
     source_id: GlobalId,
-    connector: PostgresSourceConnector,
+    connection: PostgresSourceConnection,
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
@@ -165,16 +165,16 @@ impl SourceReader for PostgresSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
-        _connector_context: ConnectorContext,
+        _connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let connector = match connector {
-            ExternalSourceConnector::Postgres(pg) => pg,
+        let connection = match connection {
+            ExternalSourceConnection::Postgres(pg) => pg,
             _ => {
-                panic!("Postgres is the only legitimate ExternalSourceConnector for PostgresSourceReader")
+                panic!("Postgres is the only legitimate ExternalSourceConnection for PostgresSourceReader")
             }
         };
 
@@ -182,12 +182,12 @@ impl SourceReader for PostgresSourceReader {
 
         let task_info = PostgresTaskInfo {
             source_id: source_id.clone(),
-            connector: connector.clone(),
+            connection: connection.clone(),
             /// Our cursor into the WAL
             lsn: 0.into(),
             metrics: PgSourceMetrics::new(&metrics, source_id),
             source_tables: HashMap::from_iter(
-                connector.details.tables.iter().map(|t| (t.oid, t.clone())),
+                connection.details.tables.iter().map(|t| (t.oid, t.clone())),
             ),
             sender: dataflow_tx,
             activator: consumer_activator,
@@ -442,20 +442,20 @@ impl PostgresTaskInfo {
         buffer: &mut W,
     ) -> Result<(), ReplicationError> {
         let client =
-            try_recoverable!(mz_postgres_util::connect_replication(&self.connector.conn).await);
+            try_recoverable!(mz_postgres_util::connect_replication(&self.connection.conn).await);
 
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
         let _ = client
             .simple_query(&format!(
                 "DROP_REPLICATION_SLOT {:?}",
-                &self.connector.details.slot
+                &self.connection.details.slot
             ))
             .await;
 
         // Get all the relevant tables for this publication
         let publication_tables = try_recoverable!(
-            mz_postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
+            mz_postgres_util::publication_info(&self.connection.conn, &self.connection.publication)
                 .await
         );
         // Validate publication tables against the state snapshot
@@ -470,7 +470,7 @@ impl PostgresTaskInfo {
 
         let slot_query = format!(
             r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-            &self.connector.details.slot
+            &self.connection.details.slot
         );
         let slot_row = client
             .simple_query(&slot_query)
@@ -600,14 +600,14 @@ impl PostgresTaskInfo {
         use ReplicationError::*;
 
         let client =
-            try_recoverable!(mz_postgres_util::connect_replication(&self.connector.conn).await);
+            try_recoverable!(mz_postgres_util::connect_replication(&self.connection.conn).await);
 
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
-            name = &self.connector.details.slot,
+            name = &self.connection.details.slot,
             lsn = self.lsn,
-            publication = self.connector.publication
+            publication = self.connection.publication
         );
         let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
 

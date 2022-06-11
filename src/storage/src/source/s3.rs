@@ -49,8 +49,8 @@ use tracing::{debug, error, trace, warn};
 
 use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{Compression, ExternalSourceConnector, MzOffset, S3KeySource};
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::sources::{Compression, ExternalSourceConnection, MzOffset, S3KeySource};
+use mz_dataflow_types::ConnectionContext;
 use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
@@ -792,16 +792,16 @@ impl SourceReader for S3SourceReader {
         worker_id: usize,
         _worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
-        connector_context: ConnectorContext,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let s3_conn = match connector {
-            ExternalSourceConnector::S3(s3_conn) => s3_conn,
+        let s3_conn = match connection {
+            ExternalSourceConnection::S3(s3_conn) => s3_conn,
             _ => {
-                panic!("S3 is the only legitimate ExternalSourceConnector for S3SourceReader")
+                panic!("S3 is the only legitimate ExternalSourceConnection for S3SourceReader")
             }
         };
 
@@ -820,7 +820,7 @@ impl SourceReader for S3SourceReader {
                     dataflow_tx,
                     shutdown_rx.clone(),
                     s3_conn.aws.clone(),
-                    connector_context.aws_external_id_prefix.clone(),
+                    connection_context.aws_external_id_prefix.clone(),
                     consumer_activator,
                     s3_conn.compression,
                     metrics.clone(),
@@ -842,7 +842,7 @@ impl SourceReader for S3SourceReader {
                                 source_id,
                                 glob.clone(),
                                 s3_conn.aws.clone(),
-                                connector_context.aws_external_id_prefix.clone(),
+                                connection_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
                             ),
@@ -860,7 +860,7 @@ impl SourceReader for S3SourceReader {
                                 glob.clone(),
                                 queue,
                                 s3_conn.aws.clone(),
-                                connector_context.aws_external_id_prefix.clone(),
+                                connection_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
                                 metrics.clone(),

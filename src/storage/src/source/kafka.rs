@@ -24,10 +24,10 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector,
+    encoding::SourceDataEncoding, ExternalSourceConnection, KafkaOffset, KafkaSourceConnection,
     MzOffset,
 };
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
@@ -88,17 +88,17 @@ impl SourceReader for KafkaSourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
-        connector_context: ConnectorContext,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let kc = match connector {
-            ExternalSourceConnector::Kafka(kc) => kc,
+        let kc = match connection {
+            ExternalSourceConnection::Kafka(kc) => kc,
             _ => unreachable!(),
         };
-        let KafkaSourceConnector {
+        let KafkaSourceConnection {
             addrs,
             config_options,
             topic,
@@ -112,7 +112,7 @@ impl SourceReader for KafkaSourceReader {
             group_id_prefix,
             cluster_id,
             &config_options,
-            connector_context.librdkafka_log_level,
+            connection_context.librdkafka_log_level,
         );
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config

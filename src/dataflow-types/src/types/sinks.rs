@@ -33,7 +33,7 @@ include!(concat!(
 pub struct SinkDesc<T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
-    pub connector: SinkConnector,
+    pub connection: SinkConnection,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
 }
@@ -46,14 +46,14 @@ impl Arbitrary for SinkDesc<mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<RelationDesc>(),
-            any::<SinkConnector>(),
+            any::<SinkConnection>(),
             any::<Option<SinkEnvelope>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
         )
-            .prop_map(|(from, from_desc, connector, envelope, as_of)| SinkDesc {
+            .prop_map(|(from, from_desc, connection, envelope, as_of)| SinkDesc {
                 from,
                 from_desc,
-                connector,
+                connection,
                 envelope,
                 as_of,
             })
@@ -66,7 +66,7 @@ impl RustType<ProtoSinkDesc> for SinkDesc<mz_repr::Timestamp> {
         ProtoSinkDesc {
             from: Some(self.from.into_proto()),
             from_desc: Some(self.from_desc.into_proto()),
-            connector: Some(self.connector.into_proto()),
+            connection: Some(self.connection.into_proto()),
             envelope: self.envelope.into_proto(),
             as_of: Some(self.as_of.into_proto()),
         }
@@ -78,9 +78,9 @@ impl RustType<ProtoSinkDesc> for SinkDesc<mz_repr::Timestamp> {
             from_desc: proto
                 .from_desc
                 .into_rust_if_some("ProtoSinkDesc::from_desc")?,
-            connector: proto
-                .connector
-                .into_rust_if_some("ProtoSinkDesc::connector")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoSinkDesc::connection")?,
             envelope: proto.envelope.into_rust()?,
             as_of: proto.as_of.into_rust_if_some("ProtoSinkDesc::as_of")?,
         })
@@ -161,53 +161,53 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SinkConnector {
-    Kafka(KafkaSinkConnector),
-    Tail(TailSinkConnector),
-    Persist(PersistSinkConnector),
+pub enum SinkConnection {
+    Kafka(KafkaSinkConnection),
+    Tail(TailSinkConnection),
+    Persist(PersistSinkConnection),
 }
 
-impl RustType<ProtoSinkConnector> for SinkConnector {
-    fn into_proto(&self) -> ProtoSinkConnector {
-        use proto_sink_connector::Kind;
-        ProtoSinkConnector {
+impl RustType<ProtoSinkConnection> for SinkConnection {
+    fn into_proto(&self) -> ProtoSinkConnection {
+        use proto_sink_connection::Kind;
+        ProtoSinkConnection {
             kind: Some(match self {
-                SinkConnector::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                SinkConnector::Tail(_) => Kind::Tail(()),
-                SinkConnector::Persist(persist) => Kind::Persist(persist.into_proto()),
+                SinkConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
+                SinkConnection::Tail(_) => Kind::Tail(()),
+                SinkConnection::Persist(persist) => Kind::Persist(persist.into_proto()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoSinkConnector) -> Result<Self, TryFromProtoError> {
-        use proto_sink_connector::Kind;
+    fn from_proto(proto: ProtoSinkConnection) -> Result<Self, TryFromProtoError> {
+        use proto_sink_connection::Kind;
         let kind = proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkConnector::kind"))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkConnection::kind"))?;
         Ok(match kind {
-            Kind::Kafka(kafka) => SinkConnector::Kafka(kafka.into_rust()?),
-            Kind::Tail(()) => SinkConnector::Tail(TailSinkConnector {}),
-            Kind::Persist(persist) => SinkConnector::Persist(persist.into_rust()?),
+            Kind::Kafka(kafka) => SinkConnection::Kafka(kafka.into_rust()?),
+            Kind::Tail(()) => SinkConnection::Tail(TailSinkConnection {}),
+            Kind::Persist(persist) => SinkConnection::Persist(persist.into_rust()?),
         })
     }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConsistencyConnector {
+pub struct KafkaSinkConsistencyConnection {
     pub topic: String,
     pub schema_id: i32,
 }
 
-impl RustType<ProtoKafkaSinkConsistencyConnector> for KafkaSinkConsistencyConnector {
-    fn into_proto(self: &Self) -> ProtoKafkaSinkConsistencyConnector {
-        ProtoKafkaSinkConsistencyConnector {
+impl RustType<ProtoKafkaSinkConsistencyConnection> for KafkaSinkConsistencyConnection {
+    fn into_proto(self: &Self) -> ProtoKafkaSinkConsistencyConnection {
+        ProtoKafkaSinkConsistencyConnection {
             topic: self.topic.clone(),
             schema_id: self.schema_id,
         }
     }
 
-    fn from_proto(proto: ProtoKafkaSinkConsistencyConnector) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkConsistencyConnector {
+    fn from_proto(proto: ProtoKafkaSinkConsistencyConnection) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkConsistencyConnection {
             topic: proto.topic,
             schema_id: proto.schema_id,
         })
@@ -215,7 +215,7 @@ impl RustType<ProtoKafkaSinkConsistencyConnector> for KafkaSinkConsistencyConnec
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnector {
+pub struct KafkaSinkConnection {
     pub addrs: KafkaAddrs,
     pub topic: String,
     pub topic_prefix: String,
@@ -223,7 +223,7 @@ pub struct KafkaSinkConnector {
     pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,
     pub published_schema_info: Option<PublishedSchemaInfo>,
-    pub consistency: Option<KafkaSinkConsistencyConnector>,
+    pub consistency: Option<KafkaSinkConsistencyConnection>,
     pub exactly_once: bool,
     // Source dependencies for exactly-once sinks.
     pub transitive_source_dependencies: Vec<GlobalId>,
@@ -234,7 +234,7 @@ pub struct KafkaSinkConnector {
 }
 
 proptest::prop_compose! {
-    fn any_kafka_sink_connector()(
+    fn any_kafka_sink_connection()(
         addrs in any::<KafkaAddrs>(),
         topic in any::<String>(),
         topic_prefix in any::<String>(),
@@ -242,13 +242,13 @@ proptest::prop_compose! {
         relation_key_indices in any::<Option<Vec<usize>>>(),
         value_desc in any::<RelationDesc>(),
         published_schema_info in any::<Option<PublishedSchemaInfo>>(),
-        consistency in any::<Option<KafkaSinkConsistencyConnector>>(),
+        consistency in any::<Option<KafkaSinkConsistencyConnection>>(),
         exactly_once in any::<bool>(),
         transitive_source_dependencies in any::<Vec<GlobalId>>(),
         fuel in any::<usize>(),
         config_options in any::<BTreeMap<String, String>>(),
-    ) -> KafkaSinkConnector {
-        KafkaSinkConnector {
+    ) -> KafkaSinkConnection {
+        KafkaSinkConnection {
             addrs,
             topic,
             topic_prefix,
@@ -265,25 +265,25 @@ proptest::prop_compose! {
     }
 }
 
-impl Arbitrary for KafkaSinkConnector {
+impl Arbitrary for KafkaSinkConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_kafka_sink_connector().boxed()
+        any_kafka_sink_connection().boxed()
     }
 }
 
-impl RustType<proto_kafka_sink_connector::ProtoKeyDescAndIndices> for (RelationDesc, Vec<usize>) {
-    fn into_proto(&self) -> proto_kafka_sink_connector::ProtoKeyDescAndIndices {
-        proto_kafka_sink_connector::ProtoKeyDescAndIndices {
+impl RustType<proto_kafka_sink_connection::ProtoKeyDescAndIndices> for (RelationDesc, Vec<usize>) {
+    fn into_proto(&self) -> proto_kafka_sink_connection::ProtoKeyDescAndIndices {
+        proto_kafka_sink_connection::ProtoKeyDescAndIndices {
             desc: Some(self.0.into_proto()),
             indices: self.1.into_proto(),
         }
     }
 
     fn from_proto(
-        proto: proto_kafka_sink_connector::ProtoKeyDescAndIndices,
+        proto: proto_kafka_sink_connection::ProtoKeyDescAndIndices,
     ) -> Result<Self, TryFromProtoError> {
         Ok((
             proto
@@ -294,23 +294,23 @@ impl RustType<proto_kafka_sink_connector::ProtoKeyDescAndIndices> for (RelationD
     }
 }
 
-impl RustType<proto_kafka_sink_connector::ProtoRelationKeyIndicesVec> for Vec<usize> {
-    fn into_proto(&self) -> proto_kafka_sink_connector::ProtoRelationKeyIndicesVec {
-        proto_kafka_sink_connector::ProtoRelationKeyIndicesVec {
+impl RustType<proto_kafka_sink_connection::ProtoRelationKeyIndicesVec> for Vec<usize> {
+    fn into_proto(&self) -> proto_kafka_sink_connection::ProtoRelationKeyIndicesVec {
+        proto_kafka_sink_connection::ProtoRelationKeyIndicesVec {
             relation_key_indices: self.into_proto(),
         }
     }
 
     fn from_proto(
-        proto: proto_kafka_sink_connector::ProtoRelationKeyIndicesVec,
+        proto: proto_kafka_sink_connection::ProtoRelationKeyIndicesVec,
     ) -> Result<Self, TryFromProtoError> {
         proto.relation_key_indices.into_rust()
     }
 }
 
-impl RustType<ProtoKafkaSinkConnector> for KafkaSinkConnector {
-    fn into_proto(&self) -> ProtoKafkaSinkConnector {
-        ProtoKafkaSinkConnector {
+impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
+    fn into_proto(&self) -> ProtoKafkaSinkConnection {
+        ProtoKafkaSinkConnection {
             addrs: Some(self.addrs.into_proto()),
             topic: self.topic.clone(),
             topic_prefix: self.topic_prefix.clone(),
@@ -326,18 +326,18 @@ impl RustType<ProtoKafkaSinkConnector> for KafkaSinkConnector {
         }
     }
 
-    fn from_proto(proto: ProtoKafkaSinkConnector) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSinkConnector {
+    fn from_proto(proto: ProtoKafkaSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaSinkConnection {
             addrs: proto
                 .addrs
-                .into_rust_if_some("ProtoKafkaSinkConnector::addrs")?,
+                .into_rust_if_some("ProtoKafkaSinkConnection::addrs")?,
             topic: proto.topic,
             topic_prefix: proto.topic_prefix,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
             relation_key_indices: proto.relation_key_indices.into_rust()?,
             value_desc: proto
                 .value_desc
-                .into_rust_if_some("ProtoKafkaSinkConnector::addrs")?,
+                .into_rust_if_some("ProtoKafkaSinkConnection::addrs")?,
             published_schema_info: proto.published_schema_info.into_rust()?,
             consistency: proto.consistency.into_rust()?,
             exactly_once: proto.exactly_once,
@@ -372,16 +372,16 @@ impl RustType<ProtoPublishedSchemaInfo> for PublishedSchemaInfo {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistSinkConnector {
+pub struct PersistSinkConnection {
     pub value_desc: RelationDesc,
     pub shard_id: ShardId,
     pub consensus_uri: String,
     pub blob_uri: String,
 }
 
-impl RustType<ProtoPersistSinkConnector> for PersistSinkConnector {
-    fn into_proto(self: &Self) -> ProtoPersistSinkConnector {
-        ProtoPersistSinkConnector {
+impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection {
+    fn into_proto(self: &Self) -> ProtoPersistSinkConnection {
+        ProtoPersistSinkConnection {
             value_desc: Some(self.value_desc.into_proto()),
             shard_id: self.shard_id.into_proto(),
             consensus_uri: self.consensus_uri.clone(),
@@ -389,11 +389,11 @@ impl RustType<ProtoPersistSinkConnector> for PersistSinkConnector {
         }
     }
 
-    fn from_proto(proto: ProtoPersistSinkConnector) -> Result<Self, TryFromProtoError> {
-        Ok(PersistSinkConnector {
+    fn from_proto(proto: ProtoPersistSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(PersistSinkConnection {
             value_desc: proto
                 .value_desc
-                .into_rust_if_some("ProtoPersistSinkConnector::value_desc")?,
+                .into_rust_if_some("ProtoPersistSinkConnection::value_desc")?,
             shard_id: proto.shard_id.into_rust()?,
             consensus_uri: proto.consensus_uri,
             blob_uri: proto.blob_uri,
@@ -401,13 +401,13 @@ impl RustType<ProtoPersistSinkConnector> for PersistSinkConnector {
     }
 }
 
-impl SinkConnector {
-    /// Returns the name of the sink connector.
+impl SinkConnection {
+    /// Returns the name of the sink connection.
     pub fn name(&self) -> &'static str {
         match self {
-            SinkConnector::Kafka(_) => "kafka",
-            SinkConnector::Tail(_) => "tail",
-            SinkConnector::Persist(_) => "persist",
+            SinkConnection::Kafka(_) => "kafka",
+            SinkConnection::Tail(_) => "tail",
+            SinkConnection::Persist(_) => "persist",
         }
     }
 
@@ -424,12 +424,12 @@ impl SinkConnector {
     /// in order to advance the frontier that holds back upstream compaction
     /// of timestamp bindings.
     ///
-    /// See also [`transitive_source_dependencies`](SinkConnector::transitive_source_dependencies).
+    /// See also [`transitive_source_dependencies`](SinkConnection::transitive_source_dependencies).
     pub fn requires_source_compaction_holdback(&self) -> bool {
         match self {
-            SinkConnector::Kafka(k) => k.exactly_once,
-            SinkConnector::Tail(_) => false,
-            SinkConnector::Persist(_) => false,
+            SinkConnection::Kafka(k) => k.exactly_once,
+            SinkConnection::Tail(_) => false,
+            SinkConnection::Persist(_) => false,
         }
     }
 
@@ -437,24 +437,24 @@ impl SinkConnector {
     /// sink.
     pub fn transitive_source_dependencies(&self) -> &[GlobalId] {
         match self {
-            SinkConnector::Kafka(k) => &k.transitive_source_dependencies,
-            SinkConnector::Tail(_) => &[],
-            SinkConnector::Persist(_) => &[],
+            SinkConnection::Kafka(k) => &k.transitive_source_dependencies,
+            SinkConnection::Tail(_) => &[],
+            SinkConnection::Persist(_) => &[],
         }
     }
 }
 
 #[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct TailSinkConnector {}
+pub struct TailSinkConnection {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum SinkConnectorBuilder {
-    Kafka(KafkaSinkConnectorBuilder),
-    Persist(PersistSinkConnectorBuilder),
+pub enum SinkConnectionBuilder {
+    Kafka(KafkaSinkConnectionBuilder),
+    Persist(PersistSinkConnectionBuilder),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistSinkConnectorBuilder {
+pub struct PersistSinkConnectionBuilder {
     pub consensus_uri: String,
     pub blob_uri: String,
     pub shard_id: ShardId,
@@ -462,7 +462,7 @@ pub struct PersistSinkConnectorBuilder {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnectorBuilder {
+pub struct KafkaSinkConnectionBuilder {
     pub broker_addrs: KafkaAddrs,
     pub format: KafkaSinkFormat,
     /// A natural key of the sinked relation (view or source).
@@ -483,11 +483,11 @@ pub struct KafkaSinkConnectorBuilder {
     pub reuse_topic: bool,
     // Source dependencies for exactly-once sinks.
     pub transitive_source_dependencies: Vec<GlobalId>,
-    pub retention: KafkaSinkConnectorRetention,
+    pub retention: KafkaSinkConnectionRetention,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSinkConnectorRetention {
+pub struct KafkaSinkConnectionRetention {
     pub duration: Option<Option<Duration>>,
     pub bytes: Option<i64>,
 }

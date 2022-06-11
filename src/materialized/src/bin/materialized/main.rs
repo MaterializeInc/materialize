@@ -46,7 +46,7 @@ use uuid::Uuid;
 use materialized::{
     OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
@@ -699,7 +699,7 @@ max log level: {max_log_level}",
         now: SYSTEM_TIME.clone(),
         replica_sizes,
         availability_zones: args.availability_zone,
-        connector_context: ConnectorContext::from_cli_args(
+        connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id_prefix,
         ),

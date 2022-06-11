@@ -7,62 +7,62 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# Test basic connector functionality
+# Test basic connection functionality
 
 ###
-# Test core functionality by creating, introspecting and dropping a connector
+# Test core functionality by creating, introspecting and dropping a connection
 ###
-$ kafka-create-topic topic=connector_test partitions=1
-$ kafka-ingest format=bytes topic=connector_test
+$ kafka-create-topic topic=connection_test partitions=1
+$ kafka-ingest format=bytes topic=connection_test
 1,2
 2,3
 
-> CREATE CONNECTOR testconn
+> CREATE CONNECTION testconn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> SELECT name, connector_type from mz_connectors
-name  connector_type
+> SELECT name, connection_type from mz_connections
+name  connection_type
 ------------------------------
 testconn   kafka
 
-> SHOW CREATE CONNECTOR testconn
-Connector   "Create Connector"
+> SHOW CREATE CONNECTION testconn
+Connection   "Create Connection"
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTOR \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER '${testdrive.kafka-addr}'"
+materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER '${testdrive.kafka-addr}'"
 
 
-> DROP CONNECTOR testconn
+> DROP CONNECTION testconn
 
 ###
-# Test that connectors work in creating a source
+# Test that connections work in creating a source
 ###
-> CREATE CONNECTOR testconn
+> CREATE CONNECTION testconn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> CREATE MATERIALIZED SOURCE connector_source (first, second)
-  FROM KAFKA CONNECTOR testconn
-  TOPIC 'testdrive-connector_test-${testdrive.seed}'
+> CREATE MATERIALIZED SOURCE connection_source (first, second)
+  FROM KAFKA CONNECTION testconn
+  TOPIC 'testdrive-connection_test-${testdrive.seed}'
   FORMAT CSV WITH 2 COLUMNS
 
-> SELECT * FROM connector_source
+> SELECT * FROM connection_source
 first second mz_offset
 ----------------------
 1     2      1
 2     3      2
 
-# Confirm we cannot drop the connector while a source depends upon it
-! DROP CONNECTOR testconn;
-contains:depended upon by catalog item 'materialize.public.connector_source'
+# Confirm we cannot drop the connection while a source depends upon it
+! DROP CONNECTION testconn;
+contains:depended upon by catalog item 'materialize.public.connection_source'
 
 # Confirm the drop works if we add cascade
-> DROP CONNECTOR testconn CASCADE;
+> DROP CONNECTION testconn CASCADE;
 
 # Validate the cascading drop actually happened
-! SELECT * FROM connector_source
-contains:unknown catalog item 'connector_source'
+! SELECT * FROM connection_source
+contains:unknown catalog item 'connection_source'
 
 ###
-# Test schema registry connector create and drop
+# Test schema registry connection create and drop
 ###
 
 # Setup kafka topic with schema
@@ -114,12 +114,12 @@ $ kafka-ingest format=avro topic=csr_test key-format=avro key-schema=${keyschema
 
 
 
-> CREATE CONNECTOR csr_conn
+> CREATE CONNECTION csr_conn
   FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE MATERIALIZED SOURCE csr_source
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-csr_test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR csr_conn
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM UPSERT
 
 > SELECT * from csr_source
@@ -128,28 +128,28 @@ id creature
 1  lizard
 
 
-> CREATE CONNECTOR broker_connector
+> CREATE CONNECTION broker_connection
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
 
-> CREATE MATERIALIZED SOURCE two_connector_source
-  FROM KAFKA CONNECTOR broker_connector
+> CREATE MATERIALIZED SOURCE two_connection_source
+  FROM KAFKA CONNECTION broker_connection
   TOPIC 'testdrive-csr_test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR csr_conn
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM UPSERT
 
-> SELECT * from two_connector_source
+> SELECT * from two_connection_source
 id creature
 -----------
 1  lizard
 
-! DROP CONNECTOR csr_conn
+! DROP CONNECTION csr_conn
 contains:depended upon by catalog item 'materialize.public.csr_source'
 
-> DROP CONNECTOR csr_conn CASCADE
+> DROP CONNECTION csr_conn CASCADE
 
 ! CREATE MATERIALIZED SOURCE should_fail
-  FROM KAFKA CONNECTOR does_not_exist
+  FROM KAFKA CONNECTION does_not_exist
   TOPIC 'error_topic'
   FORMAT TEXT
 contains: unknown catalog item 'does_not_exist'
@@ -157,11 +157,11 @@ contains: unknown catalog item 'does_not_exist'
 ! CREATE MATERIALIZED SOURCE should_fail
   FROM KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-csr_test-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTOR does_not_exist
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION does_not_exist
   ENVELOPE DEBEZIUM UPSERT
 contains: unknown catalog item 'does_not_exist'
 
-# Test protobuf CSR connector
+# Test protobuf CSR connection
 # Duplicated from protobuf-import.td since once a topic has been read we can only create the source again by forcing offsets which is itself a different test case
 $ set empty-schema
 syntax = "proto3";
@@ -229,14 +229,14 @@ $ schema-registry-publish subject=testdrive-import-csr-${testdrive.seed}-value s
 $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb message=Importer confluent-wire-format=true
 {"importee1": {"b": false}, "importee2": {"ts": "1970-01-01T00:20:34.000005678Z"}}
 
-> CREATE CONNECTOR proto_csr
+> CREATE CONNECTION proto_csr
   FOR CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-> CREATE MATERIALIZED SOURCE import_connector_csr FROM
+> CREATE MATERIALIZED SOURCE import_connection_csr FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-import-csr-${testdrive.seed}'
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTOR proto_csr
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
 
-> SELECT importee1::text, importee2::text, mz_offset FROM import_connector_csr
+> SELECT importee1::text, importee2::text, mz_offset FROM import_connection_csr
 importee1  importee2            mz_offset
 -----------------------------------------
 (f)        "(\"(1234,5678)\")"  1
