@@ -9,14 +9,6 @@ menu:
 `CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters), which
 contains indexes and sinks.
 
-{{< warning >}}
-
-In addition to clusters, you must <a
-href="https://materialize.com/docs/sql/create-cluster-replicas">create cluster
-replicas</a> for Materialize to perform computations.
-
-{{< /warning >}}
-
 ## Conceptual framework
 
 Clusters are logical components that let you express resource isolation for all
