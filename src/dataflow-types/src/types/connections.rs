@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Connector types.
+//! Connection types.
 
 use std::collections::BTreeMap;
 
@@ -33,13 +33,13 @@ impl StringOrSecret {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub enum Connector {
-    Kafka(KafkaConnector),
+pub enum Connection {
+    Kafka(KafkaConnection),
     Csr(mz_ccsr::ClientConfig),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct KafkaConnector {
+pub struct KafkaConnection {
     pub broker: KafkaAddrs,
     pub options: BTreeMap<String, StringOrSecret>,
 }

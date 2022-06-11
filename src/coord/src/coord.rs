@@ -97,13 +97,14 @@ use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
     LinearizedTimestampBindingFeedback, ReplicaId,
 };
-use mz_dataflow_types::sinks::{SinkAsOf, SinkConnector, SinkDesc, TailSinkConnector};
+use mz_dataflow_types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
 use mz_dataflow_types::sources::{
-    ExternalSourceConnector, IngestionDescription, PostgresSourceConnector, SourceConnector,
+    ExternalSourceConnection, IngestionDescription, PostgresSourceConnection, SourceConnection,
     Timeline,
 };
 use mz_dataflow_types::{
-    BuildDesc, ConnectorContext, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
+    BuildDesc, ConnectionContext, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse,
+    Update,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,
@@ -135,7 +136,7 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
-    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectorPlan,
+    CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
@@ -150,7 +151,7 @@ use mz_transform::Optimizer;
 use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
-    Connector, SinkConnectorState,
+    Connection, SinkConnectionState,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -163,7 +164,7 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
     TransactionStatus, WriteOp,
 };
-use crate::sink_connector;
+use crate::sink_connection;
 use crate::tail::PendingTail;
 use crate::util::ClientTransmitter;
 
@@ -177,7 +178,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     Command(Command),
     ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
-    SinkConnectorReady(SinkConnectorReady),
+    SinkConnectionReady(SinkConnectionReady),
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
@@ -227,13 +228,13 @@ pub struct DeferredPlan {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct SinkConnectorReady {
+pub struct SinkConnectionReady {
     pub session: Session,
     #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
-    pub result: Result<SinkConnector, CoordError>,
+    pub result: Result<SinkConnection, CoordError>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -251,7 +252,7 @@ pub struct Config<S> {
     pub secrets_reader: SecretsReader,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
-    pub connector_context: ConnectorContext,
+    pub connection_context: ConnectionContext,
 }
 
 struct PendingPeek {
@@ -485,8 +486,8 @@ pub struct Coordinator<S> {
     /// Valid availability zones for replicas.
     availability_zones: Vec<String>,
 
-    /// Extra context to pass through to connector creation.
-    connector_context: ConnectorContext,
+    /// Extra context to pass through to connection creation.
+    connection_context: ConnectionContext,
 }
 
 /// Metadata about an active connection.
@@ -782,23 +783,23 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
-                    let builder = match &sink.connector {
-                        SinkConnectorState::Pending(builder) => builder,
-                        SinkConnectorState::Ready(_) => {
+                    let builder = match &sink.connection {
+                        SinkConnectionState::Pending(builder) => builder,
+                        SinkConnectionState::Ready(_) => {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = sink_connector::build(
+                    let connection = sink_connection::build(
                         builder.clone(),
                         entry.id(),
-                        self.connector_context.clone(),
+                        self.connection_context.clone(),
                     )
                     .await
                     .with_context(|| format!("recreating sink {}", entry.name()))?;
-                    self.handle_sink_connector_ready(
+                    self.handle_sink_connection_ready(
                         entry.id(),
                         entry.oid(),
-                        connector,
+                        connection,
                         // The sink should be established on a specific compute instance.
                         sink.compute_instance,
                         None,
@@ -810,7 +811,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connector(_) => {}
+                | CatalogItem::Connection(_) => {}
             }
         }
 
@@ -962,8 +963,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::CreateSourceStatementReady(ready) => {
                     self.message_create_source_statement_ready(ready).await
                 }
-                Message::SinkConnectorReady(ready) => {
-                    self.message_sink_connector_ready(ready).await
+                Message::SinkConnectionReady(ready) => {
+                    self.message_sink_connection_ready(ready).await
                 }
                 Message::WriteLockGrant(write_lock_guard) => {
                     // It's possible to have more incoming write lock grants
@@ -1266,21 +1267,21 @@ impl<S: Append + 'static> Coordinator<S> {
         tx.send(result, session);
     }
 
-    async fn message_sink_connector_ready(
+    async fn message_sink_connection_ready(
         &mut self,
-        SinkConnectorReady {
+        SinkConnectionReady {
             session,
             tx,
             id,
             oid,
             result,
             compute_instance,
-        }: SinkConnectorReady,
+        }: SinkConnectionReady,
     ) {
         match result {
-            Ok(connector) => {
+            Ok(connection) => {
                 // NOTE: we must not fail from here on out. We have a
-                // connector, which means there is external state (like
+                // connection, which means there is external state (like
                 // a Kafka topic) that's been created on our behalf. If
                 // we fail now, we'll leak that external state.
                 if self.catalog.try_get_entry(&id).is_some() {
@@ -1288,10 +1289,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
                     // bit on the sink.
-                    self.handle_sink_connector_ready(
+                    self.handle_sink_connection_ready(
                         id,
                         oid,
-                        connector,
+                        connection,
                         compute_instance,
                         Some(&session),
                     )
@@ -1299,7 +1300,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .expect("sinks should be validated by sequence_create_sink");
                 } else {
                     // Another session dropped the sink while we were
-                    // creating the connector. Report to the client that
+                    // creating the connection. Report to the client that
                     // we created the sink, because from their
                     // perspective we did, as there is state (e.g. a
                     // Kafka topic) they need to clean up.
@@ -1316,7 +1317,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .expect("deleting placeholder sink cannot fail");
                 } else {
                     // Another session may have dropped the placeholder sink while we were
-                    // attempting to create the connector, in which case we don't need to do
+                    // attempting to create the connection, in which case we don't need to do
                     // anything.
                 }
                 tx.send(Err(e), session);
@@ -1769,7 +1770,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::ShowCreateSource(_)
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
-                    | Statement::ShowCreateConnector(_)
+                    | Statement::ShowCreateConnection(_)
                     | Statement::ShowDatabases(_)
                     | Statement::ShowSchemas(_)
                     | Statement::ShowIndexes(_)
@@ -1806,7 +1807,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
                     | Statement::AlterObjectRename(_)
-                    | Statement::CreateConnector(_)
+                    | Statement::CreateConnection(_)
                     | Statement::CreateDatabase(_)
                     | Statement::CreateIndex(_)
                     | Statement::CreateRole(_)
@@ -1863,7 +1864,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     Box::new(catalog.into_owned()),
                     self.now(),
                     stmt,
-                    self.connector_context.clone(),
+                    self.connection_context.clone(),
                 );
                 task::spawn(|| format!("purify:{conn_id}"), async move {
                     let result = purify_fut.await.map_err(|e| e.into());
@@ -1999,22 +2000,22 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("unable to drop temporary items for conn_id");
     }
 
-    async fn handle_sink_connector_ready(
+    async fn handle_sink_connection_ready(
         &mut self,
         id: GlobalId,
         oid: u32,
-        connector: SinkConnector,
+        connection: SinkConnection,
         compute_instance: ComputeInstanceId,
         session: Option<&Session>,
     ) -> Result<(), CoordError> {
-        // Update catalog entry with sink connector.
+        // Update catalog entry with sink connection.
         let entry = self.catalog.get_entry(&id);
         let name = entry.name().clone();
         let mut sink = match entry.item() {
             CatalogItem::Sink(sink) => sink.clone(),
             _ => unreachable!(),
         };
-        sink.connector = catalog::SinkConnectorState::Ready(connector.clone());
+        sink.connection = catalog::SinkConnectionState::Ready(connection.clone());
         // We don't try to linearize the as of for the sink; we just pick the
         // least valid read timestamp. If users want linearizability across
         // Materialize and their sink, they'll need to reason about the
@@ -2051,7 +2052,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         )
                         .unwrap()
                         .into_owned(),
-                    connector: connector.clone(),
+                    connection: connection.clone(),
                     envelope: Some(sink.envelope),
                     as_of,
                 };
@@ -2070,9 +2071,9 @@ impl<S: Append + 'static> Coordinator<S> {
         depends_on: Vec<GlobalId>,
     ) {
         match plan {
-            Plan::CreateConnector(plan) => {
+            Plan::CreateConnection(plan) => {
                 tx.send(
-                    self.sequence_create_connector(&session, plan).await,
+                    self.sequence_create_connection(&session, plan).await,
                     session,
                 );
             }
@@ -2373,28 +2374,28 @@ impl<S: Append + 'static> Coordinator<S> {
         session.create_new_portal(sql, desc, plan.params, Vec::new(), revision)
     }
 
-    async fn sequence_create_connector(
+    async fn sequence_create_connection(
         &mut self,
         session: &Session,
-        plan: CreateConnectorPlan,
+        plan: CreateConnectionPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let connector_oid = self.catalog.allocate_oid().await?;
-        let connector_gid = self.catalog.allocate_user_id().await?;
+        let connection_oid = self.catalog.allocate_oid().await?;
+        let connection_gid = self.catalog.allocate_user_id().await?;
         let ops = vec![catalog::Op::CreateItem {
-            id: connector_gid,
-            oid: connector_oid,
+            id: connection_gid,
+            oid: connection_oid,
             name: plan.name.clone(),
-            item: CatalogItem::Connector(Connector {
-                create_sql: plan.connector.create_sql,
-                connector: plan.connector.connector,
+            item: CatalogItem::Connection(Connection {
+                create_sql: plan.connection.create_sql,
+                connection: plan.connection.connection,
             }),
         }];
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(_) => Ok(ExecuteResponse::CreatedConnector { existed: false }),
+            Ok(_) => Ok(ExecuteResponse::CreatedConnection { existed: false }),
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
-            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnector { existed: true }),
+            })) if plan.if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -2690,7 +2691,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let source_oid = self.catalog.allocate_oid().await?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
-            connector: plan.source.connector,
+            connection: plan.source.connection,
             desc: plan.source.desc,
             depends_on,
         };
@@ -2833,11 +2834,11 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         // Then try to create a placeholder catalog item with an unknown
-        // connector. If that fails, we're done, though if the client specified
+        // connection. If that fails, we're done, though if the client specified
         // `if_not_exists` we'll tell the client we succeeded.
         //
         // This placeholder catalog item reserves the name while we create
-        // the sink connector, which could take an arbitrarily long time.
+        // the sink connection, which could take an arbitrarily long time.
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -2845,7 +2846,7 @@ impl<S: Append + 'static> Coordinator<S> {
             item: CatalogItem::Sink(catalog::Sink {
                 create_sql: sink.create_sql,
                 from: sink.from,
-                connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
+                connection: catalog::SinkConnectionState::Pending(sink.connection_builder.clone()),
                 envelope: sink.envelope,
                 with_snapshot,
                 depends_on,
@@ -2871,7 +2872,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 )
                                 .unwrap()
                                 .into_owned(),
-                            connector: SinkConnector::Tail(TailSinkConnector {}),
+                            connection: SinkConnection::Tail(TailSinkConnection {}),
                             envelope: Some(sink.envelope),
                             as_of: SinkAsOf {
                                 frontier: Antichain::new(),
@@ -2897,21 +2898,21 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        // Now we're ready to create the sink connector. Arrange to notify the
+        // Now we're ready to create the sink connection. Arrange to notify the
         // main coordinator thread when the future completes.
-        let connector_builder = sink.connector_builder;
+        let connection_builder = sink.connection_builder;
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let connector_context = self.connector_context.clone();
+        let connection_context = self.connection_context.clone();
         task::spawn(
-            || format!("sink_connector_ready:{}", sink.from),
+            || format!("sink_connection_ready:{}", sink.from),
             async move {
                 internal_cmd_tx
-                    .send(Message::SinkConnectorReady(SinkConnectorReady {
+                    .send(Message::SinkConnectionReady(SinkConnectionReady {
                         session,
                         tx,
                         id,
                         oid,
-                        result: sink_connector::build(connector_builder, id, connector_context)
+                        result: sink_connection::build(connection_builder, id, connection_context)
                             .await,
                         compute_instance,
                     }))
@@ -3307,7 +3308,7 @@ impl<S: Append + 'static> Coordinator<S> {
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
             ObjectType::Secret => ExecuteResponse::DroppedSecret,
-            ObjectType::Connector => ExecuteResponse::DroppedConnector,
+            ObjectType::Connection => ExecuteResponse::DroppedConnection,
             ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
                 unreachable!("handled through their respective sequence_drop functions")
             }
@@ -3931,7 +3932,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok::<_, CoordError>(SinkDesc {
                 from,
                 from_desc,
-                connector: SinkConnector::Tail(TailSinkConnector::default()),
+                connection: SinkConnection::Tail(TailSinkConnection::default()),
                 envelope: None,
                 as_of: SinkAsOf {
                     frontier: Antichain::from_elem(timestamp),
@@ -4698,7 +4699,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                         .all(|id| validate_read_dependencies(catalog, id))
                             )
                     }
-                    Source | Secret | Connector => false,
+                    Source | Secret | Connection => false,
                     // Cannot select from sinks or indexes
                     Sink | Index => unreachable!(),
                     Table => id.is_user(),
@@ -4963,15 +4964,15 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        if let SourceConnector::External {
-                            connector:
-                                ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                        if let SourceConnection::External {
+                            connection:
+                                ExternalSourceConnection::Postgres(PostgresSourceConnection {
                                     conn,
                                     details,
                                     ..
                                 }),
                             ..
-                        } = &source.connector
+                        } = &source.connection
                         {
                             replication_slots_to_drop
                                 .entry(conn.clone())
@@ -4980,7 +4981,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         }
                     }
                     CatalogItem::Sink(catalog::Sink {
-                        connector: SinkConnectorState::Ready(_),
+                        connection: SinkConnectionState::Ready(_),
                         compute_instance,
                         ..
                     }) => {
@@ -5319,7 +5320,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let entry = self.catalog.get_entry(&id);
             match entry.item() {
                 CatalogItem::Source(source) => {
-                    timelines.insert(id, source.connector.timeline());
+                    timelines.insert(id, source.connection.timeline());
                 }
                 CatalogItem::Index(index) => {
                     ids.push(index.on);
@@ -5419,7 +5420,7 @@ pub async fn serve<S: Append + 'static>(
         secrets_reader,
         replica_sizes,
         availability_zones,
-        connector_context,
+        connection_context,
     }: Config<S>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -5471,7 +5472,7 @@ pub async fn serve<S: Append + 'static>(
                 secrets_controller,
                 replica_sizes,
                 availability_zones,
-                connector_context,
+                connection_context,
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

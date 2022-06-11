@@ -31,7 +31,7 @@ use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator::Orchestrator;
 use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
@@ -98,11 +98,11 @@ pub struct Config {
     /// Postgres connection string for storage's stash.
     pub storage_postgres_stash: String,
 
-    // === Connector options. ===
-    /// Configuration for source and sink connectors created by the storage
+    // === Connection options. ===
+    /// Configuration for source and sink connections created by the storage
     /// layer. This can include configuration for external
     /// sources.
-    pub connector_context: ConnectorContext,
+    pub connection_context: ConnectionContext,
 
     // === Platform options. ===
     /// Configuration of service orchestration.
@@ -341,7 +341,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         secrets_reader,
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
-        connector_context: config.connector_context,
+        connection_context: config.connection_context,
     })
     .await?;
 

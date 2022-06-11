@@ -27,10 +27,10 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::connectors::{Connector, KafkaConnector};
+use mz_dataflow_types::connections::{Connection, KafkaConnection};
 use mz_dataflow_types::sinks::{
-    KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
-    PersistSinkConnectorBuilder, SinkConnectorBuilder, SinkEnvelope,
+    KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
+    PersistSinkConnectionBuilder, SinkConnectionBuilder, SinkEnvelope,
 };
 use mz_dataflow_types::sources::encoding::{
     included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
@@ -38,10 +38,10 @@ use mz_dataflow_types::sources::encoding::{
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
-    IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MzOffset,
-    PostgresSourceConnector, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, Timeline,
+    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnection,
+    IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
+    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
+    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceEnvelope, Timeline,
     UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
@@ -58,13 +58,13 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
     AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnector,
-    CreateConnectorStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnector,
-    CreateSinkStatement, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
+    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateViewsSourceTarget, CreateViewsStatement, CsrConnector, CsrConnectorAvro,
-    CsrConnectorProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
+    CreateViewsSourceTarget, CreateViewsStatement, CsrConnection, CsrConnectionAvro,
+    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
     DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
@@ -89,7 +89,7 @@ use crate::plan::with_options::{OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
-    CreateComputeInstanceReplicaPlan, CreateConnectorPlan, CreateDatabasePlan, CreateIndexPlan,
+    CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
@@ -304,7 +304,7 @@ pub fn plan_create_source(
     let CreateSourceStatement {
         name,
         col_names,
-        connector,
+        connection,
         with_options,
         envelope,
         if_not_exists,
@@ -330,7 +330,7 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_frequency,
     };
 
-    if !matches!(connector, CreateSourceConnector::Kafka { .. })
+    if !matches!(connection, CreateSourceConnection::Kafka { .. })
         && include_metadata
             .iter()
             .any(|sic| sic.ty == SourceIncludeMetadataType::Headers)
@@ -338,24 +338,24 @@ pub fn plan_create_source(
         // TODO(guswynn): should this be `bail_unsupported!`?
         bail!("INCLUDE HEADERS with non-Kafka sources not supported");
     }
-    if !matches!(connector, CreateSourceConnector::Kafka { .. }) && !include_metadata.is_empty() {
+    if !matches!(connection, CreateSourceConnection::Kafka { .. }) && !include_metadata.is_empty() {
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let (external_connector, encoding) = match connector {
-        CreateSourceConnector::Kafka(kafka) => {
-            let (broker, config_options) = match &kafka.connector {
-                mz_sql_parser::ast::KafkaConnector::Inline { broker } => (
+    let (external_connection, encoding) = match connection {
+        CreateSourceConnection::Kafka(kafka) => {
+            let (broker, config_options) = match &kafka.connection {
+                mz_sql_parser::ast::KafkaConnection::Inline { broker } => (
                     broker.to_string(),
                     kafka_util::extract_config(&mut with_options, scx.catalog.secrets_reader())?,
                 ),
-                mz_sql_parser::ast::KafkaConnector::Reference { connector, .. } => {
-                    let item = scx.get_item_by_resolved_name(&connector)?;
-                    match item.connector()? {
-                        Connector::Kafka(connector) => {
-                            (connector.broker.to_string(), connector.options.clone())
+                mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    match item.connection()? {
+                        Connection::Kafka(connection) => {
+                            (connection.broker.to_string(), connection.options.clone())
                         }
-                        _ => bail!("{} is not a kafka connector", item.name()),
+                        _ => bail!("{} is not a kafka connection", item.name()),
                     }
                 }
             };
@@ -404,7 +404,7 @@ pub fn plan_create_source(
             let config_options =
                 kafka_util::inline_secrets(config_options, scx.catalog.secrets_reader())?;
 
-            let mut connector = KafkaSourceConnector {
+            let mut connection = KafkaSourceConnection {
                 addrs: broker.parse()?,
                 topic: kafka.topic.clone(),
                 config_options,
@@ -452,10 +452,10 @@ pub fn plan_create_source(
             for (pos, item) in include_metadata.iter().cloned().enumerate() {
                 match item.ty {
                     SourceIncludeMetadataType::Timestamp => {
-                        connector.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
+                        connection.include_timestamp = unwrap_name(item.alias, "timestamp", pos);
                     }
                     SourceIncludeMetadataType::Partition => {
-                        connector.include_partition = unwrap_name(item.alias, "partition", pos);
+                        connection.include_partition = unwrap_name(item.alias, "partition", pos);
                     }
                     SourceIncludeMetadataType::Topic => {
                         // TODO(bwm): This requires deeper thought, the current structure of the
@@ -466,20 +466,20 @@ pub fn plan_create_source(
                         bail_unsupported!("INCLUDE TOPIC");
                     }
                     SourceIncludeMetadataType::Offset => {
-                        connector.include_offset = unwrap_name(item.alias, "offset", pos);
+                        connection.include_offset = unwrap_name(item.alias, "offset", pos);
                     }
                     SourceIncludeMetadataType::Headers => {
-                        connector.include_headers = unwrap_name(item.alias, "headers", pos);
+                        connection.include_headers = unwrap_name(item.alias, "headers", pos);
                     }
                     SourceIncludeMetadataType::Key => {} // handled below
                 }
             }
 
-            let connector = ExternalSourceConnector::Kafka(connector);
+            let connection = ExternalSourceConnection::Kafka(connection);
 
-            (connector, encoding)
+            (connection, encoding)
         }
-        CreateSourceConnector::Kinesis { arn, .. } => {
+        CreateSourceConnection::Kinesis { arn, .. } => {
             scx.require_unsafe_mode("CREATE SOURCE ... FROM KINESIS")?;
             let arn: ARN = arn
                 .parse()
@@ -497,12 +497,12 @@ pub fn plan_create_source(
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
-            let connector =
-                ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
+            let connection =
+                ExternalSourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
             let encoding = get_encoding(scx, format, &envelope)?;
-            (connector, encoding)
+            (connection, encoding)
         }
-        CreateSourceConnector::S3 {
+        CreateSourceConnection::S3 {
             key_sources,
             pattern,
             compression,
@@ -525,7 +525,7 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
-            let connector = ExternalSourceConnector::S3(S3SourceConnector {
+            let connection = ExternalSourceConnection::S3(S3SourceConnection {
                 key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
@@ -546,9 +546,9 @@ pub fn plan_create_source(
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
-            (connector, encoding)
+            (connection, encoding)
         }
-        CreateSourceConnector::Postgres {
+        CreateSourceConnection::Postgres {
             conn,
             publication,
             details,
@@ -557,16 +557,16 @@ pub fn plan_create_source(
                 .as_ref()
                 .ok_or_else(|| anyhow!("internal error: Postgres source missing details"))?;
             let details = ProtoPostgresSourceDetails::decode(&*hex::decode(details)?)?;
-            let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
+            let connection = ExternalSourceConnection::Postgres(PostgresSourceConnection {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 details: PostgresSourceDetails::from_proto(details)?,
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
-            (connector, encoding)
+            (connection, encoding)
         }
-        CreateSourceConnector::PubNub {
+        CreateSourceConnection::PubNub {
             subscribe_key,
             channel,
         } => {
@@ -574,11 +574,11 @@ pub fn plan_create_source(
                 CreateSourceFormat::None | CreateSourceFormat::Bare(Format::Text) => (),
                 _ => bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
             }
-            let connector = ExternalSourceConnector::PubNub(PubNubSourceConnector {
+            let connection = ExternalSourceConnection::PubNub(PubNubSourceConnection {
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (connector, SourceDataEncoding::Single(DataEncoding::Text))
+            (connection, SourceDataEncoding::Single(DataEncoding::Text))
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
@@ -598,11 +598,11 @@ pub fn plan_create_source(
 
     let key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
-    // Not all source envelopes are compatible with all source connectors.
+    // Not all source envelopes are compatible with all source connections.
     // Whoever constructs the source ingestion pipeline is responsible for
-    // choosing compatible envelopes and connectors.
+    // choosing compatible envelopes and connections.
     //
-    // TODO(guswynn): ambiguously assert which connectors and envelopes are
+    // TODO(guswynn): ambiguously assert which connections and envelopes are
     // compatible in typechecking
     //
     // TODO: remove bails as more support for upsert is added.
@@ -803,8 +803,8 @@ pub fn plan_create_source(
 
     // TODO(petrosagg): remove this inconsistency once INCLUDE (offset) syntax is implemented
     let include_defaults = provide_default_metadata(&envelope, encoding.value_ref());
-    let metadata_columns = external_connector.metadata_columns(include_defaults);
-    let metadata_column_types = external_connector.metadata_column_types(include_defaults);
+    let metadata_columns = external_connection.metadata_columns(include_defaults);
+    let metadata_column_types = external_connection.metadata_column_types(include_defaults);
     let metadata_desc = included_column_desc(metadata_columns.clone());
     let (envelope, mut desc) = envelope.desc(key_desc, value_desc, metadata_desc)?;
 
@@ -826,7 +826,7 @@ pub fn plan_create_source(
         let mut tmp = Vec::with_capacity(desc.arity());
         tmp.extend(col_names.iter().cloned());
         tmp.push(Ident::from(
-            external_connector.default_metadata_column_name().unwrap(),
+            external_connection.default_metadata_column_name().unwrap(),
         ));
         tmp_col = tmp;
         &tmp_col
@@ -911,8 +911,8 @@ pub fn plan_create_source(
 
     let source = Source {
         create_sql,
-        connector: SourceConnector::External {
-            connector: external_connector,
+        connection: SourceConnection::External {
+            connection: external_connection,
             encoding,
             envelope,
             metadata_columns: metadata_column_types,
@@ -1251,16 +1251,16 @@ fn get_encoding_inner(
                     unreachable!("File schema should already have been inlined")
                 }
                 AvroSchema::Csr {
-                    csr_connector:
-                        CsrConnectorAvro {
-                            connector,
+                    csr_connection:
+                        CsrConnectionAvro {
+                            connection,
                             seed,
                             with_options: ccsr_options,
                         },
                 } => {
                     let mut normalized_options = normalize::options(&ccsr_options)?;
-                    let ccsr_config = match connector {
-                        CsrConnector::Inline { url } => {
+                    let ccsr_config = match connection {
+                        CsrConnection::Inline { url } => {
                             let mut options = kafka_util::extract_config_ccsr(
                                 &mut normalized_options,
                                 scx.catalog.secrets_reader(),
@@ -1271,11 +1271,11 @@ fn get_encoding_inner(
                                 scx.catalog.secrets_reader(),
                             )?
                         }
-                        CsrConnector::Reference { connector } => {
-                            let item = scx.get_item_by_resolved_name(&connector)?;
-                            match item.connector()? {
-                                Connector::Csr(config) => config.clone(),
-                                _ => bail!("{} is not a schema registry connector", item.name()),
+                        CsrConnection::Reference { connection } => {
+                            let item = scx.get_item_by_resolved_name(&connection)?;
+                            match item.connection()? {
+                                Connection::Csr(config) => config.clone(),
+                                _ => bail!("{} is not a schema registry connection", item.name()),
                             }
                         }
                     };
@@ -1319,9 +1319,9 @@ fn get_encoding_inner(
         }
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr {
-                csr_connector:
-                    CsrConnectorProto {
-                        connector,
+                csr_connection:
+                    CsrConnectionProto {
+                        connection,
                         seed,
                         with_options: ccsr_options,
                     },
@@ -1329,12 +1329,12 @@ fn get_encoding_inner(
                 if let Some(CsrSeedCompiledOrLegacy::Compiled(CsrSeedCompiled { key, value })) =
                     seed
                 {
-                    // We validate to match the behavior of Avro CSR connectors,
-                    // even though we don't actually use the connector. (It
+                    // We validate to match the behavior of Avro CSR connections,
+                    // even though we don't actually use the connection. (It
                     // was used during purification.)
                     let mut normalized_options = normalize::options(&ccsr_options)?;
-                    let _ = match connector {
-                        CsrConnector::Inline { url } => {
+                    let _ = match connection {
+                        CsrConnection::Inline { url } => {
                             let mut options = kafka_util::extract_config_ccsr(
                                 &mut normalized_options,
                                 scx.catalog.secrets_reader(),
@@ -1345,11 +1345,11 @@ fn get_encoding_inner(
                                 scx.catalog.secrets_reader(),
                             )?
                         }
-                        CsrConnector::Reference { connector } => {
-                            let item = scx.get_item_by_resolved_name(&connector)?;
-                            match item.connector()? {
-                                Connector::Csr(config) => config.clone(),
-                                _ => bail!("{} is not a schema registry connector", item.name()),
+                        CsrConnection::Reference { connection } => {
+                            let item = scx.get_item_by_resolved_name(&connection)?;
+                            match item.connection()? {
+                                Connection::Csr(config) => config.clone(),
+                                _ => bail!("{} is not a schema registry connection", item.name()),
                             }
                         }
                     };
@@ -1602,12 +1602,12 @@ pub fn plan_create_views(
         targets,
     }: CreateViewsStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let source_connector = scx
+    let source_connection = scx
         .get_item_by_resolved_name(&source_name)?
-        .source_connector()?;
-    match source_connector {
-        SourceConnector::External {
-            connector: ExternalSourceConnector::Postgres(PostgresSourceConnector { details, .. }),
+        .source_connection()?;
+    match source_connection {
+        SourceConnection::External {
+            connection: ExternalSourceConnection::Postgres(PostgresSourceConnection { details, .. }),
             ..
         } => {
             let targets = targets.unwrap_or_else(|| {
@@ -1748,10 +1748,10 @@ pub fn plan_create_views(
                 materialize: materialized,
             }))
         }
-        SourceConnector::External { connector, .. } => {
-            bail!("cannot generate views from {} sources", connector.name())
+        SourceConnection::External { connection, .. } => {
+            bail!("cannot generate views from {} sources", connection.name())
         }
-        SourceConnector::Local { .. } => {
+        SourceConnection::Local { .. } => {
             bail!("cannot generate views from local sources")
         }
     }
@@ -1771,7 +1771,7 @@ fn kafka_sink_builder(
     envelope: SinkEnvelope,
     topic_suffix_nonce: String,
     root_dependencies: &[&dyn CatalogItem],
-) -> Result<SinkConnectorBuilder, anyhow::Error> {
+) -> Result<SinkConnectionBuilder, anyhow::Error> {
     let consistency_topic = match with_options.remove("consistency_topic") {
         None => None,
         Some(SqlValueOrSecret::Value(Value::String(topic))) => Some(topic),
@@ -1813,9 +1813,9 @@ fn kafka_sink_builder(
 
     let format = match format {
         Some(Format::Avro(AvroSchema::Csr {
-            csr_connector:
-                CsrConnectorAvro {
-                    connector: CsrConnector::Inline { url },
+            csr_connection:
+                CsrConnectionAvro {
+                    connection: CsrConnection::Inline { url },
                     seed,
                     with_options,
                 },
@@ -1882,7 +1882,7 @@ fn kafka_sink_builder(
     let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source {
-                if !item.source_connector()?.yields_stable_input() {
+                if !item.source_connection()?.yields_stable_input() {
                     bail!(
                     "reuse_topic requires that sink input dependencies are replayable, {} is not",
                     scx.catalog.resolve_full_name(item.name())
@@ -1946,7 +1946,7 @@ fn kafka_sink_builder(
     if retention_bytes.unwrap_or(0) < -1 {
         bail!("retention bytes for sink topics must be greater than or equal to -1");
     }
-    let retention = KafkaSinkConnectorRetention {
+    let retention = KafkaSinkConnectionRetention {
         duration: retention_duration,
         bytes: retention_bytes,
     };
@@ -1956,7 +1956,7 @@ fn kafka_sink_builder(
 
     // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
     let config_options = kafka_util::inline_secrets(config_options, scx.catalog.secrets_reader())?;
-    Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
+    Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
         broker_addrs,
         format,
         topic_prefix,
@@ -1997,9 +1997,9 @@ fn get_kafka_sink_consistency_config(
             topic_format,
         }) => match topic_format {
             Some(Format::Avro(AvroSchema::Csr {
-                csr_connector:
-                    CsrConnectorAvro {
-                        connector: CsrConnector::Inline { url: uri },
+                csr_connection:
+                    CsrConnectionAvro {
+                        connection: CsrConnection::Inline { url: uri },
                         seed,
                         with_options,
                     },
@@ -2088,7 +2088,7 @@ fn persist_sink_builder(
     consensus_uri: String,
     shard_id: String,
     value_desc: RelationDesc,
-) -> Result<SinkConnectorBuilder, anyhow::Error> {
+) -> Result<SinkConnectionBuilder, anyhow::Error> {
     if format.is_some() {
         bail!("CREATE SINK ... PERSIST cannot specify a format");
     }
@@ -2097,12 +2097,14 @@ fn persist_sink_builder(
         bail!("CREATE SINK ... PERSIST does not support specifying an ENVELOPE");
     }
 
-    Ok(SinkConnectorBuilder::Persist(PersistSinkConnectorBuilder {
-        consensus_uri,
-        blob_uri,
-        shard_id: shard_id.parse().map_err(anyhow::Error::msg)?,
-        value_desc,
-    }))
+    Ok(SinkConnectionBuilder::Persist(
+        PersistSinkConnectionBuilder {
+            consensus_uri,
+            blob_uri,
+            shard_id: shard_id.parse().map_err(anyhow::Error::msg)?,
+            value_desc,
+        },
+    ))
 }
 
 pub fn describe_create_sink(
@@ -2129,7 +2131,7 @@ pub fn plan_create_sink(
         name,
         from,
         in_cluster: _,
-        connector,
+        connection,
         with_options,
         format,
         envelope,
@@ -2140,7 +2142,7 @@ pub fn plan_create_sink(
 
     let envelope = match envelope {
         // The persist sink only works with its own special envelope, so make that the default.
-        None if matches!(connector, CreateSinkConnector::Persist { .. }) => {
+        None if matches!(connection, CreateSinkConnection::Persist { .. }) => {
             SinkEnvelope::DifferentialRow
         }
         Some(Envelope::DifferentialRow) => unreachable!("not expressable in SQL"),
@@ -2170,8 +2172,8 @@ pub fn plan_create_sink(
     let mut with_options = normalize::options(&with_options)?;
 
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
-    let key_indices = match &connector {
-        CreateSinkConnector::Kafka { key, .. } => {
+    let key_indices = match &connection {
+        CreateSinkConnection::Kafka { key, .. } => {
             if let Some(key) = key.clone() {
                 let key_columns = key
                     .key_columns
@@ -2216,7 +2218,7 @@ pub fn plan_create_sink(
                 None
             }
         }
-        CreateSinkConnector::Persist { .. } => None,
+        CreateSinkConnection::Persist { .. } => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -2243,8 +2245,8 @@ pub fn plan_create_sink(
 
     let root_user_dependencies = get_root_dependencies(scx, &[from.id()]);
 
-    let connector_builder = match connector {
-        CreateSinkConnector::Kafka {
+    let connection_builder = match connection {
+        CreateSinkConnection::Kafka {
             broker,
             topic,
             consistency,
@@ -2263,7 +2265,7 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        CreateSinkConnector::Persist {
+        CreateSinkConnection::Persist {
             consensus_uri,
             blob_uri,
             shard_id,
@@ -2284,7 +2286,7 @@ pub fn plan_create_sink(
         sink: Sink {
             create_sql,
             from: from.id(),
-            connector_builder,
+            connection_builder,
             envelope,
             compute_instance,
         },
@@ -2872,32 +2874,32 @@ pub fn plan_create_secret(
     }))
 }
 
-pub fn describe_create_connector(
+pub fn describe_create_connection(
     _: &StatementContext,
-    _: CreateConnectorStatement<Aug>,
+    _: CreateConnectionStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
-pub fn plan_create_connector(
+pub fn plan_create_connection(
     scx: &StatementContext,
-    stmt: CreateConnectorStatement<Aug>,
+    stmt: CreateConnectionStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    scx.require_unsafe_mode("CREATE CONNECTOR")?;
+    scx.require_unsafe_mode("CREATE CONNECTION")?;
 
-    let create_sql = normalize::create_statement(&scx, Statement::CreateConnector(stmt.clone()))?;
-    let CreateConnectorStatement {
+    let create_sql = normalize::create_statement(&scx, Statement::CreateConnection(stmt.clone()))?;
+    let CreateConnectionStatement {
         name,
-        connector,
+        connection,
         if_not_exists,
     } = stmt;
-    let connector = match connector {
-        CreateConnector::Kafka {
+    let connection = match connection {
+        CreateConnection::Kafka {
             broker,
             with_options,
         } => {
             let mut with_options = normalize::options(&with_options)?;
-            Connector::Kafka(KafkaConnector {
+            Connection::Kafka(KafkaConnection {
                 broker: broker.parse()?,
                 options: kafka_util::extract_config(
                     &mut with_options,
@@ -2905,8 +2907,8 @@ pub fn plan_create_connector(
                 )?,
             })
         }
-        CreateConnector::Csr { url, with_options } => {
-            let connector = kafka_util::generate_ccsr_client_config(
+        CreateConnection::Csr { url, with_options } => {
+            let connection = kafka_util::generate_ccsr_client_config(
                 url.parse()?,
                 &mut kafka_util::extract_config_ccsr(
                     &mut normalize::options(&with_options)?,
@@ -2914,19 +2916,19 @@ pub fn plan_create_connector(
                 )?,
                 scx.catalog.secrets_reader(),
             )?;
-            Connector::Csr(connector)
+            Connection::Csr(connection)
         }
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
-    let plan = CreateConnectorPlan {
+    let plan = CreateConnectionPlan {
         name,
         if_not_exists,
-        connector: crate::plan::Connector {
+        connection: crate::plan::Connection {
             create_sql,
-            connector,
+            connection,
         },
     };
-    Ok(Plan::CreateConnector(plan))
+    Ok(Plan::CreateConnection(plan))
 }
 
 pub fn describe_drop_database(
@@ -3005,7 +3007,7 @@ pub fn plan_drop_objects(
         | ObjectType::Sink
         | ObjectType::Type
         | ObjectType::Secret
-        | ObjectType::Connector => plan_drop_items(scx, object_type, items, cascade),
+        | ObjectType::Connection => plan_drop_items(scx, object_type, items, cascade),
         ObjectType::Role | ObjectType::Cluster | ObjectType::ClusterReplica => {
             unreachable!("handled through their respective plan_drop functions")
         }
@@ -3244,7 +3246,7 @@ pub fn plan_drop_item(
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
                     | CatalogItemType::Secret
-                    | CatalogItemType::Connector => {
+                    | CatalogItemType::Connection => {
                         bail!(
                             "cannot drop {}: still depended upon by catalog item '{}'",
                             scx.catalog.resolve_full_name(catalog_entry.name()),

@@ -22,7 +22,7 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, CreateConnector, CreateSinkConnector, CreateSourceConnector,
+    AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
     CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata,
     TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
     UnresolvedSchemaName, Value,
@@ -37,7 +37,7 @@ pub enum Statement<T: AstInfo> {
     Copy(CopyStatement<T>),
     Update(UpdateStatement<T>),
     Delete(DeleteStatement<T>),
-    CreateConnector(CreateConnectorStatement<T>),
+    CreateConnection(CreateConnectionStatement<T>),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
@@ -73,7 +73,7 @@ pub enum Statement<T: AstInfo> {
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
-    ShowCreateConnector(ShowCreateConnectorStatement<T>),
+    ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowVariable(ShowVariableStatement),
     StartTransaction(StartTransactionStatement),
     SetTransaction(SetTransactionStatement),
@@ -98,7 +98,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Copy(stmt) => f.write_node(stmt),
             Statement::Update(stmt) => f.write_node(stmt),
             Statement::Delete(stmt) => f.write_node(stmt),
-            Statement::CreateConnector(stmt) => f.write_node(stmt),
+            Statement::CreateConnection(stmt) => f.write_node(stmt),
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
@@ -134,7 +134,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ShowCreateTable(stmt) => f.write_node(stmt),
             Statement::ShowCreateSink(stmt) => f.write_node(stmt),
             Statement::ShowCreateIndex(stmt) => f.write_node(stmt),
-            Statement::ShowCreateConnector(stmt) => f.write_node(stmt),
+            Statement::ShowCreateConnection(stmt) => f.write_node(stmt),
             Statement::ShowVariable(stmt) => f.write_node(stmt),
             Statement::StartTransaction(stmt) => f.write_node(stmt),
             Statement::SetTransaction(stmt) => f.write_node(stmt),
@@ -424,33 +424,33 @@ impl AstDisplay for CreateSchemaStatement {
 }
 impl_display!(CreateSchemaStatement);
 
-/// `CREATE CONNECTOR`
+/// `CREATE CONNECTION`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateConnectorStatement<T: AstInfo> {
+pub struct CreateConnectionStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
-    pub connector: CreateConnector<T>,
+    pub connection: CreateConnection<T>,
     pub if_not_exists: bool,
 }
 
-impl<T: AstInfo> AstDisplay for CreateConnectorStatement<T> {
+impl<T: AstInfo> AstDisplay for CreateConnectionStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE CONNECTOR ");
+        f.write_str("CREATE CONNECTION ");
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }
         f.write_node(&self.name);
         f.write_str(" FOR ");
-        self.connector.fmt(f)
+        self.connection.fmt(f)
     }
 }
-impl_display_t!(CreateConnectorStatement);
+impl_display_t!(CreateConnectionStatement);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: CreateSourceConnector<T>,
+    pub connection: CreateSourceConnection<T>,
     pub with_options: Vec<WithOption<T>>,
     pub include_metadata: Vec<SourceIncludeMetadata>,
     pub format: CreateSourceFormat<T>,
@@ -486,7 +486,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_str(") ")
         }
         f.write_str("FROM ");
-        f.write_node(&self.connector);
+        f.write_node(&self.connection);
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
@@ -516,7 +516,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub in_cluster: Option<T::ClusterName>,
     pub from: T::ObjectName,
-    pub connector: CreateSinkConnector<T>,
+    pub connection: CreateSinkConnection<T>,
     pub with_options: Vec<WithOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,
@@ -539,7 +539,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         f.write_str(" FROM ");
         f.write_node(&self.from);
         f.write_str(" INTO ");
-        f.write_node(&self.connector);
+        f.write_node(&self.connection);
         if !self.with_options.is_empty() {
             f.write_str(" WITH (");
             f.write_node(&display::comma_separated(&self.with_options));
@@ -1489,7 +1489,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ObjectType::ClusterReplica => "CLUSTER REPLICAS",
             ObjectType::Object => "OBJECTS",
             ObjectType::Secret => "SECRETS",
-            ObjectType::Connector => "CONNECTORS",
+            ObjectType::Connection => "CONNECTIONS",
             ObjectType::Index => unreachable!(),
         });
         if let Some(from) = &self.from {
@@ -1637,14 +1637,14 @@ impl<T: AstInfo> AstDisplay for ShowCreateIndexStatement<T> {
 impl_display_t!(ShowCreateIndexStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShowCreateConnectorStatement<T: AstInfo> {
-    pub connector_name: T::ObjectName,
+pub struct ShowCreateConnectionStatement<T: AstInfo> {
+    pub connection_name: T::ObjectName,
 }
 
-impl<T: AstInfo> AstDisplay for ShowCreateConnectorStatement<T> {
+impl<T: AstInfo> AstDisplay for ShowCreateConnectionStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE CONNECTOR ");
-        f.write_node(&self.connector_name);
+        f.write_str("SHOW CREATE CONNECTION ");
+        f.write_node(&self.connection_name);
     }
 }
 
@@ -1847,7 +1847,7 @@ pub enum ObjectType {
     ClusterReplica,
     Object,
     Secret,
-    Connector,
+    Connection,
 }
 
 impl AstDisplay for ObjectType {
@@ -1864,7 +1864,7 @@ impl AstDisplay for ObjectType {
             ObjectType::ClusterReplica => "CLUSTER REPLICA",
             ObjectType::Object => "OBJECT",
             ObjectType::Secret => "SECRET",
-            ObjectType::Connector => "CONNECTOR",
+            ObjectType::Connection => "CONNECTION",
         })
     }
 }
@@ -1916,7 +1916,7 @@ pub enum WithOptionValue<T: AstInfo> {
     Value(Value),
     Ident(Ident),
     DataType(T::DataType),
-    // Temporary variant until we have support for connectors, which will use
+    // Temporary variant until we have support for connections, which will use
     // explicit fields for each secret reference.
     Secret(T::ObjectName),
 }

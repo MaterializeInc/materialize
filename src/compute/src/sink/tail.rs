@@ -21,14 +21,14 @@ use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
-    sinks::{SinkAsOf, SinkDesc, TailSinkConnector},
+    sinks::{SinkAsOf, SinkDesc, TailSinkConnection},
     TailResponse,
 };
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
 use crate::render::sinks::SinkRender;
 
-impl<G> SinkRender<G> for TailSinkConnector
+impl<G> SinkRender<G> for TailSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {

@@ -18,7 +18,7 @@ use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{LocalClient, LocalStorageClient};
-use mz_dataflow_types::ConnectorContext;
+use mz_dataflow_types::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 
@@ -36,8 +36,8 @@ pub struct Config {
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// Configuration for source and sink connectors.
-    pub connector_context: ConnectorContext,
+    /// Configuration for source and sink connection.
+    pub connection_context: ConnectionContext,
 }
 
 /// A handle to a running dataflow server.
@@ -107,7 +107,7 @@ pub fn serve(config: Config) -> Result<(Server, LocalStorageClient), anyhow::Err
                 source_metrics,
                 timely_worker_index,
                 timely_worker_peers,
-                connector_context: config.connector_context.clone(),
+                connection_context: config.connection_context.clone(),
                 persist_clients,
             },
             response_tx,

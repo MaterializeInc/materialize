@@ -159,7 +159,7 @@ message ProtoDebeziumSourceProjection {
     }
 }
 
-message ProtoKafkaSourceConnector {
+message ProtoKafkaSourceConnection {
     mz_kafka_util.addr.ProtoKafkaAddrs addrs = 1;
     string topic = 2;
     map<string, string> config_options = 3;
@@ -173,9 +173,9 @@ message ProtoKafkaSourceConnector {
     ProtoIncludedColumnPos include_headers = 11;
 }
 
-message ProtoSourceConnector {
+message ProtoSourceConnection {
     message ProtoExternal {
-        ProtoExternalSourceConnector connector = 1;
+        ProtoExternalSourceConnection connection = 1;
         mz_dataflow_types.types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
         ProtoSourceEnvelope envelope = 3;
         repeated ProtoIncludedColumnSource metadata_columns = 4;
@@ -193,13 +193,13 @@ message ProtoSourceConnector {
     }
 }
 
-message ProtoExternalSourceConnector {
+message ProtoExternalSourceConnection {
     oneof kind {
-        ProtoKafkaSourceConnector kafka = 1;
-        ProtoKinesisSourceConnector kinesis = 2;
-        ProtoS3SourceConnector s3 = 3;
-        ProtoPostgresSourceConnector postgres = 4;
-        ProtoPubNubSourceConnector pubnub = 5;
+        ProtoKafkaSourceConnection kafka = 1;
+        ProtoKinesisSourceConnection kinesis = 2;
+        ProtoS3SourceConnection s3 = 3;
+        ProtoPostgresSourceConnection postgres = 4;
+        ProtoPubNubSourceConnection pubnub = 5;
     }
 }
 
@@ -210,12 +210,12 @@ message ProtoSourceData {
     }
 }
 
-message ProtoKinesisSourceConnector {
+message ProtoKinesisSourceConnection {
     string stream_name = 1;
     mz_dataflow_types.types.aws.ProtoAwsConfig aws = 2;
 }
 
-message ProtoPostgresSourceConnector {
+message ProtoPostgresSourceConnection {
     string conn = 1;
     string publication = 2;
     ProtoPostgresSourceDetails details = 4;
@@ -226,12 +226,12 @@ message ProtoPostgresSourceDetails {
     string slot = 2;
 }
 
-message ProtoPubNubSourceConnector {
+message ProtoPubNubSourceConnection {
     string subscribe_key = 1;
     string channel = 2;
 }
 
-message ProtoS3SourceConnector {
+message ProtoS3SourceConnection {
     repeated ProtoS3KeySource key_sources = 1;
     optional string pattern = 2;
     mz_dataflow_types.types.aws.ProtoAwsConfig aws = 3;
@@ -253,6 +253,6 @@ message ProtoCompression {
 }
 
 message ProtoSourceDesc {
-    ProtoSourceConnector connector = 1;
+    ProtoSourceConnection connection = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc desc = 2;
 }

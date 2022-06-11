@@ -45,7 +45,7 @@ use tracing::{debug, error, info};
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sinks::{
-    KafkaSinkConnector, KafkaSinkConsistencyConnector, PublishedSchemaInfo, SinkAsOf, SinkDesc,
+    KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
     SinkEnvelope,
 };
 use mz_interchange::avro::{
@@ -65,7 +65,7 @@ use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 use super::KafkaBaseMetrics;
 use crate::render::sinks::SinkRender;
 
-impl<G> SinkRender<G> for KafkaSinkConnector
+impl<G> SinkRender<G> for KafkaSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -138,7 +138,7 @@ where
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
             &compute_state.sink_metrics.kafka,
-            compute_state.connector_context.librdkafka_log_level,
+            compute_state.connection_context.librdkafka_log_level,
         );
 
         compute_state
@@ -427,7 +427,7 @@ struct KafkaSinkState {
 
 impl KafkaSinkState {
     fn new(
-        connector: KafkaSinkConnector,
+        connection: KafkaSinkConnection,
         sink_name: String,
         sink_id: &GlobalId,
         worker_id: String,
@@ -437,13 +437,13 @@ impl KafkaSinkState {
         metrics: &KafkaBaseMetrics,
         librdkafka_log_level: tracing::Level,
     ) -> Self {
-        let config = Self::create_producer_config(&connector, librdkafka_log_level);
+        let config = Self::create_producer_config(&connection, librdkafka_log_level);
         let consistency_client_config =
-            Self::create_consistency_client_config(&connector, librdkafka_log_level);
+            Self::create_consistency_client_config(&connection, librdkafka_log_level);
 
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
-            &connector.topic,
+            &connection.topic,
             &sink_id.to_string(),
             &worker_id,
         ));
@@ -463,8 +463,8 @@ impl KafkaSinkState {
             timeout: Duration::from_secs(5),
         };
 
-        let sink_state = KafkaSinkStateEnum::Init(connector.consistency.map(
-            |KafkaSinkConsistencyConnector { topic, schema_id }| KafkaConsistencyInitState {
+        let sink_state = KafkaSinkStateEnum::Init(connection.consistency.map(
+            |KafkaSinkConsistencyConnection { topic, schema_id }| KafkaConsistencyInitState {
                 topic,
                 schema_id,
                 consistency_client_config,
@@ -473,13 +473,13 @@ impl KafkaSinkState {
 
         KafkaSinkState {
             name: sink_name,
-            topic: connector.topic,
-            topic_prefix: connector.topic_prefix,
+            topic: connection.topic,
+            topic_prefix: connection.topic_prefix,
             shutdown_flag,
             metrics,
             producer,
             activator,
-            transactional: connector.exactly_once,
+            transactional: connection.exactly_once,
             pending_rows: HashMap::new(),
             ready_rows: VecDeque::new(),
             retry_manager,
@@ -490,11 +490,11 @@ impl KafkaSinkState {
     }
 
     fn create_producer_config(
-        connector: &KafkaSinkConnector,
+        connection: &KafkaSinkConnection,
         librdkafka_log_level: tracing::Level,
     ) -> ClientConfig {
         let mut config = create_new_client_config(librdkafka_log_level);
-        config.set("bootstrap.servers", &connector.addrs.to_string());
+        config.set("bootstrap.servers", &connection.addrs.to_string());
 
         // Ensure that messages are sinked in order and without duplicates. Note that
         // this only applies to a single instance of a producer - in the case of restarts,
@@ -520,7 +520,7 @@ impl KafkaSinkState {
         // if it makes a big difference
         config.set("queue.buffering.max.ms", &format!("{}", 10));
 
-        for (k, v) in connector.config_options.iter() {
+        for (k, v) in connection.config_options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't
             // flood the INFO log with statistics messages.
             // TODO: properly support statistics on Kafka sinks
@@ -531,10 +531,10 @@ impl KafkaSinkState {
             }
         }
 
-        if connector.exactly_once {
+        if connection.exactly_once {
             // TODO(aljoscha): this only works for now, once there's an actual
             // Kafka producer on each worker they would step on each others toes
-            let transactional_id = format!("mz-producer-{}", connector.topic);
+            let transactional_id = format!("mz-producer-{}", connection.topic);
             config.set("transactional.id", transactional_id);
         }
 
@@ -542,12 +542,12 @@ impl KafkaSinkState {
     }
 
     fn create_consistency_client_config(
-        connector: &KafkaSinkConnector,
+        connection: &KafkaSinkConnection,
         librdkafka_log_level: tracing::Level,
     ) -> ClientConfig {
         let mut config = create_new_client_config(librdkafka_log_level);
-        config.set("bootstrap.servers", &connector.addrs.to_string());
-        for (k, v) in connector.config_options.iter() {
+        config.set("bootstrap.servers", &connection.addrs.to_string());
+        for (k, v) in connection.config_options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't
             // flood the INFO log with statistics messages.
             // TODO: properly support statistics on Kafka sinks
@@ -562,7 +562,7 @@ impl KafkaSinkState {
                 "group.id",
                 format!(
                     "materialize-bootstrap-{}",
-                    connector
+                    connection
                         .consistency
                         .as_ref()
                         .map(|c| c.topic.clone())
@@ -949,7 +949,7 @@ impl KafkaSinkState {
     /// unblock compaction of timestamp bindings in sources.
     ///
     /// *NOTE*: `END` records will only be emitted when
-    /// `KafkaSinkConnector.consistency` points to a consistency topic. The
+    /// `KafkaSinkConnection.consistency` points to a consistency topic. The
     /// write frontier will be advanced regardless.
     async fn maybe_emit_progress<'a>(
         &mut self,
@@ -1027,7 +1027,7 @@ struct EncodedRow {
 fn kafka<G>(
     collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     id: GlobalId,
-    connector: KafkaSinkConnector,
+    connection: KafkaSinkConnection,
     envelope: Option<SinkEnvelope>,
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -1043,13 +1043,13 @@ where
 
     let shared_gate_ts = Rc::new(Cell::new(None));
 
-    let key_desc = connector
+    let key_desc = connection
         .key_desc_and_indices
         .as_ref()
         .map(|(desc, _indices)| desc.clone());
-    let value_desc = connector.value_desc.clone();
+    let value_desc = connection.value_desc.clone();
 
-    let encoded_stream = match connector.published_schema_info {
+    let encoded_stream = match connection.published_schema_info {
         Some(PublishedSchemaInfo {
             key_schema_id,
             value_schema_id,
@@ -1060,7 +1060,7 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                connector.consistency.is_some(),
+                connection.consistency.is_some(),
             );
             let encoder = AvroEncoder::new(schema_generator, key_schema_id, value_schema_id);
             encode_stream(
@@ -1068,7 +1068,7 @@ where
                 as_of.clone(),
                 Rc::clone(&shared_gate_ts),
                 encoder,
-                connector.fuel,
+                connection.fuel,
                 name.clone(),
             )
         }
@@ -1077,14 +1077,14 @@ where
                 key_desc,
                 value_desc,
                 matches!(envelope, Some(SinkEnvelope::Debezium)),
-                connector.consistency.is_some(),
+                connection.consistency.is_some(),
             );
             encode_stream(
                 stream,
                 as_of.clone(),
                 Rc::clone(&shared_gate_ts),
                 encoder,
-                connector.fuel,
+                connection.fuel,
                 name.clone(),
             )
         }
@@ -1094,7 +1094,7 @@ where
         encoded_stream,
         id,
         name,
-        connector,
+        connection,
         as_of,
         shared_gate_ts,
         write_frontier,
@@ -1113,12 +1113,12 @@ where
 /// stream is sharded updates will likely arrive at this operator in some non-deterministic order.
 ///
 /// Updates that are not beyond the given [`SinkAsOf`] and/or the `gate_ts` in
-/// [`KafkaSinkConnector`] will be discarded without producing them.
+/// [`KafkaSinkConnection`] will be discarded without producing them.
 pub fn produce_to_kafka<G>(
     stream: Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
     id: GlobalId,
     name: String,
-    connector: KafkaSinkConnector,
+    connection: KafkaSinkConnection,
     as_of: SinkAsOf,
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
@@ -1135,7 +1135,7 @@ where
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
     let mut s = KafkaSinkState::new(
-        connector,
+        connection,
         name,
         &id,
         scope.index().to_string(),

@@ -183,8 +183,8 @@ pub enum ExecuteResponse {
         columns: Vec<usize>,
         params: mz_sql::plan::CopyParams,
     },
-    /// The requested connector was created.
-    CreatedConnector {
+    /// The requested connection was created.
+    CreatedConnection {
         existed: bool,
     },
     /// The requested database was created.
@@ -245,8 +245,8 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
-    /// The requested connector was dropped
-    DroppedConnector,
+    /// The requested connection was dropped
+    DroppedConnection,
     /// The requested compute instance was dropped.
     DroppedComputeInstance,
     /// The requested compute instance replicas were dropped.

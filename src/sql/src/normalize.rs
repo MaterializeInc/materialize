@@ -25,7 +25,7 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateConnectionStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
     CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
     TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
@@ -351,7 +351,7 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector: _,
+            connection: _,
             with_options: _,
             format: _,
             include_metadata: _,
@@ -390,7 +390,7 @@ pub fn create_statement(
 
         Statement::CreateSink(CreateSinkStatement {
             name,
-            connector: _,
+            connection: _,
             with_options: _,
             in_cluster: _,
             format: _,
@@ -486,9 +486,9 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
         }
-        Statement::CreateConnector(CreateConnectorStatement {
+        Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connector: _,
+            connection: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;

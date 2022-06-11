@@ -18,7 +18,7 @@ use anyhow::bail;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::ShowCreateConnectorStatement;
+use mz_sql_parser::ast::ShowCreateConnectionStatement;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
@@ -195,32 +195,32 @@ pub fn plan_show_create_index(
     }
 }
 
-pub fn describe_show_create_connector(
+pub fn describe_show_create_connection(
     _: &StatementContext,
-    _: ShowCreateConnectorStatement<Aug>,
+    _: ShowCreateConnectionStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Connector", ScalarType::String.nullable(false))
-            .with_column("Create Connector", ScalarType::String.nullable(false)),
+            .with_column("Connection", ScalarType::String.nullable(false))
+            .with_column("Create Connection", ScalarType::String.nullable(false)),
     )))
 }
 
-pub fn plan_show_create_connector(
+pub fn plan_show_create_connection(
     scx: &StatementContext,
-    ShowCreateConnectorStatement { connector_name }: ShowCreateConnectorStatement<Aug>,
+    ShowCreateConnectionStatement { connection_name }: ShowCreateConnectionStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let connector = scx.get_item_by_resolved_name(&connector_name)?;
-    if let CatalogItemType::Connector = connector.item_type() {
-        let name = connector_name.full_name_str();
+    let connection = scx.get_item_by_resolved_name(&connection_name)?;
+    if let CatalogItemType::Connection = connection.item_type() {
+        let name = connection_name.full_name_str();
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
-                Datum::String(connector.create_sql()),
+                Datum::String(connection.create_sql()),
             ])],
         }))
     } else {
-        bail!("'{}' is not a connector", connector_name.full_name_str());
+        bail!("'{}' is not a connection", connection_name.full_name_str());
     }
 }
 
@@ -305,11 +305,11 @@ pub fn show_objects<'a>(
         ObjectType::ClusterReplica => show_cluster_replicas(scx, filter),
         ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
-        ObjectType::Connector => show_connectors(scx, extended, full, from, filter),
+        ObjectType::Connection => show_connections(scx, extended, full, from, filter),
     }
 }
 
-fn show_connectors<'a>(
+fn show_connections<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
@@ -319,7 +319,7 @@ fn show_connectors<'a>(
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
-        FROM mz_catalog.mz_connectors t
+        FROM mz_catalog.mz_connections t
         JOIN mz_catalog.mz_schemas on t.schema_id = s.id
         WHERE schema_id = {}",
         schema_spec,
@@ -393,7 +393,7 @@ fn show_sources<'a>(
                  mz_internal.mz_classify_object_id(id) AS type,
                  mz_internal.mz_is_materialized(id) AS materialized,
                  volatility,
-                 connector_type
+                 connection_type
              FROM
                  mz_catalog.mz_sources
              WHERE
@@ -405,7 +405,7 @@ fn show_sources<'a>(
                  name,
                  mz_internal.mz_classify_object_id(id) AS type,
                  volatility,
-                 connector_type
+                 connection_type
              FROM
                  mz_catalog.mz_sources
              WHERE

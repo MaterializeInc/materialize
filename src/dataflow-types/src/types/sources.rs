@@ -331,8 +331,8 @@ impl RustType<ProtoTimeline> for Timeline {
     }
 }
 
-/// `SourceEnvelope`s, describe how to turn a stream of messages from `SourceConnector`s,
-/// and turn them into a _differential stream_, that is, a stream of (data, time, diff)
+/// `SourceEnvelope`s describe how to turn a stream of messages from `SourceConnection`s
+/// into a _differential stream_, that is, a stream of (data, time, diff)
 /// triples.
 ///
 /// Some sources (namely postgres and pubnub) skip any explicit envelope handling, effectively
@@ -753,7 +753,7 @@ impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
 }
 
 /// Debezium generates records that contain metadata about the upstream database. The structure of
-/// this metadata depends on the type of connector used. This struct records the relevant indices
+/// this metadata depends on the type of connection used. This struct records the relevant indices
 /// in the record, calculated during planning, so that the dataflow operator can unpack the
 /// structure and extract the relevant information.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -1009,7 +1009,7 @@ impl UnplannedSourceEnvelope {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaSourceConnector {
+pub struct KafkaSourceConnection {
     pub addrs: KafkaAddrs,
     pub topic: String,
     // Represents options specified by user when creating the source, e.g.
@@ -1030,7 +1030,7 @@ pub struct KafkaSourceConnector {
     pub include_headers: Option<IncludedColumnPos>,
 }
 
-impl Arbitrary for KafkaSourceConnector {
+impl Arbitrary for KafkaSourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -1061,7 +1061,7 @@ impl Arbitrary for KafkaSourceConnector {
                     include_topic,
                     include_offset,
                     include_headers,
-                )| KafkaSourceConnector {
+                )| KafkaSourceConnection {
                     addrs,
                     topic,
                     config_options,
@@ -1079,9 +1079,9 @@ impl Arbitrary for KafkaSourceConnector {
     }
 }
 
-impl RustType<ProtoKafkaSourceConnector> for KafkaSourceConnector {
-    fn into_proto(&self) -> ProtoKafkaSourceConnector {
-        ProtoKafkaSourceConnector {
+impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
+    fn into_proto(&self) -> ProtoKafkaSourceConnection {
+        ProtoKafkaSourceConnection {
             addrs: Some((&self.addrs).into_proto()),
             topic: self.topic.clone(),
             config_options: self.config_options.clone().into_iter().collect(),
@@ -1100,23 +1100,23 @@ impl RustType<ProtoKafkaSourceConnector> for KafkaSourceConnector {
         }
     }
 
-    fn from_proto(proto: ProtoKafkaSourceConnector) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
         let start_offsets: Result<_, TryFromProtoError> = proto
             .start_offsets
             .into_iter()
             .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
             .collect();
-        Ok(KafkaSourceConnector {
+        Ok(KafkaSourceConnection {
             addrs: proto
                 .addrs
-                .into_rust_if_some("ProtoKafkaSourceConnector::addrs")?,
+                .into_rust_if_some("ProtoKafkaSourceConnection::addrs")?,
             topic: proto.topic,
             config_options: proto.config_options.into_iter().collect(),
             start_offsets: start_offsets?,
             group_id_prefix: proto.group_id_prefix,
             cluster_id: proto
                 .cluster_id
-                .into_rust_if_some("ProtoPostgresSourceConnector::details")?,
+                .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
             include_timestamp: proto.include_timestamp.into_rust()?,
             include_partition: proto.include_partition.into_rust()?,
             include_topic: proto.include_topic.into_rust()?,
@@ -1180,36 +1180,36 @@ impl RustType<ProtoCompression> for Compression {
 /// of the collection.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceDesc {
-    pub connector: SourceConnector,
+    pub connection: SourceConnection,
     pub desc: RelationDesc,
 }
 
 impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(self: &Self) -> ProtoSourceDesc {
         ProtoSourceDesc {
-            connector: Some(self.connector.into_proto()),
+            connection: Some(self.connection.into_proto()),
             desc: Some(self.desc.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoSourceDesc) -> Result<Self, TryFromProtoError> {
         Ok(SourceDesc {
-            connector: proto
-                .connector
-                .into_rust_if_some("ProtoSourceDesc::connector")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoSourceDesc::connection")?,
             desc: proto.desc.into_rust_if_some("ProtoSourceDesc::desc")?,
         })
     }
 }
 
-/// A `SourceConnector` describes how data is produced for a source, be
+/// A `SourceConnection` describes how data is produced for a source, be
 /// it from a local table, or some upstream service. It is the first
 /// step of _rendering_ of a source, and describes only how to produce
 /// a stream of messages associated with MzOffset's.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SourceConnector {
+pub enum SourceConnection {
     External {
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         encoding: encoding::SourceDataEncoding,
         envelope: SourceEnvelope,
         metadata_columns: Vec<IncludedColumnSource>,
@@ -1221,14 +1221,14 @@ pub enum SourceConnector {
     Local { timeline: Timeline },
 }
 
-impl Arbitrary for SourceConnector {
+impl Arbitrary for SourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
             (
-                any::<ExternalSourceConnector>(),
+                any::<ExternalSourceConnection>(),
                 any::<encoding::SourceDataEncoding>(),
                 any::<SourceEnvelope>(),
                 any::<Vec<IncludedColumnSource>>(),
@@ -1236,9 +1236,9 @@ impl Arbitrary for SourceConnector {
                 any::<Timeline>(),
             )
                 .prop_map(
-                    |(connector, encoding, envelope, metadata_columns, ts_frequency, timeline)| {
-                        SourceConnector::External {
-                            connector,
+                    |(connection, encoding, envelope, metadata_columns, ts_frequency, timeline)| {
+                        SourceConnection::External {
+                            connection,
                             encoding,
                             envelope,
                             metadata_columns,
@@ -1247,82 +1247,82 @@ impl Arbitrary for SourceConnector {
                         }
                     }
                 ),
-            any::<Timeline>().prop_map(|timeline| SourceConnector::Local { timeline }),
+            any::<Timeline>().prop_map(|timeline| SourceConnection::Local { timeline }),
         ]
         .boxed()
     }
 }
 
-impl RustType<ProtoSourceConnector> for SourceConnector {
-    fn into_proto(self: &Self) -> ProtoSourceConnector {
-        use proto_source_connector::{Kind, ProtoExternal, ProtoLocal};
-        ProtoSourceConnector {
+impl RustType<ProtoSourceConnection> for SourceConnection {
+    fn into_proto(self: &Self) -> ProtoSourceConnection {
+        use proto_source_connection::{Kind, ProtoExternal, ProtoLocal};
+        ProtoSourceConnection {
             kind: Some(match self {
-                SourceConnector::External {
-                    connector,
+                SourceConnection::External {
+                    connection,
                     encoding,
                     envelope,
                     metadata_columns,
                     ts_frequency,
                     timeline,
                 } => Kind::External(ProtoExternal {
-                    connector: Some(connector.into_proto()),
+                    connection: Some(connection.into_proto()),
                     encoding: Some(encoding.into_proto()),
                     envelope: Some(envelope.into_proto()),
                     metadata_columns: metadata_columns.into_proto(),
                     ts_frequency: Some(ts_frequency.into_proto()),
                     timeline: Some(timeline.into_proto()),
                 }),
-                SourceConnector::Local { timeline } => Kind::Local(ProtoLocal {
+                SourceConnection::Local { timeline } => Kind::Local(ProtoLocal {
                     timeline: Some(timeline.into_proto()),
                 }),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoSourceConnector) -> Result<Self, TryFromProtoError> {
-        use proto_source_connector::{Kind, ProtoExternal, ProtoLocal};
+    fn from_proto(proto: ProtoSourceConnection) -> Result<Self, TryFromProtoError> {
+        use proto_source_connection::{Kind, ProtoExternal, ProtoLocal};
         let kind = proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnector::kind"))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnection::kind"))?;
         Ok(match kind {
             Kind::External(ProtoExternal {
-                connector,
+                connection,
                 encoding,
                 envelope,
                 metadata_columns,
                 ts_frequency,
                 timeline,
-            }) => SourceConnector::External {
-                connector: connector.into_rust_if_some("ProtoExternal::connector")?,
+            }) => SourceConnection::External {
+                connection: connection.into_rust_if_some("ProtoExternal::connection")?,
                 encoding: encoding.into_rust_if_some("ProtoExternal::encoding")?,
                 envelope: envelope.into_rust_if_some("ProtoExternal::envelope")?,
                 metadata_columns: metadata_columns.into_rust()?,
                 ts_frequency: ts_frequency.into_rust_if_some("ProtoExternal::ts_frequency")?,
                 timeline: timeline.into_rust_if_some("ProtoExternal::timeline")?,
             },
-            Kind::Local(ProtoLocal { timeline }) => SourceConnector::Local {
+            Kind::Local(ProtoLocal { timeline }) => SourceConnection::Local {
                 timeline: timeline.into_rust_if_some("ProtoLocal::timeline")?,
             },
         })
     }
 }
 
-impl SourceConnector {
-    /// Returns `true` if this connector yields input data (including
+impl SourceConnection {
+    /// Returns `true` if this connection yields input data (including
     /// timestamps) that is stable across restarts. This is important for
     /// exactly-once Sinks that need to ensure that the same data is written,
     /// even when failures/restarts happen.
     pub fn yields_stable_input(&self) -> bool {
-        if let SourceConnector::External { connector, .. } = self {
+        if let SourceConnection::External { connection, .. } = self {
             // Conservatively, set all Kafka/File sources as having stable inputs because
             // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
-            match connector {
+            match connection {
                 // TODO(guswynn): does postgres count here as well?
-                ExternalSourceConnector::Kafka(_) => true,
-                // Currently, the Kinesis connector assigns "offsets" by counting the message in the order it was received
+                ExternalSourceConnection::Kafka(_) => true,
+                // Currently, the Kinesis connection assigns "offsets" by counting the message in the order it was received
                 // and this order is not replayable across different reads of the same Kinesis stream.
-                ExternalSourceConnector::Kinesis(_) => false,
+                ExternalSourceConnection::Kinesis(_) => false,
                 _ => false,
             }
         } else {
@@ -1330,7 +1330,7 @@ impl SourceConnector {
         }
     }
 
-    /// Returns `true` if this connector yields data that is
+    /// Returns `true` if this connection yields data that is
     /// append-only/monotonic. Append-monly means the source
     /// never produces retractions.
     // TODO(guswynn): consider enforcing this more completely at the
@@ -1339,51 +1339,51 @@ impl SourceConnector {
     pub fn append_only(&self) -> bool {
         match self {
             // Postgres can produce retractions (deletes)
-            SourceConnector::External {
-                connector: ExternalSourceConnector::Postgres(_),
+            SourceConnection::External {
+                connection: ExternalSourceConnection::Postgres(_),
                 ..
             } => false,
             // Other sources the `None` envelope are append-only.
-            SourceConnector::External {
+            SourceConnection::External {
                 envelope: SourceEnvelope::None(_),
                 ..
             } => true,
             // Other combinations may produce retractions.
-            SourceConnector::External {
+            SourceConnection::External {
                 envelope:
                     SourceEnvelope::Debezium(_)
                     | SourceEnvelope::Upsert(_)
                     | SourceEnvelope::CdcV2
                     | SourceEnvelope::DifferentialRow,
-                connector:
-                    ExternalSourceConnector::S3(_)
-                    | ExternalSourceConnector::Kafka(_)
-                    | ExternalSourceConnector::Kinesis(_)
-                    | ExternalSourceConnector::PubNub(_),
+                connection:
+                    ExternalSourceConnection::S3(_)
+                    | ExternalSourceConnection::Kafka(_)
+                    | ExternalSourceConnection::Kinesis(_)
+                    | ExternalSourceConnection::PubNub(_),
                 ..
             } => false,
             // Local sources (i.e., tables) also support retractions (deletes)
-            SourceConnector::Local { .. } => false,
+            SourceConnection::Local { .. } => false,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
-            SourceConnector::External { connector, .. } => connector.name(),
-            SourceConnector::Local { .. } => "local",
+            SourceConnection::External { connection, .. } => connection.name(),
+            SourceConnection::Local { .. } => "local",
         }
     }
 
     pub fn timeline(&self) -> Timeline {
         match self {
-            SourceConnector::External { timeline, .. } => timeline.clone(),
-            SourceConnector::Local { timeline, .. } => timeline.clone(),
+            SourceConnection::External { timeline, .. } => timeline.clone(),
+            SourceConnection::Local { timeline, .. } => timeline.clone(),
         }
     }
 
     pub fn requires_single_materialization(&self) -> bool {
-        if let SourceConnector::External { connector, .. } = self {
-            connector.requires_single_materialization()
+        if let SourceConnection::External { connection, .. } = self {
+            connection.requires_single_materialization()
         } else {
             false
         }
@@ -1391,46 +1391,46 @@ impl SourceConnector {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ExternalSourceConnector {
-    Kafka(KafkaSourceConnector),
-    Kinesis(KinesisSourceConnector),
-    S3(S3SourceConnector),
-    Postgres(PostgresSourceConnector),
-    PubNub(PubNubSourceConnector),
+pub enum ExternalSourceConnection {
+    Kafka(KafkaSourceConnection),
+    Kinesis(KinesisSourceConnection),
+    S3(S3SourceConnection),
+    Postgres(PostgresSourceConnection),
+    PubNub(PubNubSourceConnection),
 }
 
-impl RustType<ProtoExternalSourceConnector> for ExternalSourceConnector {
-    fn into_proto(&self) -> ProtoExternalSourceConnector {
-        use proto_external_source_connector::Kind;
-        ProtoExternalSourceConnector {
+impl RustType<ProtoExternalSourceConnection> for ExternalSourceConnection {
+    fn into_proto(&self) -> ProtoExternalSourceConnection {
+        use proto_external_source_connection::Kind;
+        ProtoExternalSourceConnection {
             kind: Some(match self {
-                ExternalSourceConnector::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                ExternalSourceConnector::Kinesis(kinesis) => Kind::Kinesis(kinesis.into_proto()),
-                ExternalSourceConnector::S3(s3) => Kind::S3(s3.into_proto()),
-                ExternalSourceConnector::Postgres(postgres) => {
+                ExternalSourceConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
+                ExternalSourceConnection::Kinesis(kinesis) => Kind::Kinesis(kinesis.into_proto()),
+                ExternalSourceConnection::S3(s3) => Kind::S3(s3.into_proto()),
+                ExternalSourceConnection::Postgres(postgres) => {
                     Kind::Postgres(postgres.into_proto())
                 }
-                ExternalSourceConnector::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
+                ExternalSourceConnection::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoExternalSourceConnector) -> Result<Self, TryFromProtoError> {
-        use proto_external_source_connector::Kind;
+    fn from_proto(proto: ProtoExternalSourceConnection) -> Result<Self, TryFromProtoError> {
+        use proto_external_source_connection::Kind;
         let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoExternalSourceConnector::kind")
+            TryFromProtoError::missing_field("ProtoExternalSourceConnection::kind")
         })?;
         Ok(match kind {
-            Kind::Kafka(kafka) => ExternalSourceConnector::Kafka(kafka.into_rust()?),
-            Kind::Kinesis(kinesis) => ExternalSourceConnector::Kinesis(kinesis.into_rust()?),
-            Kind::S3(s3) => ExternalSourceConnector::S3(s3.into_rust()?),
-            Kind::Postgres(postgres) => ExternalSourceConnector::Postgres(postgres.into_rust()?),
-            Kind::Pubnub(pubnub) => ExternalSourceConnector::PubNub(pubnub.into_rust()?),
+            Kind::Kafka(kafka) => ExternalSourceConnection::Kafka(kafka.into_rust()?),
+            Kind::Kinesis(kinesis) => ExternalSourceConnection::Kinesis(kinesis.into_rust()?),
+            Kind::S3(s3) => ExternalSourceConnection::S3(s3.into_rust()?),
+            Kind::Postgres(postgres) => ExternalSourceConnection::Postgres(postgres.into_rust()?),
+            Kind::Pubnub(pubnub) => ExternalSourceConnection::PubNub(pubnub.into_rust()?),
         })
     }
 }
 
-impl ExternalSourceConnector {
+impl ExternalSourceConnection {
     /// Returns the name and type of each additional metadata column that
     /// Materialize will automatically append to the source's inherent columns.
     ///
@@ -1444,7 +1444,7 @@ impl ExternalSourceConnector {
         let mut columns = Vec::new();
         let default_col = |name| (name, ScalarType::Int64.nullable(false));
         match self {
-            Self::Kafka(KafkaSourceConnector {
+            Self::Kafka(KafkaSourceConnection {
                 include_partition: part,
                 include_timestamp: time,
                 include_topic: topic,
@@ -1517,17 +1517,17 @@ impl ExternalSourceConnector {
     // TODO(bwm): get rid of this when we no longer have the notion of default metadata
     pub fn default_metadata_column_name(&self) -> Option<&str> {
         match self {
-            ExternalSourceConnector::Kafka(_) => Some("mz_offset"),
-            ExternalSourceConnector::Kinesis(_) => Some("mz_offset"),
-            ExternalSourceConnector::S3(_) => Some("mz_record"),
-            ExternalSourceConnector::Postgres(_) => None,
-            ExternalSourceConnector::PubNub(_) => None,
+            ExternalSourceConnection::Kafka(_) => Some("mz_offset"),
+            ExternalSourceConnection::Kinesis(_) => Some("mz_offset"),
+            ExternalSourceConnection::S3(_) => Some("mz_record"),
+            ExternalSourceConnection::Postgres(_) => None,
+            ExternalSourceConnection::PubNub(_) => None,
         }
     }
 
     pub fn metadata_column_types(&self, include_defaults: bool) -> Vec<IncludedColumnSource> {
         match self {
-            ExternalSourceConnector::Kafka(KafkaSourceConnector {
+            ExternalSourceConnection::Kafka(KafkaSourceConnection {
                 include_partition: part,
                 include_timestamp: time,
                 include_topic: topic,
@@ -1557,25 +1557,27 @@ impl ExternalSourceConnector {
                 items.into_values().collect()
             }
 
-            ExternalSourceConnector::Kinesis(_) | ExternalSourceConnector::S3(_) => {
+            ExternalSourceConnection::Kinesis(_) | ExternalSourceConnection::S3(_) => {
                 if include_defaults {
                     vec![IncludedColumnSource::DefaultPosition]
                 } else {
                     Vec::new()
                 }
             }
-            ExternalSourceConnector::Postgres(_) | ExternalSourceConnector::PubNub(_) => Vec::new(),
+            ExternalSourceConnection::Postgres(_) | ExternalSourceConnection::PubNub(_) => {
+                Vec::new()
+            }
         }
     }
 
-    /// Returns the name of the external source connector.
+    /// Returns the name of the external source connection.
     pub fn name(&self) -> &'static str {
         match self {
-            ExternalSourceConnector::Kafka(_) => "kafka",
-            ExternalSourceConnector::Kinesis(_) => "kinesis",
-            ExternalSourceConnector::S3(_) => "s3",
-            ExternalSourceConnector::Postgres(_) => "postgres",
-            ExternalSourceConnector::PubNub(_) => "pubnub",
+            ExternalSourceConnection::Kafka(_) => "kafka",
+            ExternalSourceConnection::Kinesis(_) => "kinesis",
+            ExternalSourceConnection::S3(_) => "s3",
+            ExternalSourceConnection::Postgres(_) => "postgres",
+            ExternalSourceConnection::PubNub(_) => "pubnub",
         }
     }
 
@@ -1584,77 +1586,77 @@ impl ExternalSourceConnector {
     ///  TODO: decide whether we want file paths and other upstream names to show up in metrics too.
     pub fn upstream_name(&self) -> Option<&str> {
         match self {
-            ExternalSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) => {
+            ExternalSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) => {
                 Some(topic.as_str())
             }
-            ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, .. }) => {
+            ExternalSourceConnection::Kinesis(KinesisSourceConnection { stream_name, .. }) => {
                 Some(stream_name.as_str())
             }
-            ExternalSourceConnector::S3(_) => None,
-            ExternalSourceConnector::Postgres(_) => None,
-            ExternalSourceConnector::PubNub(_) => None,
+            ExternalSourceConnection::S3(_) => None,
+            ExternalSourceConnection::Postgres(_) => None,
+            ExternalSourceConnection::PubNub(_) => None,
         }
     }
 
     pub fn requires_single_materialization(&self) -> bool {
         match self {
-            ExternalSourceConnector::S3(c) => c.requires_single_materialization(),
+            ExternalSourceConnection::S3(c) => c.requires_single_materialization(),
 
-            ExternalSourceConnector::Kafka(_)
-            | ExternalSourceConnector::Kinesis(_)
-            | ExternalSourceConnector::Postgres(_)
-            | ExternalSourceConnector::PubNub(_) => false,
+            ExternalSourceConnection::Kafka(_)
+            | ExternalSourceConnection::Kinesis(_)
+            | ExternalSourceConnection::Postgres(_)
+            | ExternalSourceConnection::PubNub(_) => false,
         }
     }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KinesisSourceConnector {
+pub struct KinesisSourceConnection {
     pub stream_name: String,
     pub aws: AwsConfig,
 }
 
-impl RustType<ProtoKinesisSourceConnector> for KinesisSourceConnector {
-    fn into_proto(&self) -> ProtoKinesisSourceConnector {
-        ProtoKinesisSourceConnector {
+impl RustType<ProtoKinesisSourceConnection> for KinesisSourceConnection {
+    fn into_proto(&self) -> ProtoKinesisSourceConnection {
+        ProtoKinesisSourceConnection {
             stream_name: self.stream_name.clone(),
             aws: Some(self.aws.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoKinesisSourceConnector) -> Result<Self, TryFromProtoError> {
-        Ok(KinesisSourceConnector {
+    fn from_proto(proto: ProtoKinesisSourceConnection) -> Result<Self, TryFromProtoError> {
+        Ok(KinesisSourceConnection {
             stream_name: proto.stream_name,
             aws: proto
                 .aws
-                .into_rust_if_some("ProtoKinesisSourceConnector::aws")?,
+                .into_rust_if_some("ProtoKinesisSourceConnection::aws")?,
         })
     }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PostgresSourceConnector {
+pub struct PostgresSourceConnection {
     pub conn: String,
     pub publication: String,
     pub details: PostgresSourceDetails,
 }
 
-impl RustType<ProtoPostgresSourceConnector> for PostgresSourceConnector {
-    fn into_proto(&self) -> ProtoPostgresSourceConnector {
-        ProtoPostgresSourceConnector {
+impl RustType<ProtoPostgresSourceConnection> for PostgresSourceConnection {
+    fn into_proto(&self) -> ProtoPostgresSourceConnection {
+        ProtoPostgresSourceConnection {
             conn: self.conn.clone(),
             publication: self.publication.clone(),
             details: Some(self.details.into_proto()),
         }
     }
 
-    fn from_proto(proto: ProtoPostgresSourceConnector) -> Result<Self, TryFromProtoError> {
-        Ok(PostgresSourceConnector {
+    fn from_proto(proto: ProtoPostgresSourceConnection) -> Result<Self, TryFromProtoError> {
+        Ok(PostgresSourceConnection {
             conn: proto.conn,
             publication: proto.publication,
             details: proto
                 .details
-                .into_rust_if_some("ProtoPostgresSourceConnector::details")?,
+                .into_rust_if_some("ProtoPostgresSourceConnection::details")?,
         })
     }
 }
@@ -1686,21 +1688,21 @@ impl RustType<ProtoPostgresSourceDetails> for PostgresSourceDetails {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PubNubSourceConnector {
+pub struct PubNubSourceConnection {
     pub subscribe_key: String,
     pub channel: String,
 }
 
-impl RustType<ProtoPubNubSourceConnector> for PubNubSourceConnector {
-    fn into_proto(&self) -> ProtoPubNubSourceConnector {
-        ProtoPubNubSourceConnector {
+impl RustType<ProtoPubNubSourceConnection> for PubNubSourceConnection {
+    fn into_proto(&self) -> ProtoPubNubSourceConnection {
+        ProtoPubNubSourceConnection {
             subscribe_key: self.subscribe_key.clone(),
             channel: self.channel.clone(),
         }
     }
 
-    fn from_proto(proto: ProtoPubNubSourceConnector) -> Result<Self, TryFromProtoError> {
-        Ok(PubNubSourceConnector {
+    fn from_proto(proto: ProtoPubNubSourceConnection) -> Result<Self, TryFromProtoError> {
+        Ok(PubNubSourceConnection {
             subscribe_key: proto.subscribe_key,
             channel: proto.channel,
         })
@@ -1708,7 +1710,7 @@ impl RustType<ProtoPubNubSourceConnector> for PubNubSourceConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct S3SourceConnector {
+pub struct S3SourceConnection {
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
     pub aws: AwsConfig,
@@ -1725,7 +1727,7 @@ fn any_glob() -> impl Strategy<Value = Glob> {
     })
 }
 
-impl Arbitrary for S3SourceConnector {
+impl Arbitrary for S3SourceConnection {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -1737,7 +1739,7 @@ impl Arbitrary for S3SourceConnector {
             any::<Compression>(),
         )
             .prop_map(
-                |(key_sources, pattern, aws, compression)| S3SourceConnector {
+                |(key_sources, pattern, aws, compression)| S3SourceConnection {
                     key_sources,
                     pattern,
                     aws,
@@ -1748,9 +1750,9 @@ impl Arbitrary for S3SourceConnector {
     }
 }
 
-impl RustType<ProtoS3SourceConnector> for S3SourceConnector {
-    fn into_proto(&self) -> ProtoS3SourceConnector {
-        ProtoS3SourceConnector {
+impl RustType<ProtoS3SourceConnection> for S3SourceConnection {
+    fn into_proto(&self) -> ProtoS3SourceConnection {
+        ProtoS3SourceConnection {
             key_sources: self.key_sources.into_proto(),
             pattern: self.pattern.as_ref().map(|g| g.glob().into()),
             aws: Some(self.aws.into_proto()),
@@ -1758,8 +1760,8 @@ impl RustType<ProtoS3SourceConnector> for S3SourceConnector {
         }
     }
 
-    fn from_proto(proto: ProtoS3SourceConnector) -> Result<Self, TryFromProtoError> {
-        Ok(S3SourceConnector {
+    fn from_proto(proto: ProtoS3SourceConnection) -> Result<Self, TryFromProtoError> {
+        Ok(S3SourceConnection {
             key_sources: proto.key_sources.into_rust()?,
             pattern: proto
                 .pattern
@@ -1770,15 +1772,17 @@ impl RustType<ProtoS3SourceConnector> for S3SourceConnector {
                         .build()
                 })
                 .transpose()?,
-            aws: proto.aws.into_rust_if_some("ProtoS3SourceConnector::aws")?,
+            aws: proto
+                .aws
+                .into_rust_if_some("ProtoS3SourceConnection::aws")?,
             compression: proto
                 .compression
-                .into_rust_if_some("ProtoS3SourceConnector::compression")?,
+                .into_rust_if_some("ProtoS3SourceConnection::compression")?,
         })
     }
 }
 
-impl S3SourceConnector {
+impl S3SourceConnection {
     fn requires_single_materialization(&self) -> bool {
         // SQS Notifications are not durable, multiple sources depending on them will get
         // non-intersecting subsets of objects to read

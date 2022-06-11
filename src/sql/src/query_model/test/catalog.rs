@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::connectors::Connector;
-use mz_dataflow_types::sources::SourceConnector;
+use mz_dataflow_types::connections::Connection;
+use mz_dataflow_types::sources::SourceConnection;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
@@ -104,7 +104,7 @@ impl CatalogItem for TestCatalogItem {
         }
     }
 
-    fn source_connector(&self) -> Result<&SourceConnector, CatalogError> {
+    fn source_connection(&self) -> Result<&SourceConnection, CatalogError> {
         unimplemented!()
     }
 
@@ -139,7 +139,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn connector(&self) -> Result<&Connector, CatalogError> {
+    fn connection(&self) -> Result<&Connection, CatalogError> {
         unimplemented!()
     }
 }

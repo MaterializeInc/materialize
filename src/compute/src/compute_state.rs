@@ -30,7 +30,7 @@ use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId};
 use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::{
-    ConnectorContext, DataflowDescription, DataflowError, PeekResponse, Plan, TailResponse,
+    ConnectionContext, DataflowDescription, DataflowError, PeekResponse, Plan, TailResponse,
 };
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -70,9 +70,9 @@ pub struct ComputeState {
     pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub materialized_logger: Option<logging::materialized::Logger>,
-    /// Configuration for sink connectors.
+    /// Configuration for sink connections.
     // TODO: remove when sinks move to storage.
-    pub connector_context: ConnectorContext,
+    pub connection_context: ConnectionContext,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<Mutex<PersistClientCache>>,

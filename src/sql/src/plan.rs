@@ -33,8 +33,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::SourceConnector;
+use mz_dataflow_types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::SourceConnection;
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
@@ -72,7 +72,7 @@ pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementD
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
-    CreateConnector(CreateConnectorPlan),
+    CreateConnection(CreateConnectionPlan),
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
@@ -190,10 +190,10 @@ pub struct CreateSourcePlan {
 }
 
 #[derive(Debug)]
-pub struct CreateConnectorPlan {
+pub struct CreateConnectionPlan {
     pub name: QualifiedObjectName,
     pub if_not_exists: bool,
-    pub connector: Connector,
+    pub connection: Connection,
 }
 
 #[derive(Debug)]
@@ -451,14 +451,14 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
-    pub connector: SourceConnector,
+    pub connection: SourceConnection,
     pub desc: RelationDesc,
 }
 
 #[derive(Clone, Debug)]
-pub struct Connector {
+pub struct Connection {
     pub create_sql: String,
-    pub connector: mz_dataflow_types::connectors::Connector,
+    pub connection: mz_dataflow_types::connections::Connection,
 }
 
 #[derive(Clone, Debug)]
@@ -471,7 +471,7 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connector_builder: SinkConnectorBuilder,
+    pub connection_builder: SinkConnectionBuilder,
     pub envelope: SinkEnvelope,
     pub compute_instance: ComputeInstanceId,
 }
