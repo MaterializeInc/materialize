@@ -27,10 +27,10 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset, PostgresSourceConnection,
 };
-use mz_dataflow_types::ConnectionContext;
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::task;

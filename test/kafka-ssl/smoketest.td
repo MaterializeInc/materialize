@@ -147,7 +147,7 @@ contains:error publishing kafka schemas for sink: unable to publish value schema
 contains:self signed certificate in certificate chain
 
 # Ensure that connectors work with SSL basic_auth
-> CREATE CONNECTOR kafka_ssl
+> CREATE CONNECTION kafka_ssl
   FOR KAFKA BROKER 'kafka:9092'
   WITH (
       security_protocol = 'SSL',
@@ -158,7 +158,7 @@ contains:self signed certificate in certificate chain
   )
 
 > CREATE MATERIALIZED SOURCE connector_source
-  FROM KAFKA CONNECTOR kafka_ssl
+  FROM KAFKA CONNECTION kafka_ssl
   TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (

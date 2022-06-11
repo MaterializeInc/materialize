@@ -50,9 +50,10 @@ use tokio::time::MissedTickBehavior;
 use tracing::error;
 
 use mz_avro::types::Value;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{ExternalSourceConnection, MzOffset};
-use mz_dataflow_types::{ConnectionContext, DecodeError, SourceError, SourceErrorDetails};
+use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};

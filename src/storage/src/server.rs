@@ -18,7 +18,7 @@ use timely::communication::initialize::WorkerGuards;
 use tokio::sync::mpsc;
 
 use mz_dataflow_types::client::{LocalClient, LocalStorageClient};
-use mz_dataflow_types::ConnectionContext;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 

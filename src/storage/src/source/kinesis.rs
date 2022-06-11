@@ -21,10 +21,11 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use mz_dataflow_types::aws::AwsExternalIdPrefix;
+use mz_dataflow_types::connections::aws::AwsExternalIdPrefix;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{ExternalSourceConnection, KinesisSourceConnection, MzOffset};
-use mz_dataflow_types::{ConnectionContext, SourceErrorDetails};
+use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;

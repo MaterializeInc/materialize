@@ -17,10 +17,10 @@ use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport, PubNub};
 use timely::scheduling::SyncActivator;
 use tracing::info;
 
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset,
 };
-use mz_dataflow_types::ConnectionContext;
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 

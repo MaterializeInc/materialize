@@ -461,7 +461,7 @@ Field            | Type        | Meaning
 `oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
-`connector_type` | [`text`]    | The type of the sink: `kafka`.
+`type`           | [`text`]    | The type of the sink: `kafka`.
 `volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_sources`
@@ -474,7 +474,7 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
-`connector_type` | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
+`type`           | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
 `volatility`     | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_tables`

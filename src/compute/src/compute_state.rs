@@ -28,10 +28,9 @@ use tokio::sync::{mpsc, Mutex};
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId};
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::logging::LoggingConfig;
-use mz_dataflow_types::{
-    ConnectionContext, DataflowDescription, DataflowError, PeekResponse, Plan, TailResponse,
-};
+use mz_dataflow_types::{DataflowDescription, DataflowError, PeekResponse, Plan, TailResponse};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::activator::RcActivator;

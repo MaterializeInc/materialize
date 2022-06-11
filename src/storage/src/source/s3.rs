@@ -47,10 +47,10 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
-use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_dataflow_types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{Compression, ExternalSourceConnection, MzOffset, S3KeySource};
-use mz_dataflow_types::ConnectionContext;
 use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;

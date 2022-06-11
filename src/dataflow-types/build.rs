@@ -33,7 +33,7 @@ fn main() {
                 "dataflow-types/src/client/controller/storage.proto",
                 "dataflow-types/src/errors.proto",
                 "dataflow-types/src/logging.proto",
-                "dataflow-types/src/types/aws.proto",
+                "dataflow-types/src/types/connections/aws.proto",
                 "dataflow-types/src/types/sinks.proto",
                 "dataflow-types/src/types/sources.proto",
                 "dataflow-types/src/types/sources/encoding.proto",

@@ -36,7 +36,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 
 pub mod encoding;
 
-use crate::aws::AwsConfig;
+use crate::connections::aws::AwsConfig;
 use crate::DataflowError;
 
 include!(concat!(

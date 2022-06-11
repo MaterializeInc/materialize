@@ -97,14 +97,14 @@ use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ControllerResponse,
     LinearizedTimestampBindingFeedback, ReplicaId,
 };
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
 use mz_dataflow_types::sources::{
     ExternalSourceConnection, IngestionDescription, PostgresSourceConnection, SourceConnection,
     Timeline,
 };
 use mz_dataflow_types::{
-    BuildDesc, ConnectionContext, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse,
-    Update,
+    BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
 };
 use mz_expr::{
     permutation_for_arrangement, CollectionPlan, ExprHumanizer, MirRelationExpr, MirScalarExpr,

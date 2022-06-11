@@ -23,11 +23,11 @@ use timely::scheduling::activate::SyncActivator;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnection, KafkaOffset, KafkaSourceConnection,
     MzOffset,
 };
-use mz_dataflow_types::ConnectionContext;
 use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};

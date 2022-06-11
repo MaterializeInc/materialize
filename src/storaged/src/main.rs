@@ -25,7 +25,7 @@ use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
 use mz_dataflow_types::client::{GenericClient, StorageClient};
-use mz_dataflow_types::ConnectionContext;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;

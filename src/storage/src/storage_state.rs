@@ -21,8 +21,8 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
 use mz_dataflow_types::client::{StorageCommand, StorageResponse};
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::SourceConnection;
-use mz_dataflow_types::ConnectionContext;
 use mz_ore::now::NowFn;
 
 use mz_repr::{GlobalId, Timestamp};

@@ -30,14 +30,12 @@ use mz_repr::proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFrom
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
-use crate::types::aws::AwsExternalIdPrefix;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 use crate::Plan;
 
 use proto_dataflow_description::*;
 
-pub mod aws;
 pub mod connections;
 pub mod sinks;
 pub mod sources;
@@ -454,46 +452,6 @@ impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timest
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         any_dataflow_description().boxed()
-    }
-}
-
-/// Extra context to pass through when instantiating a connection for a source
-/// or sink.
-///
-/// Should be kept cheaply cloneable.
-#[derive(Debug, Clone)]
-pub struct ConnectionContext {
-    /// The level for librdkafka's logs.
-    pub librdkafka_log_level: tracing::Level,
-    /// A prefix for an external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
-}
-
-impl ConnectionContext {
-    /// Constructs a new connection context from command line arguments.
-    ///
-    /// **WARNING:** it is critical for security that the `aws_external_id` be
-    /// provided by the operator of the Materialize service (i.e., via a CLI
-    /// argument or environment variable) and not the end user of Materialize
-    /// (e.g., via a configuration option in a SQL statement). See
-    /// [`AwsExternalIdPrefix`] for details.
-    pub fn from_cli_args(
-        filter: &tracing_subscriber::filter::Targets,
-        aws_external_id_prefix: Option<String>,
-    ) -> ConnectionContext {
-        ConnectionContext {
-            librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
-            aws_external_id_prefix: aws_external_id_prefix.map(AwsExternalIdPrefix),
-        }
-    }
-}
-
-impl Default for ConnectionContext {
-    fn default() -> ConnectionContext {
-        ConnectionContext {
-            librdkafka_log_level: tracing::Level::INFO,
-            aws_external_id_prefix: None,
-        }
     }
 }
 
