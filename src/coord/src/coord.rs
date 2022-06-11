@@ -4967,7 +4967,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             connector:
                                 ExternalSourceConnector::Postgres(PostgresSourceConnector {
                                     conn,
-                                    slot_name,
+                                    details,
                                     ..
                                 }),
                             ..
@@ -4976,7 +4976,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             replication_slots_to_drop
                                 .entry(conn.clone())
                                 .or_insert_with(Vec::new)
-                                .push(slot_name.clone());
+                                .push(details.slot.clone());
                         }
                     }
                     CatalogItem::Sink(catalog::Sink {

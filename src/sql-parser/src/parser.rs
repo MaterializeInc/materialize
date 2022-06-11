@@ -2113,11 +2113,6 @@ impl<'a> Parser<'a> {
                 let conn = self.parse_literal_string()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
-                let slot = if self.parse_keyword(SLOT) {
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
                 let details = if self.parse_keyword(DETAILS) {
                     Some(self.parse_literal_string()?)
                 } else {
@@ -2127,7 +2122,6 @@ impl<'a> Parser<'a> {
                 Ok(CreateSourceConnector::Postgres {
                     conn,
                     publication,
-                    slot,
                     details,
                 })
             }

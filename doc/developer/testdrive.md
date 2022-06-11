@@ -559,7 +559,10 @@ single-threaded context, so will be serialized in the order they appear in the
 
 #### `$ postgres-verify-slot connection=... slot=... active=(true|false)`
 
-Pauses the test until the desired Postgres replication slot has become active or inactive on the Postgres side of the direct Postgres replication. This is used to prevent flakiness in Postgres-related tests.
+Pauses the test until the desired Postgres replication slot (identified by
+`LIKE` pattern) has become active or inactive on the Postgres side of the direct
+Postgres replication. This is used to prevent flakiness in Postgres-related
+tests.
 
 
 ## Connecting to MySQL

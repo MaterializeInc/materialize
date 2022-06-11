@@ -269,7 +269,6 @@ Show
 Sink
 Sinks
 Size
-Slot
 Smallint
 Snapshot
 Some

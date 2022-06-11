@@ -14,7 +14,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use futures::{pin_mut, FutureExt, StreamExt, TryStreamExt};
-use mz_postgres_util::TableInfo;
 use once_cell::sync::Lazy;
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
@@ -28,7 +27,6 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::SimpleQueryMessage;
 use tracing::{error, info, warn};
 
-use mz_dataflow_types::postgres_source::PostgresTable;
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnector, MzOffset, PostgresSourceConnector,
 };
@@ -36,6 +34,7 @@ use mz_dataflow_types::ConnectorContext;
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::task;
+use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 
 use self::metrics::PgSourceMetrics;
@@ -149,7 +148,7 @@ struct PostgresTaskInfo {
     /// Our cursor into the WAL
     lsn: PgLsn,
     metrics: PgSourceMetrics,
-    source_tables: HashMap<u32, PostgresTable>,
+    source_tables: HashMap<u32, PostgresTableDesc>,
     sender: Sender<InternalMessage>,
     activator: SyncActivator,
 }
@@ -188,11 +187,7 @@ impl SourceReader for PostgresSourceReader {
             lsn: 0.into(),
             metrics: PgSourceMetrics::new(&metrics, source_id),
             source_tables: HashMap::from_iter(
-                connector
-                    .details
-                    .tables
-                    .iter()
-                    .map(|t| (t.relation_id, t.clone())),
+                connector.details.tables.iter().map(|t| (t.oid, t.clone())),
             ),
             sender: dataflow_tx,
             activator: consumer_activator,
@@ -410,11 +405,9 @@ impl Transaction {
 // implement the core pg logic in this impl block
 impl PostgresTaskInfo {
     /// Validates that all expected tables exist in the publication tables and they have the same schema
-    fn validate_tables(&self, tables: Vec<TableInfo>) -> Result<(), anyhow::Error> {
-        let pub_tables: HashMap<u32, PostgresTable> = tables
-            .into_iter()
-            .map(|t| (t.rel_id, PostgresTable::from(t)))
-            .collect();
+    fn validate_tables(&self, tables: Vec<PostgresTableDesc>) -> Result<(), anyhow::Error> {
+        let pub_tables: HashMap<u32, PostgresTableDesc> =
+            tables.into_iter().map(|t| (t.oid, t)).collect();
         for (id, schema) in self.source_tables.iter() {
             match pub_tables.get(id) {
                 Some(pub_schema) => {
@@ -456,7 +449,7 @@ impl PostgresTaskInfo {
         let _ = client
             .simple_query(&format!(
                 "DROP_REPLICATION_SLOT {:?}",
-                &self.connector.slot_name
+                &self.connector.details.slot
             ))
             .await;
 
@@ -477,7 +470,7 @@ impl PostgresTaskInfo {
 
         let slot_query = format!(
             r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
-            &self.connector.slot_name
+            &self.connector.details.slot
         );
         let slot_row = client
             .simple_query(&slot_query)
@@ -502,7 +495,7 @@ impl PostgresTaskInfo {
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn"))));
         for info in self.source_tables.values() {
-            let relation_id: Datum = (i32::try_from(info.relation_id).unwrap()).into();
+            let relation_id: Datum = (i32::try_from(info.oid).unwrap()).into();
             let reader = client
                 .copy_out_simple(
                     format!(
@@ -612,7 +605,7 @@ impl PostgresTaskInfo {
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
-            name = &self.connector.slot_name,
+            name = &self.connector.details.slot,
             lsn = self.lsn,
             publication = self.connector.publication
         );
@@ -757,12 +750,12 @@ impl PostgresTaskInfo {
                                                 if source_table.columns.len() != relation.columns().len() {
                                                     error!(
                                                         "alter table detected on {} with id {}",
-                                                        source_table.name, source_table.relation_id
+                                                        source_table.name, source_table.oid
                                                     );
                                                     return Err(Fatal(anyhow!(
                                                         "source table {} with oid {} has been altered",
                                                         source_table.name,
-                                                        source_table.relation_id
+                                                        source_table.oid
                                                     )));
                                                 }
                                                 if source_table.name.ne(relation.name().unwrap())
@@ -772,14 +765,14 @@ impl PostgresTaskInfo {
                                                         "table name changed on {}.{} with id {} to {}.{}",
                                                         source_table.namespace,
                                                         source_table.name,
-                                                        source_table.relation_id,
+                                                        source_table.oid,
                                                         relation.namespace().unwrap(),
                                                         relation.name().unwrap()
                                                     );
                                                     return Err(Fatal(anyhow!(
                                                         "source table {} with oid {} has been altered",
                                                         source_table.name,
-                                                        source_table.relation_id
+                                                        source_table.oid
                                                     )));
                                                 }
                                                 // Relation messages do not include nullability/primary_key data
@@ -787,15 +780,15 @@ impl PostgresTaskInfo {
                                                 if !source_table.columns.iter().zip(relation.columns()).all(
                                                     |(src, rel)| {
                                                         src.name == rel.name().unwrap()
-                                                            && src.type_oid == rel.type_id()
+                                                            && src.type_oid == u32::from_be_bytes(rel.type_id().to_be_bytes())
                                                             && src.type_mod == rel.type_modifier()
                                                     },
                                                 ) {
-                                                    error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.relation_id, source_table.columns, relation.columns());
+                                                    error!("alter table error: name {}, oid {}, old_schema {:?}, new_schema {:?}", source_table.name, source_table.oid, source_table.columns, relation.columns());
                                                     return Err(Fatal(anyhow!(
                                                         "source table {} with oid {} has been altered",
                                                         source_table.name,
-                                                        source_table.relation_id
+                                                        source_table.oid
                                                     )));
                                                 }
                                             }
@@ -813,7 +806,7 @@ impl PostgresTaskInfo {
                                             // Filter here makes option handling in map "safe"
                                             .filter_map(|id| self.source_tables.get(&id))
                                             .map(|table| {
-                                                format!("name: {} id: {}", table.name, table.relation_id)
+                                                format!("name: {} id: {}", table.name, table.oid)
                                             })
                                             .collect::<Vec<String>>();
                                         return Err(Fatal(anyhow!(

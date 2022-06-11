@@ -18,7 +18,6 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
-use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
@@ -28,7 +27,6 @@ use regex::Regex;
 use reqwest::Url;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::postgres_source::PostgresSourceDetails;
 use mz_dataflow_types::sinks::{
     KafkaSinkConnectorBuilder, KafkaSinkConnectorRetention, KafkaSinkFormat,
     PersistSinkConnectorBuilder, SinkConnectorBuilder, SinkEnvelope,
@@ -41,15 +39,17 @@ use mz_dataflow_types::sources::{
     provide_default_metadata, ConnectorInner, DebeziumDedupProjection, DebeziumEnvelope,
     DebeziumMode, DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnector,
     IncludedColumnPos, KafkaSourceConnector, KeyEnvelope, KinesisSourceConnector, MzOffset,
-    PostgresSourceConnector, PubNubSourceConnector, S3SourceConnector, SourceConnector,
-    SourceEnvelope, StringOrSecret, Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    PostgresSourceConnector, PostgresSourceDetails, ProtoPostgresSourceDetails,
+    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope, StringOrSecret,
+    Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
-use mz_postgres_util::TableInfo;
+use mz_postgres_util::desc::PostgresTableDesc;
 use mz_repr::adt::interval::Interval;
+use mz_repr::proto::RustType;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 
@@ -549,21 +549,16 @@ pub fn plan_create_source(
         CreateSourceConnector::Postgres {
             conn,
             publication,
-            slot,
             details,
         } => {
-            let slot_name = slot
+            let details = details
                 .as_ref()
-                .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
+                .ok_or_else(|| anyhow!("internal error: Postgres source missing details"))?;
+            let details = ProtoPostgresSourceDetails::decode(&*hex::decode(details)?)?;
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
-                slot_name: slot_name.clone(),
-                details: PostgresSourceDetails::decode(Bytes::from(hex::decode(
-                    details
-                        .as_ref()
-                        .expect("Postgres source must provide associated details"),
-                )?))?,
+                details: PostgresSourceDetails::from_proto(details)?,
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
@@ -1635,13 +1630,14 @@ pub fn plan_create_views(
             });
 
             // An index from table_name -> schema_name -> PostgresTable
-            let mut details_info_idx: HashMap<String, HashMap<String, TableInfo>> = HashMap::new();
+            let mut details_info_idx: HashMap<String, HashMap<String, PostgresTableDesc>> =
+                HashMap::new();
             for table in &details.tables {
                 details_info_idx
                     .entry(table.name.clone())
                     .or_default()
                     .entry(table.namespace.clone())
-                    .or_insert_with(|| table.clone().into());
+                    .or_insert_with(|| table.clone());
             }
             let mut views = Vec::with_capacity(targets.len());
             for target in targets {
@@ -1650,7 +1646,7 @@ pub fn plan_create_views(
                 let schemas = details_info_idx
                     .get(&name.item)
                     .ok_or_else(|| anyhow!("table {} not found in upstream database", name))?;
-                let table_info = match &name.schema {
+                let table_desc = match &name.schema {
                     Some(schema) => schemas.get(schema).ok_or_else(|| {
                         anyhow!("schema {} does not exist in upstream database", schema)
                     })?,
@@ -1662,8 +1658,9 @@ pub fn plan_create_views(
                     })?,
                 };
                 let mut projection = vec![];
-                for (i, column) in table_info.schema.iter().enumerate() {
-                    let mut ty = mz_pgrepr::Type::from_oid_and_typmod(column.oid, column.typmod)?;
+                for (i, column) in table_desc.columns.iter().enumerate() {
+                    let mut ty =
+                        mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod)?;
                     // Ignore precision constraints on date/time types until we support
                     // it. This should be safe enough because our types are wide enough
                     // to support the maximum possible precision.
@@ -1726,7 +1723,7 @@ pub fn plan_create_views(
                             op: Op::bare("="),
                             expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
                             expr2: Some(Box::new(Expr::Value(Value::Number(
-                                table_info.rel_id.to_string(),
+                                table_desc.oid.to_string(),
                             )))),
                         }),
                         group_by: vec![],
@@ -1740,8 +1737,8 @@ pub fn plan_create_views(
 
                 let mut viewdef = ViewDefinition {
                     name: view_name,
-                    columns: table_info
-                        .schema
+                    columns: table_desc
+                        .columns
                         .iter()
                         .map(|c| Ident::new(c.name.clone()))
                         .collect(),

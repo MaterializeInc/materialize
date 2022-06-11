@@ -26,8 +26,9 @@ use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_dataflow_types::postgres_source::PostgresSourceDetails;
+use mz_dataflow_types::sources::PostgresSourceDetails;
 use mz_dataflow_types::ConnectorContext;
+use mz_repr::proto::RustType;
 use mz_repr::strconv;
 
 use crate::ast::{
@@ -150,24 +151,19 @@ pub async fn purify_create_source(
         CreateSourceConnector::Postgres {
             conn,
             publication,
-            slot,
-            details,
+            details: details_ast,
         } => {
-            slot.get_or_insert_with(|| {
-                format!(
-                    "materialize_{}",
-                    Uuid::new_v4().to_string().replace('-', "")
-                )
-            });
-
             // verify that we can connect upstream and snapshot publication metadata
             let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
 
-            let details_proto = PostgresSourceDetails {
-                tables: tables.into_iter().map(|t| t.into()).collect(),
-                slot: slot.clone().expect("slot must exist"),
+            let details = PostgresSourceDetails {
+                tables,
+                slot: format!(
+                    "materialize_{}",
+                    Uuid::new_v4().to_string().replace('-', "")
+                ),
             };
-            *details = Some(hex::encode(details_proto.encode_to_vec()));
+            *details_ast = Some(hex::encode(details.into_proto().encode_to_vec()));
         }
         CreateSourceConnector::PubNub { .. } => (),
     }
