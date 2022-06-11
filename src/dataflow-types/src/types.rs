@@ -369,26 +369,6 @@ impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {
 /// Type alias for source subscriptions, (dataflow_id, source_id).
 pub type SourceInstanceId = (uuid::Uuid, mz_repr::GlobalId);
 
-/// A formed request for source instantiation.
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
-    /// The source's own identifier.
-    pub source_id: mz_repr::GlobalId,
-    /// A dataflow identifier that should be unique across dataflows.
-    pub dataflow_id: uuid::Uuid,
-    /// Arguments to the source instantiation.
-    pub arguments: SourceInstanceArguments,
-    /// Frontier beyond which updates must be correct.
-    pub as_of: Antichain<T>,
-}
-
-impl<T> SourceInstanceRequest<T> {
-    /// Source identifier uniquely identifying this instantiation.
-    pub fn unique_id(&self) -> SourceInstanceId {
-        (self.dataflow_id, self.source_id)
-    }
-}
-
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
