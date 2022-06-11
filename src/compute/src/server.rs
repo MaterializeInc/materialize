@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
-use mz_dataflow_types::ConnectionContext;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 

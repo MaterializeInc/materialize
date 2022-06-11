@@ -24,10 +24,9 @@ use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
-use mz_dataflow_types::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_dataflow_types::connections::Connection;
+use mz_dataflow_types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_dataflow_types::connections::{Connection, ConnectionContext};
 use mz_dataflow_types::sources::PostgresSourceDetails;
-use mz_dataflow_types::ConnectionContext;
 use mz_repr::proto::RustType;
 use mz_repr::strconv;
 

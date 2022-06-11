@@ -20,8 +20,8 @@ $ kafka-ingest format=bytes topic=connection_test
 > CREATE CONNECTION testconn
   FOR KAFKA BROKER '${testdrive.kafka-addr}'
 
-> SELECT name, connection_type from mz_connections
-name  connection_type
+> SELECT name, type from mz_connections
+name       type
 ------------------------------
 testconn   kafka
 

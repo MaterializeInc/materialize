@@ -17,7 +17,7 @@ import "repr/src/proto.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
-import "dataflow-types/src/types/aws.proto";
+import "dataflow-types/src/types/connections/aws.proto";
 import "dataflow-types/src/types/sources/encoding.proto";
 import "kafka-util/src/addr.proto";
 import "postgres-util/src/desc.proto";
@@ -212,7 +212,7 @@ message ProtoSourceData {
 
 message ProtoKinesisSourceConnection {
     string stream_name = 1;
-    mz_dataflow_types.types.aws.ProtoAwsConfig aws = 2;
+    mz_dataflow_types.types.connections.aws.ProtoAwsConfig aws = 2;
 }
 
 message ProtoPostgresSourceConnection {
@@ -234,7 +234,7 @@ message ProtoPubNubSourceConnection {
 message ProtoS3SourceConnection {
     repeated ProtoS3KeySource key_sources = 1;
     optional string pattern = 2;
-    mz_dataflow_types.types.aws.ProtoAwsConfig aws = 3;
+    mz_dataflow_types.types.connections.aws.ProtoAwsConfig aws = 3;
     ProtoCompression compression = 4;
 }
 

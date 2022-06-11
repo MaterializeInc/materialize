@@ -319,14 +319,14 @@ name
 mat_data
 
 > SHOW FULL SOURCES
-name     type materialized  volatility connector_type
------------------------------------------------------
+name     type materialized  volatility type
+--------------------------------------------
 data     user false         unknown    kafka
 mat_data user true          unknown    kafka
 
 > SHOW FULL MATERIALIZED SOURCES
-name     type  volatility connector_type
-----------------------------------------
+name     type  volatility type
+-------------------------------
 mat_data user  unknown    kafka
 
 # If there exists another index, dropping the primary index will not #

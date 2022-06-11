@@ -12,12 +12,12 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sinks::{
     KafkaSinkConnection, KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention,
     KafkaSinkConsistencyConnection, PersistSinkConnection, PersistSinkConnectionBuilder,
     PublishedSchemaInfo, SinkConnection, SinkConnectionBuilder,
 };
-use mz_dataflow_types::ConnectionContext;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::collections::CollectionExt;
 use mz_repr::GlobalId;

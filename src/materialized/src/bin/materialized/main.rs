@@ -46,7 +46,7 @@ use uuid::Uuid;
 use materialized::{
     OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_dataflow_types::ConnectionContext;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;

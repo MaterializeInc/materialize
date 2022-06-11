@@ -237,7 +237,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found identifier
+contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
 
 > SHOW FULL OBJECTS
 name            type
@@ -371,8 +371,8 @@ mz_scheduling_parks_internal
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
-name                                          type   materialized  volatility  connector_type
----------------------------------------------------------------------------------------------
+name                                          type   materialized  volatility  type
+-----------------------------------------------------------------------------------
 mz_arrangement_sharing_internal               system true          volatile    log
 mz_arrangement_batches_internal               system true          volatile    log
 mz_arrangement_records_internal               system true          volatile    log
@@ -399,7 +399,7 @@ mz_clusters
 mz_cluster_replicas_base
 mz_cluster_replicas_status
 mz_columns
-mz_connectors
+mz_connections
 mz_databases
 mz_functions
 mz_index_columns
@@ -429,7 +429,7 @@ mz_clusters                 system
 mz_cluster_replicas_base    system
 mz_cluster_replicas_status  system
 mz_columns                  system
-mz_connectors               system
+mz_connections               system
 mz_databases                system
 mz_functions                system
 mz_index_columns            system
@@ -461,7 +461,7 @@ mz_clusters
 mz_cluster_replicas_base
 mz_cluster_replicas_status
 mz_columns
-mz_connectors
+mz_connections
 mz_databases
 mz_functions
 mz_index_columns
@@ -494,7 +494,7 @@ mz_clusters
 mz_cluster_replicas_base
 mz_cluster_replicas_status
 mz_columns
-mz_connectors
+mz_connections
 mz_databases
 mz_functions
 mz_index_columns

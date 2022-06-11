@@ -20,7 +20,7 @@ use std::fmt;
 use anyhow::{bail, Context};
 use itertools::Itertools;
 
-use mz_dataflow_types::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
+use mz_dataflow_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
