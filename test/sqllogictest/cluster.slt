@@ -354,7 +354,7 @@ CREATE CLUSTER foo REPLICAS (size_2 (SIZE 'no_such_size'));
 statement error invalid SIZE
 CREATE CLUSTER foo REPLICAS (size_2 (SIZE 1));
 
-statement error invalid SIZE
+statement error unknown cluster replica size a
 CREATE CLUSTER foo REPLICAS (size_2 (SIZE a));
 
 statement ok

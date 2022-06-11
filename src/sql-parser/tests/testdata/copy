@@ -51,9 +51,9 @@ Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t
 parse-statement
 COPY t FROM STDIN WITH (FORMAT CSV, DELIMITER '|')
 ----
-COPY t FROM STDIN WITH (FORMAT = csv, FORMAT = '|')
+COPY t FROM STDIN WITH (FORMAT = csv, DELIMITER = '|')
 =>
-Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: Format, value: Some(Value(String("|"))) }] })
+Copy(CopyStatement { relation: Table { name: Name(UnresolvedObjectName([Ident("t")])), columns: [] }, direction: From, target: Stdin, options: [CopyOption { name: Format, value: Some(Ident(Ident("csv"))) }, CopyOption { name: Delimiter, value: Some(Value(String("|"))) }] })
 
 parse-statement
 COPY t TO STDOUT (format = text)
