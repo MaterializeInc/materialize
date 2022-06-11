@@ -45,21 +45,24 @@ impl ImpliedValue for Interval {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
 pub struct OptionalInterval(pub Option<Interval>);
 
+impl From<Interval> for OptionalInterval {
+    fn from(i: Interval) -> OptionalInterval {
+        // An interval of 0 disables the setting.
+        let inner = if i == Interval::default() {
+            None
+        } else {
+            Some(i)
+        };
+        OptionalInterval(inner)
+    }
+}
+
 impl TryFromValue<Value> for OptionalInterval {
     fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
-        let inner = match v {
-            Value::Null => None,
-            v => {
-                let d = Interval::try_from_value(v)?;
-                // An interval of 0 disables the setting.
-                if d == Interval::default() {
-                    None
-                } else {
-                    Some(d)
-                }
-            }
-        };
-        Ok(OptionalInterval(inner))
+        Ok(match v {
+            Value::Null => OptionalInterval(None),
+            v => Interval::try_from_value(v)?.into(),
+        })
     }
 }
 
@@ -140,10 +143,11 @@ impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
     }
 }
 
-impl<V: TryFromValue<Value>, T: AstInfo> TryFromValue<WithOptionValue<T>> for V {
+impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOptionValue<T>> for V {
     fn try_from_value(v: WithOptionValue<T>) -> Result<Self, anyhow::Error> {
         match v {
             WithOptionValue::Value(v) => V::try_from_value(v),
+            WithOptionValue::Ident(i) => V::try_from_value(Value::String(i.to_string())),
             _ => bail!("incompatible value types"),
         }
     }

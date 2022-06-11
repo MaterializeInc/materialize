@@ -83,6 +83,14 @@ impl num_traits::ops::checked::CheckedNeg for Interval {
     }
 }
 
+impl std::str::FromStr for Interval {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::strconv::parse_interval(s).map_err(|e| anyhow!(e))
+    }
+}
+
 static MONTH_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
     format!(
         "Overflows maximum months; cannot exceed {}/{} microseconds",
