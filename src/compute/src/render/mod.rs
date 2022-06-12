@@ -159,6 +159,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
+                // Note: For correctness, we require that sources only emit times advanced by
+                // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
                 let (ok_stream, err_stream, token) = persist_source::persist_source(
                     region,
                     source.storage_metadata.clone(),
@@ -170,26 +172,12 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // type checker happy. We should decide what we want our tokens to look like
                 let token = Rc::new(token) as Rc<dyn std::any::Any>;
 
-                let (mut ok, mut err) = (ok_stream.as_collection(), err_stream.as_collection());
-
-                // We do not trust `replay` to correctly advance times.
-                use timely::dataflow::operators::Map;
-                let as_of_frontier1 = dataflow.as_of.clone().unwrap();
-                ok = ok
-                    .inner
-                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
-                    .as_collection();
-
-                let as_of_frontier2 = dataflow.as_of.clone().unwrap();
-                err = err
-                    .inner
-                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
-                    .as_collection();
+                let (oks, errs) = (ok_stream.as_collection(), err_stream.as_collection());
 
                 // Associate collection bundle with the source identifier.
                 context.insert_id(
                     mz_expr::Id::Global(*source_id),
-                    crate::render::CollectionBundle::from_collections(ok, err),
+                    crate::render::CollectionBundle::from_collections(oks, errs),
                 );
                 // Associate returned tokens with the source identifier.
                 tokens.insert(*source_id, token);
