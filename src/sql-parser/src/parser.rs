@@ -51,7 +51,7 @@ macro_rules! parser_err {
 }
 
 /// Parses a SQL string containing zero or more SQL statements.
-#[tracing::instrument(level = "debug", name = "sql_to_ast")]
+#[tracing::instrument(level = "trace", name = "sql_to_ast")]
 pub fn parse_statements(sql: &str) -> Result<Vec<Statement<Raw>>, ParserError> {
     let tokens = lexer::lex(sql)?;
     Parser::new(sql, tokens).parse_statements()
