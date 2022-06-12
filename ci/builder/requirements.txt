@@ -39,7 +39,7 @@ toml==0.10.2
 twine==4.0.1
 types-pkg-resources==0.1.3
 types-prettytable==2.1.2
-types-psutil==5.8.22
+types-psutil==5.8.23
 types-PyMYSQL==1.0.19
 types-PyYAML==6.0.8
 types-requests==2.27.30
