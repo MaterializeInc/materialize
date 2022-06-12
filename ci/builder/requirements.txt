@@ -30,7 +30,7 @@ pydantic==1.9.1
 PyMySQL==1.0.2
 pytest==7.1.2
 pyyaml==6.0
-requests==2.27.1
+requests==2.28.0
 scipy==1.7.3
 semver==3.0.0.dev3
 shtab==1.5.4
