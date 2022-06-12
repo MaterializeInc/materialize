@@ -1925,7 +1925,7 @@ impl<'a> Parser<'a> {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
-                let with_options = self.parse_opt_with_options()?;
+                let with_options = self.parse_kafka_connection_options()?;
                 CreateConnection::Kafka {
                     broker,
                     with_options,
@@ -1947,6 +1947,48 @@ impl<'a> Parser<'a> {
             connection,
             if_not_exists,
         }))
+    }
+
+    fn parse_kafka_connection_options(
+        &mut self,
+    ) -> Result<Vec<KafkaConnectionOption<Raw>>, ParserError> {
+        Ok(match self.parse_one_of_keywords(&[SSL]) {
+            Some(SSL) => {
+                self.expect_token(&Token::LParen)?;
+                let o = self.parse_comma_separated(Parser::parse_kafka_connection_ssl_options)?;
+                self.expect_token(&Token::RParen)?;
+                o
+            }
+            None => vec![],
+            _ => unreachable!(),
+        })
+    }
+
+    fn parse_kafka_connection_ssl_options(
+        &mut self,
+    ) -> Result<KafkaConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+            KEY => {
+                if self.parse_keyword(PASSWORD) {
+                    KafkaConnectionOptionName::SslKeyPassword
+                } else {
+                    KafkaConnectionOptionName::SslKey
+                }
+            }
+            CERTIFICATE => {
+                if self.parse_keyword(AUTHORITY) {
+                    KafkaConnectionOptionName::SslCertificateAuthority
+                } else {
+                    KafkaConnectionOptionName::SslCertificate
+                }
+            }
+            _ => unreachable!(),
+        };
+        let _ = self.consume_token(&Token::Eq);
+        Ok(KafkaConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {

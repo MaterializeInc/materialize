@@ -153,7 +153,7 @@ pub fn options(
                 SqlValueOrSecret::Value(Value::String(data_type.to_ast_string()))
             }
             Some(WithOptionValue::Secret(ResolvedObjectName::Object { id, .. })) => {
-                SqlValueOrSecret::Secret(id.clone())
+                SqlValueOrSecret::Secret(*id)
             }
             Some(WithOptionValue::Secret(_)) => {
                 panic!("SECRET option {} must be Object", option.key)

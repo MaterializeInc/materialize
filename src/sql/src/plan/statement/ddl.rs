@@ -2865,13 +2865,10 @@ pub fn plan_create_connection(
         CreateConnection::Kafka {
             broker,
             with_options,
-        } => {
-            let mut with_options = normalize::options(&with_options)?;
-            Connection::Kafka(KafkaConnection {
-                broker: broker.parse()?,
-                options: kafka_util::extract_config(scx.catalog, &mut with_options)?,
-            })
-        }
+        } => Connection::Kafka(KafkaConnection {
+            broker: broker.parse()?,
+            options: kafka_util::kafka_connection_config(scx.catalog, with_options)?,
+        }),
         CreateConnection::Csr { url, with_options } => {
             let connection = kafka_util::generate_ccsr_connection(
                 scx.catalog,

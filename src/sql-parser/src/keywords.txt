@@ -33,6 +33,7 @@ Array
 As
 Asc
 At
+Authority
 Availability
 Avro
 Begin
@@ -49,6 +50,7 @@ Bytes
 Cascade
 Case
 Cast
+Certificate
 Chain
 Channel
 Char
@@ -213,6 +215,7 @@ Ordinality
 Outer
 Over
 Partition
+Password
 Persist
 Physical
 Plan
@@ -276,6 +279,7 @@ Some
 Source
 Sources
 Sqs
+Ssl
 Start
 Stdin
 Stdout

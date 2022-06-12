@@ -165,13 +165,12 @@ contains:self signed certificate in certificate chain
 # Ensure that connectors work with SSL basic_auth
 > CREATE CONNECTION kafka_ssl
   FOR KAFKA BROKER 'kafka:9092'
-  WITH (
-      security_protocol = 'SSL',
-      ssl_key_pem = SECRET ssl_key_kafka,
-      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
-      ssl_ca_pem = '${arg.ca-crt}',
-      ssl_key_password = SECRET ssl_key_password_kafka
-  )
+  SSL (
+    KEY = SECRET ssl_key_kafka,
+    KEY PASSWORD = SECRET ssl_key_password_kafka,
+    CERTIFICATE = '${arg.materialized-kafka-crt}',
+    CERTIFICATE AUTHORITY = '${arg.ca-crt}'
+  );
 
 > CREATE MATERIALIZED SOURCE connector_source
   FROM KAFKA CONNECTION kafka_ssl

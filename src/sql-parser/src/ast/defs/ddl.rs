@@ -21,6 +21,7 @@
 //! AST types specific to CREATE/ALTER variants of [crate::ast::Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -546,10 +547,68 @@ impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
 impl_display_t!(DbzTxMetadataOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaConnectionOptionName {
+    SslKey,
+    SslKeyPassword,
+    SslCertificate,
+    SslCertificateAuthority,
+    SaslMechanisms,
+    SaslUsername,
+    SaslPassword,
+}
+
+impl KafkaConnectionOptionName {
+    pub fn group(&self) -> &'static str {
+        match self {
+            KafkaConnectionOptionName::SslKey
+            | KafkaConnectionOptionName::SslKeyPassword
+            | KafkaConnectionOptionName::SslCertificate
+            | KafkaConnectionOptionName::SslCertificateAuthority => "SSL",
+            KafkaConnectionOptionName::SaslMechanisms
+            | KafkaConnectionOptionName::SaslUsername
+            | KafkaConnectionOptionName::SaslPassword => "SASL",
+        }
+    }
+}
+
+impl AstDisplay for KafkaConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            KafkaConnectionOptionName::SslKey => "KEY",
+            KafkaConnectionOptionName::SslKeyPassword => "KEY PASSWORD",
+            KafkaConnectionOptionName::SslCertificate => "CERTIFICATE",
+            KafkaConnectionOptionName::SslCertificateAuthority => "CERTIFICATE AUTHORITY",
+            KafkaConnectionOptionName::SaslMechanisms => "MECHANISMS",
+            KafkaConnectionOptionName::SaslUsername => "USERNAME",
+            KafkaConnectionOptionName::SaslPassword => "PASSWORD",
+        })
+    }
+}
+impl_display!(KafkaConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CLUSTER` or `CREATE CLUSTER KafkaConnector` statement.
+pub struct KafkaConnectionOption<T: AstInfo> {
+    pub name: KafkaConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(KafkaConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
     Kafka {
         broker: String,
-        with_options: Vec<WithOption<T>>,
+        with_options: Vec<KafkaConnectionOption<T>>,
     },
     Csr {
         url: String,
@@ -566,10 +625,27 @@ impl<T: AstInfo> AstDisplay for CreateConnection<T> {
             } => {
                 f.write_str("KAFKA BROKER '");
                 f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("'");
-                if with_options.len() > 0 {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(&with_options));
+                f.write_str("' ");
+
+                // TODO(move this into a trait with a generic implementation)
+                let mut groups: HashMap<&str, Vec<String>> = HashMap::new();
+                for root @ KafkaConnectionOption { name, .. } in with_options {
+                    groups.entry(name.group()).or_default().push(if f.stable() {
+                        root.to_ast_string_stable()
+                    } else {
+                        root.to_ast_string()
+                    })
+                }
+                let mut sorted_groups = vec![];
+                for (k, mut v) in groups {
+                    v.sort();
+                    sorted_groups.push((k, v));
+                }
+                sorted_groups.sort();
+                for (group, values) in sorted_groups {
+                    f.write_str(group);
+                    f.write_str(" (");
+                    f.write_str(itertools::join(values, ", "));
                     f.write_str(")");
                 }
             }
