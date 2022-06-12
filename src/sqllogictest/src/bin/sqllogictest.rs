@@ -44,9 +44,6 @@ struct Args {
     /// Generate a JUnit-compatible XML report to the specified file.
     #[clap(long, value_name = "FILE")]
     junit_report: Option<PathBuf>,
-    /// Run with N materialized workers.
-    #[clap(long, value_name = "N", default_value = "3")]
-    workers: usize,
     /// PostgreSQL connection URL to use for `persist` consensus and the catalog
     /// stash.
     #[clap(long)]
@@ -70,7 +67,6 @@ async fn main() {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
         verbosity: args.verbosity,
-        workers: args.workers,
         postgres_url: args.postgres_url.clone(),
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,

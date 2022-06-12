@@ -224,7 +224,7 @@ impl Action for SqlAction {
                 if let Some(disk_state) = disk_state {
                     let mem_state = reqwest::get(&format!(
                         "http://{}/api/internal/catalog",
-                        state.materialized_http_addr,
+                        state.materialize_http_addr,
                     ))
                     .await?
                     .text()

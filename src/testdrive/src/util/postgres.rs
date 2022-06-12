@@ -25,15 +25,15 @@ pub fn config_url(config: &Config) -> Result<Url, anyhow::Error> {
         [] => "localhost".into(),
         [Host::Tcp(host)] => host.clone(),
         [Host::Unix(path)] => path.display().to_string(),
-        _ => bail!("materialized URL cannot contain multiple hosts"),
+        _ => bail!("Materialize URL cannot contain multiple hosts"),
     };
     url.set_host(Some(&host))
-        .context("parsing materialized host")?;
+        .context("parsing Materialize host")?;
 
     url.set_port(Some(match config.get_ports() {
         [] => 5432,
         [port] => *port,
-        _ => bail!("materialized URL cannot contain multiple ports"),
+        _ => bail!("Materialize URL cannot contain multiple ports"),
     }))
     .expect("known to be valid to set port");
 

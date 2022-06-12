@@ -31,7 +31,7 @@ SERVICES = [
         entrypoint=[
             "testdrive",
             "--schema-registry-url=http://schema-registry:8081",
-            "--materialized-url=postgres://materialize@materialized:6875",
+            "--materialize-url=postgres://materialize@materialized:6875",
             "--kafka-option=acks=all",
             "--seed=1",
         ]

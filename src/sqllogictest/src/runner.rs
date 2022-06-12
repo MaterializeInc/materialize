@@ -58,7 +58,7 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
-use materialized::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig};
+use mz_environmentd::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::id_gen::PortAllocator;
@@ -587,7 +587,7 @@ impl Runner {
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
-        let mz_config = materialized::Config {
+        let server_config = mz_environmentd::Config {
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
             persist_location: PersistLocation {
@@ -645,7 +645,7 @@ impl Runner {
                     return;
                 }
             };
-            let server = match runtime.block_on(materialized::serve(mz_config)) {
+            let server = match runtime.block_on(mz_environmentd::serve(server_config)) {
                 Ok(runtime) => runtime,
                 Err(e) => {
                     server_addr_tx
@@ -1039,7 +1039,6 @@ pub struct RunConfig<'a> {
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
     pub verbosity: usize,
-    pub workers: usize,
     pub postgres_url: String,
     pub no_fail: bool,
     pub fail_fast: bool,

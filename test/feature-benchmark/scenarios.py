@@ -1101,7 +1101,7 @@ class ConnectionLatency(Coordinator):
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
             f"""
-$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialized-sql-addr}}
+$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
 SELECT 1;
 """
             for i in range(0, self.n())

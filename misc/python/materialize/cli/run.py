@@ -18,7 +18,7 @@ import sys
 from materialize import ROOT, spawn, ui
 from materialize.ui import UIError
 
-KNOWN_PROGRAMS = ["materialized", "sqllogictest"]
+KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["storaged", "computed"]
 
 if sys.platform == "darwin":
@@ -103,7 +103,7 @@ def main() -> int:
         command = [str(path), *args.args]
         if args.tokio_console:
             command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
-        if args.program == "materialized":
+        if args.program == "environmentd":
             if args.reset:
                 print("Removing mzdata directory...")
                 shutil.rmtree("mzdata", ignore_errors=True)

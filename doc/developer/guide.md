@@ -148,12 +148,12 @@ access token for use with HTTPS][github-https].
 
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
-individually via Cargo, but we recommend using the `bin/materialized` script to
+individually via Cargo, but we recommend using the `bin/environmentd` script to
 drive the process:
 
 ```shell
 cd materialize
-bin/materialized [--release] [<materialized arg>...]
+bin/environmentd [--release] [<environmentd arg>...]
 ```
 
 ## Running Confluent Platform
@@ -201,9 +201,9 @@ full rebuild of the binary.
 To speed up the development cycle, you can enable the `dev-web` feature like so:
 
 ```shell
-cd src/materialized
+cd src/environmentd
 cargo build --bin storaged --bin computed
-cargo run --bin materialized --features=dev-web
+cargo run --bin environmentd --features=dev-web
 ```
 
 In this mode, every request for a static file will reload the file from disk.
@@ -211,12 +211,12 @@ Changes to standalone CSS and JS files will be reflected immediately upon
 reload, without requiring a recompile!
 
 Note that `dev-web` can only hot-reload the the files in
-`src/materialized/src/static`. The HTML templates in
-`src/materialized/src/templates` use a compile-time templating library called
+`src/environmentd/src/static`. The HTML templates in
+`src/environmentd/src/templates` use a compile-time templating library called
 [`askama`], and so changes to those templates necessarily require a recompile.
 
 For details about adding a new JavaScript/CSS dependency, see the comment in
-[`src/materialized/build/npm.rs`](/src/materialized/build/npm.rs).
+[`src/environmentd/build/npm.rs`](/src/environmentd/build/npm.rs).
 
 ## Testing
 

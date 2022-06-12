@@ -17,7 +17,7 @@ psql -Atc "CREATE SCHEMA IF NOT EXISTS consensus"
 psql -Atc "CREATE SCHEMA IF NOT EXISTS catalog"
 psql -Atc "CREATE SCHEMA IF NOT EXISTS storage"
 
-exec materialized \
+exec environmentd \
     --sql-listen-addr=0.0.0.0:6875 \
     --http-listen-addr=0.0.0.0:6876 \
     --internal-sql-listen-addr=0.0.0.0:6877 \

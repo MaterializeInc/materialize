@@ -11,7 +11,7 @@ name: antithesis-materialized
 publish: false
 pre-image:
   - type: cargo-build
-    bin: [materialized, storaged, computed]
+    bin: [environmentd, storaged, computed]
     strip: false
     rustflags: [
       "-Cpasses=sancov-module",

@@ -16,8 +16,8 @@ RUN apt-get update \
     && mkdir /mzdata \
     && chown materialize /mzdata
 
-COPY materialized /usr/local/bin/
+COPY environmentd /usr/local/bin/
 
 USER materialize
 
-ENTRYPOINT ["tini", "--", "materialized", "--sql-listen-addr=0.0.0.0:6875", "--http-listen-addr=0.0.0.0:6876"]
+ENTRYPOINT ["tini", "--", "environmentd", "--sql-listen-addr=0.0.0.0:6875", "--http-listen-addr=0.0.0.0:6876"]

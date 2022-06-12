@@ -29,7 +29,7 @@ RUN apt-get update \
 
 COPY pg_hba.conf /etc/postgresql/14/materialize/pg_hba.conf
 
-COPY storaged computed materialized entrypoint.sh /usr/local/bin/
+COPY storaged computed environmentd entrypoint.sh /usr/local/bin/
 
 USER materialize
 

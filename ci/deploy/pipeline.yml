@@ -30,32 +30,12 @@ steps:
       manual:
         permit_on_passed: true
 
-  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.linux
+  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
     concurrency: 1
     concurrency_group: deploy/linux
-    retry:
-      manual:
-        permit_on_passed: true
-
-  - command: bin/pyactivate -m ci.deploy.macos x86_64
-    agents:
-      queue: mac-x86_64
-    timeout_in_minutes: 30
-    concurrency: 1
-    concurrency_group: deploy/macos/x86_64
-    retry:
-      manual:
-        permit_on_passed: true
-
-  - command: bin/pyactivate -m ci.deploy.macos aarch64
-    agents:
-      queue: mac-aarch64
-    timeout_in_minutes: 30
-    concurrency: 1
-    concurrency_group: deploy/macos/aarch64
     retry:
       manual:
         permit_on_passed: true

@@ -51,7 +51,7 @@ pub static VERSION: Lazy<String> = Lazy::new(|| BUILD_INFO.human_version());
 
 /// Independent storage server for Materialize.
 #[derive(clap::Parser)]
-#[clap(version = VERSION.as_str())]
+#[clap(name = "storaged", version = VERSION.as_str())]
 struct Args {
     /// The address on which to listen for a connection from the controller.
     #[clap(

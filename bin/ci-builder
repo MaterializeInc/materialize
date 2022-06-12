@@ -44,7 +44,7 @@ channel=$1 && shift
 
 rust_date=
 case "$channel" in
-    stable) rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' src/materialized/Cargo.toml) ;;
+    stable) rust_version=$(sed -n 's/rust-version = "\(.*\)"/\1/p' src/environmentd/Cargo.toml) ;;
     nightly)
         rust_version=nightly
         rust_date=/$NIGHTLY_RUST_DATE

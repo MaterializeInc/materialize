@@ -514,8 +514,8 @@ class Testdrive(Service):
         self,
         name: str = "testdrive",
         mzbuild: str = "testdrive",
-        materialized_url: str = "postgres://materialize@materialized:6875",
-        materialized_params: Dict[str, str] = {},
+        materialize_url: str = "postgres://materialize@materialized:6875",
+        materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
         no_reset: bool = False,
@@ -562,7 +562,7 @@ class Testdrive(Service):
                 "testdrive",
                 f"--kafka-addr={kafka_url}",
                 "--schema-registry-url=http://schema-registry:8081",
-                f"--materialized-url={materialized_url}",
+                f"--materialize-url={materialize_url}",
             ]
 
         if aws_region:
@@ -582,8 +582,8 @@ class Testdrive(Service):
         if no_reset:
             entrypoint.append("--no-reset")
 
-        for (k, v) in materialized_params.items():
-            entrypoint.append(f"--materialized-param={k}={v}")
+        for (k, v) in materialize_params.items():
+            entrypoint.append(f"--materialize-param={k}={v}")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
 

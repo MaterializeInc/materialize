@@ -104,30 +104,30 @@ struct Args {
     junit_report: Option<PathBuf>,
     /// Which log messages to emit.
     ///
-    /// See materialized's `--log-filter` option for details.
+    /// See environmentd's `--log-filter` option for details.
     #[clap(long, value_name = "FILTER", default_value = "off")]
     log_filter: EnvFilter,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
 
     // === Materialize options. ===
-    /// materialized SQL connection string.
+    /// materialize SQL connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6875",
         value_name = "URL"
     )]
-    materialized_url: tokio_postgres::Config,
-    /// The port on which materialized is listening for untrusted HTTP connections.
+    materialize_url: tokio_postgres::Config,
+    /// The port on which Materialize is listening for untrusted HTTP connections.
     ///
-    /// The hostname is taken from `materialized_url`.
+    /// The hostname is taken from `materialize_url`.
     #[clap(long, default_value = "6876", value_name = "PORT")]
-    materialized_http_port: u16,
+    materialize_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
-    /// materialized.
+    /// Materialize.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
-    materialized_param: Vec<(String, String)>,
-    /// Validate the on-disk state of the specified materialized data directory.
+    materialize_param: Vec<(String, String)>,
+    /// Validate the on-disk state of the specified Materialize data directory.
     #[clap(long, value_name = "PATH")]
     validate_data_dir: Option<PathBuf>,
     /// Validate the stash state of the specified postgres connection string.
@@ -242,11 +242,11 @@ async fn main() {
         "Configuration parameters:
     Kafka address: {}
     Schema registry URL: {}
-    materialized host: {:?}
+    Materialize host: {:?}
     Error limit: {}",
         args.kafka_addr,
         args.schema_registry_url,
-        args.materialized_url.get_hosts()[0],
+        args.materialize_url.get_hosts()[0],
         args.max_errors
     );
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
@@ -279,10 +279,10 @@ async fn main() {
         backoff_factor: args.backoff_factor,
 
         // === Materialize options. ===
-        materialized_pgconfig: args.materialized_url,
-        materialized_http_port: args.materialized_http_port,
-        materialized_params: args.materialized_param,
-        materialized_catalog_postgres_stash: args.validate_postgres_stash,
+        materialize_pgconfig: args.materialize_url,
+        materialize_http_port: args.materialize_http_port,
+        materialize_params: args.materialize_param,
+        materialize_catalog_postgres_stash: args.validate_postgres_stash,
 
         // === Confluent options. ===
         kafka_addr: args.kafka_addr,

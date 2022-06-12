@@ -241,7 +241,7 @@ impl AwsConfig {
         };
 
         if let Some(AwsAssumeRole { arn }) = &self.role {
-            let mut role = AssumeRoleProvider::builder(arn).session_name("materialized");
+            let mut role = AssumeRoleProvider::builder(arn).session_name("materialize");
             // This affects which region to perform STS on, not where
             // anything else happens.
             if let Some(region) = &region {
