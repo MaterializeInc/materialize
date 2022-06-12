@@ -21,7 +21,7 @@ use reqwest::Url;
 use tokio::time::Duration;
 
 use mz_dataflow_types::connections::{
-    CsrConnection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, StringOrSecret,
+    CsrConnection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, KafkaConnection, StringOrSecret,
 };
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
@@ -219,14 +219,19 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 pub async fn create_consumer(
     topic: &str,
+    kafka_connection: &KafkaConnection,
     options: &BTreeMap<String, StringOrSecret>,
     librdkafka_log_level: tracing::Level,
     secrets_reader: &SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
     let mut config = create_new_client_config(librdkafka_log_level);
-    for (k, v) in options {
-        config.set(k, v.get_string(secrets_reader).await?);
-    }
+    mz_dataflow_types::populate_client_config(
+        kafka_connection.clone(),
+        options,
+        std::collections::HashSet::new(),
+        &mut config,
+        secrets_reader,
+    );
 
     // We need this only for logging which broker we're connecting to; the
     // setting itself makes its way into `config`.

@@ -13,10 +13,11 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::convert::TryFrom;
 use std::num::NonZeroUsize;
 
+use futures::executor::block_on;
 use proptest::prelude::{any, Arbitrary};
 use proptest::prop_oneof;
 use proptest::strategy::{BoxedStrategy, Just, Strategy};
@@ -35,6 +36,8 @@ use crate::types::sources::SourceDesc;
 use crate::Plan;
 
 use proto_dataflow_description::*;
+
+use self::connections::{KafkaConnection, StringOrSecret};
 
 pub mod connections;
 pub mod sinks;
@@ -845,6 +848,56 @@ impl LinearOperator {
     /// input of the specified arity.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
+    }
+}
+
+/// Propagates appropriate configuration options from `kafka_connection` and
+/// `options` into `config`, ignoring any options identified in
+/// `drop_option_keys`.
+///
+/// Note that this:
+/// - Performs blocking reads when extracting SECRETS.
+/// - Does not ensure that the keys from the Kafka connection and
+///   additional options are disjoint.
+pub fn populate_client_config(
+    kafka_connection: KafkaConnection,
+    options: &BTreeMap<String, StringOrSecret>,
+    drop_option_keys: HashSet<&'static str>,
+    config: &mut rdkafka::ClientConfig,
+    secrets_reader: &mz_secrets::SecretsReader,
+) {
+    let config_options: BTreeMap<String, StringOrSecret> = kafka_connection.into();
+    for (k, v) in options.iter().chain(config_options.iter()) {
+        if !drop_option_keys.contains(k.as_str()) {
+            config.set(
+                k,
+                block_on(v.get_string(&secrets_reader))
+                    .expect("reading kafka secret unexpectedly failed"),
+            );
+        }
+    }
+}
+
+/// Provides cleaner access to the `populate_client_config` implementation for
+/// structs.
+pub trait PopulateClientConfig {
+    fn kafka_connection(&self) -> &KafkaConnection;
+    fn options(&self) -> &BTreeMap<String, StringOrSecret>;
+    fn drop_option_keys() -> HashSet<&'static str> {
+        HashSet::new()
+    }
+    fn populate_client_config(
+        &self,
+        config: &mut rdkafka::ClientConfig,
+        secrets_reader: &mz_secrets::SecretsReader,
+    ) {
+        populate_client_config(
+            self.kafka_connection().clone(),
+            self.options(),
+            Self::drop_option_keys(),
+            config,
+            secrets_reader,
+        )
     }
 }
 

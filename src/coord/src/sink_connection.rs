@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
+use mz_dataflow_types::PopulateClientConfig;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, ResourceSpecifier, TopicReplication};
 
 use mz_dataflow_types::connections::ConnectionContext;
@@ -209,12 +210,7 @@ async fn build_kafka(
 ) -> Result<SinkConnection, CoordError> {
     // Create Kafka topic
     let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-    for (k, v) in &builder.options {
-        config.set(
-            k,
-            futures::executor::block_on(v.get_string(&connection_context.secrets_reader)).unwrap(),
-        );
-    }
+    builder.populate_client_config(&mut config, &connection_context.secrets_reader);
 
     let client: AdminClient<_> = config
         .create_with_context(MzClientContext)
@@ -319,6 +315,7 @@ async fn build_kafka(
     };
 
     Ok(SinkConnection::Kafka(KafkaSinkConnection {
+        connection: builder.connection,
         options: builder.options,
         topic,
         topic_prefix: builder.topic_prefix,
