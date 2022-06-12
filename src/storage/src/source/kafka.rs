@@ -23,7 +23,7 @@ use timely::scheduling::activate::SyncActivator;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use mz_dataflow_types::connections::{ConnectionContext, StringOrSecret};
+use mz_dataflow_types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnection, KafkaOffset, KafkaSourceConnection,
     MzOffset,
@@ -99,6 +99,7 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         };
         let KafkaSourceConnection {
+            connection,
             options,
             topic,
             group_id_prefix,
@@ -109,6 +110,7 @@ impl SourceReader for KafkaSourceReader {
             &source_name,
             group_id_prefix,
             cluster_id,
+            &connection,
             &options,
             &connection_context,
         );
@@ -521,16 +523,19 @@ fn create_kafka_config(
     name: &str,
     group_id_prefix: Option<String>,
     cluster_id: Uuid,
+    kafka_connection: &KafkaConnection,
     options: &BTreeMap<String, StringOrSecret>,
     connection_context: &ConnectionContext,
 ) -> ClientConfig {
     let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
-    for (k, v) in options {
-        kafka_config.set(
-            k,
-            futures::executor::block_on(v.get_string(&connection_context.secrets_reader)).unwrap(),
-        );
-    }
+
+    mz_dataflow_types::populate_client_config(
+        kafka_connection.clone(),
+        options,
+        std::collections::HashSet::new(),
+        &mut kafka_config,
+        &connection_context.secrets_reader,
+    );
 
     // Default to disabling Kafka auto commit. This can be explicitly enabled
     // by the user if they want to use it for progress tracking.

@@ -347,15 +347,34 @@ pub fn plan_create_source(
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
             let mut options = kafka_util::extract_config(&mut with_options)?;
-            match &kafka.connection {
+            let kafka_connection = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
                     options.insert(
                         "bootstrap.servers".into(),
                         KafkaAddrs::from_str(broker)?.to_string().into(),
                     );
+                    KafkaConnection::try_from(&mut options)?
                 }
-                mz_sql_parser::ast::KafkaConnection::Reference { connection: _, .. } => {
-                    todo!()
+                mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    let connection = match item.connection()? {
+                        Connection::Kafka(connection) => connection.clone(),
+                        _ => bail!("{} is not a kafka connection", item.name()),
+                    };
+
+                    // TODO: Once we remove use of `String`-keyed options, we
+                    // can remove this check because permitted values here will
+                    // simply be a disjoint set of what `CONNECTION`s support.
+                    for k in BTreeMap::<String, StringOrSecret>::from(connection.clone()).keys() {
+                        if options.contains_key(k) {
+                            bail!(
+                                "cannot set option {} for SOURCE using CONNECTION {}",
+                                k,
+                                scx.catalog.resolve_full_name(item.name())
+                            );
+                        }
+                    }
+                    connection
                 }
             };
 
@@ -401,6 +420,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
 
             let mut connection = KafkaSourceConnection {
+                connection: kafka_connection,
                 options,
                 topic: kafka.topic.clone(),
                 start_offsets,
@@ -1995,6 +2015,7 @@ fn kafka_sink_builder(
     let consistency_format = consistency_config.map(|config| config.1);
 
     Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
+        connection: KafkaConnection::try_from(&mut config_options)?,
         options: config_options,
         format,
         topic_prefix,

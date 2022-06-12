@@ -149,23 +149,33 @@ contains:catalog item 'materialize.public.s1' is a sink and so cannot be depende
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   WITH (security_protocol = 'FOO')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:creating admin client failed: Client config error: Invalid value "FOO" for configuration property "security.protocol" security.protocol FOO
+contains:unsupported security.protocol: foo
+
+# TODO: test this by propagating all of the appropriate SSL configuration
 
 ! CREATE SINK ssl_on_non_ssl_broker FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   WITH (security_protocol = 'SSL')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
+contains:invalid SSL config
 
 #
 # Kerberos options
 #
 
+> CREATE SECRET sasl_password_kafka AS 'mzmzmz'
+
 ! CREATE SINK invalid_sasl_mechanisms FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH  (security_protocol = SASL_SSL, sasl_mechanisms = foo)
+  WITH  (
+    security_protocol = SASL_SSL,
+    sasl_mechanisms = foo,
+    sasl_username = 'mz',
+    sasl_password = SECRET sasl_password_kafka,
+    ssl_ca_pem = 'foo'
+  )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Unsupported SASL mechanism: FOO
 
@@ -177,14 +187,14 @@ nonsense
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   WITH  (security_protocol = SASL_SSL, sasl_mechanisms = plain)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:creating admin client failed: Client creation error: sasl.username and sasl.password must be set
+contains:missing SASL USERNAME
 
 ! CREATE SINK missing_required_sasl_password FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
   WITH  (security_protocol = SASL_SSL, sasl_mechanisms = plain, sasl_username = foo)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:creating admin client failed: Client creation error: sasl.username and sasl.password must be set
+contains:missing SASL PASSWORD
 #
 # FORMAT
 #

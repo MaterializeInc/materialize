@@ -63,6 +63,7 @@ message ProtoKafkaSinkConnection {
         repeated uint64 relation_key_indices = 1;
     }
 
+    mz_dataflow_types.types.connections.ProtoKafkaConnection connection = 1;
     string topic = 2;
     string topic_prefix = 3;
     optional ProtoKeyDescAndIndices key_desc_and_indices = 4;

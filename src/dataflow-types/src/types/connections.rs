@@ -9,18 +9,23 @@
 
 //! Connection types.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use anyhow::{anyhow, bail};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
+use mz_kafka_util::KafkaAddrs;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
 use mz_secrets::{SecretsReader, SecretsReaderConfig};
+use mz_sql_parser::ast::KafkaConnectionOptionName;
 
 use crate::types::connections::aws::AwsExternalIdPrefix;
 
@@ -183,10 +188,137 @@ impl From<SaslConfig> for Security {
     }
 }
 
+/// Meant to create an equivalence function between enum-named options and
+/// their free-form `String` counterparts.
+pub trait ConfigKey {
+    fn config_key(&self) -> String;
+}
+
+impl ConfigKey for KafkaConnectionOptionName {
+    fn config_key(&self) -> String {
+        use KafkaConnectionOptionName::*;
+        match self {
+            Broker | Brokers => "bootstrap.servers",
+            SslKey => "ssl.key.pem",
+            SslKeyPassword => "ssl.key.password",
+            SslCertificate => "ssl.certificate.pem",
+            SslCertificateAuthority => "ssl.ca.pem",
+            SaslMechanisms => "sasl.mechanisms",
+            SaslUsername => "sasl.username",
+            SaslPassword => "sasl.password",
+        }
+        .to_string()
+    }
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
     pub brokers: Vec<String>,
     pub security: Option<Security>,
+}
+
+impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
+    fn from(v: KafkaConnection) -> Self {
+        use KafkaConnectionOptionName::*;
+        let mut r = BTreeMap::new();
+        r.insert("bootstrap.servers".into(), v.brokers.join(",").into());
+        match v.security {
+            Some(Security::Ssl(SslConfig {
+                key,
+                key_password,
+                certificate,
+                certificate_authority,
+            })) => {
+                r.insert("security.protocol".into(), "SSL".into());
+                r.insert(SslKey.config_key(), StringOrSecret::Secret(key));
+                r.insert(
+                    SslKeyPassword.config_key(),
+                    StringOrSecret::Secret(key_password),
+                );
+                r.insert(SslCertificate.config_key(), certificate);
+                r.insert(SslCertificateAuthority.config_key(), certificate_authority);
+            }
+            Some(Security::Sasl(SaslConfig {
+                mechanisms,
+                username,
+                password,
+                certificate_authority,
+            })) => {
+                r.insert("security.protocol".into(), "SASL_SSL".into());
+                r.insert(
+                    SaslMechanisms.config_key(),
+                    StringOrSecret::String(mechanisms),
+                );
+                r.insert(SaslUsername.config_key(), username);
+                r.insert(SaslPassword.config_key(), StringOrSecret::Secret(password));
+                r.insert(SslCertificateAuthority.config_key(), certificate_authority);
+            }
+            None => {}
+        }
+
+        r
+    }
+}
+
+impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
+    type Error = anyhow::Error;
+    /// Extracts only the options necessary to create a `KafkaConnection` from
+    /// a `BTreeMap<String, StringOrSecret>`, and returns the remaining
+    /// options.
+    ///
+    /// # Panics
+    /// - If `value` was not sufficiently or incorrectly type checked and
+    ///   parameters expected to reference objects (i.e. secrets) are instead
+    ///   `String`s, or vice versa.
+    fn try_from(map: &mut BTreeMap<String, StringOrSecret>) -> Result<Self, Self::Error> {
+        use KafkaConnectionOptionName::*;
+
+        let key_or_err = |config: &str,
+                          map: &mut BTreeMap<String, StringOrSecret>,
+                          key: KafkaConnectionOptionName| {
+            map.remove(&key.config_key()).ok_or_else(|| {
+                anyhow!(
+                    "invalid {} config: missing {} ({})",
+                    config.to_uppercase(),
+                    key,
+                    key.config_key(),
+                )
+            })
+        };
+
+        let security = if let Some(v) = map.remove("security.protocol") {
+            match v.unwrap_string().to_lowercase().as_str() {
+                config @ "ssl" => Some(Security::Ssl(SslConfig {
+                    key: key_or_err(config, map, SslKey)?.unwrap_secret(),
+                    key_password: key_or_err(config, map, SslKeyPassword)?.unwrap_secret(),
+                    certificate: key_or_err(config, map, SslCertificate)?,
+                    certificate_authority: key_or_err(config, map, SslCertificateAuthority)?,
+                })),
+                config @ "sasl_ssl" => Some(Security::Sasl(SaslConfig {
+                    mechanisms: key_or_err(config, map, SaslMechanisms)?
+                        .unwrap_string()
+                        .to_string(),
+                    username: key_or_err(config, map, SaslUsername)?,
+                    password: key_or_err(config, map, SaslPassword)?.unwrap_secret(),
+                    certificate_authority: key_or_err(config, map, SslCertificateAuthority)?,
+                })),
+                o => bail!("unsupported security.protocol: {}", o),
+            }
+        } else {
+            None
+        };
+
+        let brokers = match map.remove(&Broker.config_key()) {
+            Some(v) => KafkaAddrs::from_str(&v.unwrap_string())?
+                .to_string()
+                .split(',')
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            None => bail!("must specify {}", Broker.config_key()),
+        };
+
+        Ok(KafkaConnection { brokers, security })
+    }
 }
 
 impl RustType<ProtoKafkaConnectionSslConfig> for SslConfig {

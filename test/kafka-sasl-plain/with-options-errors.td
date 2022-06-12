@@ -47,4 +47,4 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
       ssl_ca_location = '/share/secrets/ca.crt'
   )
   ENVELOPE DEBEZIUM
-contains:sasl.password must be set
+contains:missing SASL PASSWORD

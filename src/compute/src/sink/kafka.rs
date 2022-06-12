@@ -49,6 +49,7 @@ use mz_dataflow_types::sinks::{
     KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
     SinkEnvelope,
 };
+use mz_dataflow_types::PopulateClientConfig;
 use mz_interchange::avro::{
     self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
 };
@@ -496,13 +497,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        for (k, v) in &connection.options {
-            config.set(
-                k,
-                futures::executor::block_on(v.get_string(&connection_context.secrets_reader))
-                    .unwrap(),
-            );
-        }
+        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
 
         // Ensure that messages are sinked in order and without duplicates. Note that
         // this only applies to a single instance of a producer - in the case of restarts,
@@ -543,13 +538,7 @@ impl KafkaSinkState {
         connection_context: &ConnectionContext,
     ) -> ClientConfig {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
-        for (k, v) in &connection.options {
-            config.set(
-                k,
-                futures::executor::block_on(v.get_string(&connection_context.secrets_reader))
-                    .unwrap(),
-            );
-        }
+        connection.populate_client_config(&mut config, &connection_context.secrets_reader);
 
         config
             .set(
