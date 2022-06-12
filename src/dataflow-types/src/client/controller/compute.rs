@@ -697,7 +697,7 @@ pub struct CollectionState<T> {
     ///
     /// Importantly, this is not a write capability, but what we have heard about the
     /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `upper_frontier.frontier()`.
+    /// equal to `write_frontier.frontier()`.
     pub write_frontier: MutableAntichain<T>,
 }
 

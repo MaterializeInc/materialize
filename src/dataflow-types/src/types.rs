@@ -475,9 +475,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// This method makes available an index previously exported as `id`, identified
     /// to the query by `description` (which names the view the index arranges, and
     /// the keys by which it is arranged).
-    ///
-    /// The `requesting_view` argument is currently necessary to correctly track the
-    /// dependencies of views on indexes.
     pub fn import_index(&mut self, id: GlobalId, description: IndexDesc, typ: RelationType) {
         self.index_imports.insert(id, (description, typ));
     }
@@ -501,7 +498,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         self.objects_to_build.push(BuildDesc { id, plan });
     }
 
-    /// Exports as `id` an index on `on_id`.
+    /// Exports as `id` an index described by `description`.
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
@@ -653,12 +650,10 @@ where
     /// Determine a unique id for this dataflow based on the indexes it exports.
     // TODO: The semantics of this function are only useful for command reconciliation at the moment.
     pub fn global_id(&self) -> Option<GlobalId> {
-        // TODO: This could be implemented without heap allocation.
-        let mut exports = self.export_ids().collect::<Vec<_>>();
-        exports.sort_unstable();
-        exports.dedup();
-        if exports.len() == 1 {
-            return exports.pop();
+        let mut exports = self.export_ids();
+        let id = exports.next()?;
+        if exports.all(|other_id| other_id == id) {
+            Some(id)
         } else {
             None
         }
