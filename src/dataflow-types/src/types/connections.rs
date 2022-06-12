@@ -89,6 +89,12 @@ impl RustType<ProtoStringOrSecret> for StringOrSecret {
     }
 }
 
+impl<V: std::string::ToString> From<V> for StringOrSecret {
+    fn from(v: V) -> StringOrSecret {
+        StringOrSecret::String(V::to_string(&v))
+    }
+}
+
 /// Extra context to pass through when instantiating a connection for a source
 /// or sink.
 ///

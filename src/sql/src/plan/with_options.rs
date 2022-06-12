@@ -12,10 +12,13 @@
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
+use mz_dataflow_types::connections::StringOrSecret;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
+use crate::names::ResolvedObjectName;
+use crate::plan::Aug;
 
 pub trait TryFromValue<T>: Sized {
     fn try_from_value(v: T) -> Result<Self, anyhow::Error>;
@@ -23,6 +26,23 @@ pub trait TryFromValue<T>: Sized {
 
 pub trait ImpliedValue: Sized {
     fn implied_value() -> Result<Self, anyhow::Error>;
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, anyhow::Error> {
+        Ok(match v {
+            WithOptionValue::Secret(ResolvedObjectName::Object { id, .. }) => {
+                StringOrSecret::Secret(id)
+            }
+            v => StringOrSecret::String(String::try_from_value(v)?),
+        })
+    }
+}
+
+impl ImpliedValue for StringOrSecret {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide a string or secret value")
+    }
 }
 
 impl TryFromValue<Value> for Interval {

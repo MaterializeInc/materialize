@@ -9,11 +9,17 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::convert::{self, TryInto};
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
+
+use rdkafka::client::ClientContext;
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::{Offset, TopicPartitionList};
+use reqwest::Url;
+use tokio::time::Duration;
 
 use mz_dataflow_types::connections::{
     CsrConnection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, StringOrSecret,
@@ -21,16 +27,15 @@ use mz_dataflow_types::connections::{
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
-use rdkafka::client::ClientContext;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::{Offset, TopicPartitionList};
-use reqwest::Url;
-use tokio::time::Duration;
-
-use mz_sql_parser::ast::Value;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{
+    KafkaConnectionOption, KafkaConnectionOptionName, Value, WithOptionValue,
+};
 
 use crate::catalog::{CatalogItemType, SessionCatalog};
+use crate::names::Aug;
 use crate::normalize::SqlValueOrSecret;
+use crate::plan::with_options::TryFromValue;
 
 enum ValType {
     String { transform: fn(String) -> String },
@@ -39,6 +44,126 @@ enum ValType {
     // Number with range [lower, upper]
     Number(i32, i32),
     Boolean,
+}
+
+impl ValType {
+    fn try_from_value(
+        &self,
+        catalog: &dyn SessionCatalog,
+        v: Option<WithOptionValue<Aug>>,
+    ) -> Result<StringOrSecret, anyhow::Error> {
+        let s = match self {
+            ValType::String { transform } => {
+                let s = String::try_from_value(v)?;
+                transform(s).into()
+            }
+            ValType::StringOrSecret => StringOrSecret::try_from_value(v)?,
+            ValType::Secret => match StringOrSecret::try_from_value(v)? {
+                StringOrSecret::String(_) => bail!("must provide a secret"),
+                secret @ StringOrSecret::Secret(_) => secret,
+            },
+            ValType::Number(lower, upper) => {
+                let i = i32::try_from_value(v)?;
+                if i < *lower || *upper < i {
+                    bail!("must be a number between {} and {}", lower, upper)
+                }
+                i.into()
+            }
+            ValType::Boolean => bool::try_from_value(v)?.into(),
+        };
+        validate_secret(catalog, &s)?;
+        Ok(s)
+    }
+}
+
+fn validate_secret(
+    catalog: &dyn SessionCatalog,
+    s: &mz_dataflow_types::connections::StringOrSecret,
+) -> Result<(), anyhow::Error> {
+    if let StringOrSecret::Secret(id) = s {
+        let item = catalog.get_item(&id);
+        if item.item_type() != CatalogItemType::Secret {
+            bail!(
+                "'{}' is not a SECRET",
+                catalog.resolve_full_name(&item.name())
+            );
+        }
+    }
+
+    Ok(())
+}
+
+trait ConfigGen {
+    fn config_key(&self) -> &str;
+    fn config_val(&self) -> ValType;
+}
+
+impl ConfigGen for KafkaConnectionOptionName {
+    fn config_key(&self) -> &str {
+        match self {
+            KafkaConnectionOptionName::SslKey => "ssl.key.pem",
+            KafkaConnectionOptionName::SslKeyPassword => "ssl.key.password",
+            KafkaConnectionOptionName::SslCertificate => "ssl.certificate.pem",
+            KafkaConnectionOptionName::SslCertificateAuthority => "ssl.ca.pem",
+            _ => unreachable!(),
+        }
+    }
+
+    fn config_val(&self) -> ValType {
+        match self {
+            KafkaConnectionOptionName::SslKey => ValType::Secret,
+            KafkaConnectionOptionName::SslKeyPassword => ValType::Secret,
+            KafkaConnectionOptionName::SslCertificate => ValType::StringOrSecret,
+            KafkaConnectionOptionName::SslCertificateAuthority => ValType::StringOrSecret,
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub fn kafka_connection_config(
+    catalog: &dyn SessionCatalog,
+    options: Vec<KafkaConnectionOption<Aug>>,
+) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
+    let mut group = None;
+    let mut seen = HashSet::<KafkaConnectionOptionName>::new();
+    let mut res = BTreeMap::new();
+    for KafkaConnectionOption { name, value } in options {
+        match group {
+            None => group = Some(name.group()),
+            Some(g) => {
+                if g != name.group() {
+                    debug_assert!(false, "parsed too many groups");
+                    bail!("invalid connector; too many types of configuration permitted");
+                }
+            }
+        }
+        if !seen.insert(name.clone()) {
+            bail!(
+                "{} ({}...) specified more than once",
+                group.unwrap(),
+                name.to_ast_string()
+            );
+        }
+
+        assert!(res
+            .insert(
+                name.config_key().to_string(),
+                name.config_val().try_from_value(catalog, value)?,
+            )
+            .is_none());
+    }
+
+    assert!(res
+        .insert(
+            "security.protocol".to_string(),
+            match group {
+                Some("SSL") => StringOrSecret::from("ssl"),
+                _ => unreachable!(),
+            },
+        )
+        .is_none());
+
+    Ok(res)
 }
 
 // Describes Kafka cluster configurations users can supply using `CREATE
@@ -144,15 +269,7 @@ fn extract(
                 );
             }
         };
-        if let StringOrSecret::Secret(id) = value {
-            let item = catalog.get_item(&id);
-            if item.item_type() != CatalogItemType::Secret {
-                bail!(
-                    "{} is not a SECRET",
-                    catalog.resolve_full_name(&item.name())
-                );
-            }
-        }
+        validate_secret(catalog, &value)?;
         out.insert(config.get_kafka_config_key(), value);
     }
     Ok(out)
