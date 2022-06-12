@@ -21,11 +21,12 @@ use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
 use axum::response::Response;
-use axum::{routing, Router};
+use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use postgres::Row;
 use regex::Regex;
+use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
@@ -148,6 +149,83 @@ fn test_no_block() -> Result<(), anyhow::Error> {
 
             Ok(())
         })
+    })
+}
+
+/// Test that dropping a connection while a source is undergoing purification
+/// does not crash the server.
+#[test]
+fn test_drop_connection_race() -> Result<(), anyhow::Error> {
+    mz_ore::test::init_logging();
+
+    info!("test_drop_connection_race: starting server");
+    let server = util::start_server(util::Config::default().unsafe_mode())?;
+
+    server.runtime.block_on(async {
+        info!("test_drop_connection_race: starting mock HTTP server");
+        let mut schema_registry_server = MockHttpServer::new();
+
+        // Construct a source that depends on a schema registry connection.
+        let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+        client
+            .batch_execute(&format!(
+                "CREATE CONNECTION conn FOR CONFLUENT SCHEMA REGISTRY 'http://{}'",
+                schema_registry_server.addr,
+            ))
+            .await?;
+        let source_task = task::spawn(|| "source_client", async move {
+            info!("test_drop_connection_race: in task; creating connection and source");
+            let result = client
+                .batch_execute(&format!(
+                    "CREATE SOURCE foo \
+                     FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn",
+                    &*KAFKA_ADDRS,
+                ))
+                .await;
+            info!(
+                "test_drop_connection_race: in task; create source done: {:?}",
+                result
+            );
+            result
+        });
+
+        // Wait for Materialize to contact the schema registry, which indicates
+        // the coordinator is processing the CREATE SOURCE command. It will be
+        // unable to complete the query until we respond.
+        info!("test_drop_connection_race: accepting fake schema registry connection");
+        let response_tx = schema_registry_server.accept().await;
+
+        // Drop the connection on which the source depends.
+        info!("test_drop_connection_race: dropping connection");
+        let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+        client.batch_execute("DROP CONNECTION conn").await?;
+
+        let schema = Json(json!({
+            "id": 1_i64,
+            "subject": "foo-value",
+            "version": 1_i64,
+            "schema": r#"{"type": "long"}"#,
+        }));
+
+        info!("test_drop_connection_race: sending fake schema registry response");
+        response_tx
+            .send(schema.clone().into_response())
+            .expect("server unexpectedly closed channel");
+        info!("test_drop_connection_race: sending fake schema registry response again");
+        let response_tx = schema_registry_server.accept().await;
+        response_tx
+            .send(schema.into_response())
+            .expect("server unexpectedly closed channel");
+
+        info!("test_drop_connection_race: asserting response");
+        let source_res = source_task.await.unwrap();
+        assert_contains!(
+            source_res.unwrap_err().to_string(),
+            "unknown catalog item 'conn'"
+        );
+
+        Ok(())
     })
 }
 
