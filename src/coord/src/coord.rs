@@ -213,6 +213,7 @@ pub struct CreateSourceStatementReady {
     pub result: Result<CreateSourceStatement<Aug>, CoordError>,
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
+    pub original_stmt: Statement<Raw>,
 }
 
 /// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
@@ -1237,6 +1238,7 @@ impl<S: Append + 'static> Coordinator<S> {
             result,
             params,
             depends_on,
+            original_stmt,
         }: CreateSourceStatementReady,
     ) {
         let stmt = match result {
@@ -1244,12 +1246,21 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        // Ensure that all dependencies still exist after purification.
+        // Ensure that all dependencies still exist after purification, as a
+        // `DROP CONNECTION` may have sneaked in. If any have gone missing, we
+        // repurify the original statement. This will either produce a nice
+        // "unknown connector" error, or pick up a new connector that has
+        // replaced the dropped connector.
+        //
+        // WARNING: If we support `ALTER CONNECTION`, we'll need to also check
+        // for connectors that were altered while we were purifying.
         if !depends_on
             .iter()
             .all(|id| self.catalog.try_get_entry(id).is_some())
         {
-            return tx.send(Err(CoordError::ChangedPlan), session);
+            self.handle_execute_inner(original_stmt, params, session, tx)
+                .await;
+            return;
         }
 
         let plan = match self
@@ -1710,10 +1721,20 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("known to exist");
 
         let stmt = match &portal.stmt {
-            Some(stmt) => stmt,
+            Some(stmt) => stmt.clone(),
             None => return tx.send(Ok(ExecuteResponse::EmptyQuery), session),
         };
+        let params = portal.parameters.clone();
+        self.handle_execute_inner(stmt, params, session, tx).await
+    }
 
+    async fn handle_execute_inner(
+        &mut self,
+        stmt: Statement<Raw>,
+        params: Params,
+        mut session: Session,
+        tx: ClientTransmitter<ExecuteResponse>,
+    ) {
         // Verify that this statement type can be executed in the current
         // transaction state.
         match session.transaction() {
@@ -1840,13 +1861,12 @@ impl<S: Append + 'static> Coordinator<S> {
         }
 
         let catalog = self.catalog.for_session(&session);
-        let stmt = stmt.clone();
+        let original_stmt = stmt.clone();
         let (stmt, depends_on) = match mz_sql::names::resolve(&catalog, stmt) {
             Ok(resolved) => resolved,
             Err(e) => return tx.send(Err(e.into()), session),
         };
         let depends_on = depends_on.into_iter().collect();
-        let params = portal.parameters.clone();
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
         // purification.  This should be done back on the main thread.
         // We do the validation:
@@ -1859,7 +1879,6 @@ impl<S: Append + 'static> Coordinator<S> {
             Statement::CreateSource(stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let conn_id = session.conn_id();
-                let params = portal.parameters.clone();
                 let purify_fut = mz_sql::pure::purify_create_source(
                     Box::new(catalog.into_owned()),
                     self.now(),
@@ -1876,6 +1895,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 result,
                                 params,
                                 depends_on,
+                                original_stmt,
                             },
                         ))
                         .expect("sending to internal_cmd_tx cannot fail");
