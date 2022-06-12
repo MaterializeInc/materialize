@@ -420,7 +420,13 @@ impl Optimizer {
     ///
     /// This method should only be called with non-empty `indexes` when optimizing a dataflow,
     /// as the optimizations may lock in the use of arrangements that may cease to exist.
-    #[tracing::instrument(level = "trace", name="mir_optimize", skip_all, fields(optimize.pipeline = %self.name))]
+    #[tracing::instrument(
+        target = "optimizer",
+        level = "trace",
+        name = "mir_optimize",
+        skip_all,
+        fields(optimize.pipeline = %self.name)
+    )]
     fn transform(
         &self,
         relation: &mut MirRelationExpr,

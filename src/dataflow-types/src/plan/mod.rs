@@ -880,6 +880,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     /// An empty list of arrangement keys indicates that only a `Collection` stream can
     /// be assumed to exist.
     #[tracing::instrument(
+        target = "optimizer"
         level = "trace",
         name = "mir_to_lir",
         skip_all,

@@ -28,7 +28,7 @@ use crate::{monotonic::MonotonicFlag, IndexOracle, Optimizer, TransformError};
 /// Inlines views, performs a full optimization pass including physical
 /// planning using the supplied indexes, propagates filtering and projection
 /// information to dataflow sources and lifts monotonicity information.
-#[tracing::instrument(level = "trace", skip_all)]
+#[tracing::instrument(target = "optimizer", level = "trace", skip_all)]
 pub fn optimize_dataflow(
     dataflow: &mut DataflowDesc,
     indexes: &dyn IndexOracle,
