@@ -43,7 +43,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # that no erroneous retractions will be issued.
 #
 
-$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 INSERT INTO deletes VALUES (123), (123), (NULL), (999);
 SELECT * FROM v1;
 

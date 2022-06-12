@@ -12,7 +12,7 @@ use std::time::Duration;
 use assert_cmd::Command;
 
 fn cmd() -> Command {
-    let mut cmd = Command::cargo_bin("materialized").unwrap();
+    let mut cmd = Command::cargo_bin("environmentd").unwrap();
     cmd.env_clear().timeout(Duration::from_secs(10));
     cmd
 }
@@ -22,15 +22,15 @@ fn cmd() -> Command {
 #[test]
 fn test_version() {
     // We don't make assertions about the build SHA because caching in CI can
-    // cause the test binary and `materialized` to have different embedded SHAs.
-    let expected_version = materialized::BUILD_INFO.version;
+    // cause the test binary and `environmentd` to have different embedded SHAs.
+    let expected_version = mz_environmentd::BUILD_INFO.version;
     assert!(!expected_version.is_empty());
     cmd()
         .arg("-V")
         .assert()
         .success()
         .stdout(predicates::str::starts_with(format!(
-            "materialized v{}",
+            "environmentd v{}",
             expected_version
         )));
 }

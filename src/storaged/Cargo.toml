@@ -1,5 +1,5 @@
 [package]
-name = "storaged"
+name = "mz-storaged"
 description = "Materialize's storage server."
 version = "0.26.1-dev"
 edition = "2021"

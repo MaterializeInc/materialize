@@ -57,7 +57,7 @@ SERVICES = [
             ".:/workdir/smoke",
             "../testdrive:/workdir/testdrive",
         ],
-        materialized_params={"cluster": "cluster1"},
+        materialize_params={"cluster": "cluster1"},
     ),
 ]
 

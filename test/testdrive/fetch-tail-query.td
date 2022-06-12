@@ -50,7 +50,7 @@ $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 <TIMESTAMP> 1 123
 
 # Insert a value from another connection that is not a new maximum.
-$ postgres-connect name=alt url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
+$ postgres-connect name=alt url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 $ postgres-execute connection=alt
 INSERT INTO t1 VALUES (100)
 

@@ -218,7 +218,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             Testdrive(
                 validate_data_dir=False,
                 no_reset=True,
-                materialized_params={"cluster": "cluster1"},
+                materialize_params={"cluster": "cluster1"},
                 seed=id,
             )
         ):

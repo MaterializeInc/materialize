@@ -416,7 +416,7 @@ impl PostgresTaskInfo {
                             "Error validating table in publication. Expected: {:?} Actual: {:?}",
                             schema, pub_schema
                         );
-                        bail!("Schema for table {} differs, recreate materialized source to use new schema", schema.name)
+                        bail!("Schema for table {} differs, recreate Materialize source to use new schema", schema.name)
                     }
                 }
                 None => {

@@ -62,7 +62,7 @@ contains:unknown role 'bad'
 > DROP ROLE IF EXISTS nlb
 
 # No dropping the current role.
-! DROP ROLE ${testdrive.materialized-user}
+! DROP ROLE ${testdrive.materialize-user}
 contains:current user cannot be dropped
 
 # No creating roles that already exist.

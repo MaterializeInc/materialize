@@ -1,30 +1,12 @@
 [package]
-name = "materialized"
-description = "Streaming SQL materialized views."
+name = "mz-environmentd"
+description = "Manages a single Materialize environment."
 version = "0.26.1-dev"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition = "2021"
 rust-version = "1.61.0"
 publish = false
-default-run = "materialized"
-
-[package.metadata.deb]
-assets = [
-    ["../../misc/dist/materialized.service", "lib/systemd/system/", "644"],
-    ["target/release/materialized", "usr/bin/", "755"],
-]
-conflicts = "materialized"
-depends = "libc6 (>= 2.12.1)"
-maintainer-scripts = "misc/dist/deb-scripts"
-
-[package.metadata.deb.variants.materialized]
-conflicts = "materialized-unstable"
-name = "materialized"
-
-[package.metadata.deb.variants.materialized-unstable]
-conflicts = "materialized"
-name = "materialized-unstable"
 
 [dependencies]
 anyhow = "1.0.57"

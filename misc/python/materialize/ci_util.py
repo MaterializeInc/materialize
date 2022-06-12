@@ -14,32 +14,7 @@ from pathlib import Path
 
 import requests
 
-from materialize import mzbuild, spawn, ui
-
-
-def acquire_materialized(repo: mzbuild.Repository, out: Path) -> None:
-    """Acquire a Linux materialized binary from the materialized Docker image.
-
-    This avoids an expensive rebuild if a Docker image is available from Docker
-    Hub.
-    """
-    deps = repo.resolve_dependencies([repo.images["materialized"]])
-    deps.acquire()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "wb") as f:
-        spawn.runv(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--entrypoint",
-                "cat",
-                deps["materialized"].spec(),
-                "/usr/local/bin/materialized",
-            ],
-            stdout=f,
-        )
-    mzbuild.chmod_x(out)
+from materialize import ui
 
 
 def junit_report_filename(suite: str) -> Path:

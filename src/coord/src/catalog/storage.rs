@@ -184,7 +184,7 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
         //
         // Please include @benesch on any code reviews that add or edit migrations.
         // Migrations must preserve backwards compatibility with all past releases
-        // of materialized. Migrations can be edited up until they ship in a
+        // of Materialize. Migrations can be edited up until they ship in a
         // release, after which they must never be removed, only patched by future
         // migrations. Migrations must be transactional or idempotent (in case of
         // midway failure).

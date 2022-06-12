@@ -404,8 +404,6 @@ class CargoTest(CargoPreImage):
                 )
                 package = slug.replace(".", "::")
                 manifest.write(f"{slug} {package} {crate_path}\n")
-        shutil.move(self.path / "materialized", self.path / "tests")
-        shutil.move(self.path / "testdrive", self.path / "tests")
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
     def inputs(self) -> Set[str]:

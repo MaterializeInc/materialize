@@ -23,8 +23,8 @@ use std::time::Duration;
 use tokio::io;
 use tracing::info;
 
-const FIELD_MANAGER: &str = "materialized";
-const POD_ANNOTATION: &str = "materialized.materialize.cloud/secret-refresh";
+const FIELD_MANAGER: &str = "environmentd";
+const POD_ANNOTATION: &str = "environmentd.materialize.cloud/secret-refresh";
 const POLL_TIMEOUT: u64 = 120;
 
 pub struct KubernetesSecretsControllerConfig {

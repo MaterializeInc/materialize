@@ -75,7 +75,7 @@ steps:
     command: bin/check
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTUP_TOOLCHAIN: $MATERIALIZED_RUST_VERSION
+      RUSTUP_TOOLCHAIN: $ENVIRONMENTD_RUST_VERSION
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"

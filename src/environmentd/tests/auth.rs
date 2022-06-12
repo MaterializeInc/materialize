@@ -51,7 +51,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use materialized::TlsMode;
+use mz_environmentd::TlsMode;
 use mz_frontegg_auth::{
     ApiTokenArgs, ApiTokenResponse, Claims, FronteggAuthentication, FronteggConfig, RefreshToken,
     REFRESH_SUFFIX,

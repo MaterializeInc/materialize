@@ -22,10 +22,10 @@ if [[ $# -ne 1 ]]; then
 fi
 username=$1
 
-for image in materialized-slim storaged computed; do
+for image in environmentd storaged computed; do
     bin/mzimage acquire --arch=x86_64 "$image"
     docker tag "$(bin/mzimage spec "$image")" "$username/$image"
     docker push "$username/$image"
 done
 
-echo "Launch environment with materialized image ref \`$username/materialized-slim:latest\`"
+echo "Launch environment with materialized image ref \`$username/environmentd-slim:latest\`"
