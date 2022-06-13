@@ -299,7 +299,8 @@ pub struct OpenTelemetryContext {
 }
 
 impl OpenTelemetryContext {
-    /// Attaches this `Context` to the current [`tracing`] span.
+    /// Attaches this `Context` to the current [`tracing`] span,
+    /// as its parent.
     ///
     /// If there is not enough information in this `OpenTelemetryContext`
     /// to create a context, then the current thread's `Context` is used
