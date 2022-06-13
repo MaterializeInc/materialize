@@ -3609,7 +3609,7 @@ impl<S: Append + 'static> Coordinator<S> {
         DropComputeInstanceReplicaPlan { names }: DropComputeInstanceReplicaPlan,
     ) {
         if names.is_empty() {
-            return;
+            return tx.send(Ok(ExecuteResponse::DroppedComputeInstanceReplicas), session);
         }
         let mut ops = Vec::with_capacity(names.len());
         let mut replicas_to_drop = Vec::with_capacity(names.len());
