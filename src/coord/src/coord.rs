@@ -1909,12 +1909,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         // is always safe.
                     }
 
-                    Statement::AlterSecret(_)
-                        if self.secrets_controller.supports_multi_statement_txn() =>
-                    {
-                        // if the controller supports this, its safe combine
-                    }
-
                     // Statements below must by run singly (in Started).
                     Statement::AlterIndex(_)
                     | Statement::AlterSecret(_)
@@ -2342,10 +2336,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_alter_index_reset_options(plan).await, session);
             }
             Plan::AlterSecret(plan) => {
-                tx.send(
-                    self.sequence_alter_secret(&mut session, plan).await,
-                    session,
-                );
+                tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(Some((tx, ExecuteResponse::DiscardedTemp)), session)
@@ -3810,9 +3801,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
                         return Ok(Some(writes));
                     }
-                    TransactionOps::Secrets(secrets) => {
-                        self.secrets_controller.apply(secrets).await?
-                    }
                     _ => {}
                 }
             }
@@ -5217,17 +5205,19 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_alter_secret(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan: AlterSecretPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let AlterSecretPlan { id, mut secret_as } = plan;
 
         let payload = self.extract_secret(session, &mut secret_as)?;
 
-        session.add_transaction_ops(TransactionOps::Secrets(vec![SecretOp::Ensure {
-            id,
-            contents: payload,
-        }]))?;
+        self.secrets_controller
+            .apply(vec![SecretOp::Ensure {
+                id,
+                contents: payload,
+            }])
+            .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Secret))
     }
