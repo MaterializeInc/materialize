@@ -271,6 +271,17 @@ pub enum PeekResponseUnary {
     Canceled,
 }
 
+struct GroupCommit {
+    pending_writes: Vec<PendingWriteTxn>,
+    table_advances: HashSet<GlobalId>,
+}
+
+impl GroupCommit {
+    fn is_empty(&self) -> bool {
+        self.pending_writes.is_empty() && self.table_advances.is_empty()
+    }
+}
+
 /// A pending write transaction that will be committed during the next group commit.
 enum PendingWriteTxn {
     /// User initiated transaction.
@@ -286,8 +297,6 @@ enum PendingWriteTxn {
     },
     /// System initiated writes.
     System { writes: Vec<BuiltinTableUpdate> },
-    /// Periodic table advancements.
-    TableAdvancement { id: GlobalId },
 }
 
 enum Write {
@@ -509,7 +518,7 @@ pub struct Coordinator<S> {
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
     /// Pending writes waiting for a group commit
-    pending_writes: Vec<PendingWriteTxn>,
+    pending_group_commit: GroupCommit,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -902,9 +911,7 @@ impl<S: Append + 'static> Coordinator<S> {
     // which means that it can no longer produce new data before the assigned timestamp.
     #[tracing::instrument(level = "debug", skip(self))]
     async fn advance_local_input(&mut self, inputs: AdvanceLocalInput) {
-        for id in inputs.ids {
-            self.submit_write(PendingWriteTxn::TableAdvancement { id })
-        }
+        self.submit_table_advancement(inputs.ids);
         // TODO(jkosh44) How do we dynamically adjust now that table advancments are thrown in with
         //group commit.
 
@@ -1091,14 +1098,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 Message::ComputeInstanceStatus(status) => {
                     self.message_compute_instance_status(status).await
-                } // TODO(jkosh44) Think about this for a bit, we never look at should_advance
-                  // anymore, which means we may not advance after a read??? Right now since all
-                  // writes put us in read mode we happen to never need to advance due to a read,
-                  // but that may not always be the case. Maybe there should be a way to modify the
-                  // timestamp of group commit?
-                  // This might be ok right now.
-                  // We also blindly send advancements even if the current time hasn't advanced.
-                  // This might also be ok, because we expect the current time to advance.
+                }
             }
         }
     }
@@ -1125,7 +1125,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
     async fn try_group_commit(&mut self, write_timestamp: Option<WriteTimestamp>) {
-        if self.pending_writes.is_empty() {
+        if self.pending_group_commit.is_empty() {
             return;
         }
 
@@ -1182,7 +1182,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         let mut responses = Vec::new();
 
-        for pending_write_txn in self.pending_writes.drain(..) {
+        for pending_write_txn in self.pending_group_commit.pending_writes.drain(..) {
             match pending_write_txn {
                 PendingWriteTxn::User {
                     writes,
@@ -1212,9 +1212,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     responses.push((client_transmitter, response, session));
                 }
-                PendingWriteTxn::TableAdvancement { id } => {
-                    appends.entry(id).or_insert(Vec::new());
-                }
                 PendingWriteTxn::System { writes } => {
                     for write in writes {
                         appends.entry(write.id).or_default().push(Update {
@@ -1225,6 +1222,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
             }
+        }
+        for id in self.pending_group_commit.table_advances.drain() {
+            appends.entry(id).or_insert(Vec::new());
         }
         let appends = appends
             .into_iter()
@@ -1242,12 +1242,25 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Submit a write to be executed during the next group commit.
     fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        if self.pending_writes.is_empty() {
+        if self.pending_group_commit.is_empty() {
             self.internal_cmd_tx
                 .send(Message::GroupCommit(None))
                 .expect("sending to internal_cmd_tx cannot fail");
         }
-        self.pending_writes.push(pending_write_txn);
+        self.pending_group_commit
+            .pending_writes
+            .push(pending_write_txn);
+    }
+
+    /// Submit a table to be advanced during the next group commit.
+    /// TODO(jkosh44)
+    fn submit_table_advancement(&mut self, ids: Vec<GlobalId>) {
+        if self.pending_group_commit.is_empty() {
+            self.internal_cmd_tx
+                .send(Message::GroupCommit(None))
+                .expect("sending to internal_cmd_tx cannot fail");
+        }
+        self.pending_group_commit.table_advances.extend(ids);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1991,6 +2004,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
             // Cancel pending writes. There is at most one pending write per session.
             if let Some(idx) = self
+                .pending_group_commit
                 .pending_writes
                 .iter()
                 .position(|pending_write_txn| matches!(pending_write_txn, PendingWriteTxn::User {session, ..} if session.conn_id() == conn_id))
@@ -1999,7 +2013,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     client_transmitter,
                     session,
                     ..
-                } = self.pending_writes.remove(idx) {
+                } = self.pending_group_commit.pending_writes.remove(idx) {
                     let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
                 }
             }
@@ -5823,7 +5837,7 @@ pub async fn serve<S: Append + 'static>(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
-                pending_writes: Vec::new(),
+                pending_group_commit: Vec::new(),
                 secrets_controller,
                 replica_sizes,
                 availability_zones,
