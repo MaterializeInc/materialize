@@ -30,6 +30,13 @@ pub struct ReadCapability<T> {
     pub since: Antichain<T>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct HollowBatch<T> {
+    pub(crate) desc: Description<T>,
+    pub(crate) keys: Vec<String>,
+    pub(crate) len: usize,
+}
+
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {

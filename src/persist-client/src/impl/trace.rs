@@ -9,11 +9,106 @@
 
 use std::fmt::Debug;
 
-use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::{Batch, Builder, Merger};
-use timely::progress::Timestamp;
-use timely::progress::{frontier::AntichainRef, Antichain};
+use differential_dataflow::trace::Description;
+use timely::progress::frontier::AntichainRef;
+use timely::progress::{Antichain, Timestamp};
+
+use crate::r#impl::state::HollowBatch;
+
+#[derive(Debug, Clone)]
+enum SpineBatch<T> {
+    Merged(HollowBatch<T>),
+    Fueled {
+        desc: Description<T>,
+        parts: Vec<HollowBatch<T>>,
+    },
+}
+
+impl<T: Timestamp + Lattice> SpineBatch<T> {
+    pub fn lower(&self) -> &Antichain<T> {
+        self.desc().lower()
+    }
+
+    pub fn upper(&self) -> &Antichain<T> {
+        self.desc().upper()
+    }
+
+    fn desc(&self) -> &Description<T> {
+        match self {
+            SpineBatch::Merged(HollowBatch { desc, .. }) => desc,
+            SpineBatch::Fueled { desc, .. } => desc,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            SpineBatch::Merged(HollowBatch { len, .. }) => *len,
+            // NB: This is an upper bound on len, we won't know for sure until
+            // we compact it.
+            SpineBatch::Fueled { parts, .. } => parts.iter().map(|b| b.len).sum(),
+        }
+    }
+
+    pub fn begin_merge(
+        b1: &Self,
+        b2: &Self,
+        compaction_frontier: Option<AntichainRef<T>>,
+    ) -> FuelingMerge<T> {
+        let mut since = b1.desc().since().join(b2.desc().since());
+        if let Some(compaction_frontier) = compaction_frontier {
+            since = since.join(&compaction_frontier.to_owned());
+        }
+        FuelingMerge {
+            b1: b1.clone(),
+            b2: b2.clone(),
+            since: since.to_owned(),
+            progress: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FuelingMerge<T> {
+    b1: SpineBatch<T>,
+    b2: SpineBatch<T>,
+    since: Antichain<T>,
+    progress: usize,
+}
+
+impl<T: Timestamp + Lattice> FuelingMerge<T> {
+    /// Perform some amount of work, decrementing `fuel`.
+    ///
+    /// If `fuel` is non-zero after the call, the merging is complete and one
+    /// should call `done` to extract the merged results.
+    fn work(&mut self, _: &SpineBatch<T>, _: &SpineBatch<T>, fuel: &mut isize) {
+        let remaining = self.b1.len() + self.b2.len() - self.progress;
+        let used = std::cmp::min(*fuel as usize, remaining);
+        self.progress += used;
+        *fuel -= used as isize;
+    }
+
+    /// Extracts merged results.
+    ///
+    /// This method should only be called after `work` has been called and has
+    /// not brought `fuel` to zero. Otherwise, the merge is still in progress.
+    fn done(self) -> SpineBatch<T> {
+        let desc = Description::new(self.b1.lower().clone(), self.b2.upper().clone(), self.since);
+
+        let mut merged_parts = Vec::new();
+        let mut append_parts = |b| match b {
+            SpineBatch::Merged(b) => merged_parts.push(b),
+            SpineBatch::Fueled { parts, .. } => merged_parts.extend_from_slice(&parts),
+        };
+        append_parts(self.b1);
+        append_parts(self.b2);
+
+        SpineBatch::Fueled {
+            desc,
+            parts: merged_parts,
+        }
+    }
+}
 
 /// An append-only collection of update batches.
 ///
@@ -97,25 +192,14 @@ use timely::progress::{frontier::AntichainRef, Antichain};
 /// low layers: they should still extract fuel from new updates even though they
 /// have completed, at least until they have paid back any "debt" to higher
 /// layers by continuing to provide fuel as updates arrive.
-pub struct Spine<B: Batch>
-where
-    B::Time: Lattice + Ord,
-    B::R: Semigroup,
-{
-    logical_frontier: Antichain<B::Time>,
-    merging: Vec<MergeState<B>>,
-    upper: Antichain<B::Time>,
+struct Spine<T> {
     effort: usize,
+    since: Antichain<T>,
+    upper: Antichain<T>,
+    merging: Vec<MergeState<T>>,
 }
 
-impl<B> Spine<B>
-where
-    B: Batch + Clone + 'static,
-    B::Key: Ord + Clone, // Clone is required by `batch::advance_*` (in-place could remove).
-    B::Val: Ord + Clone, // Clone is required by `batch::advance_*` (in-place could remove).
-    B::Time: Lattice + timely::progress::Timestamp + Ord + Clone + Debug,
-    B::R: Semigroup,
-{
+impl<T: Timestamp + Lattice> Spine<T> {
     /// Allocates a fueled `Spine`.
     ///
     /// This trace will merge batches progressively, with each inserted batch
@@ -124,19 +208,17 @@ where
     /// for the merging to happen; a value of zero is not helpful.
     pub fn new() -> Self {
         Spine {
-            logical_frontier: Antichain::from_elem(
-                <B::Time as timely::progress::Timestamp>::minimum(),
-            ),
-            merging: Vec::new(),
-            upper: Antichain::from_elem(<B::Time as timely::progress::Timestamp>::minimum()),
             effort: 1,
+            since: Antichain::from_elem(T::minimum()),
+            upper: Antichain::from_elem(T::minimum()),
+            merging: Vec::new(),
         }
     }
 
     // Ideally, this method acts as insertion of `batch`, even if we are not yet
     // able to begin merging the batch. This means it is a good time to perform
     // amortized work proportional to the size of batch.
-    pub fn insert(&mut self, batch: B) {
+    pub fn insert(&mut self, batch: SpineBatch<T>) {
         assert!(batch.lower() != batch.upper());
         assert_eq!(batch.lower(), &self.upper);
 
@@ -186,7 +268,7 @@ where
         }
     }
 
-    pub fn map_batches<F: FnMut(&B)>(&self, mut f: F) {
+    pub fn map_batches<F: FnMut(&SpineBatch<T>)>(&self, mut f: F) {
         for batch in self.merging.iter().rev() {
             match batch {
                 MergeState::Double(MergeVariant::InProgress(batch1, batch2, _)) => {
@@ -241,7 +323,7 @@ where
     /// The level indication is often related to the size of the batch, but it
     /// can also be used to artificially fuel the computation by supplying empty
     /// batches at non-trivial indices, to move merges along.
-    pub fn introduce_batch(&mut self, batch: Option<B>, batch_index: usize) {
+    fn introduce_batch(&mut self, batch: Option<SpineBatch<T>>, batch_index: usize) {
         // Step 0.  Determine an amount of fuel to use for the computation.
         //
         //          Fuel is used to drive maintenance of the data structure,
@@ -397,7 +479,7 @@ where
     /// This is a non-public internal method that can panic if we try and insert
     /// into a layer which already contains two batches (and is still in the
     /// process of merging).
-    fn insert_at(&mut self, batch: Option<B>, index: usize) {
+    fn insert_at(&mut self, batch: Option<SpineBatch<T>>, index: usize) {
         // Ensure the spine is large enough.
         while self.merging.len() <= index {
             self.merging.push(MergeState::Vacant);
@@ -409,7 +491,7 @@ where
                 self.merging[index] = MergeState::Single(batch);
             }
             MergeState::Single(old) => {
-                let compaction_frontier = Some(self.logical_frontier.borrow());
+                let compaction_frontier = Some(self.since.borrow());
                 self.merging[index] = MergeState::begin_merge(old, batch, compaction_frontier);
             }
             MergeState::Double(_) => {
@@ -419,7 +501,7 @@ where
     }
 
     /// Completes and extracts what ever is at layer `index`.
-    fn complete_at(&mut self, index: usize) -> Option<B> {
+    fn complete_at(&mut self, index: usize) -> Option<SpineBatch<T>> {
         if let Some((merged, _)) = self.merging[index].complete() {
             Some(merged)
         } else {
@@ -497,22 +579,19 @@ where
 ///
 /// A layer can be empty, contain a single batch, or contain a pair of batches
 /// that are in the process of merging into a batch for the next layer.
-enum MergeState<B: Batch> {
+enum MergeState<T> {
     /// An empty layer, containing no updates.
     Vacant,
     /// A layer containing a single batch.
     ///
     /// The `None` variant is used to represent a structurally empty batch
     /// present to ensure the progress of maintenance work.
-    Single(Option<B>),
+    Single(Option<SpineBatch<T>>),
     /// A layer containing two batches, in the process of merging.
-    Double(MergeVariant<B>),
+    Double(MergeVariant<T>),
 }
 
-impl<B: Batch> MergeState<B>
-where
-    B::Time: Eq,
-{
+impl<T: Timestamp + Lattice> MergeState<T> {
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
         match self {
@@ -557,8 +636,8 @@ where
     /// distinguish between Vacant entries and structurally empty batches, which
     /// should be done with the `is_complete()` method.
     ///
-    /// There is the addional option of input batches.
-    fn complete(&mut self) -> Option<(B, Option<(B, B)>)> {
+    /// There is the additional option of input batches.
+    fn complete(&mut self) -> Option<(SpineBatch<T>, Option<(SpineBatch<T>, SpineBatch<T>)>)> {
         match std::mem::replace(self, MergeState::Vacant) {
             MergeState::Vacant => None,
             MergeState::Single(batch) => batch.map(|b| (b, None)),
@@ -600,18 +679,18 @@ where
     /// of the new batch.
     ///
     /// Either batch may be `None` which corresponds to a structurally empty
-    /// batch whose upper and lower froniers are equal. This option exists
+    /// batch whose upper and lower frontiers are equal. This option exists
     /// purely for bookkeeping purposes, and no computation is performed to
     /// merge the two batches.
     fn begin_merge(
-        batch1: Option<B>,
-        batch2: Option<B>,
-        compaction_frontier: Option<AntichainRef<B::Time>>,
-    ) -> MergeState<B> {
+        batch1: Option<SpineBatch<T>>,
+        batch2: Option<SpineBatch<T>>,
+        compaction_frontier: Option<AntichainRef<T>>,
+    ) -> MergeState<T> {
         let variant = match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as Batch>::begin_merge(&batch1, &batch2, compaction_frontier);
+                let begin_merge = SpineBatch::begin_merge(&batch1, &batch2, compaction_frontier);
                 MergeVariant::InProgress(batch1, batch2, begin_merge)
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
@@ -623,20 +702,20 @@ where
     }
 }
 
-enum MergeVariant<B: Batch> {
+enum MergeVariant<T> {
     /// Describes an actual in-progress merge between two non-trivial batches.
-    InProgress(B, B, <B as Batch>::Merger),
+    InProgress(SpineBatch<T>, SpineBatch<T>, FuelingMerge<T>),
     /// A merge that requires no further work. May or may not represent a
     /// non-trivial batch.
-    Complete(Option<(B, Option<(B, B)>)>),
+    Complete(Option<(SpineBatch<T>, Option<(SpineBatch<T>, SpineBatch<T>)>)>),
 }
 
-impl<B: Batch> MergeVariant<B> {
+impl<T: Timestamp + Lattice> MergeVariant<T> {
     /// Completes and extracts the batch, unless structurally empty.
     ///
     /// The result is either `None`, for structurally empty batches, or a batch
     /// and optionally input batches from which it derived.
-    fn complete(mut self) -> Option<(B, Option<(B, B)>)> {
+    fn complete(mut self) -> Option<(SpineBatch<T>, Option<(SpineBatch<T>, SpineBatch<T>)>)> {
         let mut fuel = isize::max_value();
         self.work(&mut fuel);
         if let MergeVariant::Complete(batch) = self {
