@@ -22,7 +22,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.21"
 futures-executor = "0.3.21"
 futures-util = "0.3.19"
-globset = { version = "0.4.8", optional = true }
+globset = { version = "0.4.9", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
 mz-ccsr = { path = "../ccsr", optional = true }
 mz-dataflow-types = { path = "../dataflow-types" }

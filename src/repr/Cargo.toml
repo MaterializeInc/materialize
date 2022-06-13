@@ -22,7 +22,7 @@ chrono-tz = { version = "0.6.1", features = ["serde", "case-insensitive"] }
 dec = "0.4.8"
 enum-kinds = "0.5.1"
 fast-float = "0.2.0"
-globset = "0.4.8"
+globset = "0.4.9"
 hex = "0.4.3"
 http = "0.2.7"
 itertools = "0.10.3"
