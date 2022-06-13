@@ -271,18 +271,26 @@ pub enum PeekResponseUnary {
     Canceled,
 }
 
+#[derive(Debug)]
 struct GroupCommit {
     pending_writes: Vec<PendingWriteTxn>,
     table_advances: HashSet<GlobalId>,
 }
 
 impl GroupCommit {
+    fn new() -> Self {
+        GroupCommit {
+            pending_writes: Vec::new(),
+            table_advances: HashSet::new(),
+        }
+    }
     fn is_empty(&self) -> bool {
         self.pending_writes.is_empty() && self.table_advances.is_empty()
     }
 }
 
 /// A pending write transaction that will be committed during the next group commit.
+#[derive(Debug)]
 enum PendingWriteTxn {
     /// User initiated transaction.
     User {
@@ -299,6 +307,7 @@ enum PendingWriteTxn {
     System { writes: Vec<BuiltinTableUpdate> },
 }
 
+#[derive(Debug)]
 enum Write {
     WriteOp(WriteOp),
     BuiltinTableUpdate(BuiltinTableUpdate),
@@ -593,22 +602,15 @@ impl<S: Append + 'static> Coordinator<S> {
         let ts = self.global_timeline.read_ts();
         // All writes go through group commit, which immediately put the `TimestampOracle` back
         // into a `Reading` state. Therefore this method will always be called while in `Reading`
-        // state and never require an advancement. See `get_and_step_local_write_ts`.
+        // state and never require an advancement. See `get_local_write_ts`.
         assert!(self.global_timeline.should_advance_to().is_none());
         ts
     }
 
-    /// Assign a timestamp for creating a source. Writes following reads
-    /// must ensure that they are assigned a strictly larger timestamp to ensure
-    /// they are not visible to any real-time earlier reads.
-    fn _get_local_write_ts(&mut self) -> Timestamp {
-        self.global_timeline.write_ts()
-    }
-
-    /// Assign a timestamp for a write to a local input and increase the local ts.
+    /// Assign a timestamp for a writes and increase the local ts.
     /// Writes following reads must ensure that they are assigned a strictly larger
     /// timestamp to ensure they are not visible to any real-time earlier reads.
-    fn get_and_step_local_write_ts(&mut self) -> WriteTimestamp {
+    fn get_local_write_ts(&mut self) -> WriteTimestamp {
         let timestamp = self.global_timeline.write_ts();
         /* Without an ADAPTER side durable WAL, all writes must increase the timestamp and be made
          * durable via an APPEND command to STORAGE. Calling `read_ts()` here ensures that the
@@ -697,8 +699,8 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), CoordError> {
-        // TODO(jkosh44) Hack to get into read mode
-        let _ = self.get_and_step_local_write_ts();
+        // Put timestamp oracle in valid starting state
+        let _ = self.get_local_write_ts();
 
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
@@ -772,7 +774,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::Table(_) => {
                     let since_ts = self.get_local_read_ts();
-
                     // Re-announce the source description.
                     let source_description = self
                         .catalog
@@ -1134,10 +1135,6 @@ impl<S: Append + 'static> Coordinator<S> {
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
-<<<<<<< Updated upstream
-    async fn try_group_commit(&mut self, write_timestamp: Option<WriteTimestamp>) {
-        if self.pending_group_commit.is_empty() {
-=======
     async fn try_group_commit(
         &mut self,
         WriteTimestamp {
@@ -1145,8 +1142,7 @@ impl<S: Append + 'static> Coordinator<S> {
             advance_to,
         }: WriteTimestamp,
     ) {
-        if self.pending_writes.is_empty() {
->>>>>>> Stashed changes
+        if self.pending_group_commit.is_empty() {
             return;
         }
 
@@ -1255,10 +1251,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Submit a write to be executed during the next group commit.
     fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-<<<<<<< Updated upstream
         if self.pending_group_commit.is_empty() {
+            let write_timestamp = self.get_local_write_ts();
             self.internal_cmd_tx
-                .send(Message::GroupCommit(None))
+                .send(Message::GroupCommit(write_timestamp))
                 .expect("sending to internal_cmd_tx cannot fail");
         }
         self.pending_group_commit
@@ -1267,13 +1263,9 @@ impl<S: Append + 'static> Coordinator<S> {
     }
 
     /// Submit a table to be advanced during the next group commit.
-    /// TODO(jkosh44)
     fn submit_table_advancement(&mut self, ids: Vec<GlobalId>) {
         if self.pending_group_commit.is_empty() {
-=======
-        if self.pending_writes.is_empty() {
-            let write_timestamp = self.get_and_step_local_write_ts();
->>>>>>> Stashed changes
+            let write_timestamp = self.get_local_write_ts();
             self.internal_cmd_tx
                 .send(Message::GroupCommit(write_timestamp))
                 .expect("sending to internal_cmd_tx cannot fail");
@@ -2221,7 +2213,9 @@ impl<S: Append + 'static> Coordinator<S> {
         depends_on: Vec<GlobalId>,
     ) {
         match plan {
-            Plan::CreateConnection(plan) => self.sequence_create_connector(tx, session, plan).await,
+            Plan::CreateConnection(plan) => {
+                self.sequence_create_connection(tx, session, plan).await
+            }
             Plan::CreateDatabase(plan) => self.sequence_create_database(tx, session, plan).await,
             Plan::CreateSchema(plan) => self.sequence_create_schema(tx, session, plan).await,
             Plan::CreateRole(plan) => {
@@ -2489,7 +2483,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
-        plan: CreateConnectorPlan,
+        plan: CreateConnectionPlan,
     ) {
         let if_not_exists = plan.if_not_exists;
         let ops = match self.sequence_create_connector_inner(plan).await {
@@ -2501,12 +2495,12 @@ impl<S: Append + 'static> Coordinator<S> {
             ops,
             |_| Ok(()),
             tx,
-            Ok(ExecuteResponse::CreatedConnector { existed: false }),
+            Ok(ExecuteResponse::CreatedConnection { existed: false }),
             |e| match e {
                 CoordError::Catalog(catalog::Error {
                     kind: catalog::ErrorKind::ItemAlreadyExists(_),
                     ..
-                }) if if_not_exists => Ok(ExecuteResponse::CreatedConnector { existed: true }),
+                }) if if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
                 _ => Err(e),
             },
         )
@@ -2515,7 +2509,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_connector_inner(
         &mut self,
-        plan: CreateConnectorPlan,
+        plan: CreateConnectionPlan,
     ) -> Result<Vec<catalog::Op>, CoordError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
@@ -2594,7 +2588,7 @@ impl<S: Append + 'static> Coordinator<S> {
             vec![op],
             |_| Ok(()),
             tx,
-            Ok(ExecuteResponse::CreatedConnector { existed: false }),
+            Ok(ExecuteResponse::CreatedSchema { existed: false }),
             |e| match e {
                 CoordError::Catalog(catalog::Error {
                     kind: catalog::ErrorKind::SchemaAlreadyExists(_),
@@ -3171,9 +3165,9 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok(_) => {
                 // Now we're ready to create the sink connector. Arrange to notify the
                 // main coordinator thread when the future completes.
-                let connector_builder = sink.connector_builder;
+                let connection_builder = sink.connection_builder;
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let connector_context = self.connector_context.clone();
+                let connection_context = self.connection_context.clone();
                 task::spawn(
                     || format!("sink_connection_ready:{}", sink.from),
                     async move {
@@ -5859,7 +5853,7 @@ pub async fn serve<S: Append + 'static>(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
-                pending_group_commit: Vec::new(),
+                pending_group_commit: GroupCommit::new(),
                 secrets_controller,
                 replica_sizes,
                 availability_zones,
