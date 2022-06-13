@@ -45,7 +45,7 @@ tracing-subscriber = { version = "0.3.11", default-features = false, features = 
 # For the `tracing` feature
 ansi_term = { version = "0.12.1", optional = true }
 atty = { version = "0.2.14", optional = true }
-http = { version = "0.2.7", optional = true }
+http = { version = "0.2.8", optional = true }
 tracing = { version = "0.1.35", optional = true }
 tracing-opentelemetry = { version = "0.17", optional = true }
 tonic = { version = "0.7.2", features = ["transport"], optional = true }

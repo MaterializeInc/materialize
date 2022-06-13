@@ -15,7 +15,7 @@ dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
-http = "0.2.7"
+http = "0.2.8"
 h2 = "0.3"
 itertools = "0.10.3"
 mz-avro = { path = "../avro", features = ["snappy"] }
