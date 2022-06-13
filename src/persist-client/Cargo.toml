@@ -47,7 +47,7 @@ serde = { version = "1.0.137", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.18.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.35"
-uuid = { version = "1.1.1", features = ["v4"] }
+uuid = { version = "1.1.2", features = ["v4"] }
 
 [features]
 tokio-console = ["mz-ore/tokio-console"]

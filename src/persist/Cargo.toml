@@ -44,7 +44,7 @@ tokio = { version = "1.18.2", default-features = false, features = ["fs", "macro
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.35"
 url = "2.2.2"
-uuid = { version = "1.1.1", features = ["v4"] }
+uuid = { version = "1.1.2", features = ["v4"] }
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
