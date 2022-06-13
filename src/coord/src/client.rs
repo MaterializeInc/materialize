@@ -17,7 +17,6 @@ use uuid::Uuid;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdAllocator;
 use mz_ore::thread::JoinOnDropHandle;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Datum, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement};
 
@@ -307,7 +306,7 @@ impl SessionClient {
             portal_name,
             session,
             tx,
-            otel_ctx: OpenTelemetryContext::obtain(),
+            span: tracing::Span::current(),
         })
         .await
     }
@@ -519,7 +518,7 @@ impl SessionClient {
                 }
                 ExecuteResponse::SendingRows {
                     future: rows,
-                    otel_ctx: _,
+                    span: _,
                 } => {
                     let rows = match rows.await {
                         PeekResponseUnary::Rows(rows) => rows,

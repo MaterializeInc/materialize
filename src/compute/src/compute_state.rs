@@ -216,7 +216,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         let mut peek = PendingPeek {
             peek,
             trace_bundle,
-            otel_ctx: OpenTelemetryContext::obtain(),
+            span: tracing::Span::current(),
         };
         // Log the receipt of the peek.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
@@ -594,8 +594,7 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
         );
         for mut peek in pending_peeks.drain(..) {
             if let Some(response) = peek.seek_fulfillment(&mut upper) {
-                let _span = tracing::info_span!("process_peek").entered();
-                peek.otel_ctx.attach_as_parent();
+                let _span = tracing::info_span!(parent: &peek.span,  "process_peek").entered();
                 self.send_peek_response(peek, response);
             } else {
                 self.compute_state.pending_peeks.push(peek);
@@ -647,8 +646,8 @@ pub struct PendingPeek {
     peek: mz_dataflow_types::client::Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
-    /// The OpenTelemetry context for this peek.
-    otel_ctx: OpenTelemetryContext,
+    /// The `tracing::Span` tracking this peek's operation
+    span: tracing::Span,
 }
 
 impl PendingPeek {

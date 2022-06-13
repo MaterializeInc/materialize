@@ -23,7 +23,7 @@ use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
 use tokio::select;
 use tokio::time::{self, Duration, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, warn, Instrument};
 
 use mz_coord::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
@@ -1020,8 +1020,6 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    // TODO(guswynn): figure out how to get it to compile without skip_all
-    #[tracing::instrument(level = "debug", skip_all)]
     async fn send_execute_response(
         &mut self,
         response: ExecuteResponse,
@@ -1156,14 +1154,11 @@ where
                 // have OIDs.
                 command_complete!("INSERT 0 {}", n)
             }
-            ExecuteResponse::SendingRows {
-                future: rx,
-                otel_ctx,
-            } => {
+            ExecuteResponse::SendingRows { future: rx, span } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
 
-                otel_ctx.attach_as_parent();
+                let span = tracing::debug_span!(parent: &span, "send_execute_response");
 
                 self.send_rows(
                     row_desc,
@@ -1174,6 +1169,7 @@ where
                     fetch_portal_name,
                     timeout,
                 )
+                .instrument(span)
                 .await
             }
             ExecuteResponse::SetVariable { name, tag } => {
@@ -1252,11 +1248,11 @@ where
                     ExecuteResponse::Tailing { rx } => rx,
                     ExecuteResponse::SendingRows {
                         future: rows_rx,
-                        otel_ctx,
+                        span,
                     } => {
-                        otel_ctx.attach_as_parent();
+                        let span = tracing::debug_span!(parent: &span, "send_execute_response");
 
-                        self.row_future_to_stream(rows_rx).await?
+                        self.row_future_to_stream(rows_rx).instrument(span).await?
                     }
                     _ => {
                         return self
