@@ -17,7 +17,6 @@ use serde::Serialize;
 use tokio::sync::oneshot;
 
 use mz_ore::str::StrExt;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
@@ -62,7 +61,7 @@ pub enum Command {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
-        otel_ctx: OpenTelemetryContext,
+        span: tracing::Span,
     },
 
     StartTransaction {
@@ -291,7 +290,7 @@ pub enum ExecuteResponse {
         #[derivative(Debug = "ignore")]
         future: RowsFuture,
         #[derivative(Debug = "ignore")]
-        otel_ctx: OpenTelemetryContext,
+        span: tracing::Span,
     },
     /// The specified variable was set to a new value.
     SetVariable {

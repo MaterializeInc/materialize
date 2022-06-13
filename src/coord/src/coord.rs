@@ -86,7 +86,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{trace, warn};
+use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -115,7 +115,6 @@ use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
@@ -1366,7 +1365,6 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
@@ -1443,12 +1441,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 portal_name,
                 session,
                 tx,
-                otel_ctx,
+                span,
             } => {
                 let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                otel_ctx.attach_as_parent();
-                self.handle_execute(portal_name, session, tx).await;
+                let span = tracing::debug_span!(parent: &span, "message_command");
+                self.handle_execute(portal_name, session, tx)
+                    .instrument(span)
+                    .await;
             }
 
             Command::Declare {
@@ -2349,7 +2349,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                     portal_name,
                                     session,
                                     tx: tx.take(),
-                                    otel_ctx: OpenTelemetryContext::empty(),
+                                    span: tracing::Span::none(),
                                 }))
                                 .expect("sending to internal_cmd_tx cannot fail");
                         });
@@ -4770,7 +4770,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let diffs = match peek_response {
                 ExecuteResponse::SendingRows {
                     future: batch,
-                    otel_ctx: _,
+                    span: _,
                 } => {
                     // TODO: This timeout should be removed once #11782 lands;
                     // we should instead periodically ensure clusters are
@@ -5523,7 +5523,7 @@ pub async fn serve<S: Append + 'static>(
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     ExecuteResponse::SendingRows {
         future: Box::pin(async { PeekResponseUnary::Rows(rows) }),
-        otel_ctx: OpenTelemetryContext::empty(),
+        span: tracing::Span::none(),
     }
 }
 
@@ -5642,7 +5642,6 @@ pub fn describe<S: Append>(
 /// or by reading out of existing arrangements, and implements the appropriate plan.
 pub mod fast_path_peek {
     use mz_dataflow_types::client::{ComputeInstanceId, ReplicaId};
-    use mz_ore::tracing::OpenTelemetryContext;
     use mz_stash::Append;
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
@@ -5956,10 +5955,9 @@ pub mod fast_path_peek {
                 self.drop_indexes(vec![(compute_instance, index_id)]).await;
             }
 
-            let otel_ctx = OpenTelemetryContext::obtain();
             Ok(crate::ExecuteResponse::SendingRows {
                 future: Box::pin(rows_rx),
-                otel_ctx,
+                span: tracing::Span::current(),
             })
         }
     }
