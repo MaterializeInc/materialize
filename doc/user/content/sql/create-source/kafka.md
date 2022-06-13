@@ -258,18 +258,20 @@ Field               | Value | Description
 To connect to a Kafka broker that requires [SSL authentication](https://docs.confluent.io/platform/current/kafka/authentication_ssl.html), use the provided [`WITH` options](#ssl-with-options).
 
 ```sql
+CREATE SECRET materialized_key AS '...';
+CREATE SECRET materialized_key_password AS '...';
 CREATE MATERIALIZED SOURCE kafka_ssl
   FROM KAFKA BROKER 'localhost:9092' TOPIC 'top-secret' WITH (
       security_protocol = 'SSL',
-      ssl_key_location = '/secrets/materialized.key',
-      ssl_certificate_location = '/secrets/materialized.crt',
-      ssl_ca_location = '/secrets/ca.crt',
-      ssl_key_password = 'mzmzmz'
+      ssl_key_pem = SECRET materialized_key,
+      ssl_key_password = SECRET materialized_key_password,
+      ssl_certificate_pem = '...',
+      ssl_ca_pem = '...',
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://localhost:8081' WITH (
-      ssl_key_location = '/secrets/materialized.key',
-      ssl_certificate_location = '/secrets/materialized.crt',
-      ssl_ca_location = '/secrets/ca.crt'
+      ssl_key_pem = SECRET materialized_key,
+      ssl_certificate_pem = '...',
+      ssl_ca_pem = '...'
   );
 ```
 
@@ -279,8 +281,8 @@ CREATE MATERIALIZED SOURCE kafka_ssl
 Field                      | Value  | Description
 ---------------------------|--------|---------------------------
 `security_protocol`        | `text` | Use `ssl` to connect to the Kafka cluster.
-`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication.
-`ssl_key_location`         | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.
+`ssl_certificate_pem`      | `text` | Your SSL certificate. Required for SSL client authentication.
+`ssl_key_pem`              | `text` | Your SSL certificate's key. Required for SSL client authentication.
 `ssl_key_password`         | `text` | Your SSL key's password, if any.
 `ssl_ca_location`          | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
 
@@ -288,9 +290,9 @@ Field                      | Value  | Description
 
 Field | Value | Description
 ------|-------|------------
-`ssl_certificate_location` | `text` | The absolute path to your SSL certificate. Required for SSL client authentication. <em>New in v0.17.0.</em>
-`ssl_key_location` | `text` | The absolute path to your SSL certificate's key. Required for SSL client authentication.  <em>New in v0.17.0.</em>
-`ssl_ca_location` | `text` | The absolute path to the certificate authority (CA) certificate. Used for both SSL client and server authentication. <em>New in v0.17.0.</em>
+`ssl_certificate_pem` | `text` | Your SSL certificate. Required for SSL client authentication.
+`ssl_key_pem` | `text` | Your SSL certificate's key. Required for SSL client authentication.
+`ssl_ca_pem` | `text` | The certificate authority (CA) certificate. Used for both SSL client and server authentication.
 `username` | `text` | The username used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 `password` | `text` | The password used to connect to the schema registry with basic HTTP authentication. This is compatible with the `ssl` options, which control the transport between Materialize and the CSR.
 
@@ -301,16 +303,18 @@ To connect to a Kafka broker that requires [SASL authentication](https://docs.co
 #### SASL/PLAIN
 
 ```sql
+CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
+CREATE SECRET schema_registry_password AS '<SCHEMA_REGISTRY_PASSWORD>';
 CREATE SOURCE kafka_sasl
   FROM KAFKA BROKER 'broker.tld:9092' TOPIC 'top-secret' WITH (
       security_protocol = 'SASL_SSL',
       sasl_mechanisms = 'PLAIN',
       sasl_username = '<BROKER_USERNAME>',
-      sasl_password = '<BROKER_PASSWORD>'
+      sasl_password = SECRET kafka_password,
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://schema-registry.tld' WITH (
       username = '<SCHEMA_REGISTRY_USERNAME>',
-      password = '<SCHEMA_REGISTRY_PASSWORD>'
+      password = SECRET schema_registry_password
   );
 ```
 
@@ -323,7 +327,7 @@ Field                                   | Value  | Description
 `security_protocol`                     | `text` | Use `plaintext`, `ssl`, `sasl_plaintext` or `sasl_ssl` to connect to the Kafka cluster.
 `sasl_mechanisms`                       | `text` | The SASL mechanism to use for authentication. Supported: `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`.
 `sasl_username`                         | `text` | Your SASL username, if any. Required if `sasl_mechanisms` is `PLAIN`.
-`sasl_password`                         | `text` | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.<br/><br/>This option stores the password in Materialize's on-disk catalog.
+`sasl_password`                         | secret | Your SASL password, if any. Required if `sasl_mechanisms` is `PLAIN`.
 
 ## Examples
 

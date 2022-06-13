@@ -92,15 +92,16 @@ SERVICES = [
             "--cert-password=mzmzmz "
             "--ccsr-password=sekurity "
             "--ccsr-username=materialize "
+            '--var=materialized-kafka-key="$$(</share/secrets/materialized-kafka.key)" '
+            '--var=materialized-kafka-crt="$$(</share/secrets/materialized-kafka.crt)" '
+            '--var=materialized-schema-registry-key="$$(</share/secrets/materialized-schema-registry.key)" '
+            '--var=materialized-schema-registry-crt="$$(</share/secrets/materialized-schema-registry.crt)" '
+            '--var=ca-crt="$$(</share/secrets/ca.crt)" '
             '"$$@"',
         ],
         volumes_extra=["secrets:/share/secrets"],
         # Required to install root certs above
         propagate_uid_gid=False,
-        # Required so that testdrive can load and validate the catalog
-        environment=[
-            "SSL_KEY_PASSWORD=mzmzmz",
-        ],
     ),
 ]
 
