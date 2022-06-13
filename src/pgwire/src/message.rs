@@ -398,7 +398,6 @@ impl ErrorResponse {
             // code, so it's probably the best choice.
             CoordError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            CoordError::SecretsOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
         };
         ErrorResponse {
             severity,

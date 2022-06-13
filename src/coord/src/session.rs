@@ -23,7 +23,6 @@ use tokio::sync::OwnedMutexGuard;
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_pgrepr::Format;
 use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
-use mz_secrets::SecretOp;
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
@@ -217,12 +216,6 @@ impl<T: CoordTimestamp> Session<T> {
                         _ => {
                             return Err(CoordError::WriteOnlyTransaction);
                         }
-                    },
-                    TransactionOps::Secrets(secret_txn_ops) => match add_ops {
-                        TransactionOps::Secrets(mut add_secret_ops) => {
-                            secret_txn_ops.append(&mut add_secret_ops);
-                        }
-                        _ => return Err(CoordError::SecretsOnlyTransaction),
                     },
                 }
             }
@@ -655,8 +648,6 @@ pub enum TransactionOps<T> {
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must only do
     /// other writes.
     Writes(Vec<WriteOp>),
-    /// This transaction has had a secrets DDL operation and must only do other secrets operations
-    Secrets(Vec<SecretOp>),
 }
 
 /// An `INSERT` waiting to be committed.
