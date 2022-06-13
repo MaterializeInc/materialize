@@ -40,7 +40,7 @@ prost = "0.10.3"
 rand = { version = "0.8.5", features = ["small_rng"] }
 serde = { version = "1.0.137", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.18.2", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
+tokio = { version = "1.19.2", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.35"
 url = "2.2.2"

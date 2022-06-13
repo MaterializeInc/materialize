@@ -63,7 +63,7 @@ tiberius = { version = "0.9.2", default-features = false }
 time = "0.3.9"
 tracing = "0.1.35"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }
-tokio = { version = "1.18.2", features = ["process"] }
+tokio = { version = "1.19.2", features = ["process"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.9"
 tokio-util = { version = "0.7.3", features = ["compat"] }

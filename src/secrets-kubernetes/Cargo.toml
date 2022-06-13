@@ -13,6 +13,6 @@ mz-secrets = { path = "../secrets" }
 k8s-openapi = { version = "0.15.0", features = ["v1_22"] }
 kube = { version = "0.73.1", features = ["ws"] }
 tracing = "0.1.35"
-tokio = { version = "1.18.2" }
+tokio = { version = "1.19.2" }
 rand = "0.8.5"
 mz-ore = { path = "../ore", default-features = false }
