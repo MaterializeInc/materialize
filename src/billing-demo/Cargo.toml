@@ -17,7 +17,7 @@ prost = "0.10.3"
 prost-types = "0.10.0"
 rand = "0.8.5"
 rand_distr = "0.4.3"
-tokio = "1.18.2"
+tokio = "1.19.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tracing = "0.1.35"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }

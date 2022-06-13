@@ -83,7 +83,7 @@ sysctl = "0.4.4"
 sysinfo = "0.24.3"
 tempfile = "3.2.0"
 thiserror = "1.0.31"
-tokio = { version = "1.18.2", features = ["sync"] }
+tokio = { version = "1.19.2", features = ["sync"] }
 tokio-openssl = "0.6.3"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-stream = { version = "0.1.9", features = ["net"] }
