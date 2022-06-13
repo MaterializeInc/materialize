@@ -361,8 +361,8 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 
     // Advance nowfn enough so that group commit can execute
     *nowfn.lock().unwrap() = NOW_HUNDRED.clone();
-    client_writes
-        .batch_execute("CREATE TABLE t (data text); CREATE DEFAULT INDEX t_primary_idx ON t")?;
+    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
     // Now that the index (and its since) are initialized to 0, we can resume using
     // system time. Do a read to bump the oracle's state so it will read from the
     // system clock during inserts below.
@@ -1035,20 +1035,12 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-    let timestamp = Arc::new(Mutex::new(1_000));
-    let now = {
-        let timestamp = Arc::clone(&timestamp);
-        NowFn::from(move || *timestamp.lock().unwrap())
-    };
-    let config = util::Config::default().with_now(now);
+    let config = util::Config::default();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
     let timestamp_str = "<TIMESTAMP>";
-    let timestamp_re = Regex::new(r"(\d{4}|0)").unwrap();
+    let timestamp_re = Regex::new(r"(\d{13}|0)").unwrap();
     let whitespace_re = Regex::new(r"\s+<TIMESTAMP>").unwrap();
-
-    // Advance the timestamp enough so that group commit can execute
-    *timestamp.lock().expect("lock poisoned") += 100;
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
@@ -1069,11 +1061,6 @@ write frontier:[{timestamp_str}]\n"
     let explain = timestamp_re.replace_all(&explain, timestamp_str);
     let explain = whitespace_re.replace_all(&explain, timestamp_str);
     assert_eq!(explain, expect);
-
-    // Advance the timestamp enough so that group commit can execute
-    *timestamp.lock().expect("lock poisoned") += 1;
-
-    client.batch_execute("SELECT * FROM t1")?;
 
     Ok(())
 }

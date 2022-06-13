@@ -525,7 +525,7 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<DeferredPlan>,
-    /// Pending writes waiting for a group commit
+    /// Pending writes and table advancements waiting for a group commit
     pending_group_commit: GroupCommit,
 
     /// Handle to secret manager that can create and delete secrets from
