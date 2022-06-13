@@ -2876,7 +2876,7 @@ impl<S: Append> Catalog<S> {
                             session,
                             &mut tx,
                             &mut builtin_table_updates,
-                            EventType::Rename,
+                            EventType::Alter,
                             sql_type_to_object_type(entry.item().typ()),
                             details,
                         )?;

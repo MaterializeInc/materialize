@@ -87,7 +87,6 @@ pub enum EventType {
     Create,
     Drop,
     Alter,
-    Rename,
 }
 
 serde_plain::derive_display_from_serialize!(EventType);
