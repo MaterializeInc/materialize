@@ -37,13 +37,6 @@ name = "env_logger"
 [[bans.deny]]
 name = "protobuf"
 
-# The `md5` crate is not part of the RustCrypto project. Use `md-5` instead,
-# despite its somewhat suspicious name.
-[[bans.deny]]
-name = "md5"
-# waiting on https://github.com/awslabs/smithy-rs/pull/1404
-wrappers = ["aws-sdk-s3"]
-
 # Strum has suspect code quality and includes many unneeded features. Use
 # more targeted enum macro crates, e.g. `enum-kinds`.
 [[bans.deny]]
