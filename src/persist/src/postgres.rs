@@ -11,13 +11,15 @@
 
 use std::time::Instant;
 
-use anyhow::anyhow;
-use anyhow::Context;
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use bytes::Bytes;
+use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
+use postgres_openssl::MakeTlsConnector;
 use tokio::task::JoinHandle;
+use tokio_postgres::config::SslMode;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use tokio_postgres::{Client as PostgresClient, NoTls};
+use tokio_postgres::Client as PostgresClient;
 
 use mz_ore::task;
 
@@ -135,10 +137,9 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
-        // TODO: reconsider opening with NoTLS. Perhaps we actually want to,
-        // especially given the fact that its not entirely known what data
-        // will actually be stored in Consensus.
-        let (mut client, conn) = tokio_postgres::connect(&config.url, NoTls)
+        let pg_config: tokio_postgres::Config = config.url.parse()?;
+        let tls = make_tls(&pg_config)?;
+        let (mut client, conn) = tokio_postgres::connect(&config.url, tls)
             .await
             .with_context(|| format!("error connecting to postgres"))?;
         let handle = task::spawn(|| "pg_consensus_client", async move {
@@ -156,6 +157,63 @@ impl PostgresConsensus {
             _handle: handle,
         })
     }
+}
+
+// This function is copied from mz-postgres-util because of a cyclic dependency
+// difficulty that we don't want to deal with now.
+// TODO: Untangle that and remove this copy.
+fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, anyhow::Error> {
+    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
+    // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
+    // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
+    //
+    // For more details, check out Table 33.1. SSL Mode Descriptions in
+    // https://postgresql.org/docs/current/libpq-ssl.html#LIBPQ-SSL-PROTECTION.
+    let (verify_mode, verify_hostname) = match config.get_ssl_mode() {
+        SslMode::Disable | SslMode::Prefer => (SslVerifyMode::NONE, false),
+        SslMode::Require => match config.get_ssl_root_cert() {
+            // If a root CA file exists, the behavior of sslmode=require will be the same as
+            // that of verify-ca, meaning the server certificate is validated against the CA.
+            //
+            // For more details, check out the note about backwards compatibility in
+            // https://postgresql.org/docs/current/libpq-ssl.html#LIBQ-SSL-CERTIFICATES.
+            Some(_) => (SslVerifyMode::PEER, false),
+            None => (SslVerifyMode::NONE, false),
+        },
+        SslMode::VerifyCa => (SslVerifyMode::PEER, false),
+        SslMode::VerifyFull => (SslVerifyMode::PEER, true),
+        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+    };
+
+    // Configure peer verification
+    builder.set_verify(verify_mode);
+
+    // Configure certificates
+    match (config.get_ssl_cert(), config.get_ssl_key()) {
+        (Some(ssl_cert), Some(ssl_key)) => {
+            builder.set_certificate_file(ssl_cert, SslFiletype::PEM)?;
+            builder.set_private_key_file(ssl_key, SslFiletype::PEM)?;
+        }
+        (None, Some(_)) => bail!("must provide both sslcert and sslkey, but only provided sslkey"),
+        (Some(_), None) => bail!("must provide both sslcert and sslkey, but only provided sslcert"),
+        _ => {}
+    }
+    if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
+        builder.set_ca_file(ssl_root_cert)?
+    }
+
+    let mut tls_connector = MakeTlsConnector::new(builder.build());
+
+    // Configure hostname verification
+    match (verify_mode, verify_hostname) {
+        (SslVerifyMode::PEER, false) => tls_connector.set_callback(|connect, _| {
+            connect.set_verify_hostname(false);
+            Ok(())
+        }),
+        _ => {}
+    }
+
+    Ok(tls_connector)
 }
 
 #[async_trait]
