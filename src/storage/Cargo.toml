@@ -11,7 +11,7 @@ anyhow = "1.0.57"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"], optional = true }
 async-stream = "0.3.3"
 async-trait = "0.1.56"
-aws-sdk-kinesis = { version = "0.12.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
+aws-sdk-kinesis = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
 aws-sdk-s3 = { version = "0.12.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
 aws-sdk-sqs = { version = "0.12.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
 bincode = { version = "1.3.3", optional = true }
@@ -54,7 +54,7 @@ tokio-byteorder = "0.3.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-util = { version = "0.7.3", features = ["codec", "io"] }
-tracing = "0.1.34"
+tracing = "0.1.35"
 thiserror = { version = "1.0.31", optional = true }
 uuid = { version = "1.1.1", features = ["serde", "v4"] }
 
