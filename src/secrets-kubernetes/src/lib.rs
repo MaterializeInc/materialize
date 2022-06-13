@@ -173,8 +173,4 @@ impl SecretsController for KubernetesSecretsController {
 
         return Ok(());
     }
-
-    fn supports_multi_statement_txn(&self) -> bool {
-        true
-    }
 }
