@@ -24,7 +24,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = { version = "3.1.18", features = ["derive"] }
 flate2 = "1.0.24"
 futures = "0.3.21"
-globset = "0.4.8"
+globset = "0.4.9"
 http = "0.2.7"
 itertools = "0.10.3"
 junit-report = "0.7.1"
