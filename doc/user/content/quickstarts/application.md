@@ -16,13 +16,13 @@ aliases:
     alt="Materialize real-time application"
 >}}
 
-<figcaption style='margin: auto; color: gray; width: fit-content;'>Real-time application in action</figcaption>
+<figcaption style='margin: auto; color: gray; width: fit-content;'>Real-time application powered by Materialize</figcaption>
 
 ## Overview
 
 An infrastructure working safe and healthy is critical. We, developers, know this very well. In other businesses, there are different vital infrastructures, such as mobile antennas (4G, 5G) in telecommunications companies. If there is an issue, then addressing and fixing it quickly is a must; otherwise, customers will complain or, even worse, churn.
 
-Telecommunications companies use [antenna manufacturers’ key performance indicators (KPIs)](https://www.ericsson.com/en/reports-and-papers/white-papers/performance-verification-for-5g-nr-deployments) to run analytics. Let’s use these indicators as “performance” and use them to calculate different performance health statuses.
+Telecommunications companies use [antenna manufacturers’ key performance indicators (KPIs)](https://www.ericsson.com/en/reports-and-papers/white-papers/performance-verification-for-5g-nr-deployments) to run analytics. Let’s use these indicators as “performance” and use them to calculate different performance health statuses over an antenna.
 
 •	If the <strong> last-half-minute average performance</strong> is greater than 5, it is <span style='border-bottom:1px solid green;'>healthy</span>.
 
@@ -55,12 +55,12 @@ The source defines how to parse the events schema.
 
 •	Kafka/Redpanda can have topics with or without a schema.
 
-For a quick start, let’s focus only on Postgres. If you want to know how it would look using Kafka without a schema, refer to [this repository](https://github.com/MaterializeInc/demos/tree/main/antennas-kafka).
+For a quick start, let’s focus only on the Postgres case, where the source already defines a schema. If you want to know how it would look using Kafka/Redpanda without a schema, refer to [this repository](https://github.com/MaterializeInc/demos/tree/main/antennas-kafka).
 
 The first step while building an application using Postgres is making available the tables to consume from Materialize.
-It’s done through a process known as Change Data Capture (CDC). As it refers to in the [integration guide](https://materialize.com/docs/integrations/cdc-postgres/), <i>“it allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL).”</i>
+It’s done through a process known as [Change Data Capture (CDC)](https://materialize.com/docs/sql/create-source/materialize-cdc/). As it refers to in the [integration guide](https://materialize.com/docs/integrations/cdc-postgres/), <i>“it allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL).”</i>
 
-From Materialize standpoint it requires create a source:
+From Materialize standpoint it requires creating a source:
 
 ```sql
     CREATE MATERIALIZED SOURCE IF NOT EXISTS antennas_publication_source
@@ -69,8 +69,7 @@ From Materialize standpoint it requires create a source:
     PUBLICATION 'antennas_publication_source';
 ```
 
-After setting up, Materialize will consume the current data and any future changes.
-Speeding up development can be done through commands like [CREATE VIEWS](https://materialize.com/docs/sql/create-views/). It will create a view for each table on the Postgres source that Materialize is consuming.
+After setting up, Materialize will consume the current data and any future changes. In this quickstart, it will be the antenna's performance events and their static data like position and name. Speeding up development can be done through commands like [CREATE VIEWS](https://materialize.com/docs/sql/create-views/). It will create a view for each table available on the Postgres publication.
 
 ```sql
     -- Materialized views is also an option
@@ -94,7 +93,7 @@ The antenna's health and performance metrics could be asked by running a query o
     GROUP BY A.antenna_id, A.geojson;
 ```
 
-Aggregated information in the last half minute is available to consume in the materialized view `last_half_minute_performance_per_antenna`. The stack can now react in a blink and win back every affected customer; Updates happen fast, and a suitable application needs to maintain the pace.
+Antenna's performance and their derivated health status in the last half-minute are available to consume in the materialized view `last_half_minute_performance_per_antenna`. Using Materialize, the stack can now react in a blink and win back every affected customer; Updates happen fast, and a suitable back-end and front-end needs to maintain the pace.
 
 ### Application Stack
 
@@ -104,7 +103,7 @@ GraphQL with sockets is one of the many options available. [Graphql-ws](https://
 
 The React front-end communicates using one of the most known clients for the framework, the [Apollo client](https://www.apollographql.com/docs/react/), with a custom [Link](https://github.com/MaterializeInc/demos/blob/main/antennas-postgres/frontend/src/link.ts) to support the subscriptions.
 
-A [microservice](https://github.com/MaterializeInc/demos/blob/main/antennas-postgres/microservice/src/app.ts) communicates to the GraphQL back-end using `graphql-ws` client with the NodeJS `ws` socket library. When it detects
+Operation teams got very happy when they knew that a [microservice](https://github.com/MaterializeInc/demos/blob/main/antennas-postgres/microservice/src/app.ts) communicates to the GraphQL back-end using `graphql-ws` client with the NodeJS `ws` socket library. When it detects
 an unhealthy antenna will deploy a set of helper antennas.
 
 ## Run the demo
@@ -138,7 +137,7 @@ an unhealthy antenna will deploy a set of helper antennas.
    Note that downloading the Docker images necessary for the demo can take quite
    a bit of time (upwards of 10 minutes, even on fast connections).
 
-### Check the environment
+### Check Materialize in action
 
 Now all the components should be up and running.
 
@@ -199,11 +198,19 @@ Now all the components should be up and running.
     DELETE FROM antennas WHERE antenna_id = 1;
     ```
 
-### Check the stack health
+### Check Materialize health
+
+Using Materialize [quick monitoring dashboard](https://materialize.com/docs/ops/monitoring/#quick-monitoring-dashboard) added to the docker-compose.
 
 1. Open your browser and head to `localhost:3001`
 
-1. Check uptime and SQL Query Timing
+1. Swap the time range to the last five minutes
+{{< figure
+    src="https://materialize.com/wp-content/uploads/2022/06/Screen-Shot-2022-06-13-at-15.02.44.png"
+    alt="Grafana health check"
+>}}
+
+1. After a few minutes. Check _uptime_ and _SQL Query Timing_ dashboard.
 {{< figure
     src="https://materialize.com/wp-content/uploads/2022/06/Screen-Shot-2022-06-10-at-15.30.43.png"
     alt="Grafana health check"
@@ -214,6 +221,7 @@ In this demo, we saw:
 
 -   How to define sources and views within Materialize
 -   How to query and tail Materialized Views
+-   How to monitor Materialize using Grafana
 -   Materialize's ability to process and serve results for applications
 
 ## Related pages
