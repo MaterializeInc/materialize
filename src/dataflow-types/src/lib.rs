@@ -16,7 +16,6 @@
 pub mod client;
 pub mod logging;
 pub mod plan;
-pub mod postgres_source;
 pub mod reconciliation;
 
 mod errors;

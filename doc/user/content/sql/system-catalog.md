@@ -81,6 +81,20 @@ Field      | Type       | Meaning
 `records`  | [`bigint`] | The number of records in the arrangement.
 `batches`  | [`bigint`] | The number of batches in the arrangement.
 
+### `mz_audit_events`
+
+The `mz_audit_events` table records create, alter, and drop events for the
+other objects in the system catalog.
+
+Field           | Type                         | Meaning
+----------------|------------------------------|--------
+`uuid`          | [`uuid`]                     | A unique identifier for the event.
+`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, or `rename`.
+`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `index`, `sink`, `source`, or `view`.
+`event_details` | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
+`user`          | [`text`]                     | The user who triggered the event.
+`occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
+
 ### `mz_base_types`
 
 The `mz_base_types` table contains a row for each base type in the system.
@@ -461,7 +475,7 @@ Field            | Type        | Meaning
 `oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
-`connector_type` | [`text`]    | The type of the sink: `kafka`.
+`type`           | [`text`]    | The type of the sink: `kafka`.
 `volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_sources`
@@ -474,7 +488,7 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
-`connector_type` | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
+`type`           | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
 `volatility`     | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_tables`

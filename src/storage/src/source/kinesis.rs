@@ -21,10 +21,11 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use mz_dataflow_types::aws::AwsExternalIdPrefix;
+use mz_dataflow_types::connections::aws::AwsExternalIdPrefix;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{ExternalSourceConnector, KinesisSourceConnector, MzOffset};
-use mz_dataflow_types::{ConnectorContext, SourceErrorDetails};
+use mz_dataflow_types::sources::{ExternalSourceConnection, KinesisSourceConnection, MzOffset};
+use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
@@ -129,21 +130,21 @@ impl SourceReader for KinesisSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
-        connector_context: ConnectorContext,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let kc = match connector {
-            ExternalSourceConnector::Kinesis(kc) => kc,
+        let kc = match connection {
+            ExternalSourceConnection::Kinesis(kc) => kc,
             _ => unreachable!(),
         };
 
         let state = block_on(create_state(
             &metrics.kinesis,
             kc,
-            connector_context.aws_external_id_prefix.as_ref(),
+            connection_context.aws_external_id_prefix.as_ref(),
             source_id,
         ));
         match state {
@@ -270,7 +271,7 @@ impl SourceReader for KinesisSourceReader {
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 async fn create_state(
     base_metrics: &KinesisMetrics,
-    c: KinesisSourceConnector,
+    c: KinesisSourceConnection,
     aws_external_id_prefix: Option<&AwsExternalIdPrefix>,
     source_id: GlobalId,
 ) -> Result<

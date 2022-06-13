@@ -473,7 +473,7 @@ impl SessionClient {
                 ExecuteResponse::Canceled => {
                     results.push(SimpleResult::err("statement canceled due to user request"));
                 }
-                ExecuteResponse::CreatedConnector { existed: _ }
+                ExecuteResponse::CreatedConnection { existed: _ }
                 | ExecuteResponse::CreatedDatabase { existed: _ }
                 | ExecuteResponse::CreatedSchema { existed: _ }
                 | ExecuteResponse::CreatedRole
@@ -502,7 +502,7 @@ impl SessionClient {
                 | ExecuteResponse::DroppedView
                 | ExecuteResponse::DroppedType
                 | ExecuteResponse::DroppedSecret
-                | ExecuteResponse::DroppedConnector
+                | ExecuteResponse::DroppedConnection
                 | ExecuteResponse::EmptyQuery
                 | ExecuteResponse::Inserted(_)
                 | ExecuteResponse::StartedTransaction { duplicated: _ }

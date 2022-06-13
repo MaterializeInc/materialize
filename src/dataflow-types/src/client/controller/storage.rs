@@ -54,7 +54,7 @@ use crate::client::controller::ReadPolicy;
 use crate::client::{
     GenericClient, StorageClient, StorageCommand, StorageResponse, StoragedRemoteClient,
 };
-use crate::sources::{IngestionDescription, SourceConnector, SourceData, SourceDesc};
+use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
 use crate::Update;
 
 include!(concat!(
@@ -298,7 +298,7 @@ impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
             &tokio_postgres::config::Config::from_str(&postgres_url)
                 .expect("invalid postgres url for storage stash"),
         )
-        .expect("could not make storage TLS connector");
+        .expect("could not make storage TLS connection");
         let stash = mz_stash::Postgres::new(postgres_url, None, tls)
             .await
             .expect("could not connect to postgres storage stash");
@@ -400,7 +400,7 @@ where
 
             // TODO(petrosagg): it's weird that tables go through this path and we filter them
             // manually. Think how to make better types to reflect their differences
-            if matches!(ingestion.desc.connector, SourceConnector::External { .. }) {
+            if matches!(ingestion.desc.connection, SourceConnection::External { .. }) {
                 external_ingestions.push(ingestion);
             }
         }

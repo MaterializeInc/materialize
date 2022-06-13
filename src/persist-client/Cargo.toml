@@ -5,6 +5,7 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.61.0"
 publish = false
+autobins = false
 autoexamples = false
 # Since we intentionally will only ever have one bench target, auto discovery of
 # benches is unnecessary. Turning it off allows us to have helper code in
@@ -25,6 +26,7 @@ harness = false
 
 [[example]]
 name = "persistcli"
+bench = false
 
 [dependencies]
 anyhow = { version = "1.0.57", features = ["backtrace"] }
@@ -43,16 +45,16 @@ proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-fea
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }
 serde = { version = "1.0.137", features = ["derive"] }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.18.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
-tracing = "0.1.34"
-uuid = { version = "1.1.1", features = ["v4"] }
+tokio = { version = "1.19.2", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
+tracing = "0.1.35"
+uuid = { version = "1.1.2", features = ["v4"] }
 
 [features]
 tokio-console = ["mz-ore/tokio-console"]
 
 [dev-dependencies]
 async-trait = "0.1.56"
-axum = "0.5.6"
+axum = "0.5.7"
 clap = { version = "3.1.18", features = ["derive", "env"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
 futures-task = "0.3.21"

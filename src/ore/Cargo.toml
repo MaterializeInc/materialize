@@ -32,7 +32,7 @@ prometheus = { version = "0.13.1", default-features = false, optional = true }
 smallvec = { version = "1.8.0", optional = true }
 stacker = { version = "0.1.14", optional = true }
 serde = { version = "1.0.137", features = ["derive"], optional = true }
-tokio = { version = "1.18.2", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
+tokio = { version = "1.19.2", features = ["io-util", "net", "rt-multi-thread", "time"], optional = true }
 tokio-openssl = { version = "0.6.3", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
@@ -45,8 +45,8 @@ tracing-subscriber = { version = "0.3.11", default-features = false, features = 
 # For the `tracing` feature
 ansi_term = { version = "0.12.1", optional = true }
 atty = { version = "0.2.14", optional = true }
-http = { version = "0.2.7", optional = true }
-tracing = { version = "0.1.34", optional = true }
+http = { version = "0.2.8", optional = true }
+tracing = { version = "0.1.35", optional = true }
 tracing-opentelemetry = { version = "0.17", optional = true }
 tonic = { version = "0.7.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.0", optional = true }
@@ -58,7 +58,7 @@ opentelemetry-otlp = { version = "0.10.0", optional = true }
 console-subscriber = { version = "0.1.6", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.18.2", features = ["macros"] }
+tokio = { version = "1.19.2", features = ["macros"] }
 
 [features]
 default = ["network", "chrono", "cli", "metrics", "stack", "test"]

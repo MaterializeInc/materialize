@@ -30,14 +30,13 @@ use mz_repr::proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFrom
 use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
-use crate::types::aws::AwsExternalIdPrefix;
 use crate::types::sinks::SinkDesc;
 use crate::types::sources::SourceDesc;
 use crate::Plan;
 
 use proto_dataflow_description::*;
 
-pub mod aws;
+pub mod connections;
 pub mod sinks;
 pub mod sources;
 
@@ -369,26 +368,6 @@ impl RustType<ProtoSourceInstanceArguments> for SourceInstanceArguments {
 /// Type alias for source subscriptions, (dataflow_id, source_id).
 pub type SourceInstanceId = (uuid::Uuid, mz_repr::GlobalId);
 
-/// A formed request for source instantiation.
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SourceInstanceRequest<T = mz_repr::Timestamp> {
-    /// The source's own identifier.
-    pub source_id: mz_repr::GlobalId,
-    /// A dataflow identifier that should be unique across dataflows.
-    pub dataflow_id: uuid::Uuid,
-    /// Arguments to the source instantiation.
-    pub arguments: SourceInstanceArguments,
-    /// Frontier beyond which updates must be correct.
-    pub as_of: Antichain<T>,
-}
-
-impl<T> SourceInstanceRequest<T> {
-    /// Source identifier uniquely identifying this instantiation.
-    pub fn unique_id(&self) -> SourceInstanceId {
-        (self.dataflow_id, self.source_id)
-    }
-}
-
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
@@ -476,46 +455,6 @@ impl Arbitrary for DataflowDescription<Plan, CollectionMetadata, mz_repr::Timest
     }
 }
 
-/// Extra context to pass through when instantiating a connector for a source or
-/// sink.
-///
-/// Should be kept cheaply cloneable.
-#[derive(Debug, Clone)]
-pub struct ConnectorContext {
-    /// The level for librdkafka's logs.
-    pub librdkafka_log_level: tracing::Level,
-    /// A prefix for an external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
-}
-
-impl ConnectorContext {
-    /// Constructs a new connector context from command line arguments.
-    ///
-    /// **WARNING:** it is critical for security that the `aws_external_id` be
-    /// provided by the operator of the Materialize service (i.e., via a CLI
-    /// argument or environment variable) and not the end user of Materialize
-    /// (e.g., via a configuration option in a SQL statement). See
-    /// [`AwsExternalIdPrefix`] for details.
-    pub fn from_cli_args(
-        filter: &tracing_subscriber::filter::Targets,
-        aws_external_id_prefix: Option<String>,
-    ) -> ConnectorContext {
-        ConnectorContext {
-            librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
-            aws_external_id_prefix: aws_external_id_prefix.map(AwsExternalIdPrefix),
-        }
-    }
-}
-
-impl Default for ConnectorContext {
-    fn default() -> ConnectorContext {
-        ConnectorContext {
-            librdkafka_log_level: tracing::Level::INFO,
-            aws_external_id_prefix: None,
-        }
-    }
-}
-
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
@@ -536,9 +475,6 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     /// This method makes available an index previously exported as `id`, identified
     /// to the query by `description` (which names the view the index arranges, and
     /// the keys by which it is arranged).
-    ///
-    /// The `requesting_view` argument is currently necessary to correctly track the
-    /// dependencies of views on indexes.
     pub fn import_index(&mut self, id: GlobalId, description: IndexDesc, typ: RelationType) {
         self.index_imports.insert(id, (description, typ));
     }
@@ -562,7 +498,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         self.objects_to_build.push(BuildDesc { id, plan });
     }
 
-    /// Exports as `id` an index on `on_id`.
+    /// Exports as `id` an index described by `description`.
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
@@ -714,12 +650,10 @@ where
     /// Determine a unique id for this dataflow based on the indexes it exports.
     // TODO: The semantics of this function are only useful for command reconciliation at the moment.
     pub fn global_id(&self) -> Option<GlobalId> {
-        // TODO: This could be implemented without heap allocation.
-        let mut exports = self.export_ids().collect::<Vec<_>>();
-        exports.sort_unstable();
-        exports.dedup();
-        if exports.len() == 1 {
-            return exports.pop();
+        let mut exports = self.export_ids();
+        let id = exports.next()?;
+        if exports.all(|other_id| other_id == id) {
+            Some(id)
         } else {
             None
         }

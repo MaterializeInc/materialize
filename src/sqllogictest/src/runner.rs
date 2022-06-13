@@ -626,7 +626,7 @@ impl Runner {
             now: SYSTEM_TIME.clone(),
             replica_sizes: Default::default(),
             availability_zones: Default::default(),
-            connector_context: Default::default(),
+            connection_context: Default::default(),
         };
         // We need to run the server on its own Tokio runtime, which in turn
         // requires its own thread, so that we can wait for any tasks spawned

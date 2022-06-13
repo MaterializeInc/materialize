@@ -82,6 +82,7 @@ impl VersionedEvent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum EventType {
     Create,
     Drop,
@@ -89,7 +90,10 @@ pub enum EventType {
     Rename,
 }
 
+serde_plain::derive_display_from_serialize!(EventType);
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ObjectType {
     Cluster,
     ClusterReplica,
@@ -98,6 +102,8 @@ pub enum ObjectType {
     Source,
     View,
 }
+
+serde_plain::derive_display_from_serialize!(ObjectType);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EventDetails {
@@ -201,7 +207,7 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
             "user".into(),
             1,
         )),
-        r#"{"V1":{"uuid":"00000000-0000-0000-0000-000000000001","event_type":"Create","object_type":"View","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
+        r#"{"V1":{"uuid":"00000000-0000-0000-0000-000000000001","event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
     )];
 
     for (event, expected_bytes) in cases {

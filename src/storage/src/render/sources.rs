@@ -98,13 +98,13 @@ where
     // at the end of `src.optimized_expr`.
     //
     // This has a lot of potential for improvement in the near future.
-    match ingestion.desc.connector.clone() {
+    match ingestion.desc.connection.clone() {
         // Create a new local input (exposed as TABLEs to users). Data is inserted
         // via Command::Insert commands. Defers entirely to `render_table`
-        SourceConnector::Local { .. } => unreachable!(),
+        SourceConnection::Local { .. } => unreachable!(),
 
-        SourceConnector::External {
-            connector,
+        SourceConnection::External {
+            connection,
             encoding,
             envelope,
             metadata_columns,
@@ -127,7 +127,7 @@ where
             // support single-threaded ingestion only. Note that in all cases we want all
             // readers of the same source or same partition to reside on the same worker,
             // and only load-balance responsibility across distinct sources.
-            let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
+            let active_read_worker = if let ExternalSourceConnection::Kafka(_) = connection {
                 true
             } else {
                 // TODO: This feels icky, but getting rid of hardcoding this difference between
@@ -140,10 +140,10 @@ where
                 )
             };
 
-            let source_name = format!("{}-{}", connector.name(), ingestion.id);
+            let source_name = format!("{}-{}", connection.name(), ingestion.id);
             let base_source_config = RawSourceCreationConfig {
                 name: source_name,
-                upstream_name: connector.upstream_name().map(ToOwned::to_owned),
+                upstream_name: connection.upstream_name().map(ToOwned::to_owned),
                 id: ingestion.id,
                 scope,
                 // Distribute read responsibility among workers.
@@ -160,45 +160,45 @@ where
 
             // Build the _raw_ ok and error sources using `create_raw_source` and the
             // correct `SourceReader` implementations
-            let ((ok_source, err_source), capability) = match connector {
-                ExternalSourceConnector::Kafka(_) => {
+            let ((ok_source, err_source), capability) = match connection {
+                ExternalSourceConnection::Kafka(_) => {
                     let ((ok, err), cap) = source::create_raw_source::<_, KafkaSourceReader>(
                         base_source_config,
-                        &connector,
-                        storage_state.connector_context.clone(),
+                        &connection,
+                        storage_state.connection_context.clone(),
                     );
                     ((SourceType::Delimited(ok), err), cap)
                 }
-                ExternalSourceConnector::Kinesis(_) => {
+                ExternalSourceConnection::Kinesis(_) => {
                     let ((ok, err), cap) =
                         source::create_raw_source::<_, DelimitedValueSource<KinesisSourceReader>>(
                             base_source_config,
-                            &connector,
-                            storage_state.connector_context.clone(),
+                            &connection,
+                            storage_state.connection_context.clone(),
                         );
                     ((SourceType::Delimited(ok), err), cap)
                 }
-                ExternalSourceConnector::S3(_) => {
+                ExternalSourceConnection::S3(_) => {
                     let ((ok, err), cap) = source::create_raw_source::<_, S3SourceReader>(
                         base_source_config,
-                        &connector,
-                        storage_state.connector_context.clone(),
+                        &connection,
+                        storage_state.connection_context.clone(),
                     );
                     ((SourceType::ByteStream(ok), err), cap)
                 }
-                ExternalSourceConnector::PubNub(_) => {
+                ExternalSourceConnection::PubNub(_) => {
                     let ((ok, err), cap) = source::create_raw_source::<_, PubNubSourceReader>(
                         base_source_config,
-                        &connector,
-                        storage_state.connector_context.clone(),
+                        &connection,
+                        storage_state.connection_context.clone(),
                     );
                     ((SourceType::AppendRow(ok), err), cap)
                 }
-                ExternalSourceConnector::Postgres(_) => {
+                ExternalSourceConnection::Postgres(_) => {
                     let ((ok, err), cap) = source::create_raw_source::<_, PostgresSourceReader>(
                         base_source_config,
-                        &connector,
-                        storage_state.connector_context.clone(),
+                        &connection,
+                        storage_state.connection_context.clone(),
                     );
                     ((SourceType::Row(ok), err), cap)
                 }
@@ -247,7 +247,7 @@ where
                     (oks, None)
                 } else {
                     // Depending on the type of _raw_ source produced for the given source
-                    // connector, render the _decode_ part of the pipeline, that turns a raw data
+                    // connection, render the _decode_ part of the pipeline, that turns a raw data
                     // stream into a `DecodeResult`.
                     let (results, extra_token) = match ok_source {
                         SourceType::Delimited(source) => render_decode_delimited(

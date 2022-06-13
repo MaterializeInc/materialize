@@ -36,7 +36,7 @@ mod client;
 mod command;
 mod coord;
 mod error;
-mod sink_connector;
+mod sink_connection;
 mod tail;
 mod util;
 

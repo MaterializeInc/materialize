@@ -31,8 +31,11 @@ copy_from ::=
   'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 create_cluster ::=
-  'CREATE' 'CLUSTER' name ( inline_replica ( ',' inline_replica )* )?
-inline_replica ::= 'REPLICA' replica_name ('(' replica_option ( ',' replica_option )* ')')
+  'CREATE' 'CLUSTER' name (
+    'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
+  )?
+cluster_replica_def ::=
+  replica_name '(' replica_option ( ',' replica_option )* ')'
 create_cluster_replica ::=
   'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name replica_option ( ',' replica_option )*
 replica_option ::=

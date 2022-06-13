@@ -38,7 +38,7 @@ where
         sink_id: GlobalId,
         sink: &SinkDesc,
     ) {
-        let sink_render = get_sink_render_for(&sink.connector);
+        let sink_render = get_sink_render_for(&sink.connection);
 
         // put together tokens that belong to the export
         let mut needed_tokens = Vec::new();
@@ -99,7 +99,7 @@ fn apply_sink_envelope<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    // Some connectors support keys - extract them.
+    // Some connections support keys - extract them.
     let keyed = if sink_render.uses_keys() {
         let user_key_indices = sink_render
             .get_key_indices()
@@ -223,13 +223,13 @@ where
         G: Scope<Timestamp = Timestamp>;
 }
 
-fn get_sink_render_for<G>(connector: &SinkConnector) -> Box<dyn SinkRender<G>>
+fn get_sink_render_for<G>(connection: &SinkConnection) -> Box<dyn SinkRender<G>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    match connector {
-        SinkConnector::Kafka(connector) => Box::new(connector.clone()),
-        SinkConnector::Tail(connector) => Box::new(connector.clone()),
-        SinkConnector::Persist(connector) => Box::new(connector.clone()),
+    match connection {
+        SinkConnection::Kafka(connection) => Box::new(connection.clone()),
+        SinkConnection::Tail(connection) => Box::new(connection.clone()),
+        SinkConnection::Persist(connection) => Box::new(connection.clone()),
     }
 }

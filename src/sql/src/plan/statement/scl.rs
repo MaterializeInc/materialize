@@ -12,19 +12,23 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use anyhow::bail;
+use std::collections::HashSet;
+
+use anyhow::{anyhow, bail};
 use uncased::UncasedStr;
 
 use mz_repr::adt::interval::Interval;
 use mz_repr::{RelationDesc, ScalarType};
 
+use crate::ast::display::AstDisplay;
 use crate::ast::{
     CloseStatement, DeallocateStatement, DeclareStatement, DiscardStatement, DiscardTarget,
-    ExecuteStatement, FetchStatement, PrepareStatement, ResetVariableStatement,
-    SetVariableStatement, ShowVariableStatement, Value,
+    ExecuteStatement, FetchOption, FetchOptionName, FetchStatement, PrepareStatement,
+    ResetVariableStatement, SetVariableStatement, ShowVariableStatement,
 };
 use crate::names::{self, Aug};
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::{
     describe, query, ClosePlan, DeallocatePlan, DeclarePlan, ExecutePlan, ExecuteTimeout,
     FetchPlan, Plan, PreparePlan, ResetVariablePlan, SetVariablePlan, ShowVariablePlan,
@@ -132,18 +136,14 @@ pub fn plan_declare(
     }))
 }
 
-with_options! {
-    struct FetchOptions {
-        timeout: Interval,
-    }
-}
-
 pub fn describe_fetch(
     _: &StatementContext,
     _: FetchStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
+
+generate_extracted_config!(FetchOption, (Timeout, Interval));
 
 pub fn plan_fetch(
     _: &StatementContext,
@@ -153,8 +153,8 @@ pub fn plan_fetch(
         options,
     }: FetchStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let options = FetchOptions::try_from(options)?;
-    let timeout = match options.timeout {
+    let FetchOptionExtracted { timeout } = options.try_into()?;
+    let timeout = match timeout {
         Some(timeout) => {
             // Limit FETCH timeouts to 1 day. If users have a legitimate need it can be
             // bumped. If we do bump it, ensure that the new upper limit is within the

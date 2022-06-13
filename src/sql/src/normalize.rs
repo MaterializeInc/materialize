@@ -20,12 +20,12 @@ use std::fmt;
 use anyhow::{bail, Context};
 use itertools::Itertools;
 
-use mz_dataflow_types::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
+use mz_dataflow_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
 use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateConnectionStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
     CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
     TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
@@ -351,7 +351,7 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector: _,
+            connection: _,
             with_options: _,
             format: _,
             include_metadata: _,
@@ -390,7 +390,7 @@ pub fn create_statement(
 
         Statement::CreateSink(CreateSinkStatement {
             name,
-            connector: _,
+            connection: _,
             with_options: _,
             in_cluster: _,
             format: _,
@@ -486,9 +486,9 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
         }
-        Statement::CreateConnector(CreateConnectorStatement {
+        Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connector: _,
+            connection: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;
@@ -501,12 +501,51 @@ pub fn create_statement(
     Ok(stmt.to_ast_string_stable())
 }
 
+/// Generates a struct capable of taking a `Vec` of types commonly used to
+/// represent `WITH` options into useful data types, such as strings.
+///
+/// # Parameters
+/// - `$option_ty`: Accepts a struct representing a set of `WITH` options, which
+///     must contain the fields `name` and `value`.
+///     - `name` must be of type `$option_tyName`, e.g. if `$option_ty` is
+///       `FooOption`, then `name` must be of type `FooOptionName`.
+///       `$option_tyName` must be an enum representing `WITH` option keys.
+///     - `TryFromValue<value>` must be implemented for the type you want to
+///       take the option to. The `sql::plan::with_option` module contains these
+///       implementations.
+/// - `$option_name` must be an element of `$option_tyName`
+/// - `$t` is the type you want to convert the option's value to. If the
+///   option's value is absent (i.e. the user only entered the option's key),
+///   you can also define a default value.
+/// - `Default($v)` is an optional parameter that sets the default value of the
+///   field to `$v`. `$v` must be convertible to `$t` using `.into`. This also
+///   converts the struct's type from `Option<$t>` to `<$t>`.
 macro_rules! generate_extracted_config {
-    ($option_ty:ty, $(($option_name:path, $t:ty)),+) => {
+    // No default specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)], $(
+            $tail
+        ),*);
+    };
+    // No default specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)]);
+    };
+    // Default specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)], $(
+            $tail
+        ),*);
+    };
+    // Default specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)]);
+    };
+    ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr))+]) => {
         paste::paste! {
             pub struct [<$option_ty Extracted>] {
                 $(
-                    [<$option_name:snake>]: Option<$t>,
+                    [<$option_name:snake>]: $t,
                 )*
             }
 
@@ -514,7 +553,7 @@ macro_rules! generate_extracted_config {
                 fn default() -> Self {
                     [<$option_ty Extracted>] {
                         $(
-                            [<$option_name:snake>]: None,
+                            [<$option_name:snake>]: $v.into(),
                         )*
                     }
                 }
@@ -533,10 +572,9 @@ macro_rules! generate_extracted_config {
                         match option.name {
                             $(
                                 $option_name => {
-                                    extracted.[<$option_name:snake>] = Some(
+                                    extracted.[<$option_name:snake>] =
                                         <$t>::try_from_value(option.value)
-                                            .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?
-                                    );
+                                            .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?;
                                 }
                             )*
                         }
@@ -545,35 +583,9 @@ macro_rules! generate_extracted_config {
                 }
             }
         }
-    }
-}
-
-macro_rules! with_option_type {
-    ($name:expr, String) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
-            Some(crate::ast::WithOptionValue::Ident(id)) => id.into_string(),
-            _ => ::anyhow::bail!("expected String or bare identifier"),
-        }
     };
-    ($name:expr, bool) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) => value,
-            // Bools, if they have no '= value', are true.
-            None => true,
-            _ => ::anyhow::bail!("expected bool"),
-        }
-    };
-    ($name:expr, Interval) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                mz_repr::strconv::parse_interval(&value)?
-            }
-            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                mz_repr::strconv::parse_interval(&interval.value)?
-            }
-            _ => ::anyhow::bail!("expected Interval"),
-        }
+    ($option_ty:ty, $($h:tt),+) => {
+        generate_extracted_config!{$option_ty, [], $($h),+}
     };
 }
 
@@ -591,58 +603,6 @@ pub(crate) fn ensure_empty_options<V>(
         )
     }
     Ok(())
-}
-
-/// This macro accepts a struct definition and will generate it and a `try_from`
-/// method that takes a `Vec<WithOption>` which will extract and type check
-/// options based on the struct field names and types.
-///
-/// The macro wraps all field types in an `Option` in the generated struct. The
-/// `TryFrom` implementation sets fields to `None` if they are not present in
-/// the provided `WITH` options.
-///
-/// Field names must match exactly the lowercased option name. Supported types
-/// are:
-///
-/// - `String`: expects a SQL string (`WITH (name = "value")`) or identifier
-///   (`WITH (name = text)`).
-/// - `bool`: expects either a SQL bool (`WITH (name = true)`) or a valueless
-///   option which will be interpreted as true: (`WITH (name)`.
-/// - `Interval`: expects either a SQL interval or string that can be parsed as
-///   an interval.
-macro_rules! with_options {
-  (struct $name:ident {
-        $($field_name:ident: $field_type:ident,)*
-    }) => {
-        #[derive(Debug)]
-        pub struct $name {
-            pub $($field_name: Option<$field_type>,)*
-        }
-
-        impl ::std::convert::TryFrom<Vec<mz_sql_parser::ast::WithOption<Aug>>> for $name {
-            type Error = anyhow::Error;
-
-            fn try_from(mut options: Vec<mz_sql_parser::ast::WithOption<Aug>>) -> Result<Self, Self::Error> {
-                let v = Self {
-                    $($field_name: {
-                        match options.iter().position(|opt| opt.key.as_str() == stringify!($field_name)) {
-                            None => None,
-                            Some(pos) => {
-                                let value: Option<mz_sql_parser::ast::WithOptionValue<Aug>> = options.swap_remove(pos).value;
-                                let value: $field_type = with_option_type!(value, $field_type);
-                                Some(value)
-                            },
-                        }
-                    },
-                    )*
-                };
-                if !options.is_empty() {
-                    ::anyhow::bail!("unexpected options");
-                }
-                Ok(v)
-            }
-        }
-    }
 }
 
 /// Normalizes option values that contain AWS connection parameters.

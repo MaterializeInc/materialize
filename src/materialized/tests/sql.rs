@@ -14,26 +14,80 @@
 //! in testdrive, e.g., because they depend on the current time.
 
 use std::error::Error;
-use std::io::Read;
-use std::io::Write;
-use std::net::Shutdown;
-use std::net::TcpListener;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::thread;
 use std::time::{Duration, Instant};
 
+use axum::response::IntoResponse;
+use axum::response::Response;
+use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
+use http::StatusCode;
 use postgres::Row;
 use regex::Regex;
+use serde_json::json;
+use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
 use mz_ore::assert_contains;
 use mz_ore::now::{NowFn, NOW_HUNDRED, NOW_ZERO, SYSTEM_TIME};
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
+
+/// An HTTP server whose responses can be controlled from another thread.
+struct MockHttpServer {
+    _task: AbortOnDropHandle<()>,
+    addr: SocketAddr,
+    conn_rx: mpsc::UnboundedReceiver<oneshot::Sender<Response>>,
+}
+
+impl MockHttpServer {
+    /// Constructs a new mock HTTP server.
+    fn new() -> MockHttpServer {
+        let (conn_tx, conn_rx) = mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/*path",
+            routing::get(|| async move {
+                let (response_tx, response_rx) = oneshot::channel();
+                conn_tx
+                    .send(response_tx)
+                    .expect("handle unexpectedly closed channel");
+                response_rx
+                    .await
+                    .expect("response channel unexpectedly closed")
+            }),
+        );
+        let server = axum::Server::bind(&SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .serve(router.into_make_service());
+        let addr = server.local_addr();
+        let task = task::spawn(|| "mock_http_server", async {
+            server
+                .await
+                .unwrap_or_else(|e| panic!("mock http server failed: {}", e))
+        });
+        MockHttpServer {
+            _task: task.abort_on_drop(),
+            addr,
+            conn_rx,
+        }
+    }
+
+    /// Accepts a new connection.
+    ///
+    /// The future resolves once a new connection has arrived at the server and
+    /// is awaiting a response. The provided oneshot channel should be used to
+    /// deliver the response.
+    async fn accept(&mut self) -> oneshot::Sender<Response> {
+        self.conn_rx
+            .recv()
+            .await
+            .expect("server unexpectedly closed channel")
+    }
+}
 
 #[test]
 fn test_no_block() -> Result<(), anyhow::Error> {
@@ -42,70 +96,135 @@ fn test_no_block() -> Result<(), anyhow::Error> {
     // This is better than relying on CI to time out, because an actual failure
     // (as opposed to a CI timeout) causes `services.log` to be uploaded.
     mz_ore::test::timeout(Duration::from_secs(30), || {
-        // Create a listener that will simulate a slow Confluent Schema Registry.
-        info!("test_no_block: creating listener");
-        let listener = TcpListener::bind("localhost:0")?;
-        let listener_port = listener.local_addr()?.port();
-
         info!("test_no_block: starting server");
         let server = util::start_server(util::Config::default())?;
-        info!("test_no_block: connecting to server");
-        let mut client = server.connect(postgres::NoTls)?;
 
-        info!("test_no_block: spawning thread");
-        let slow_thread = thread::spawn(move || {
-            info!("test_no_block: in thread; executing create source");
-            let result = client.batch_execute(&format!(
-                "CREATE SOURCE foo \
-                FROM KAFKA BROKER '{}' TOPIC 'foo' \
-                FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
-                &*KAFKA_ADDRS, listener_port,
-            ));
-            info!("test_no_block: in thread; create source done");
+        server.runtime.block_on(async {
+            info!("test_no_block: starting mock HTTP server");
+            let mut schema_registry_server = MockHttpServer::new();
+
+            info!("test_no_block: connecting to server");
+            let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+
+            let slow_task = task::spawn(|| "slow_client", async move {
+                info!("test_no_block: in thread; executing create source");
+                let result = client
+                    .batch_execute(&format!(
+                        "CREATE SOURCE foo \
+                        FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://{}'",
+                        &*KAFKA_ADDRS, schema_registry_server.addr,
+                    ))
+                    .await;
+                info!("test_no_block: in thread; create source done");
+                result
+            });
+
+            // Wait for Materialize to contact the schema registry, which
+            // indicates the coordinator is processing the CREATE SOURCE
+            // command. It will be unable to complete the query until we
+            // respond.
+            info!("test_no_block: accepting fake schema registry connection");
+            let response_tx = schema_registry_server.accept().await;
+
+            // Verify that the coordinator can still process other requests from other
+            // sessions.
+            info!("test_no_block: connecting to server again");
+            let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+            info!("test_no_block: executing query");
+            let answer: i32 = client.query_one("SELECT 1 + 1", &[]).await?.get(0);
+            assert_eq!(answer, 2);
+
+            // Return an error to the coordinator, so that we can shutdown cleanly.
+            info!("test_no_block: writing fake schema registry error");
+            response_tx
+                .send(StatusCode::SERVICE_UNAVAILABLE.into_response())
+                .expect("server unexpectedly closed channel");
+
+            // Verify that the schema registry error was returned to the client, for
+            // good measure.
+            info!("test_no_block: joining task");
+            let slow_res = slow_task.await.unwrap();
+            assert_contains!(slow_res.unwrap_err().to_string(), "server error 503");
+
+            Ok(())
+        })
+    })
+}
+
+/// Test that dropping a connection while a source is undergoing purification
+/// does not crash the server.
+#[test]
+fn test_drop_connection_race() -> Result<(), anyhow::Error> {
+    mz_ore::test::init_logging();
+
+    info!("test_drop_connection_race: starting server");
+    let server = util::start_server(util::Config::default().unsafe_mode())?;
+
+    server.runtime.block_on(async {
+        info!("test_drop_connection_race: starting mock HTTP server");
+        let mut schema_registry_server = MockHttpServer::new();
+
+        // Construct a source that depends on a schema registry connection.
+        let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+        client
+            .batch_execute(&format!(
+                "CREATE CONNECTION conn FOR CONFLUENT SCHEMA REGISTRY 'http://{}'",
+                schema_registry_server.addr,
+            ))
+            .await?;
+        let source_task = task::spawn(|| "source_client", async move {
+            info!("test_drop_connection_race: in task; creating connection and source");
+            let result = client
+                .batch_execute(&format!(
+                    "CREATE SOURCE foo \
+                     FROM KAFKA BROKER '{}' TOPIC 'foo' \
+                     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION conn",
+                    &*KAFKA_ADDRS,
+                ))
+                .await;
+            info!(
+                "test_drop_connection_race: in task; create source done: {:?}",
+                result
+            );
             result
         });
 
-        // Wait for materialized to contact the schema registry, which indicates
+        // Wait for Materialize to contact the schema registry, which indicates
         // the coordinator is processing the CREATE SOURCE command. It will be
         // unable to complete the query until we respond.
-        info!("test_no_block: accepting fake schema registry connection");
-        let (mut stream, _) = listener.accept()?;
+        info!("test_drop_connection_race: accepting fake schema registry connection");
+        let response_tx = schema_registry_server.accept().await;
 
-        // Verify that the coordinator can still process other requests from other
-        // sessions.
-        info!("test_no_block: connecting to server again");
-        let mut client = server.connect(postgres::NoTls)?;
-        info!("test_no_block: executing query");
-        let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
-        assert_eq!(answer, 2);
+        // Drop the connection on which the source depends.
+        info!("test_drop_connection_race: dropping connection");
+        let (client, _conn) = server.connect_async(postgres::NoTls).await?;
+        client.batch_execute("DROP CONNECTION conn").await?;
 
-        info!("test_no_block: reading the HTTP request");
-        let mut buf = vec![0; 1024];
-        let mut input = vec![];
-        // The HTTP request will end in two CRLFs, so detect that to know we've finished reading.
-        while {
-            let len = input.len();
-            len < 4 || &input[len - 4..] != b"\r\n\r\n"
-        } {
-            let len_read = stream.read(&mut buf).unwrap();
-            assert!(len_read > 0);
-            input.extend_from_slice(&buf[0..len_read]);
-        }
+        let schema = Json(json!({
+            "id": 1_i64,
+            "subject": "foo-value",
+            "version": 1_i64,
+            "schema": r#"{"type": "long"}"#,
+        }));
 
-        // Return an error to the coordinator, so that we can shutdown cleanly.
-        info!("test_no_block: writing fake schema registry error");
-        write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
-        info!("test_no_block: shutting down fake schema registry connection");
+        info!("test_drop_connection_race: sending fake schema registry response");
+        response_tx
+            .send(schema.clone().into_response())
+            .expect("server unexpectedly closed channel");
+        info!("test_drop_connection_race: sending fake schema registry response again");
+        let response_tx = schema_registry_server.accept().await;
+        response_tx
+            .send(schema.into_response())
+            .expect("server unexpectedly closed channel");
 
-        stream.shutdown(Shutdown::Write).unwrap();
+        info!("test_drop_connection_race: asserting response");
+        let source_res = source_task.await.unwrap();
+        assert_contains!(
+            source_res.unwrap_err().to_string(),
+            "unknown catalog item 'conn'"
+        );
 
-        // Verify that the schema registry error was returned to the client, for
-        // good measure.
-        info!("test_no_block: joining thread");
-        let slow_res = slow_thread.join().unwrap();
-        assert_contains!(slow_res.unwrap_err().to_string(), "server error 503");
-
-        info!("test_no_block: returning");
         Ok(())
     })
 }

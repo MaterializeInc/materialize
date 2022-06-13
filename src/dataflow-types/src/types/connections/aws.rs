@@ -18,7 +18,10 @@ use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::URL_PATTERN;
 use mz_repr::GlobalId;
 
-include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.types.aws.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/mz_dataflow_types.types.connections.aws.rs"
+));
 
 /// A wrapper for [`Uri`] that implements [`Serialize`] and `Deserialize`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -62,9 +65,9 @@ impl RustType<ProtoSerdeUri> for SerdeUri {
 ///
 /// This type protects against accidental construction of an
 /// `AwsExternalIdPrefix`. The only approved way to construct an `AwsExternalIdPrefix`
-/// is via [`ConnectorContext::from_cli_args`].
+/// is via [`ConnectionContext::from_cli_args`].
 ///
-/// [`ConnectorContext::from_cli_args`]: crate::ConnectorContext::from_cli_args
+/// [`ConnectionContext::from_cli_args`]: crate::connections::ConnectionContext::from_cli_args
 /// [external ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AwsExternalIdPrefix(pub(super) String);

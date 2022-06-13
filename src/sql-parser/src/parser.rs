@@ -1585,8 +1585,8 @@ impl<'a> Parser<'a> {
             self.parse_create_table()
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
-        } else if self.peek_keyword(CONNECTOR) {
-            self.parse_create_connector()
+        } else if self.peek_keyword(CONNECTION) {
+            self.parse_create_connection()
         } else {
             let index = self.index;
 
@@ -1679,16 +1679,17 @@ impl<'a> Parser<'a> {
 
     fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector_avro()?;
-            AvroSchema::Csr { csr_connector }
+            let csr_connection = self.parse_csr_connection_avro()?;
+            AvroSchema::Csr { csr_connection }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
             let schema = self.parse_schema()?;
             // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
             // accept `WITH (...)` here.
-            let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-                self.expect_keyword(WITH)?;
-                self.parse_with_options(false)?
+            let with_options = if self.peek_keyword(WITH)
+                && self.peek_nth_token(1) != Some(Token::Keyword(SNAPSHOT))
+            {
+                self.parse_kw_options(Parser::parse_avro_schema_options)?
             } else {
                 vec![]
             };
@@ -1706,10 +1707,19 @@ impl<'a> Parser<'a> {
         Ok(avro_schema)
     }
 
+    fn parse_avro_schema_options(&mut self) -> Result<AvroSchemaOption<Raw>, ParserError> {
+        self.expect_keywords(&[CONFLUENT, WIRE, FORMAT])?;
+        let _ = self.consume_token(&Token::Eq);
+        Ok(AvroSchemaOption {
+            name: AvroSchemaOptionName::ConfluentWireFormat,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
     fn parse_protobuf_schema(&mut self) -> Result<ProtobufSchema<Raw>, ParserError> {
         if self.parse_keywords(&[USING, CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector_proto()?;
-            Ok(ProtobufSchema::Csr { csr_connector })
+            let csr_connection = self.parse_csr_connection_proto()?;
+            Ok(ProtobufSchema::Csr { csr_connection })
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
             self.expect_keyword(USING)?;
@@ -1727,13 +1737,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
-        let connector = if self.parse_keyword(CONNECTOR) {
-            CsrConnector::Reference {
-                connector: self.parse_raw_name()?,
+    fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {
+        let connection = if self.parse_keyword(CONNECTION) {
+            CsrConnection::Reference {
+                connection: self.parse_raw_name()?,
             }
         } else {
-            CsrConnector::Inline {
+            CsrConnection::Inline {
                 url: self.parse_literal_string()?,
             }
         };
@@ -1761,20 +1771,20 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
-        Ok(CsrConnectorAvro {
-            connector,
+        Ok(CsrConnectionAvro {
+            connection,
             seed,
             with_options,
         })
     }
 
-    fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
-        let connector = if self.parse_keyword(CONNECTOR) {
-            CsrConnector::Reference {
-                connector: self.parse_raw_name()?,
+    fn parse_csr_connection_proto(&mut self) -> Result<CsrConnectionProto<Raw>, ParserError> {
+        let connection = if self.parse_keyword(CONNECTION) {
+            CsrConnection::Reference {
+                connection: self.parse_raw_name()?,
             }
         } else {
-            CsrConnector::Inline {
+            CsrConnection::Inline {
                 url: self.parse_literal_string()?,
             }
         };
@@ -1830,8 +1840,8 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(CsrConnectorProto {
-            connector,
+        Ok(CsrConnectionProto {
+            connection,
             seed,
             with_options,
         })
@@ -1906,17 +1916,17 @@ impl<'a> Parser<'a> {
         Ok(compression)
     }
 
-    fn parse_create_connector(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keyword(CONNECTOR)?;
+    fn parse_create_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(CONNECTION)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connector = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
+        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
-                CreateConnector::Kafka {
+                CreateConnection::Kafka {
                     broker,
                     with_options,
                 }
@@ -1925,16 +1935,16 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
-                CreateConnector::CSR {
-                    registry,
+                CreateConnection::Csr {
+                    url: registry,
                     with_options,
                 }
             }
             _ => unreachable!(),
         };
-        Ok(Statement::CreateConnector(CreateConnectorStatement {
+        Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connector,
+            connection,
             if_not_exists,
         }))
     }
@@ -1946,7 +1956,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
-        let connector = self.parse_create_source_connector()?;
+        let connection = self.parse_create_source_connection()?;
         let with_options = self.parse_opt_with_options()?;
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
@@ -1989,7 +1999,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
-            connector,
+            connection,
             with_options,
             format,
             include_metadata,
@@ -2050,7 +2060,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
-        let connector = self.parse_create_sink_connector()?;
+        let connection = self.parse_create_sink_connection()?;
         let mut with_options = vec![];
         if self.parse_keyword(WITH) {
             if let Some(Token::LParen) = self.next_token() {
@@ -2085,7 +2095,7 @@ impl<'a> Parser<'a> {
             name,
             in_cluster,
             from,
-            connector,
+            connection,
             with_options,
             format,
             envelope,
@@ -2095,7 +2105,9 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
+    fn parse_create_source_connection(
+        &mut self,
+    ) -> Result<CreateSourceConnection<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -2103,7 +2115,7 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(CHANNEL)?;
                 let channel = self.parse_literal_string()?;
 
-                Ok(CreateSourceConnector::PubNub {
+                Ok(CreateSourceConnection::PubNub {
                     subscribe_key,
                     channel,
                 })
@@ -2113,31 +2125,25 @@ impl<'a> Parser<'a> {
                 let conn = self.parse_literal_string()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
-                let slot = if self.parse_keyword(SLOT) {
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
                 let details = if self.parse_keyword(DETAILS) {
                     Some(self.parse_literal_string()?)
                 } else {
                     None
                 };
 
-                Ok(CreateSourceConnector::Postgres {
+                Ok(CreateSourceConnection::Postgres {
                     conn,
                     publication,
-                    slot,
                     details,
                 })
             }
             KAFKA => {
-                let connector = match self.expect_one_of_keywords(&[BROKER, CONNECTOR])? {
-                    BROKER => KafkaConnector::Inline {
+                let connection = match self.expect_one_of_keywords(&[BROKER, CONNECTION])? {
+                    BROKER => KafkaConnection::Inline {
                         broker: self.parse_literal_string()?,
                     },
-                    CONNECTOR => KafkaConnector::Reference {
-                        connector: self.parse_raw_name()?,
+                    CONNECTION => KafkaConnection::Reference {
+                        connection: self.parse_raw_name()?,
                     },
                     _ => unreachable!(),
                 };
@@ -2154,8 +2160,8 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Ok(CreateSourceConnector::Kafka(KafkaSourceConnector {
-                    connector,
+                Ok(CreateSourceConnection::Kafka(KafkaSourceConnection {
+                    connection,
                     topic,
                     key,
                 }))
@@ -2163,7 +2169,7 @@ impl<'a> Parser<'a> {
             KINESIS => {
                 self.expect_keyword(ARN)?;
                 let arn = self.parse_literal_string()?;
-                Ok(CreateSourceConnector::Kinesis { arn })
+                Ok(CreateSourceConnection::Kinesis { arn })
             }
             S3 => {
                 // FROM S3 DISCOVER OBJECTS
@@ -2204,7 +2210,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Compression::None
                 };
-                Ok(CreateSourceConnector::S3 {
+                Ok(CreateSourceConnection::S3 {
                     key_sources,
                     pattern,
                     compression,
@@ -2214,7 +2220,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_create_sink_connector(&mut self) -> Result<CreateSinkConnector<Raw>, ParserError> {
+    fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[KAFKA, AVRO, PERSIST])? {
             KAFKA => {
                 self.expect_keyword(BROKER)?;
@@ -2244,7 +2250,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 let consistency = self.parse_kafka_consistency()?;
-                Ok(CreateSinkConnector::Kafka {
+                Ok(CreateSinkConnection::Kafka {
                     broker,
                     topic,
                     key,
@@ -2274,7 +2280,7 @@ impl<'a> Parser<'a> {
                     format!("{}", shard_id)
                 };
 
-                Ok(CreateSinkConnector::Persist {
+                Ok(CreateSinkConnection::Persist {
                     consensus_uri,
                     blob_uri,
                     shard_id,
@@ -2712,11 +2718,11 @@ impl<'a> Parser<'a> {
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
-        let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
-            CONNECTOR,
-        ]) {
-            Some(DATABASE) => {
+        let object_type = match self.expect_one_of_keywords(&[
+            CONNECTION, CLUSTER, DATABASE, INDEX, ROLE, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE,
+            USER, VIEW,
+        ])? {
+            DATABASE => {
                 let if_exists = self.parse_if_exists()?;
                 let name = self.parse_database_name()?;
                 let restrict = matches!(
@@ -2729,7 +2735,7 @@ impl<'a> Parser<'a> {
                     restrict,
                 }));
             }
-            Some(SCHEMA) => {
+            SCHEMA => {
                 let if_exists = self.parse_if_exists()?;
                 let name = self.parse_schema_name()?;
                 let cascade = matches!(
@@ -2742,7 +2748,7 @@ impl<'a> Parser<'a> {
                     cascade,
                 }));
             }
-            Some(ROLE) | Some(USER) => {
+            ROLE | USER => {
                 let if_exists = self.parse_if_exists()?;
                 let names = self.parse_comma_separated(Parser::parse_object_name)?;
                 return Ok(Statement::DropRoles(DropRolesStatement {
@@ -2750,21 +2756,21 @@ impl<'a> Parser<'a> {
                     names,
                 }));
             }
-            Some(CLUSTER) => {
+            CLUSTER => {
                 return if self.peek_keyword(REPLICA) {
                     self.parse_drop_cluster_replicas()
                 } else {
                     self.parse_drop_clusters()
                 };
             }
-            Some(INDEX) => ObjectType::Index,
-            Some(SINK) => ObjectType::Sink,
-            Some(SOURCE) => ObjectType::Source,
-            Some(TABLE) => ObjectType::Table,
-            Some(TYPE) => ObjectType::Type,
-            Some(VIEW) => ObjectType::View,
-            Some(SECRET) => ObjectType::Secret,
-            Some(CONNECTOR) => ObjectType::Connector,
+            INDEX => ObjectType::Index,
+            SINK => ObjectType::Sink,
+            SOURCE => ObjectType::Source,
+            TABLE => ObjectType::Table,
+            TYPE => ObjectType::Type,
+            VIEW => ObjectType::View,
+            SECRET => ObjectType::Secret,
+            CONNECTION => ObjectType::Connection,
             _ => {
                 return self.expected(
                     self.peek_pos(),
@@ -3070,7 +3076,7 @@ impl<'a> Parser<'a> {
             // HACK(benesch): temporarily allow secret references of the form
             // `KEY = SECRET db.schema.item`. `KEY = SECRET` is still allowed
             // for backwards copmatibility and parses as the ident `secret`.
-            // Once we have connectors with explicit fields for secret
+            // Once we have connections with explicit fields for secret
             // references, we can remove this hack.
             if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
                 Ok(WithOptionValue::Secret(secret))
@@ -3216,7 +3222,6 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         };
-        let mut options = vec![];
         // WITH must be followed by LParen. The WITH in COPY is optional for backward
         // compat with Postgres but is required elsewhere, which is why we don't use
         // parse_with_options here.
@@ -3226,16 +3231,35 @@ impl<'a> Parser<'a> {
         } else {
             self.consume_token(&Token::LParen)
         };
-        if has_options {
-            self.prev_token();
-            options = self.parse_with_options(false)?;
-        }
+        let options = if has_options {
+            let o = self.parse_comma_separated(Parser::parse_copy_options)?;
+            self.expect_token(&Token::RParen)?;
+            o
+        } else {
+            vec![]
+        };
         Ok(Statement::Copy(CopyStatement {
             relation,
             direction,
             target,
             options,
         }))
+    }
+
+    fn parse_copy_options(&mut self) -> Result<CopyOption<Raw>, ParserError> {
+        let name =
+            match self.expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER])? {
+                FORMAT => CopyOptionName::Format,
+                DELIMITER => CopyOptionName::Delimiter,
+                NULL => CopyOptionName::Null,
+                ESCAPE => CopyOptionName::Escape,
+                QUOTE => CopyOptionName::Quote,
+                HEADER => CopyOptionName::Header,
+                _ => unreachable!(),
+            };
+        let _ = self.consume_token(&Token::Eq);
+        let value = self.parse_opt_with_option_value(false)?;
+        Ok(CopyOption { name, value })
     }
 
     /// Parse a literal value (numbers, strings, date/time, booleans)
@@ -4141,7 +4165,16 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                COLUMNS, CONNECTORS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
+                COLUMNS,
+                CONNECTIONS,
+                FULL,
+                INDEX,
+                INDEXES,
+                KEYS,
+                OBJECTS,
+                SCHEMAS,
+                TABLES,
+                TYPES,
             ])?;
             self.prev_token();
         }
@@ -4153,7 +4186,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expect_one_of_keywords(&[
                     COLUMNS,
-                    CONNECTORS,
+                    CONNECTIONS,
                     MATERIALIZED,
                     OBJECTS,
                     ROLES,
@@ -4189,8 +4222,18 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, CLUSTER, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
-            SECRETS, CONNECTORS,
+            OBJECTS,
+            ROLES,
+            CLUSTER,
+            CLUSTERS,
+            SINKS,
+            SOURCES,
+            TABLES,
+            TYPES,
+            USERS,
+            VIEWS,
+            SECRETS,
+            CONNECTIONS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
@@ -4211,7 +4254,7 @@ impl<'a> Parser<'a> {
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
                 SECRETS => ObjectType::Secret,
-                CONNECTORS => ObjectType::Connector,
+                CONNECTIONS => ObjectType::Connection,
                 _ => unreachable!(),
             };
 
@@ -4301,10 +4344,10 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
             }))
-        } else if self.parse_keywords(&[CREATE, CONNECTOR]) {
-            Ok(Statement::ShowCreateConnector(
-                ShowCreateConnectorStatement {
-                    connector_name: self.parse_raw_name()?,
+        } else if self.parse_keywords(&[CREATE, CONNECTION]) {
+            Ok(Statement::ShowCreateConnection(
+                ShowCreateConnectionStatement {
+                    connection_name: self.parse_raw_name()?,
                 },
             ))
         } else {
@@ -4987,12 +5030,21 @@ impl<'a> Parser<'a> {
         };
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
-        let options = self.parse_opt_with_options()?;
+        let options = self.parse_kw_options(Parser::parse_fetch_option)?;
         Ok(Statement::Fetch(FetchStatement {
             name,
             count,
             options,
         }))
+    }
+
+    fn parse_fetch_option(&mut self) -> Result<FetchOption<Raw>, ParserError> {
+        self.expect_keyword(TIMEOUT)?;
+        let _ = self.consume_token(&Token::Eq);
+        Ok(FetchOption {
+            name: FetchOptionName::Timeout,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     /// Parse a `RAISE` statement, assuming that the `RAISE` token

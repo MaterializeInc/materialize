@@ -9,14 +9,6 @@ menu:
 `CREATE CLUSTER` creates a logical [cluster](/overview/key-concepts#clusters), which
 contains indexes and sinks.
 
-{{< warning >}}
-
-In addition to clusters, you must <a
-href="https://materialize.com/docs/sql/create-cluster-replicas">create cluster
-replicas</a> for Materialize to perform computations.
-
-{{< /warning >}}
-
 ## Conceptual framework
 
 Clusters are logical components that let you express resource isolation for all
@@ -42,9 +34,9 @@ this might require setting up more than one cluster.
 
 {{< diagram "create-cluster.svg" >}}
 
-### `inline_replica`
+### `replica_definition`
 
-{{< diagram "inline-replica.svg" >}}
+{{< diagram "cluster-replica-def.svg" >}}
 
 ### `replica_option`
 
@@ -53,7 +45,7 @@ this might require setting up more than one cluster.
 Field | Use
 ------|-----
 _name_ | A name for the cluster.
-_inline_replica_ | Any [inline replicas](#inline_replica) you want to immediately provision.
+_inline_replica_ | Any [replicas](#replica_definition) you want to immediately provision.
 _replica_name_ | A name for a cluster replica.
 _replica_option_ | This replica's specified [options](#replica_option).
 _size_ | A "size" for a managed replica. For valid `size` values, see [Cluster replica sizes](#cluster-replica-sizes)

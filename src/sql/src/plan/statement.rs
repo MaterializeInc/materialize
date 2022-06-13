@@ -111,7 +111,7 @@ pub fn describe(
         Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
         Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
         Statement::CreateClusterReplica(stmt) => ddl::describe_create_cluster_replica(&scx, stmt)?,
-        Statement::CreateConnector(stmt) => ddl::describe_create_connector(&scx, stmt)?,
+        Statement::CreateConnection(stmt) => ddl::describe_create_connection(&scx, stmt)?,
         Statement::CreateDatabase(stmt) => ddl::describe_create_database(&scx, stmt)?,
         Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
         Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
@@ -132,7 +132,7 @@ pub fn describe(
 
         // `SHOW` statements.
         Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
-        Statement::ShowCreateConnector(stmt) => show::describe_show_create_connector(&scx, stmt)?,
+        Statement::ShowCreateConnection(stmt) => show::describe_show_create_connection(&scx, stmt)?,
         Statement::ShowCreateIndex(stmt) => show::describe_show_create_index(&scx, stmt)?,
         Statement::ShowCreateSink(stmt) => show::describe_show_create_sink(&scx, stmt)?,
         Statement::ShowCreateSource(stmt) => show::describe_show_create_source(&scx, stmt)?,
@@ -214,7 +214,7 @@ pub fn plan(
         Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
         Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
         Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
-        Statement::CreateConnector(stmt) => ddl::plan_create_connector(scx, stmt),
+        Statement::CreateConnection(stmt) => ddl::plan_create_connection(scx, stmt),
         Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),
         Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
@@ -244,7 +244,7 @@ pub fn plan(
 
         // `SHOW` statements.
         Statement::ShowColumns(stmt) => show::show_columns(scx, stmt)?.plan(),
-        Statement::ShowCreateConnector(stmt) => show::plan_show_create_connector(scx, stmt),
+        Statement::ShowCreateConnection(stmt) => show::plan_show_create_connection(scx, stmt),
         Statement::ShowCreateIndex(stmt) => show::plan_show_create_index(scx, stmt),
         Statement::ShowCreateSink(stmt) => show::plan_show_create_sink(scx, stmt),
         Statement::ShowCreateSource(stmt) => show::plan_show_create_source(scx, stmt),
@@ -304,7 +304,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::Index, ObjectType::Index)
             | (CatalogItemType::Type, ObjectType::Type)
             | (CatalogItemType::Secret, ObjectType::Secret)
-            | (CatalogItemType::Connector, ObjectType::Connector) => true,
+            | (CatalogItemType::Connection, ObjectType::Connection) => true,
             (_, _) => false,
         }
     }

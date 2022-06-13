@@ -11,7 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-package mz_dataflow_types.types.aws;
+package mz_dataflow_types.types.connections.aws;
 
 message ProtoSerdeUri {
     string uri = 1;

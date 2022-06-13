@@ -61,3 +61,6 @@ land, and then browsed as reference material as you skill up on the codebase.
 
 * [sqllogictest.md](sqllogictest.md) contains detailed information about
   our SQL logic testing framework.
+
+* We have basic introductions for developers for various parts of the system:
+  * [Query Compilation 101](101-query-compilation.md) (for members of the optimizer team).

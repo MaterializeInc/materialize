@@ -458,7 +458,7 @@ where
 /// highest-ever seen binlog offset.
 #[derive(Debug)]
 struct DebeziumDeduplicationState {
-    /// Last recorded binlog position and connector offset
+    /// Last recorded binlog position and connection offset
     ///
     /// [`DebeziumEnvelope`] determines whether messages that are not ahead
     /// of the last recorded position will be skipped.
@@ -759,7 +759,7 @@ impl DebeziumDeduplicationState {
         &mut self,
         key: Option<Row>,
         value: &Row,
-        connector_offset: MzOffset,
+        connection_offset: MzOffset,
         upstream_time_millis: Option<i64>,
         debug_name: &str,
     ) -> Result<bool, DataflowError> {
@@ -784,7 +784,7 @@ impl DebeziumDeduplicationState {
                     }
                 }
                 None => {
-                    self.last_position_and_offset = Some((position.clone(), connector_offset));
+                    self.last_position_and_offset = Some((position.clone(), connection_offset));
                     None
                 }
             },
@@ -868,7 +868,7 @@ impl DebeziumDeduplicationState {
 
                     log_duplication_info(
                         position,
-                        connector_offset,
+                        connection_offset,
                         upstream_time_millis,
                         debug_name,
                         is_new,
@@ -919,7 +919,7 @@ struct SkipInfo {
 
 fn log_duplication_info(
     position: RowCoordinates,
-    connector_offset: MzOffset,
+    connection_offset: MzOffset,
     upstream_time_millis: Option<i64>,
     debug_name: &str,
     is_new: bool,
@@ -938,12 +938,12 @@ fn log_duplication_info(
             // that label is omitted from this log message
             warn!(
                 "Created a new record behind the highest point in source={} \
-                 new deduplication position: {:?}, new connector offset: {}, \
+                 new deduplication position: {:?}, new connection offset: {}, \
                  old deduplication position: {:?} \
                  message_time={} max_seen_time={}",
                 debug_name,
                 position,
-                connector_offset,
+                connection_offset,
                 skipinfo.old_position,
                 fmt_timestamp(upstream_time_millis),
                 fmt_timestamp(*max_seen_time),
@@ -954,7 +954,7 @@ fn log_duplication_info(
             debug!(
                 "already ingested source={} new deduplication position: {:?}, \
                  old deduplication position: {:?}\
-                 connector offset={} message_time={} message_first_seen={} max_seen_time={}",
+                 connection offset={} message_time={} message_first_seen={} max_seen_time={}",
                 debug_name,
                 position,
                 skipinfo.old_position,
@@ -971,10 +971,10 @@ fn log_duplication_info(
         (false, None) => {
             error!(
                 "We surprisingly are seeing a duplicate record that \
-                    is beyond the highest record we've ever seen. {:?} connector offset={} \
+                    is beyond the highest record we've ever seen. {:?} connection offset={} \
                     message_time={} message_first_seen={} max_seen_time={}",
                 position,
-                connector_offset,
+                connection_offset,
                 fmt_timestamp(upstream_time_millis),
                 fmt_timestamp(*original_time),
                 fmt_timestamp(*max_seen_time),
