@@ -280,8 +280,17 @@ where
 
         self.coord_client.reset_canceled();
 
+        // NOTE(guswynn): we could consider adding spans to all message types. Currently
+        // only a few message types seem useful.
+        let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
+
         let next_state = match message {
-            Some(FrontendMessage::Query { sql }) => self.query(sql).await?,
+            Some(FrontendMessage::Query { sql }) => {
+                let query_root_span =
+                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                query_root_span.follows_from(tracing::Span::current());
+                self.query(sql).instrument(query_root_span).await?
+            }
             Some(FrontendMessage::Parse {
                 name,
                 sql,
@@ -311,6 +320,9 @@ where
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
                 };
+                let execute_root_span =
+                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                execute_root_span.follows_from(tracing::Span::current());
                 self.execute(
                     portal_name,
                     max_rows,
@@ -318,6 +330,7 @@ where
                     None,
                     ExecuteTimeout::None,
                 )
+                .instrument(execute_root_span)
                 .await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
