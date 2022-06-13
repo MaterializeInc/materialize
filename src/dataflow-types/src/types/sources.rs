@@ -1133,7 +1133,7 @@ pub fn provide_default_metadata(
     envelope: &UnplannedSourceEnvelope,
     encoding: &encoding::DataEncoding,
 ) -> bool {
-    let is_avro = matches!(encoding, encoding::DataEncoding::Avro(_));
+    let is_avro = matches!(encoding.inner, encoding::DataEncodingInner::Avro(_));
     let is_stateless_dbz = match envelope {
         UnplannedSourceEnvelope::Debezium(_) => true,
         _ => false,

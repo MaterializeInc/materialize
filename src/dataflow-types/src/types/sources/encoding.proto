@@ -29,7 +29,7 @@ message ProtoSourceDataEncoding {
     }
 }
 
-message ProtoDataEncoding {
+message ProtoDataEncodingInner {
     oneof kind {
         ProtoAvroEncoding avro = 1;
         ProtoProtobufEncoding protobuf = 2;
@@ -40,6 +40,11 @@ message ProtoDataEncoding {
         google.protobuf.Empty text = 7;
         mz_repr.relation_and_scalar.ProtoRelationDesc row_codec = 8;
     }
+}
+
+message ProtoDataEncoding {
+    bool force_nullable_columns = 1;
+    ProtoDataEncodingInner inner = 2;
 }
 
 message ProtoAvroEncoding {
