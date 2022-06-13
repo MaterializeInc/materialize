@@ -38,6 +38,17 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 > CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
 > CREATE SECRET password_csr AS 'sekurity'
 
+> CREATE TABLE not_a_secret (a int);
+
+! CREATE MATERIALIZED SOURCE data
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
+  WITH (
+      ssl_key_pem = SECRET not_a_secret
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM
+contains: not a SECRET
+
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
