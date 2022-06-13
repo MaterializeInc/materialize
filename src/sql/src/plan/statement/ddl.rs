@@ -398,7 +398,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(scx, format, &envelope)?;
+            let encoding = get_encoding(scx, format, &envelope, &connection)?;
 
             // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
             let config_options =
@@ -497,9 +497,9 @@ pub fn plan_create_source(
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 ExternalSourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            let encoding = get_encoding(scx, format, &envelope)?;
             (connection, encoding)
         }
         CreateSourceConnection::S3 {
@@ -525,6 +525,10 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
+            let encoding = get_encoding(scx, format, &envelope, &connection)?;
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("S3 sources do not support key decoding");
+            }
             let connection = ExternalSourceConnection::S3(S3SourceConnection {
                 key_sources: converted_sources,
                 pattern: pattern
@@ -542,10 +546,6 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(scx, format, &envelope)?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                bail!("S3 sources do not support key decoding");
-            }
             (connection, encoding)
         }
         CreateSourceConnection::Postgres {
@@ -1176,6 +1176,7 @@ fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope<Aug>,
+    connection: &CreateSourceConnection<Aug>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
@@ -1193,8 +1194,9 @@ fn get_encoding(
         }
     };
 
-    let force_nullable_columns = matches!(envelope, Envelope::None);
-    let encoding = encoding.into_source_data_encoding(force_nullable_columns);
+    let force_nullable_keys = matches!(connection, CreateSourceConnection::Kafka(_))
+        && matches!(envelope, Envelope::None);
+    let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
     let requires_keyvalue = matches!(
         envelope,

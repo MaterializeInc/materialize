@@ -33,20 +33,20 @@ pub enum SourceDataEncodingInner {
 }
 
 impl SourceDataEncodingInner {
-    pub fn into_source_data_encoding(self, force_nullable_columns: bool) -> SourceDataEncoding {
+    pub fn into_source_data_encoding(self, force_nullable_keys: bool) -> SourceDataEncoding {
         match self {
             SourceDataEncodingInner::Single(inner) => SourceDataEncoding::Single(DataEncoding {
                 inner,
-                force_nullable_columns,
+                force_nullable_columns: false,
             }),
             SourceDataEncodingInner::KeyValue { key, value } => SourceDataEncoding::KeyValue {
                 key: DataEncoding {
                     inner: key,
-                    force_nullable_columns,
+                    force_nullable_columns: force_nullable_keys,
                 },
                 value: DataEncoding {
                     inner: value,
-                    force_nullable_columns,
+                    force_nullable_columns: false,
                 },
             },
         }
