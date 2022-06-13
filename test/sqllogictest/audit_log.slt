@@ -52,7 +52,7 @@ create  view  {"database":"materialize","item":"v2","schema":"public"}  material
 create  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
 create  view  {"database":"materialize","item":"unmat","schema":"public"}  materialize
 create  index  {"database":"materialize","item":"t_primary_idx","schema":"public"}  materialize
-rename  view  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
+alter  view  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
 drop  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
 drop  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
 create  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
