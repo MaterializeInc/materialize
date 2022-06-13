@@ -37,6 +37,7 @@ services:
         --materialize-url=postgres://materialize@materialized:6875
         --cert=/share/secrets/producer.p12
         --cert-password=mzmzmz
+        --var=ca="$$(</share/secrets/ca.crt)"
         $$*
       - bash
     command: test/kafka-sasl-plain/*.td

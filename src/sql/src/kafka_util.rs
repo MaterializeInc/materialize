@@ -11,11 +11,9 @@
 
 use std::collections::BTreeMap;
 use std::convert::{self, TryInto};
-use std::fs::File;
-use std::io::Read;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use mz_dataflow_types::connections::StringOrSecret;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
@@ -33,31 +31,12 @@ use mz_sql_parser::ast::Value;
 use crate::normalize::SqlValueOrSecret;
 
 enum ValType {
-    Path,
-    String,
+    String { transform: fn(String) -> String },
+    StringOrSecret,
+    Secret,
     // Number with range [lower, upper]
     Number(i32, i32),
     Boolean,
-}
-
-impl ValType {
-    fn process_val(&self, val: &Value) -> Result<String, anyhow::Error> {
-        Ok(match (&self, val) {
-            (ValType::String, Value::String(v)) => v.to_string(),
-            (ValType::Boolean, Value::Boolean(b)) => b.to_string(),
-            (ValType::Path, Value::String(v)) => {
-                if std::fs::metadata(&v).is_err() {
-                    bail!("file does not exist")
-                }
-                v.to_string()
-            }
-            (ValType::Number(lower, upper), Value::Number(n)) => match n.parse::<i32>() {
-                Ok(parsed_n) if *lower <= parsed_n && parsed_n <= *upper => n.to_string(),
-                _ => bail!("must be a number between {} and {}", lower, upper),
-            },
-            _ => bail!("unexpected value type"),
-        })
-    }
 }
 
 // Describes Kafka cluster configurations users can supply using `CREATE
@@ -65,7 +44,6 @@ impl ValType {
 struct Config {
     name: &'static str,
     val_type: ValType,
-    transform: fn(String) -> String,
     default: Option<String>,
 }
 
@@ -74,31 +52,33 @@ impl Config {
         Config {
             name,
             val_type,
-            transform: convert::identity,
             default: None,
         }
     }
 
     /// Shorthand for simple string config options.
     fn string(name: &'static str) -> Self {
-        Config::new(name, ValType::String)
+        Config::new(
+            name,
+            ValType::String {
+                transform: convert::identity,
+            },
+        )
     }
 
-    /// Shorthand for simple path config options.
-    fn path(name: &'static str) -> Self {
-        Config::new(name, ValType::Path)
+    /// Shorthand for a string config option with a transformation function.
+    fn string_transform(name: &'static str, transform: fn(String) -> String) -> Self {
+        Config::new(name, ValType::String { transform })
     }
 
-    /// Builds a new config that transforms the parameter according to `f` after
-    /// it is validated.
-    fn set_transform(mut self, f: fn(String) -> String) -> Self {
-        self.transform = f;
-        self
+    /// Shorthand for a config option that can be either a string or a secret.
+    fn string_or_secret(name: &'static str) -> Self {
+        Config::new(name, ValType::StringOrSecret)
     }
 
-    /// Performs `self`'s `transform` on `v`.
-    fn do_transform(&self, v: String) -> String {
-        (self.transform)(v)
+    /// Shorthand for secret config options.
+    fn secret(name: &'static str) -> Self {
+        Config::new(name, ValType::Secret)
     }
 
     /// Allows for returning a default value for this configuration option
@@ -116,27 +96,50 @@ impl Config {
 fn extract(
     input: &mut BTreeMap<String, SqlValueOrSecret>,
     configs: &[Config],
-    secrets_reader: &SecretsReader,
 ) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
     let mut out = BTreeMap::new();
     for config in configs {
         // Look for config.name
-        let value = match input.remove(config.name) {
-            Some(SqlValueOrSecret::Value(v)) => config
-                .val_type
-                .process_val(&v)
-                .map(|v| StringOrSecret::String(config.do_transform(v)))
-                .map_err(|e| anyhow!("Invalid WITH option {}={}: {}", config.name, v, e))?,
-            Some(SqlValueOrSecret::Secret(id)) => config
-                .val_type
-                .process_val(&Value::String(secrets_reader.read_string(id)?))
-                .map(|_| StringOrSecret::Secret(id))
-                .map_err(|e| anyhow!("Invalid WITH option {}={:?}: {}", config.name, id, e))?,
+        let value = match (input.remove(config.name), &config.val_type) {
+            (Some(SqlValueOrSecret::Value(Value::Boolean(b))), ValType::Boolean) => {
+                StringOrSecret::String(b.to_string())
+            }
+            (Some(SqlValueOrSecret::Value(Value::Number(n))), ValType::Number(lower, upper)) => {
+                match n.parse::<i32>() {
+                    Ok(parsed_n) if *lower <= parsed_n && parsed_n <= *upper => {
+                        StringOrSecret::String(n.to_string())
+                    }
+                    _ => bail!("must be a number between {} and {}", lower, upper),
+                }
+            }
+            (Some(SqlValueOrSecret::Value(Value::String(s))), ValType::String { transform }) => {
+                StringOrSecret::String(transform(s.to_string()))
+            }
+            (Some(SqlValueOrSecret::Value(Value::String(s))), ValType::StringOrSecret) => {
+                StringOrSecret::String(s.to_string())
+            }
+            (Some(SqlValueOrSecret::Secret(id)), ValType::Secret)
+            | (Some(SqlValueOrSecret::Secret(id)), ValType::StringOrSecret) => {
+                StringOrSecret::Secret(id)
+            }
             // Check for default values
-            None => match &config.default {
-                Some(v) => StringOrSecret::String(config.do_transform(v.to_string())),
+            (None, _) => match &config.default {
+                Some(v) => StringOrSecret::String(v.to_string()),
                 None => continue,
             },
+            (Some(SqlValueOrSecret::Value(v)), _) => {
+                bail!(
+                    "Invalid WITH option {}={}: unexpected value type",
+                    config.name,
+                    v
+                );
+            }
+            (Some(SqlValueOrSecret::Secret(_)), _) => {
+                bail!(
+                    "WITH option {} does not accept secret references",
+                    config.name
+                );
+            }
         };
         out.insert(config.get_kafka_config_key(), value);
     }
@@ -155,7 +158,6 @@ fn extract(
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-    secrets_reader: &SecretsReader,
 ) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
@@ -180,16 +182,16 @@ pub fn extract_config(
             Config::new("enable_auto_commit", ValType::Boolean),
             Config::string("isolation_level").set_default(Some(String::from("read_committed"))),
             Config::string("security_protocol"),
-            Config::string("sasl_username"),
-            Config::string("sasl_password"),
+            Config::string_or_secret("sasl_username"),
+            Config::secret("sasl_password"),
             // For historical reasons, we allow `sasl_mechanisms` to be lowercase or
             // mixed case, while librdkafka requires all uppercase (e.g., `PLAIN`,
             // not `plain`).
-            Config::string("sasl_mechanisms").set_transform(|s| s.to_uppercase()),
-            Config::path("ssl_ca_location"),
-            Config::path("ssl_certificate_location"),
-            Config::path("ssl_key_location"),
-            Config::string("ssl_key_password"),
+            Config::string_transform("sasl_mechanisms", |s| s.to_uppercase()),
+            Config::string_or_secret("ssl_ca_pem"),
+            Config::string_or_secret("ssl_certificate_pem"),
+            Config::secret("ssl_key_pem"),
+            Config::secret("ssl_key_password"),
             Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
             Config::new("enable_idempotence", ValType::Boolean),
             Config::new(
@@ -199,24 +201,21 @@ pub fn extract_config(
                 ValType::Number(0, 1_000_000_000),
             ),
         ],
-        secrets_reader,
     )
 }
 
 pub fn extract_config_ccsr(
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-    secrets_reader: &SecretsReader,
 ) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
         with_options,
         &[
-            Config::path("ssl_ca_location"),
-            Config::path("ssl_key_location"),
-            Config::path("ssl_certificate_location"),
-            Config::string("username"),
-            Config::string("password"),
+            Config::string_or_secret("ssl_ca_pem"),
+            Config::secret("ssl_key_pem"),
+            Config::string_or_secret("ssl_certificate_pem"),
+            Config::string_or_secret("username"),
+            Config::secret("password"),
         ],
-        secrets_reader,
     )
 }
 
@@ -431,34 +430,33 @@ pub fn generate_ccsr_client_config(
     let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
 
     // If provided, prefer SSL options from the schema registry configuration
-    if let Some(ca_path) = ccsr_options
-        .remove("ssl.ca.location")
+    if let Some(ca) = ccsr_options
+        .remove("ssl.ca.pem")
         .map(|v| v.get_string(secrets_reader))
         .transpose()?
     {
-        let mut ca_buf = Vec::new();
-        File::open(ca_path)?.read_to_end(&mut ca_buf)?;
-        let cert = Certificate::from_pem(&ca_buf)?;
+        let cert = Certificate::from_pem(&ca.as_bytes())?;
         client_config = client_config.add_root_certificate(cert);
     }
 
-    let key_path = ccsr_options
-        .remove("ssl.key.location")
+    let key = ccsr_options
+        .remove("ssl.key.pem")
         .map(|v| v.get_string(secrets_reader))
         .transpose()?;
-    let cert_path = ccsr_options
-        .remove("ssl.certificate.location")
+    let cert = ccsr_options
+        .remove("ssl.certificate.pem")
         .map(|v| v.get_string(secrets_reader))
         .transpose()?;
-    match (key_path, cert_path) {
-        (Some(key_path), Some(cert_path)) => {
+    match (key, cert) {
+        (Some(key), Some(cert)) => {
             // `reqwest` expects identity `pem` files to contain one key and
             // at least one certificate. Because `librdkafka` expects these
             // as two separate arguments, we simply concatenate them for
             // `reqwest`'s sake.
             let mut ident_buf = Vec::new();
-            File::open(key_path)?.read_to_end(&mut ident_buf)?;
-            File::open(cert_path)?.read_to_end(&mut ident_buf)?;
+            ident_buf.extend(key.as_bytes());
+            ident_buf.push(b'\n');
+            ident_buf.extend(cert.as_bytes());
             let ident = Identity::from_pem(&ident_buf)?;
             client_config = client_config.identity(ident);
         }

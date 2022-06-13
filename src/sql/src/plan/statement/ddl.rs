@@ -347,7 +347,7 @@ pub fn plan_create_source(
             let (broker, config_options) = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => (
                     broker.to_string(),
-                    kafka_util::extract_config(&mut with_options, scx.catalog.secrets_reader())?,
+                    kafka_util::extract_config(&mut with_options)?,
                 ),
                 mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
                     let item = scx.get_item_by_resolved_name(&connection)?;
@@ -1261,10 +1261,8 @@ fn get_encoding_inner(
                     let mut normalized_options = normalize::options(&ccsr_options)?;
                     let ccsr_config = match connection {
                         CsrConnection::Inline { url } => {
-                            let mut options = kafka_util::extract_config_ccsr(
-                                &mut normalized_options,
-                                scx.catalog.secrets_reader(),
-                            )?;
+                            let mut options =
+                                kafka_util::extract_config_ccsr(&mut normalized_options)?;
                             kafka_util::generate_ccsr_client_config(
                                 url.parse()?,
                                 &mut options,
@@ -1335,10 +1333,8 @@ fn get_encoding_inner(
                     let mut normalized_options = normalize::options(&ccsr_options)?;
                     let _ = match connection {
                         CsrConnection::Inline { url } => {
-                            let mut options = kafka_util::extract_config_ccsr(
-                                &mut normalized_options,
-                                scx.catalog.secrets_reader(),
-                            )?;
+                            let mut options =
+                                kafka_util::extract_config_ccsr(&mut normalized_options)?;
                             kafka_util::generate_ccsr_client_config(
                                 url.parse()?,
                                 &mut options,
@@ -1787,7 +1783,7 @@ fn kafka_sink_builder(
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
-    let config_options = kafka_util::extract_config(with_options, scx.catalog.secrets_reader())?;
+    let config_options = kafka_util::extract_config(with_options)?;
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
@@ -1824,10 +1820,8 @@ fn kafka_sink_builder(
                 bail!("SEED option does not make sense with sinks");
             }
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let mut ccsr_with_options = kafka_util::extract_config_ccsr(
-                &mut normalized_with_options,
-                scx.catalog.secrets_reader(),
-            )?;
+            let mut ccsr_with_options =
+                kafka_util::extract_config_ccsr(&mut normalized_with_options)?;
             normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let schema_registry_url = url.parse::<Url>()?;
@@ -2008,10 +2002,8 @@ fn get_kafka_sink_consistency_config(
                     bail!("SEED option does not make sense with sinks");
                 }
                 let schema_registry_url = uri.parse::<Url>()?;
-                let mut ccsr_with_options = kafka_util::extract_config_ccsr(
-                    &mut normalize::options(&with_options)?,
-                    secrets_reader,
-                )?;
+                let mut ccsr_with_options =
+                    kafka_util::extract_config_ccsr(&mut normalize::options(&with_options)?)?;
                 let ccsr_config = kafka_util::generate_ccsr_client_config(
                     schema_registry_url.clone(),
                     &mut ccsr_with_options,
@@ -2901,19 +2893,13 @@ pub fn plan_create_connection(
             let mut with_options = normalize::options(&with_options)?;
             Connection::Kafka(KafkaConnection {
                 broker: broker.parse()?,
-                options: kafka_util::extract_config(
-                    &mut with_options,
-                    scx.catalog.secrets_reader(),
-                )?,
+                options: kafka_util::extract_config(&mut with_options)?,
             })
         }
         CreateConnection::Csr { url, with_options } => {
             let connection = kafka_util::generate_ccsr_client_config(
                 url.parse()?,
-                &mut kafka_util::extract_config_ccsr(
-                    &mut normalize::options(&with_options)?,
-                    scx.catalog.secrets_reader(),
-                )?,
+                &mut kafka_util::extract_config_ccsr(&mut normalize::options(&with_options)?)?,
                 scx.catalog.secrets_reader(),
             )?;
             Connection::Csr(connection)

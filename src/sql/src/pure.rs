@@ -87,7 +87,7 @@ pub async fn purify_create_source(
                 }
                 KafkaConnection::Inline { broker } => (
                     broker.to_string(),
-                    kafka_util::extract_config(&mut with_options_map, catalog.secrets_reader())?,
+                    kafka_util::extract_config(&mut with_options_map)?,
                 ),
             };
             let consumer = kafka_util::create_consumer(
@@ -299,10 +299,7 @@ async fn purify_csr_connection_proto(
             let ccsr_config = match connection {
                 CsrConnection::Inline { url } => kafka_util::generate_ccsr_client_config(
                     url.parse()?,
-                    &mut kafka_util::extract_config_ccsr(
-                        &mut normalize::options(&ccsr_options)?,
-                        catalog.secrets_reader(),
-                    )?,
+                    &mut kafka_util::extract_config_ccsr(&mut normalize::options(&ccsr_options)?)?,
                     catalog.secrets_reader(),
                 )?,
                 CsrConnection::Reference { connection } => {
@@ -361,10 +358,7 @@ async fn purify_csr_connection_avro(
         let ccsr_config = match connection {
             CsrConnection::Inline { url } => kafka_util::generate_ccsr_client_config(
                 url.parse()?,
-                &mut kafka_util::extract_config_ccsr(
-                    &mut normalize::options(&ccsr_options)?,
-                    catalog.secrets_reader(),
-                )?,
+                &mut kafka_util::extract_config_ccsr(&mut normalize::options(&ccsr_options)?)?,
                 catalog.secrets_reader(),
             )?,
             CsrConnection::Reference { connection } => {
