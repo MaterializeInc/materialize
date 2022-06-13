@@ -47,7 +47,7 @@
 
 > CREATE TABLE s (a int);
 
-$ postgres-connect name=writer url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
+$ postgres-connect name=writer url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
 # In-flight txns don't affect updates/deletes, and vice versa
 

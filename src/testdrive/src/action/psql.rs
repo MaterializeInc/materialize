@@ -45,7 +45,7 @@ impl Action for ExecuteAction {
                 &self.command,
                 &format!(
                     "postgres://{}@{}",
-                    state.materialized_user, state.materialized_sql_addr
+                    state.materialize_user, state.materialize_sql_addr
                 ),
             ])
             .output()

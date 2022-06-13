@@ -79,7 +79,7 @@ pub(crate) async fn migrate<S: Append>(catalog: &mut Catalog<S>) -> Result<(), a
 //   This might mean changing code outside the migration itself, or only
 //   executing some migrations when encountering certain versions.
 // - Migrations must preserve backwards compatibility with all past releases of
-//   materialized.
+//   Materialize.
 //
 // Please include @benesch on any code reviews that add or edit migrations.
 

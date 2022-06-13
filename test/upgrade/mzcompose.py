@@ -249,7 +249,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
             "testdrive "
             "--kafka-addr=kafka:9092 "
             "--schema-registry-url=https://schema-registry:8081 "
-            "--materialized-url=postgres://materialize@materialized:6875 "
+            "--materialize-url=postgres://materialize@materialized:6875 "
             "--cert=/share/secrets/producer.p12 "
             "--cert-password=mzmzmz "
             "--ccsr-password=sekurity "

@@ -37,7 +37,7 @@ use mz_orchestrator::{
     ServiceStatus,
 };
 
-const FIELD_MANAGER: &str = "materialized";
+const FIELD_MANAGER: &str = "environmentd";
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -157,7 +157,7 @@ impl NamespacedKubernetesOrchestrator {
     /// assigned to this orchestrator.
     fn list_params(&self) -> ListParams {
         let ns_selector = format!(
-            "materialized.materialize.cloud/namespace={}",
+            "environmentd.materialize.cloud/namespace={}",
             self.namespace
         );
         ListParams::default().labels(&ns_selector)
@@ -184,22 +184,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut labels = BTreeMap::new();
         for (key, value) in labels_in {
             labels.insert(
-                format!("{}.materialized.materialize.cloud/{}", self.namespace, key),
+                format!("{}.environmentd.materialize.cloud/{}", self.namespace, key),
                 value,
             );
         }
         for port in &ports_in {
             labels.insert(
-                format!("materialized.materialize.cloud/port-{}", port.name),
+                format!("environmentd.materialize.cloud/port-{}", port.name),
                 "true".into(),
             );
         }
         labels.insert(
-            "materialized.materialize.cloud/namespace".into(),
+            "environmentd.materialize.cloud/namespace".into(),
             self.namespace.clone(),
         );
         labels.insert(
-            "materialized.materialize.cloud/service-id".into(),
+            "environmentd.materialize.cloud/service-id".into(),
             id.into(),
         );
         for (key, value) in &self.config.service_labels {
@@ -329,7 +329,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
         let pod_template_hash = format!("{:x}", hasher.finalize());
-        let pod_template_hash_annotation = "materialized.materialize.cloud/pod-template-hash";
+        let pod_template_hash_annotation = "environmentd.materialize.cloud/pod-template-hash";
         pod_template_spec
             .metadata
             .as_mut()
@@ -435,7 +435,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
             let process_id = pod.name().split('-').last().unwrap().parse()?;
-            let service_id_label = "materialized.materialize.cloud/service-id";
+            let service_id_label = "environmentd.materialize.cloud/service-id";
             let service_id = pod
                 .labels()
                 .get(service_id_label)

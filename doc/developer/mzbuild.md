@@ -232,7 +232,7 @@ materialize/fancy-loadgen:Z2GPU4TQMCV2PGFTNUPYLQO2PQAYD6OY
 fancy_fancy_1   python3 fancy-loadgen.py   Exit 0
 ```
 
-Let's add another mzbuild dependency, this time on `materialized`:
+Let's add another mzbuild dependency, this time on `environmentd`:
 
 ```yml
 version: "3.7"
@@ -240,39 +240,39 @@ version: "3.7"
 services:
   fancy:
     mzbuild: fancy-loadgen
-  materialized:
-    mzbuild: materialized
+  environmentd:
+    mzbuild: environmentd
 ```
 
 `mzcompose` will automatically acquire the new dependency on the next
 invocation. Note that if you have local changes to any Rust code, you'll likely
 want to stash them away now, or `mzcompose` will be spending a lot of time
-recompiling a fresh version of the `materialized` image.
+recompiling a fresh version of the `environmentd` image.
 
 ```shell
 $ ./mzcompose up
 ==> Collecting mzbuild dependencies
 materialize/billing-demo:FM4STU42G7W44OLAPKZNEZWGEPTMIVE6
 materialize/fancy-loadgen:Z2GPU4TQMCV2PGFTNUPYLQO2PQAYD6OY
-materialize/materialized:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
-==> Acquiring materialize/materialized:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
-$ docker pull materialize/materialized:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
-EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM: Pulling from materialize/materialized
+materialize/environmentd:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
+==> Acquiring materialize/environmentd:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
+$ docker pull materialize/environmentd:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
+EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM: Pulling from materialize/environmentd
 ...
-Status: Downloaded newer image for materialize/materialized:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
-docker.io/materialize/materialized:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
+Status: Downloaded newer image for materialize/environmentd:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
+docker.io/materialize/environmentd:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
 ==> Delegating to Docker Compose
 Starting fancy_fancy_1        ... done
-Creating fancy_materialized_1 ... done
-Attaching to fancy_fancy_1, fancy_materialized_1
+Creating fancy_environmentd_1 ... done
+Attaching to fancy_fancy_1, fancy_environmentd_1
 fancy_1         | 🎩 load
-materialized_1  | materialized: '--workers' must be specified and greater than 0
-materialized_1  | hint: As a starting point, set the number of threads to half of the number of
-materialized_1  | cores on your system. Then, further adjust based on your performance needs.
-materialized_1  | hint: You may also set the environment variable MZ_WORKERS to the desired number
-materialized_1  | of threads.
+environmentd_1  | environmentd: '--workers' must be specified and greater than 0
+environmentd_1  | hint: As a starting point, set the number of threads to half of the number of
+environmentd_1  | cores on your system. Then, further adjust based on your performance needs.
+environmentd_1  | hint: You may also set the environment variable MZ_WORKERS to the desired number
+environmentd_1  | of threads.
 fancy_fancy_1 exited with code 0
-fancy_materialized_1 exited with code 1
+fancy_environmentd_1 exited with code 1
 ```
 
 And that's it. Pretty simple. Note that you can add normal `image` services to
@@ -285,8 +285,8 @@ version: "3.7"
 services:
   fancy:
     mzbuild: fancy-loadgen
-  materialized:
-    mzbuild: materialized
+  environmentd:
+    mzbuild: environmentd
   zookeeper:
     image: zookeeper:3.4.13
 ```
@@ -347,10 +347,10 @@ The directory containing a `mzbuild.yml` file is called the "mzbuild context."
 #### Example
 
 ```yml
-name: materialized
+name: environmentd
 pre-image:
   - type: cargo-build
-    bin: materialized
+    bin: environmentd
     strip: false
 publish: true
 ```
@@ -448,8 +448,8 @@ top-level map.
 version: "3.7"
 
 services:
-  materialized:
-    mzbuild: materialized
+  environmentd:
+    mzbuild: environmentd
     propagate_uid_gid: true
 ```
 
@@ -474,7 +474,7 @@ mzbuild images.
 #### Example
 
 ```dockerfile
-MZFROM materialized
+MZFROM environmentd
 
 MZFROM ubuntu-base
 

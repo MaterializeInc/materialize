@@ -24,7 +24,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tower_http::cors::AllowOrigin;
 
-use materialized::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsMode};
+use mz_environmentd::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
 use mz_orchestrator_process::ProcessOrchestratorConfig;
 use mz_orchestrator_tracing::TracingCliArgs;
@@ -47,7 +47,7 @@ static PORT_ALLOCATOR: Lazy<Arc<PortAllocator>> =
 pub struct Config {
     data_directory: Option<PathBuf>,
     logging_granularity: Option<Duration>,
-    tls: Option<materialized::TlsConfig>,
+    tls: Option<mz_environmentd::TlsConfig>,
     frontegg: Option<FronteggAuthentication>,
     unsafe_mode: bool,
     workers: usize,
@@ -89,7 +89,7 @@ impl Config {
         cert_path: impl Into<PathBuf>,
         key_path: impl Into<PathBuf>,
     ) -> Self {
-        self.tls = Some(materialized::TlsConfig {
+        self.tls = Some(mz_environmentd::TlsConfig {
             mode,
             cert: cert_path.into(),
             key: key_path.into(),
@@ -153,7 +153,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         )
     };
     let metrics_registry = MetricsRegistry::new();
-    let inner = runtime.block_on(materialized::serve(materialized::Config {
+    let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
         persist_location: PersistLocation {
@@ -209,7 +209,7 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
 }
 
 pub struct Server {
-    pub inner: materialized::Server,
+    pub inner: mz_environmentd::Server,
     pub runtime: Arc<Runtime>,
     _temp_dir: Option<TempDir>,
     pub metrics_registry: MetricsRegistry,

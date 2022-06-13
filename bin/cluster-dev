@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# cluster-dev — build and deploy materialized to Minikube.
+# cluster-dev — build and deploy Materialize to Minikube.
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ eval "$(minikube docker-env --shell bash)"
 
 bin/mzimage acquire --dev storaged
 bin/mzimage acquire --dev computed
-bin/mzimage acquire --dev materialized-slim
+bin/mzimage acquire --dev environmentd
 
 kubectl apply --context=minikube  -f - <<EOF
 apiVersion: v1
@@ -107,43 +107,43 @@ subjects:
 apiVersion: v1
 kind: Service
 metadata:
-  name: materialized
+  name: environmentd
   labels:
-    app: materialized
+    app: environmentd
 spec:
   type: NodePort
   ports:
   - port: 6875
     name: sql
   selector:
-    app: materialized
+    app: environmentd
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: user-managed-secrets
   labels:
-    app: materialized
+    app: environmentd
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: materialized
+  name: environmentd
 spec:
-  serviceName: materialized
+  serviceName: environmentd
   replicas: 1
   podManagementPolicy: Parallel
   selector:
     matchLabels:
-      app: materialized
+      app: environmentd
   template:
     metadata:
       labels:
-        app: materialized
+        app: environmentd
     spec:
       containers:
-      - name: materialized
-        image: $(bin/mzimage spec --dev materialized-slim)
+      - name: environmentd
+        image: $(bin/mzimage spec --dev environmentd)
         args:
             - --storaged-image=$(bin/mzimage spec --dev storaged)
             - --computed-image=$(bin/mzimage spec --dev computed)

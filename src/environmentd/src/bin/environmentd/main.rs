@@ -7,16 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The main Materialize server.
+//! Manages a single Materialize environment.
 //!
-//! The name is pronounced "materialize-dee." It listens for SQL connections
-//! on port 6875 (MTRL) and for HTTP connections on port 6876.
-//!
-//! The design and implementation of materialized is very much in flux. See the
-//! draft architecture doc for the most up-to-date plan [0]. Access is limited
-//! to those with access to the Material Dropbox Paper folder.
-//!
-//! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
+//! It listens for SQL connections on port 6875 (MTRL) and for HTTP connections
+//! on port 6876.
 
 use std::cmp;
 use std::env;
@@ -43,10 +37,10 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
-use materialized::{
+use mz_dataflow_types::connections::ConnectionContext;
+use mz_environmentd::{
     OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
 };
-use mz_dataflow_types::connections::ConnectionContext;
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
 use mz_orchestrator_process::ProcessOrchestratorConfig;
@@ -72,9 +66,9 @@ mod sys;
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-pub static VERSION: Lazy<String> = Lazy::new(|| materialized::BUILD_INFO.human_version());
+pub static VERSION: Lazy<String> = Lazy::new(|| mz_environmentd::BUILD_INFO.human_version());
 pub static LONG_VERSION: Lazy<String> = Lazy::new(|| {
-    iter::once(materialized::BUILD_INFO.human_version())
+    iter::once(mz_environmentd::BUILD_INFO.human_version())
         .chain(build_info())
         .join("\n")
 });
@@ -88,15 +82,16 @@ fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
     }
 }
 
-/// The streaming SQL materialized view engine.
+/// Manages a single Materialize environment.
 #[derive(Parser, Debug)]
 #[clap(
+    name = "environmentd",
     next_line_help = true,
     version = VERSION.as_str(),
     long_version = LONG_VERSION.as_str(),
 )]
 pub struct Args {
-    /// [DANGEROUS] Enable unsafe features.
+    /// \[DANGEROUS\] Enable unsafe features.
     ///
     /// Unsafe features fall into two categories:
     ///
@@ -238,14 +233,14 @@ pub struct Args {
     http_listen_addr: SocketAddr,
     /// How stringently to demand TLS authentication and encryption.
     ///
-    /// If set to "disable", then materialized rejects HTTP and PostgreSQL
+    /// If set to "disable", then environmentd rejects HTTP and PostgreSQL
     /// connections that negotiate TLS.
     ///
-    /// If set to "require", then materialized requires that all HTTP and
+    /// If set to "require", then environmentd requires that all HTTP and
     /// PostgreSQL connections negotiate TLS. Unencrypted connections will be
     /// rejected.
     ///
-    /// If set to "verify-ca", then materialized requires that all HTTP and
+    /// If set to "verify-ca", then environmentd requires that all HTTP and
     /// PostgreSQL connections negotiate TLS and supply a certificate signed by
     /// a trusted certificate authority (CA). HTTP connections will operate as
     /// the system user in this mode, while PostgreSQL connections will assume
@@ -382,7 +377,7 @@ enum Orchestrator {
 impl Orchestrator {
     /// Default linger value for orchestrator type.
     ///
-    /// Locally it is convenient for all the processes to be cleaned up when materialized dies
+    /// Locally it is convenient for all the processes to be cleaned up when environmentd dies
     /// which is why `Process` defaults to false.
     ///
     /// In production we want COMPUTE and STORAGE nodes to be resilient to ADAPTER failures which
@@ -401,7 +396,7 @@ fn main() {
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
-        eprintln!("materialized: {:#}", err);
+        eprintln!("environmentd: {:#}", err);
         process::exit(1);
     }
 }
@@ -437,11 +432,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // orchestrator, which intermingles log output from multiple services. Other
     // orchestrators separate log output from different services.
     args.tracing.log_prefix = if matches!(args.orchestrator, Orchestrator::Process) {
-        Some("materialized".to_string())
+        Some("environmentd".to_string())
     } else {
         None
     };
-    runtime.block_on(mz_ore::tracing::configure("materialized", &args.tracing))?;
+    runtime.block_on(mz_ore::tracing::configure("environmentd", &args.tracing))?;
 
     // Initialize fail crate for failpoint support
     let _failpoint_scenario = FailScenario::setup();
@@ -612,7 +607,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     eprintln!(
         "booting server
-materialized {mz_version}
+environmentd {mz_version}
 {dep_versions}
 invoked as: {invocation}
 os: {os}
@@ -621,7 +616,7 @@ cpu0: {cpu0}
 memory: {memory_total}KB total, {memory_used}KB used{memory_limit}
 swap: {swap_total}KB total, {swap_used}KB used{swap_limit}
 max log level: {max_log_level}",
-        mz_version = materialized::BUILD_INFO.human_version(),
+        mz_version = mz_environmentd::BUILD_INFO.human_version(),
         dep_versions = build_info().join("\n"),
         invocation = {
             use shell_words::quote as escape;
@@ -679,7 +674,7 @@ max log level: {max_log_level}",
         }
     };
 
-    let server = runtime.block_on(materialized::serve(materialized::Config {
+    let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         logical_compaction_window: args.logical_compaction_window,
         timestamp_frequency: args.timestamp_frequency,
         sql_listen_addr: args.sql_listen_addr,
@@ -706,8 +701,8 @@ max log level: {max_log_level}",
     }))?;
 
     println!(
-        "materialized {} listening...",
-        materialized::BUILD_INFO.human_version()
+        "environmentd {} listening...",
+        mz_environmentd::BUILD_INFO.human_version()
     );
     println!(" SQL address: {}", server.sql_local_addr());
     println!(" HTTP address: {}", server.http_local_addr());

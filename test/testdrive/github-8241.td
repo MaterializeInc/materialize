@@ -13,9 +13,9 @@
 
 > CREATE VIEW v1 AS SELECT * FROM t1;
 
-$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
-$ postgres-connect name=conn2 url=postgres://materialize:materialize@${testdrive.materialized-sql-addr}
+$ postgres-connect name=conn2 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
 $ postgres-execute connection=conn1
 BEGIN;
