@@ -1177,8 +1177,6 @@ fn get_encoding(
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope<Aug>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
-    let force_nullable_columns = matches!(envelope, Envelope::None);
-
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
         CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
@@ -1195,6 +1193,7 @@ fn get_encoding(
         }
     };
 
+    let force_nullable_columns = matches!(envelope, Envelope::None);
     let encoding = encoding.into_source_data_encoding(force_nullable_columns);
 
     let requires_keyvalue = matches!(
