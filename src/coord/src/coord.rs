@@ -184,7 +184,7 @@ pub enum Message {
     AdvanceLocalInputs,
     AdvanceLocalInput(AdvanceLocalInput),
     ComputeInstanceStatus(ComputeInstanceEvent),
-    GroupCommit(Option<WriteTimestamp>),
+    GroupCommit(WriteTimestamp),
 }
 
 #[derive(Debug)]
@@ -590,13 +590,18 @@ impl<S: Append + 'static> Coordinator<S> {
     /// must be at a time >= the write's timestamp; we choose "equal to" for
     /// simplicity's sake and to open as few new timestamps as possible.
     fn get_local_read_ts(&mut self) -> Timestamp {
-        self.global_timeline.read_ts()
+        let ts = self.global_timeline.read_ts();
+        // All writes go through group commit, which immediately put the `TimestampOracle` back
+        // into a `Reading` state. Therefore this method will always be called while in `Reading`
+        // state and never require an advancement. See `get_and_step_local_write_ts`.
+        assert!(self.global_timeline.should_advance_to().is_none());
+        ts
     }
 
     /// Assign a timestamp for creating a source. Writes following reads
     /// must ensure that they are assigned a strictly larger timestamp to ensure
     /// they are not visible to any real-time earlier reads.
-    fn get_local_write_ts(&mut self) -> Timestamp {
+    fn _get_local_write_ts(&mut self) -> Timestamp {
         self.global_timeline.write_ts()
     }
 
@@ -614,7 +619,9 @@ impl<S: Append + 'static> Coordinator<S> {
          * same timestamp as long as they're written to the WAL first.
          */
         let _ = self.global_timeline.read_ts();
-        let advance_to = timestamp.step_forward();
+        let advance_to = self.global_timeline.should_advance_to().expect(
+            "getting a write then read timestamp should always move the `TimestampOracle` forward",
+        );
         WriteTimestamp {
             timestamp,
             advance_to,
@@ -690,6 +697,9 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), CoordError> {
+        // TODO(jkosh44) Hack to get into read mode
+        let _ = self.get_and_step_local_write_ts();
+
         for instance in self.catalog.compute_instances() {
             self.dataflow_client
                 .create_instance(instance.id, instance.logging.clone())
@@ -761,7 +771,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await;
                 }
                 CatalogItem::Table(_) => {
-                    let since_ts = self.get_local_write_ts();
+                    let since_ts = self.get_local_read_ts();
 
                     // Re-announce the source description.
                     let source_description = self
@@ -1124,18 +1134,21 @@ impl<S: Append + 'static> Coordinator<S> {
     /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
+<<<<<<< Updated upstream
     async fn try_group_commit(&mut self, write_timestamp: Option<WriteTimestamp>) {
         if self.pending_group_commit.is_empty() {
-            return;
-        }
-
-        let WriteTimestamp {
+=======
+    async fn try_group_commit(
+        &mut self,
+        WriteTimestamp {
             timestamp,
             advance_to,
-        } = match write_timestamp {
-            Some(write_timestamp) => write_timestamp,
-            None => self.get_and_step_local_write_ts(),
-        };
+        }: WriteTimestamp,
+    ) {
+        if self.pending_writes.is_empty() {
+>>>>>>> Stashed changes
+            return;
+        }
 
         let now = (self.catalog.config().now)();
         if timestamp > now {
@@ -1148,10 +1161,10 @@ impl<S: Append + 'static> Coordinator<S> {
             task::spawn(|| "group_commit", async move {
                 tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
                 internal_cmd_tx
-                    .send(Message::GroupCommit(Some(WriteTimestamp {
+                    .send(Message::GroupCommit(WriteTimestamp {
                         timestamp,
                         advance_to,
-                    })))
+                    }))
                     .expect("sending to internal_cmd_tx cannot fail");
             });
         } else {
@@ -1242,6 +1255,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Submit a write to be executed during the next group commit.
     fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
+<<<<<<< Updated upstream
         if self.pending_group_commit.is_empty() {
             self.internal_cmd_tx
                 .send(Message::GroupCommit(None))
@@ -1256,8 +1270,12 @@ impl<S: Append + 'static> Coordinator<S> {
     /// TODO(jkosh44)
     fn submit_table_advancement(&mut self, ids: Vec<GlobalId>) {
         if self.pending_group_commit.is_empty() {
+=======
+        if self.pending_writes.is_empty() {
+            let write_timestamp = self.get_and_step_local_write_ts();
+>>>>>>> Stashed changes
             self.internal_cmd_tx
-                .send(Message::GroupCommit(None))
+                .send(Message::GroupCommit(write_timestamp))
                 .expect("sending to internal_cmd_tx cannot fail");
         }
         self.pending_group_commit.table_advances.extend(ids);
@@ -2861,7 +2879,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await
         {
             // Determine the initial validity for the table.
-            let since_ts = self.get_local_write_ts();
+            let since_ts = self.get_local_read_ts();
 
             // Announce the creation of the table source.
             let source_description = self
@@ -3770,6 +3788,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
 
         match result {
+            Ok(Some(writes)) if writes.is_empty() => tx.send(response, session),
             Ok(Some(writes)) => self.submit_write(PendingWriteTxn::User {
                 writes: writes.into_iter().map(|write| write.into()).collect(),
                 response,
@@ -5296,6 +5315,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         match builtin_updates {
+            Ok(builtin_updates) if builtin_updates.is_empty() => tx.send(response, session),
             Ok(builtin_updates) => self.submit_write(PendingWriteTxn::User {
                 writes: builtin_updates
                     .into_iter()
@@ -5338,9 +5358,11 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         if let Some(builtin_updates) = builtin_updates {
-            self.submit_write(PendingWriteTxn::System {
-                writes: builtin_updates,
-            })
+            if !builtin_updates.is_empty() {
+                self.submit_write(PendingWriteTxn::System {
+                    writes: builtin_updates,
+                })
+            }
         };
 
         result
@@ -6504,7 +6526,7 @@ mod timeline {
     /// and strictly less than all subsequently emitted write timestamps.
     pub struct TimestampOracle<T> {
         state: TimestampOracleState<T>,
-        _advance_to: Option<T>,
+        advance_to: Option<T>,
         next: Box<dyn Fn() -> T>,
     }
 
@@ -6518,7 +6540,7 @@ mod timeline {
         {
             Self {
                 state: TimestampOracleState::Writing(initially.clone()),
-                _advance_to: Some(initially),
+                advance_to: Some(initially),
                 next: Box::new(next),
             }
         }
@@ -6538,7 +6560,7 @@ mod timeline {
                     }
                     assert!(ts.less_than(&next));
                     self.state = TimestampOracleState::Writing(next.clone());
-                    self._advance_to = Some(next.clone());
+                    self.advance_to = Some(next.clone());
                     next
                 }
             }
@@ -6554,7 +6576,7 @@ mod timeline {
                     // Avoid rust borrow complaint.
                     let ts = ts.clone();
                     self.state = TimestampOracleState::Reading(ts.clone());
-                    self._advance_to = Some(ts.step_forward());
+                    self.advance_to = Some(ts.step_forward());
                     ts
                 }
             }
@@ -6568,7 +6590,7 @@ mod timeline {
             match &self.state {
                 TimestampOracleState::Writing(ts) => {
                     if ts.less_than(&lower_bound) {
-                        self._advance_to = Some(lower_bound.clone());
+                        self.advance_to = Some(lower_bound.clone());
                         self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
@@ -6576,7 +6598,7 @@ mod timeline {
                     if ts.less_than(&lower_bound) {
                         // This may result in repetition in the case `lower_bound == ts + 1`.
                         // This is documented as fine, and concerned users can protect themselves.
-                        self._advance_to = Some(lower_bound.clone());
+                        self.advance_to = Some(lower_bound.clone());
                         self.state = TimestampOracleState::Writing(lower_bound);
                     }
                 }
@@ -6586,8 +6608,8 @@ mod timeline {
         ///
         /// This method may produce the same value multiple times, and should not be used as a test for whether
         /// a write-to-read transition has occurred, so much as an advisory signal that write capabilities can advance.
-        pub fn _should_advance_to(&mut self) -> Option<T> {
-            self._advance_to.take()
+        pub fn should_advance_to(&mut self) -> Option<T> {
+            self.advance_to.take()
         }
     }
 }
