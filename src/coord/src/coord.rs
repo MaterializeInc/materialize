@@ -918,82 +918,6 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(())
     }
 
-    // Advance a local input (table). This downgrades the capability of a table,
-    // which means that it can no longer produce new data before the assigned timestamp.
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn advance_local_input(&mut self, inputs: AdvanceLocalInput) {
-        self.submit_table_advancement(inputs.ids);
-        // TODO(jkosh44) How do we dynamically adjust now that table advancments are thrown in with
-        //group commit.
-
-        // We split up table advancement into batches of requests so that user queries
-        // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
-        // maximum amount of time we are willing to block user queries for. We could
-        // process tables one at a time, but that increases the overall processing time
-        // because we miss out on batching the requests to the postgres server. To
-        // balance these two goals (not blocking user queries, minimizing time to
-        // advance tables), we record how long a batch takes to process, and will
-        // adjust the size of the next batch up or down based on the response time.
-        //
-        // On one extreme, should we ever be able to advance all tables in less time
-        // than MAX_WAIT (probably due to connection pools or other actual parallelism
-        // on the persist side), great, we've minimized the total processing time
-        // without blocking user queries for more than our target. On the other extreme
-        // where we can only process one table at a time (probably due to the postgres
-        // server being over used or some other cloud/network slowdown inbetween), the
-        // AdvanceTables struct will gracefully attempt to close tables in a bounded
-        // and fair manner.
-        /*
-        const MAX_WAIT: Duration = Duration::from_millis(50);
-        // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
-        // change the batch size.
-        const WINDOW: Duration = Duration::from_millis(10);
-        let start = Instant::now();
-        let storage = self.dataflow_client.storage();
-        let appends = inputs
-            .ids
-            .into_iter()
-            .filter_map(|id| {
-                if self.catalog.try_get_entry(&id).is_none()
-                    || !storage
-                    .collection(id)
-                    .unwrap()
-                    .write_frontier
-                    .less_than(&inputs.advance_to)
-                {
-                    // Filter out tables that were dropped while waiting for advancement.
-                    // Filter out tables whose upper is already advanced. This is not needed for
-                    // correctness (advance_to and write_frontier should be equal here), just
-                    // performance, as it's a no-op.
-                    None
-                } else {
-                    Some((id, vec![], inputs.advance_to))
-                }
-            })
-            .collect::<Vec<_>>();
-        let num_updates = appends.len();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
-        let elapsed = start.elapsed();
-        trace!(
-            "advance_local_inputs for {} tables to {} took: {} ms",
-            num_updates,
-            inputs.advance_to,
-            elapsed.as_millis()
-        );
-        if elapsed > (MAX_WAIT + WINDOW) {
-            self.advance_tables.decrease_batch();
-        } else if elapsed < (MAX_WAIT - WINDOW) && num_updates == self.advance_tables.batch_size {
-            // Only increase the batch size if it completed under the window and the batch
-            // was full.
-            self.advance_tables.increase_batch();
-        }
-        */
-    }
-
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
     /// and feedback from dataflow workers over `feedback_rx`.
     ///
@@ -1129,6 +1053,82 @@ impl<S: Append + 'static> Coordinator<S> {
                     None
                 }
             }));
+    }
+
+    // Advance a local input (table). This downgrades the capability of a table,
+    // which means that it can no longer produce new data before the assigned timestamp.
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn advance_local_input(&mut self, inputs: AdvanceLocalInput) {
+        self.submit_table_advancement(inputs.ids);
+        // TODO(jkosh44) How do we dynamically adjust now that table advancments are thrown in with
+        //group commit.
+
+        // We split up table advancement into batches of requests so that user queries
+        // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
+        // maximum amount of time we are willing to block user queries for. We could
+        // process tables one at a time, but that increases the overall processing time
+        // because we miss out on batching the requests to the postgres server. To
+        // balance these two goals (not blocking user queries, minimizing time to
+        // advance tables), we record how long a batch takes to process, and will
+        // adjust the size of the next batch up or down based on the response time.
+        //
+        // On one extreme, should we ever be able to advance all tables in less time
+        // than MAX_WAIT (probably due to connection pools or other actual parallelism
+        // on the persist side), great, we've minimized the total processing time
+        // without blocking user queries for more than our target. On the other extreme
+        // where we can only process one table at a time (probably due to the postgres
+        // server being over used or some other cloud/network slowdown inbetween), the
+        // AdvanceTables struct will gracefully attempt to close tables in a bounded
+        // and fair manner.
+        /*
+        const MAX_WAIT: Duration = Duration::from_millis(50);
+        // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
+        // change the batch size.
+        const WINDOW: Duration = Duration::from_millis(10);
+        let start = Instant::now();
+        let storage = self.dataflow_client.storage();
+        let appends = inputs
+            .ids
+            .into_iter()
+            .filter_map(|id| {
+                if self.catalog.try_get_entry(&id).is_none()
+                    || !storage
+                    .collection(id)
+                    .unwrap()
+                    .write_frontier
+                    .less_than(&inputs.advance_to)
+                {
+                    // Filter out tables that were dropped while waiting for advancement.
+                    // Filter out tables whose upper is already advanced. This is not needed for
+                    // correctness (advance_to and write_frontier should be equal here), just
+                    // performance, as it's a no-op.
+                    None
+                } else {
+                    Some((id, vec![], inputs.advance_to))
+                }
+            })
+            .collect::<Vec<_>>();
+        let num_updates = appends.len();
+        self.dataflow_client
+            .storage_mut()
+            .append(appends)
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+        trace!(
+            "advance_local_inputs for {} tables to {} took: {} ms",
+            num_updates,
+            inputs.advance_to,
+            elapsed.as_millis()
+        );
+        if elapsed > (MAX_WAIT + WINDOW) {
+            self.advance_tables.decrease_batch();
+        } else if elapsed < (MAX_WAIT - WINDOW) && num_updates == self.advance_tables.batch_size {
+            // Only increase the batch size if it completed under the window and the batch
+            // was full.
+            self.advance_tables.increase_batch();
+        }
+        */
     }
 
     /// Attempts to commit all pending write transactions in a group commit. If the timestamp
@@ -1996,6 +1996,7 @@ impl<S: Append + 'static> Coordinator<S> {
             // All other statements are handled immediately.
             _ => match self.handle_statement(&mut session, stmt, &params).await {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
+
                 Err(e) => tx.send(Err(e), session),
             },
         }
@@ -2214,9 +2215,11 @@ impl<S: Append + 'static> Coordinator<S> {
     ) {
         match plan {
             Plan::CreateConnection(plan) => {
-                self.sequence_create_connection(tx, session, plan).await
+                self.sequence_create_connection(tx, session, plan).await;
             }
+
             Plan::CreateDatabase(plan) => self.sequence_create_database(tx, session, plan).await,
+
             Plan::CreateSchema(plan) => self.sequence_create_schema(tx, session, plan).await,
             Plan::CreateRole(plan) => {
                 let _ = self
@@ -2225,56 +2228,54 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::CreateComputeInstance(plan) => {
                 self.sequence_create_compute_instance(tx, session, plan)
-                    .await
+                    .await;
             }
             Plan::CreateComputeInstanceReplica(plan) => {
                 self.sequence_create_compute_instance_replica(tx, session, plan)
-                    .await
+                    .await;
             }
             Plan::CreateTable(plan) => {
                 self.sequence_create_table(tx, session, plan, depends_on)
-                    .await
+                    .await;
             }
             Plan::CreateSecret(plan) => self.sequence_create_secret(tx, session, plan).await,
             Plan::CreateSource(_) => unreachable!("handled separately"),
             Plan::CreateSink(plan) => {
                 self.sequence_create_sink(tx, session, plan, depends_on)
-                    .await
+                    .await;
             }
             Plan::CreateView(plan) => {
                 self.sequence_create_view(tx, session, plan, depends_on)
-                    .await
+                    .await;
             }
             Plan::CreateViews(plan) => {
                 self.sequence_create_views(tx, session, plan, depends_on)
-                    .await
+                    .await;
             }
             Plan::CreateIndex(plan) => {
                 self.sequence_create_index(tx, session, plan, depends_on)
-                    .await
+                    .await;
             }
             Plan::CreateType(plan) => {
                 self.sequence_create_type(tx, session, plan, depends_on)
-                    .await
+                    .await;
             }
             Plan::DropDatabase(plan) => self.sequence_drop_database(tx, session, plan).await,
             Plan::DropSchema(plan) => self.sequence_drop_schema(tx, session, plan).await,
             Plan::DropRoles(plan) => self.sequence_drop_roles(tx, session, plan).await,
             Plan::DropComputeInstances(plan) => {
                 self.sequence_drop_compute_instances(tx, session, plan)
-                    .await
+                    .await;
             }
             Plan::DropComputeInstanceReplica(plan) => {
                 self.sequence_drop_compute_instance_replica(tx, session, plan)
-                    .await
+                    .await;
             }
             Plan::DropItems(plan) => self.sequence_drop_items(tx, session, plan).await,
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
             }
-            Plan::ShowAllVariables => {
-                tx.send(self.sequence_show_all_variables(&session), session);
-            }
+            Plan::ShowAllVariables => tx.send(self.sequence_show_all_variables(&session), session),
             Plan::ShowVariable(plan) => {
                 tx.send(self.sequence_show_variable(&session, plan), session);
             }
@@ -2302,9 +2303,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 self.sequence_end_transaction(tx, session, action).await;
             }
-            Plan::Peek(plan) => {
-                tx.send(self.sequence_peek(&mut session, plan).await, session);
-            }
+            Plan::Peek(plan) => tx.send(self.sequence_peek(&mut session, plan).await, session),
             Plan::Tail(plan) => {
                 tx.send(
                     self.sequence_tail(&mut session, plan, depends_on).await,
@@ -2325,27 +2324,17 @@ impl<S: Append + 'static> Coordinator<S> {
                     session,
                 );
             }
-            Plan::Explain(plan) => {
-                tx.send(self.sequence_explain(&session, plan), session);
-            }
-            Plan::SendDiffs(plan) => {
-                tx.send(self.sequence_send_diffs(&mut session, plan), session);
-            }
-            Plan::Insert(plan) => {
-                self.sequence_insert(tx, session, plan).await;
-            }
-            Plan::ReadThenWrite(plan) => {
-                self.sequence_read_then_write(tx, session, plan).await;
-            }
+            Plan::Explain(plan) => tx.send(self.sequence_explain(&session, plan), session),
+            Plan::SendDiffs(plan) => tx.send(self.sequence_send_diffs(&mut session, plan), session),
+            Plan::Insert(plan) => self.sequence_insert(tx, session, plan).await,
+            Plan::ReadThenWrite(plan) => self.sequence_read_then_write(tx, session, plan).await,
             Plan::AlterNoop(plan) => {
                 tx.send(
                     Ok(ExecuteResponse::AlteredObject(plan.object_type)),
                     session,
                 );
             }
-            Plan::AlterItemRename(plan) => {
-                self.sequence_alter_item_rename(tx, session, plan).await;
-            }
+            Plan::AlterItemRename(plan) => self.sequence_alter_item_rename(tx, session, plan).await,
             Plan::AlterIndexSetOptions(plan) => {
                 tx.send(self.sequence_alter_index_set_options(plan).await, session);
             }
@@ -2360,7 +2349,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             Plan::DiscardTemp => {
                 self.drop_temp_items(Some((tx, ExecuteResponse::DiscardedTemp)), session)
-                    .await
+                    .await;
             }
             Plan::DiscardAll => {
                 if let TransactionStatus::Started(_) = session.transaction() {
