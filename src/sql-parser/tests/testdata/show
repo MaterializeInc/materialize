@@ -201,6 +201,27 @@ SHOW EXTENDED INDEXES FROM foo WHERE index_name = 'bar'
 ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("foo")]))), in_cluster: None, extended: true, filter: Some(Where(Op { op: Op { namespace: [], op: "=" }, expr1: Identifier([Ident("index_name")]), expr2: Some(Value(String("bar"))) })) })
 
 parse-statement
+SHOW INDEXES
+----
+SHOW INDEXES
+=>
+ShowIndexes(ShowIndexesStatement { table_name: None, in_cluster: None, extended: false, filter: None })
+
+parse-statement
+SHOW INDEXES IN CLUSTER c
+----
+SHOW INDEXES IN CLUSTER c
+=>
+ShowIndexes(ShowIndexesStatement { table_name: None, in_cluster: Some(Unresolved(Ident("c"))), extended: false, filter: None })
+
+parse-statement
+SHOW INDEXES FROM c IN CLUSTER c
+----
+SHOW INDEXES FROM c IN CLUSTER c
+=>
+ShowIndexes(ShowIndexesStatement { table_name: Some(Name(UnresolvedObjectName([Ident("c")]))), in_cluster: Some(Unresolved(Ident("c"))), extended: false, filter: None })
+
+parse-statement
 SHOW CREATE VIEW foo
 ----
 SHOW CREATE VIEW foo

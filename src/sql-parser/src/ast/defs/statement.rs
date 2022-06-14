@@ -1519,13 +1519,13 @@ impl<T: AstInfo> AstDisplay for ShowIndexesStatement<T> {
         if self.extended {
             f.write_str("EXTENDED ");
         }
-        f.write_str("INDEXES ");
+        f.write_str("INDEXES");
         if let Some(table_name) = &self.table_name {
-            f.write_str("FROM ");
+            f.write_str(" FROM ");
             f.write_node(table_name);
         }
         if let Some(in_cluster) = &self.in_cluster {
-            f.write_str("IN CLUSTER ");
+            f.write_str(" IN CLUSTER ");
             f.write_node(in_cluster);
         }
         if let Some(filter) = &self.filter {
