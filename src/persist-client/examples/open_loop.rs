@@ -9,6 +9,7 @@
 
 #![allow(clippy::cast_precision_loss)]
 
+use std::fs::File;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cache::PersistClientCache;
+use prometheus::Encoder;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::Barrier;
 use tokio::task::JoinHandle;
@@ -88,6 +90,10 @@ pub struct Args {
     /// The address of the internal HTTP server.
     #[clap(long, value_name = "HOST:PORT", default_value = "127.0.0.1:6877")]
     internal_http_listen_addr: SocketAddr,
+
+    /// Path of a file to write metrics at the end of the run.
+    #[clap(long)]
+    metrics_file: Option<String>,
 }
 
 const MIB: u64 = 1024 * 1024;
@@ -141,11 +147,12 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         BenchmarkType::MzSourceModel => panic!("source model"),
     };
 
-    run_benchmark(args, writers, readers).await
+    run_benchmark(args, metrics_registry, writers, readers).await
 }
 
 async fn run_benchmark<W, R>(
     args: Args,
+    metrics_registry: MetricsRegistry,
     writers: Vec<W>,
     readers: Vec<R>,
 ) -> Result<(), anyhow::Error>
@@ -417,6 +424,14 @@ where
             Err(e) => error!("error: {:?}", e),
         }
     }
+
+    if let Some(metrics_file) = args.metrics_file {
+        let mut file = File::create(metrics_file)?;
+        let encoder = prometheus::TextEncoder::new();
+        encoder.encode(&metrics_registry.gather(), &mut file)?;
+        file.sync_all()?;
+    }
+
     Ok(())
 }
 
