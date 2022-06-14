@@ -52,6 +52,7 @@ use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::source::{DecodeResult, SourceOutput};
 use metrics::DecodeMetrics;
+use mz_dataflow_types::sources::encoding::DataEncodingInner;
 
 mod avro;
 mod csv;
@@ -256,8 +257,8 @@ fn get_decoder(
     is_connection_delimited: bool,
     metrics: DecodeMetrics,
 ) -> DataDecoder {
-    match encoding {
-        DataEncoding::Avro(AvroEncoding {
+    match encoding.inner {
+        DataEncodingInner::Avro(AvroEncoding {
             schema,
             schema_registry_config,
             confluent_wire_format,
@@ -274,22 +275,22 @@ fn get_decoder(
                 metrics,
             }
         }
-        DataEncoding::Text
-        | DataEncoding::Bytes
-        | DataEncoding::Protobuf(_)
-        | DataEncoding::Regex(_) => {
-            let after_delimiting = match encoding {
-                DataEncoding::Regex(RegexEncoding { regex }) => {
+        DataEncodingInner::Text
+        | DataEncodingInner::Bytes
+        | DataEncodingInner::Protobuf(_)
+        | DataEncodingInner::Regex(_) => {
+            let after_delimiting = match encoding.inner {
+                DataEncodingInner::Regex(RegexEncoding { regex }) => {
                     PreDelimitedFormat::Regex(regex.0, Default::default())
                 }
-                DataEncoding::Protobuf(encoding) => {
+                DataEncodingInner::Protobuf(encoding) => {
                     PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(
                         "Failed to create protobuf decoder, even though we validated ccsr \
                                     client creation in purification.",
                     ))
                 }
-                DataEncoding::Bytes => PreDelimitedFormat::Bytes,
-                DataEncoding::Text => PreDelimitedFormat::Text,
+                DataEncodingInner::Bytes => PreDelimitedFormat::Bytes,
+                DataEncodingInner::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
             let inner = if is_connection_delimited {
@@ -302,17 +303,17 @@ fn get_decoder(
             };
             DataDecoder { inner, metrics }
         }
-        DataEncoding::Csv(enc) => {
+        DataEncodingInner::Csv(enc) => {
             let state = CsvDecoderState::new(enc, operators);
             DataDecoder {
                 inner: DataDecoderInner::Csv(state),
                 metrics,
             }
         }
-        DataEncoding::Postgres => {
+        DataEncodingInner::Postgres => {
             unreachable!("Postgres sources should not go through the general decoding path.")
         }
-        DataEncoding::RowCodec(_) => {
+        DataEncodingInner::RowCodec(_) => {
             unreachable!(
                 "Persist (RowCodec) sources should not go through the general decoding path."
             )

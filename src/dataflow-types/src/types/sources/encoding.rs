@@ -24,6 +24,35 @@ include!(concat!(
     "/mz_dataflow_types.types.sources.encoding.rs"
 ));
 
+pub enum SourceDataEncodingInner {
+    Single(DataEncodingInner),
+    KeyValue {
+        key: DataEncodingInner,
+        value: DataEncodingInner,
+    },
+}
+
+impl SourceDataEncodingInner {
+    pub fn into_source_data_encoding(self, force_nullable_keys: bool) -> SourceDataEncoding {
+        match self {
+            SourceDataEncodingInner::Single(inner) => SourceDataEncoding::Single(DataEncoding {
+                inner,
+                force_nullable_columns: false,
+            }),
+            SourceDataEncodingInner::KeyValue { key, value } => SourceDataEncoding::KeyValue {
+                key: DataEncoding {
+                    inner: key,
+                    force_nullable_columns: force_nullable_keys,
+                },
+                value: DataEncoding {
+                    inner: value,
+                    force_nullable_columns: false,
+                },
+            },
+        }
+    }
+}
+
 /// A description of how to interpret data from various sources
 ///
 /// Almost all sources only present values as part of their records, but Kafka allows a key to be
@@ -100,7 +129,7 @@ impl SourceDataEncoding {
 /// A description of how each row should be decoded, from a string of bytes to a sequence of
 /// Differential updates.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum DataEncoding {
+pub enum DataEncodingInner {
     Avro(AvroEncoding),
     Protobuf(ProtobufEncoding),
     Csv(CsvEncoding),
@@ -111,37 +140,61 @@ pub enum DataEncoding {
     RowCodec(RelationDesc),
 }
 
-impl RustType<ProtoDataEncoding> for DataEncoding {
-    fn into_proto(self: &Self) -> ProtoDataEncoding {
-        use proto_data_encoding::Kind;
-        ProtoDataEncoding {
+impl RustType<ProtoDataEncodingInner> for DataEncodingInner {
+    fn into_proto(&self) -> ProtoDataEncodingInner {
+        use proto_data_encoding_inner::Kind;
+        ProtoDataEncodingInner {
             kind: Some(match self {
-                DataEncoding::Avro(e) => Kind::Avro(e.into_proto()),
-                DataEncoding::Protobuf(e) => Kind::Protobuf(e.into_proto()),
-                DataEncoding::Csv(e) => Kind::Csv(e.into_proto()),
-                DataEncoding::Regex(e) => Kind::Regex(e.into_proto()),
-                DataEncoding::Postgres => Kind::Postgres(()),
-                DataEncoding::Bytes => Kind::Bytes(()),
-                DataEncoding::Text => Kind::Text(()),
-                DataEncoding::RowCodec(e) => Kind::RowCodec(e.into_proto()),
+                DataEncodingInner::Avro(e) => Kind::Avro(e.into_proto()),
+                DataEncodingInner::Protobuf(e) => Kind::Protobuf(e.into_proto()),
+                DataEncodingInner::Csv(e) => Kind::Csv(e.into_proto()),
+                DataEncodingInner::Regex(e) => Kind::Regex(e.into_proto()),
+                DataEncodingInner::Postgres => Kind::Postgres(()),
+                DataEncodingInner::Bytes => Kind::Bytes(()),
+                DataEncodingInner::Text => Kind::Text(()),
+                DataEncodingInner::RowCodec(e) => Kind::RowCodec(e.into_proto()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoDataEncoding) -> Result<Self, TryFromProtoError> {
-        use proto_data_encoding::Kind;
+    fn from_proto(proto: ProtoDataEncodingInner) -> Result<Self, TryFromProtoError> {
+        use proto_data_encoding_inner::Kind;
         let kind = proto
             .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDataEncoding::kind"))?;
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDataEncodingInner::kind"))?;
         Ok(match kind {
-            Kind::Avro(e) => DataEncoding::Avro(e.into_rust()?),
-            Kind::Protobuf(e) => DataEncoding::Protobuf(e.into_rust()?),
-            Kind::Csv(e) => DataEncoding::Csv(e.into_rust()?),
-            Kind::Regex(e) => DataEncoding::Regex(e.into_rust()?),
-            Kind::Postgres(()) => DataEncoding::Postgres,
-            Kind::Bytes(()) => DataEncoding::Bytes,
-            Kind::Text(()) => DataEncoding::Text,
-            Kind::RowCodec(e) => DataEncoding::RowCodec(e.into_rust()?),
+            Kind::Avro(e) => DataEncodingInner::Avro(e.into_rust()?),
+            Kind::Protobuf(e) => DataEncodingInner::Protobuf(e.into_rust()?),
+            Kind::Csv(e) => DataEncodingInner::Csv(e.into_rust()?),
+            Kind::Regex(e) => DataEncodingInner::Regex(e.into_rust()?),
+            Kind::Postgres(()) => DataEncodingInner::Postgres,
+            Kind::Bytes(()) => DataEncodingInner::Bytes,
+            Kind::Text(()) => DataEncodingInner::Text,
+            Kind::RowCodec(e) => DataEncodingInner::RowCodec(e.into_rust()?),
+        })
+    }
+}
+
+/// A description of how each row should be decoded, from a string of bytes to a sequence of
+/// Differential updates.
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct DataEncoding {
+    pub force_nullable_columns: bool,
+    pub inner: DataEncodingInner,
+}
+
+impl RustType<ProtoDataEncoding> for DataEncoding {
+    fn into_proto(self: &Self) -> ProtoDataEncoding {
+        ProtoDataEncoding {
+            force_nullable_columns: self.force_nullable_columns,
+            inner: Some(self.inner.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoDataEncoding) -> Result<Self, TryFromProtoError> {
+        Ok(DataEncoding {
+            force_nullable_columns: proto.force_nullable_columns.into_rust()?,
+            inner: proto.inner.into_rust_if_some("ProtoDataEncoding::inner")?,
         })
     }
 }
@@ -155,21 +208,28 @@ pub fn included_column_desc(included_columns: Vec<(&str, ColumnType)>) -> Relati
 }
 
 impl DataEncoding {
+    pub fn new(inner: DataEncodingInner) -> DataEncoding {
+        DataEncoding {
+            inner,
+            force_nullable_columns: false,
+        }
+    }
+
     /// Computes the [`RelationDesc`] for the relation specified by this
     /// data encoding and envelope.
     ///
     /// If a key desc is provided it will be prepended to the returned desc
     fn desc(&self) -> Result<RelationDesc, anyhow::Error> {
         // Add columns for the data, based on the encoding format.
-        Ok(match self {
-            DataEncoding::Bytes => {
+        let desc = match &self.inner {
+            DataEncodingInner::Bytes => {
                 RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
             }
-            DataEncoding::Avro(AvroEncoding { schema, .. }) => {
+            DataEncodingInner::Avro(AvroEncoding { schema, .. }) => {
                 let parsed_schema = avro::parse_schema(schema).context("validating avro schema")?;
                 avro::schema_to_relationdesc(parsed_schema).context("validating avro schema")?
             }
-            DataEncoding::Protobuf(ProtobufEncoding {
+            DataEncodingInner::Protobuf(ProtobufEncoding {
                 descriptors,
                 message_name,
                 confluent_wire_format: _,
@@ -179,7 +239,7 @@ impl DataEncoding {
                 .fold(RelationDesc::empty(), |desc, (name, ty)| {
                     desc.with_column(name, ty.clone())
                 }),
-            DataEncoding::Regex(RegexEncoding { regex }) => regex
+            DataEncodingInner::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
                 .enumerate()
                 // The first capture is the entire matched string. This will
@@ -195,7 +255,7 @@ impl DataEncoding {
                     let ty = ScalarType::String.nullable(true);
                     desc.with_column(name, ty)
                 }),
-            DataEncoding::Csv(CsvEncoding { columns, .. }) => match columns {
+            DataEncodingInner::Csv(CsvEncoding { columns, .. }) => match columns {
                 ColumnSpec::Count(n) => {
                     (1..=*n).into_iter().fold(RelationDesc::empty(), |desc, i| {
                         desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
@@ -208,10 +268,10 @@ impl DataEncoding {
                         desc.with_column(name, ScalarType::String.nullable(false))
                     }),
             },
-            DataEncoding::Text => {
+            DataEncodingInner::Text => {
                 RelationDesc::empty().with_column("text", ScalarType::String.nullable(false))
             }
-            DataEncoding::Postgres => RelationDesc::empty()
+            DataEncodingInner::Postgres => RelationDesc::empty()
                 .with_column("oid", ScalarType::Int32.nullable(false))
                 .with_column(
                     "row_data",
@@ -221,20 +281,29 @@ impl DataEncoding {
                     }
                     .nullable(false),
                 ),
-            DataEncoding::RowCodec(desc) => desc.clone(),
-        })
+            DataEncodingInner::RowCodec(desc) => desc.clone(),
+        };
+
+        if self.force_nullable_columns {
+            Ok(RelationDesc::from_names_and_types(
+                desc.into_iter()
+                    .map(|(name, typ)| (name, typ.nullable(true))),
+            ))
+        } else {
+            Ok(desc)
+        }
     }
 
     pub fn op_name(&self) -> &'static str {
-        match self {
-            DataEncoding::Bytes => "Bytes",
-            DataEncoding::Avro(_) => "Avro",
-            DataEncoding::Protobuf(_) => "Protobuf",
-            DataEncoding::Regex { .. } => "Regex",
-            DataEncoding::Csv(_) => "Csv",
-            DataEncoding::Text => "Text",
-            DataEncoding::Postgres => "Postgres",
-            DataEncoding::RowCodec(_) => "RowCodec",
+        match &self.inner {
+            DataEncodingInner::Bytes => "Bytes",
+            DataEncodingInner::Avro(_) => "Avro",
+            DataEncodingInner::Protobuf(_) => "Protobuf",
+            DataEncodingInner::Regex { .. } => "Regex",
+            DataEncodingInner::Csv(_) => "Csv",
+            DataEncodingInner::Text => "Text",
+            DataEncodingInner::Postgres => "Postgres",
+            DataEncodingInner::RowCodec(_) => "RowCodec",
         }
     }
 }

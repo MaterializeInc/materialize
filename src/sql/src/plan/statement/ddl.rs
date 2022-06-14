@@ -33,8 +33,8 @@ use mz_dataflow_types::sinks::{
     PersistSinkConnectionBuilder, SinkConnectionBuilder, SinkEnvelope,
 };
 use mz_dataflow_types::sources::encoding::{
-    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding,
-    RegexEncoding, SourceDataEncoding,
+    included_column_desc, AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, DataEncodingInner,
+    ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
@@ -398,7 +398,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(scx, format, &envelope)?;
+            let encoding = get_encoding(scx, format, &envelope, &connection)?;
 
             // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
             let config_options =
@@ -497,9 +497,9 @@ pub fn plan_create_source(
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
                 ExternalSourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
-            let encoding = get_encoding(scx, format, &envelope)?;
             (connection, encoding)
         }
         CreateSourceConnection::S3 {
@@ -525,6 +525,10 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
+            let encoding = get_encoding(scx, format, &envelope, &connection)?;
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("S3 sources do not support key decoding");
+            }
             let connection = ExternalSourceConnection::S3(S3SourceConnection {
                 key_sources: converted_sources,
                 pattern: pattern
@@ -542,10 +546,6 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(scx, format, &envelope)?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                bail!("S3 sources do not support key decoding");
-            }
             (connection, encoding)
         }
         CreateSourceConnection::Postgres {
@@ -563,7 +563,8 @@ pub fn plan_create_source(
                 details: PostgresSourceDetails::from_proto(details)?,
             });
 
-            let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
+            let encoding =
+                SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
             (connection, encoding)
         }
         CreateSourceConnection::PubNub {
@@ -578,23 +579,13 @@ pub fn plan_create_source(
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (connection, SourceDataEncoding::Single(DataEncoding::Text))
+            (
+                connection,
+                SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Text)),
+            )
         }
     };
     let (key_desc, value_desc) = encoding.desc()?;
-
-    let key_desc = key_desc.map(|key_desc| {
-        // keys are optional with `Envelope::None`, so we mark each of the key's columns as nullable
-        if let mz_sql_parser::ast::Envelope::None = &envelope {
-            RelationDesc::from_names_and_types(
-                key_desc
-                    .into_iter()
-                    .map(|(name, typ)| (name, typ.nullable(true))),
-            )
-        } else {
-            key_desc
-        }
-    });
 
     let key_envelope = get_key_envelope(include_metadata, &envelope, &encoding)?;
 
@@ -786,7 +777,10 @@ pub fn plan_create_source(
             }
             //TODO(petrosagg): remove this check. it will be a breaking change
             let key_envelope = match encoding.key_ref() {
-                Some(DataEncoding::Avro(_)) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
+                Some(DataEncoding {
+                    inner: DataEncodingInner::Avro(_),
+                    ..
+                }) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
                 _ => key_envelope.unwrap_or(KeyEnvelope::LegacyUpsert),
             };
             UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
@@ -1182,22 +1176,27 @@ fn get_encoding(
     scx: &StatementContext,
     format: &CreateSourceFormat<Aug>,
     envelope: &Envelope<Aug>,
+    connection: &CreateSourceConnection<Aug>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
         CreateSourceFormat::Bare(format) => get_encoding_inner(scx, format)?,
         CreateSourceFormat::KeyValue { key, value } => {
             let key = match get_encoding_inner(scx, key)? {
-                SourceDataEncoding::Single(key) => key,
-                SourceDataEncoding::KeyValue { key, .. } => key,
+                SourceDataEncodingInner::Single(key) => key,
+                SourceDataEncodingInner::KeyValue { key, .. } => key,
             };
             let value = match get_encoding_inner(scx, value)? {
-                SourceDataEncoding::Single(value) => value,
-                SourceDataEncoding::KeyValue { value, .. } => value,
+                SourceDataEncodingInner::Single(value) => value,
+                SourceDataEncodingInner::KeyValue { value, .. } => value,
             };
-            SourceDataEncoding::KeyValue { key, value }
+            SourceDataEncodingInner::KeyValue { key, value }
         }
     };
+
+    let force_nullable_keys = matches!(connection, CreateSourceConnection::Kafka(_))
+        && matches!(envelope, Envelope::None);
+    let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
     let requires_keyvalue = matches!(
         envelope,
@@ -1216,10 +1215,10 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
-) -> Result<SourceDataEncoding, anyhow::Error> {
+) -> Result<SourceDataEncodingInner, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
-    Ok(SourceDataEncoding::Single(match format {
-        Format::Bytes => DataEncoding::Bytes,
+    Ok(SourceDataEncodingInner::Single(match format {
+        Format::Bytes => DataEncodingInner::Bytes,
         Format::Avro(schema) => {
             let Schema {
                 key_schema,
@@ -1297,20 +1296,20 @@ fn get_encoding_inner(
             };
 
             if let Some(key_schema) = key_schema {
-                return Ok(SourceDataEncoding::KeyValue {
-                    key: DataEncoding::Avro(AvroEncoding {
+                return Ok(SourceDataEncodingInner::KeyValue {
+                    key: DataEncodingInner::Avro(AvroEncoding {
                         schema: key_schema,
                         schema_registry_config: schema_registry_config.clone(),
                         confluent_wire_format,
                     }),
-                    value: DataEncoding::Avro(AvroEncoding {
+                    value: DataEncodingInner::Avro(AvroEncoding {
                         schema: value_schema,
                         schema_registry_config,
                         confluent_wire_format,
                     }),
                 });
             } else {
-                DataEncoding::Avro(AvroEncoding {
+                DataEncodingInner::Avro(AvroEncoding {
                     schema: value_schema,
                     schema_registry_config,
                     confluent_wire_format,
@@ -1357,14 +1356,14 @@ fn get_encoding_inner(
                         &normalized_options,
                         "CONFLUENT SCHEMA REGISTRY",
                     )?;
-                    let value = DataEncoding::Protobuf(ProtobufEncoding {
+                    let value = DataEncodingInner::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: value.message_name.clone(),
                         confluent_wire_format: true,
                     });
                     if let Some(key) = key {
-                        return Ok(SourceDataEncoding::KeyValue {
-                            key: DataEncoding::Protobuf(ProtobufEncoding {
+                        return Ok(SourceDataEncodingInner::KeyValue {
+                            key: DataEncodingInner::Protobuf(ProtobufEncoding {
                                 descriptors: strconv::parse_bytes(&key.schema)?,
                                 message_name: key.message_name.clone(),
                                 confluent_wire_format: true,
@@ -1388,7 +1387,7 @@ fn get_encoding_inner(
                     }
                 };
 
-                DataEncoding::Protobuf(ProtobufEncoding {
+                DataEncodingInner::Protobuf(ProtobufEncoding {
                     descriptors,
                     message_name: message_name.to_owned(),
                     confluent_wire_format: false,
@@ -1397,7 +1396,7 @@ fn get_encoding_inner(
         },
         Format::Regex(regex) => {
             let regex = Regex::new(&regex)?;
-            DataEncoding::Regex(RegexEncoding {
+            DataEncodingInner::Regex(RegexEncoding {
                 regex: mz_repr::adt::regex::Regex(regex),
             })
         }
@@ -1413,7 +1412,7 @@ fn get_encoding_inner(
                 }
                 CsvColumns::Count(n) => ColumnSpec::Count(*n),
             };
-            DataEncoding::Csv(CsvEncoding {
+            DataEncodingInner::Csv(CsvEncoding {
                 columns,
                 delimiter: match *delimiter as u32 {
                     0..=127 => *delimiter as u8,
@@ -1422,7 +1421,7 @@ fn get_encoding_inner(
             })
         }
         Format::Json => bail_unsupported!("JSON sources"),
-        Format::Text => DataEncoding::Text,
+        Format::Text => DataEncodingInner::Text,
     }))
 }
 
@@ -1448,15 +1447,15 @@ fn get_key_envelope(
                 // If the key is requested but comes from an unnamed type then it gets the name "key"
                 //
                 // Otherwise it gets the names of the columns in the type
-                let is_composite = match key {
-                    DataEncoding::Postgres | DataEncoding::RowCodec(_) => {
+                let is_composite = match key.inner {
+                    DataEncodingInner::Postgres | DataEncodingInner::RowCodec(_) => {
                         bail!("{} sources cannot use INCLUDE KEY", key.op_name())
                     }
-                    DataEncoding::Bytes | DataEncoding::Text => false,
-                    DataEncoding::Avro(_)
-                    | DataEncoding::Csv(_)
-                    | DataEncoding::Protobuf(_)
-                    | DataEncoding::Regex { .. } => true,
+                    DataEncodingInner::Bytes | DataEncodingInner::Text => false,
+                    DataEncodingInner::Avro(_)
+                    | DataEncodingInner::Csv(_)
+                    | DataEncodingInner::Protobuf(_)
+                    | DataEncodingInner::Regex { .. } => true,
                 };
 
                 if is_composite {
