@@ -79,16 +79,18 @@ pub async fn purify_create_source(
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     match item.connection()? {
-                        Connection::Kafka(connection) => {
-                            (connection.broker.to_string(), connection.options.clone())
-                        }
+                        Connection::Kafka(mz_dataflow_types::connections::KafkaConnection {
+                            broker,
+                            options,
+                        }) => (broker.to_string(), options.clone()),
                         _ => bail!("{} is not a kafka connection", item.name()),
                     }
                 }
-                KafkaConnection::Inline { broker } => (
-                    broker.to_string(),
-                    kafka_util::extract_config(&*catalog, &mut with_options_map)?,
-                ),
+                KafkaConnection::Inline { broker } => {
+                    let connection_options =
+                        kafka_util::extract_config(&*catalog, &mut with_options_map)?;
+                    (broker.to_string(), connection_options)
+                }
             };
             let consumer = kafka_util::create_consumer(
                 &broker,

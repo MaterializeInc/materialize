@@ -23,6 +23,13 @@ include!(concat!(env!("OUT_DIR"), "/mz_kafka_util.addr.rs"));
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaAddrs(Vec<(String, u16)>);
 
+impl KafkaAddrs {
+    /// Returns the inner vec's len
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 impl FromStr for KafkaAddrs {
     type Err = KafkaAddrsParseError;
 

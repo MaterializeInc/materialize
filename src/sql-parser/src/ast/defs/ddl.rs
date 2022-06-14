@@ -21,7 +21,6 @@
 //! AST types specific to CREATE/ALTER variants of [crate::ast::Statement]
 //! (commonly referred to as Data Definition Language, or DDL)
 
-use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -548,6 +547,8 @@ impl_display_t!(DbzTxMetadataOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KafkaConnectionOptionName {
+    Broker,
+    Brokers,
     SslKey,
     SslKeyPassword,
     SslCertificate,
@@ -557,37 +558,25 @@ pub enum KafkaConnectionOptionName {
     SaslPassword,
 }
 
-impl KafkaConnectionOptionName {
-    pub fn group(&self) -> &'static str {
-        match self {
-            KafkaConnectionOptionName::SslKey
-            | KafkaConnectionOptionName::SslKeyPassword
-            | KafkaConnectionOptionName::SslCertificate
-            | KafkaConnectionOptionName::SslCertificateAuthority => "SSL",
-            KafkaConnectionOptionName::SaslMechanisms
-            | KafkaConnectionOptionName::SaslUsername
-            | KafkaConnectionOptionName::SaslPassword => "SASL",
-        }
-    }
-}
-
 impl AstDisplay for KafkaConnectionOptionName {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
-            KafkaConnectionOptionName::SslKey => "KEY",
-            KafkaConnectionOptionName::SslKeyPassword => "KEY PASSWORD",
-            KafkaConnectionOptionName::SslCertificate => "CERTIFICATE",
-            KafkaConnectionOptionName::SslCertificateAuthority => "CERTIFICATE AUTHORITY",
-            KafkaConnectionOptionName::SaslMechanisms => "MECHANISMS",
-            KafkaConnectionOptionName::SaslUsername => "USERNAME",
-            KafkaConnectionOptionName::SaslPassword => "PASSWORD",
+            KafkaConnectionOptionName::Broker => "BROKER",
+            KafkaConnectionOptionName::Brokers => "BROKERS",
+            KafkaConnectionOptionName::SslKey => "SSL KEY",
+            KafkaConnectionOptionName::SslKeyPassword => "SSL KEY PASSWORD",
+            KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
+            KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
+            KafkaConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
+            KafkaConnectionOptionName::SaslUsername => "SASL USERNAME",
+            KafkaConnectionOptionName::SaslPassword => "SASL PASSWORD",
         })
     }
 }
 impl_display!(KafkaConnectionOptionName);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-/// An option in a `CREATE CLUSTER` or `CREATE CLUSTER KafkaConnector` statement.
+/// An option in a `CREATE CONNECTION...KAFKA`.
 pub struct KafkaConnectionOption<T: AstInfo> {
     pub name: KafkaConnectionOptionName,
     pub value: Option<WithOptionValue<T>>,
@@ -607,7 +596,6 @@ impl_display_t!(KafkaConnectionOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
     Kafka {
-        broker: String,
         with_options: Vec<KafkaConnectionOption<T>>,
     },
     Csr {
@@ -619,35 +607,9 @@ pub enum CreateConnection<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Kafka {
-                broker,
-                with_options,
-            } => {
-                f.write_str("KAFKA BROKER '");
-                f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("' ");
-
-                // TODO(move this into a trait with a generic implementation)
-                let mut groups: HashMap<&str, Vec<String>> = HashMap::new();
-                for root @ KafkaConnectionOption { name, .. } in with_options {
-                    groups.entry(name.group()).or_default().push(if f.stable() {
-                        root.to_ast_string_stable()
-                    } else {
-                        root.to_ast_string()
-                    })
-                }
-                let mut sorted_groups = vec![];
-                for (k, mut v) in groups {
-                    v.sort();
-                    sorted_groups.push((k, v));
-                }
-                sorted_groups.sort();
-                for (group, values) in sorted_groups {
-                    f.write_str(group);
-                    f.write_str(" (");
-                    f.write_str(itertools::join(values, ", "));
-                    f.write_str(")");
-                }
+            Self::Kafka { with_options } => {
+                f.write_str("KAFKA ");
+                f.write_node(&display::comma_separated(&with_options));
             }
             Self::Csr {
                 url: registry,

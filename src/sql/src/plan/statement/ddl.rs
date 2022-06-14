@@ -44,6 +44,7 @@ use mz_dataflow_types::sources::{
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
+use mz_kafka_util::KafkaAddrs;
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -2862,13 +2863,17 @@ pub fn plan_create_connection(
         if_not_exists,
     } = stmt;
     let connection = match connection {
-        CreateConnection::Kafka {
-            broker,
-            with_options,
-        } => Connection::Kafka(KafkaConnection {
-            broker: broker.parse()?,
-            options: kafka_util::kafka_connection_config(scx.catalog, with_options)?,
-        }),
+        CreateConnection::Kafka { with_options } => {
+            let mut options = kafka_util::kafka_connection_config(scx.catalog, with_options)?;
+            // TODO: Do not rely on config; `KafkaConnection` should have
+            // distinct fields instead of options
+            Connection::Kafka(KafkaConnection {
+                broker: <KafkaAddrs as std::str::FromStr>::from_str(
+                    &options.remove("bootstrap.servers").unwrap().unwrap_string(),
+                )?,
+                options,
+            })
+        }
         CreateConnection::Csr { url, with_options } => {
             let connection = kafka_util::generate_ccsr_connection(
                 scx.catalog,

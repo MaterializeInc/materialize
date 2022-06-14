@@ -9,10 +9,13 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use std::str::FromStr;
+
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::connections::StringOrSecret;
+use mz_kafka_util::KafkaAddrs;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 
@@ -26,6 +29,24 @@ pub trait TryFromValue<T>: Sized {
 
 pub trait ImpliedValue: Sized {
     fn implied_value() -> Result<Self, anyhow::Error>;
+}
+
+impl TryFromValue<Value> for KafkaAddrs {
+    fn try_from_value(value: Value) -> Result<Self, anyhow::Error> {
+        Ok(KafkaAddrs::from_str(&match value {
+            v @ Value::Array(..) => {
+                let s: Vec<String> = Vec::<String>::try_from_value(v)?;
+                s.join(",")
+            }
+            v => String::try_from_value(v)?,
+        })?)
+    }
+}
+
+impl ImpliedValue for KafkaAddrs {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide a string or array value for Kafka addresses")
+    }
 }
 
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {

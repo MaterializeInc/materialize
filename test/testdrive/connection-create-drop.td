@@ -28,7 +28,7 @@ testconn   kafka
 > SHOW CREATE CONNECTION testconn
 Connection   "Create Connection"
 ---------------------------------
-materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER '${testdrive.kafka-addr}'"
+materialize.public.testconn   "CREATE CONNECTION \"materialize\".\"public\".\"testconn\" FOR KAFKA BROKER = '${testdrive.kafka-addr}'"
 
 
 > DROP CONNECTION testconn
