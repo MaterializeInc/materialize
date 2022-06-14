@@ -17,7 +17,9 @@ aliases:
 
 Field | Use
 ------|-----
-_on&lowbar;name_ | The name of the object whose indexes you want to show. This can be the name of a table, source, or view.
+_on&lowbar;name_ | The name of the object whose indexes you want to show. This can be the name of a table, source, or view. If omitted, all indexes in the cluster are shown.
+_cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
+**EXTENDED** | Returns system indexes as well as user-created indexes. By default, only user-created indexes are returned.
 
 ## Details
 

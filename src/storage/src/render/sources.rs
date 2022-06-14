@@ -227,8 +227,8 @@ where
                         schema,
                         schema_registry_config,
                         confluent_wire_format,
-                    } = match value_encoding {
-                        DataEncoding::Avro(enc) => enc,
+                    } = match value_encoding.inner {
+                        DataEncodingInner::Avro(enc) => enc,
                         _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
                     };
                     let ok_source = match ok_source {

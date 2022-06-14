@@ -4294,36 +4294,30 @@ impl<'a> Parser<'a> {
             .parse_one_of_keywords(&[INDEX, INDEXES, KEYS])
             .is_some()
         {
-            match self.parse_one_of_keywords(&[FROM, IN, ON]) {
-                Some(kw) => {
-                    let (table_name, in_cluster) = if kw == IN && self.peek_keyword(CLUSTER) {
-                        // put `IN` back
-                        self.prev_token();
-                        (None, self.parse_optional_in_cluster()?)
-                    } else {
-                        let table_name = self.parse_raw_name()?;
-                        let in_cluster = self.parse_optional_in_cluster()?;
-                        (Some(table_name), in_cluster)
-                    };
+            let kw = self.parse_one_of_keywords(&[FROM, IN, ON]);
+            let (table_name, in_cluster) = if kw == Some(IN) && self.peek_keyword(CLUSTER) {
+                // put `IN` back
+                self.prev_token();
+                (None, self.parse_optional_in_cluster()?)
+            } else if kw.is_some() {
+                let table_name = self.parse_raw_name()?;
+                let in_cluster = self.parse_optional_in_cluster()?;
+                (Some(table_name), in_cluster)
+            } else {
+                (None, None)
+            };
 
-                    let filter = if self.parse_keyword(WHERE) {
-                        Some(ShowStatementFilter::Where(self.parse_expr()?))
-                    } else {
-                        None
-                    };
-                    Ok(Statement::ShowIndexes(ShowIndexesStatement {
-                        table_name,
-                        in_cluster,
-                        extended,
-                        filter,
-                    }))
-                }
-                None => self.expected(
-                    self.peek_pos(),
-                    "FROM or IN after SHOW INDEXES",
-                    self.peek_token(),
-                ),
-            }
+            let filter = if self.parse_keyword(WHERE) {
+                Some(ShowStatementFilter::Where(self.parse_expr()?))
+            } else {
+                None
+            };
+            Ok(Statement::ShowIndexes(ShowIndexesStatement {
+                table_name,
+                in_cluster,
+                extended,
+                filter,
+            }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,

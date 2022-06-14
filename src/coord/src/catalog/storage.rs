@@ -38,6 +38,7 @@ use crate::catalog::builtin::BuiltinLog;
 use crate::catalog::error::{Error, ErrorKind};
 
 const USER_VERSION: &str = "user_version";
+const DEFAULT_CLUSTER_ID: u64 = 1;
 
 async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
     // Initial state.
@@ -53,21 +54,29 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                 COLLECTION_ITEM.upsert(stash, vec![]).await?;
                 COLLECTION_AUDIT_LOG.upsert(stash, vec![]).await?;
 
-                COLLECTION_GID_ALLOC
+                COLLECTION_ID_ALLOC
                     .upsert(
                         stash,
                         vec![
                             (
-                                GidAllocKey {
+                                IdAllocKey {
                                     name: "user".into(),
                                 },
-                                GidAllocValue { next_gid: 1 },
+                                IdAllocValue { next_id: 1 },
                             ),
                             (
-                                GidAllocKey {
+                                IdAllocKey {
                                     name: "system".into(),
                                 },
-                                GidAllocValue { next_gid: 1 },
+                                IdAllocValue { next_id: 1 },
+                            ),
+                            (
+                                IdAllocKey {
+                                    name: "compute".into(),
+                                },
+                                IdAllocValue {
+                                    next_id: DEFAULT_CLUSTER_ID + 1,
+                                },
                             ),
                         ],
                     )
@@ -140,7 +149,7 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     .upsert(
                         stash,
                         vec![(
-                    ComputeInstanceKey { id: 1 },
+                    ComputeInstanceKey { id: DEFAULT_CLUSTER_ID },
                     ComputeInstanceValue {
                         name: "default".into(),
                         config: Some(
@@ -499,33 +508,39 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
-        let id = self.allocate_global_id("system", amount).await?;
+        let id = self.allocate_id("system", amount).await?;
 
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 
     pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
-        let id = self.allocate_global_id("user", 1).await?;
+        let id = self.allocate_id("user", 1).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
     }
 
-    async fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
-        let key = GidAllocKey {
+    pub async fn allocate_compute_instance_id(&mut self) -> Result<ComputeInstanceId, Error> {
+        let id = self.allocate_id("compute", 1).await?;
+        let id = id.into_element();
+        Ok(id)
+    }
+
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
+        let key = IdAllocKey {
             name: id_type.to_string(),
         };
-        let prev = COLLECTION_GID_ALLOC
+        let prev = COLLECTION_ID_ALLOC
             .peek_key_one(&mut self.stash, &key)
             .await?;
-        let id = prev.expect("must exist").next_gid;
+        let id = prev.expect("must exist").next_id;
         let next = match id.checked_add(amount) {
-            Some(next_gid) => GidAllocValue { next_gid },
+            Some(next_gid) => IdAllocValue { next_id: next_gid },
             None => return Err(Error::new(ErrorKind::IdExhaustion)),
         };
-        COLLECTION_GID_ALLOC
+        COLLECTION_ID_ALLOC
             .upsert_key(&mut self.stash, &key, &next)
             .await?;
-        Ok((id..next.next_gid).collect())
+        Ok((id..next.next_id).collect())
     }
 
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
@@ -553,7 +568,7 @@ impl<S: Append> Connection<S> {
                 a.schema_id == b.schema_id && a.name == b.name
             }),
             roles: TableTransaction::new(roles, Some(|k| k.id), |a, b| a.name == b.name),
-            compute_instances: TableTransaction::new(compute_instances, Some(|k| k.id), |a, b| {
+            compute_instances: TableTransaction::new(compute_instances, None, |a, b| {
                 a.name == b.name
             }),
             compute_instance_replicas: TableTransaction::new(
@@ -579,7 +594,7 @@ pub struct Transaction<'a, S> {
     schemas: TableTransaction<SchemaKey, SchemaValue, i64>,
     items: TableTransaction<ItemKey, ItemValue, i64>,
     roles: TableTransaction<RoleKey, RoleValue, i64>,
-    compute_instances: TableTransaction<ComputeInstanceKey, ComputeInstanceValue, i64>,
+    compute_instances: TableTransaction<ComputeInstanceKey, ComputeInstanceValue, u64>,
     compute_instance_replicas:
         TableTransaction<ComputeInstanceReplicaKey, ComputeInstanceReplicaValue, i64>,
     introspection_sources: TableTransaction<
@@ -681,25 +696,23 @@ impl<'a, S: Append> Transaction<'a, S> {
     /// Panics if any introspection source id is not a system id
     pub fn insert_compute_instance(
         &mut self,
+        id: ComputeInstanceId,
         cluster_name: &str,
         config: &Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
-    ) -> Result<ComputeInstanceId, Error> {
+    ) -> Result<(), Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
-        let id = match self.compute_instances.insert(
-            |id| ComputeInstanceKey { id: id.unwrap() },
+        if let Err(_) = self.compute_instances.insert(
+            |_| ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
                 config: Some(config),
             },
         ) {
-            Ok(id) => id.unwrap(),
-            Err(()) => {
-                return Err(Error::new(ErrorKind::ClusterAlreadyExists(
-                    cluster_name.to_owned(),
-                )))
-            }
+            return Err(Error::new(ErrorKind::ClusterAlreadyExists(
+                cluster_name.to_owned(),
+            )));
         };
 
         for (builtin, index_id) in introspection_sources {
@@ -719,7 +732,7 @@ impl<'a, S: Append> Transaction<'a, S> {
                 .expect("no uniqueness violation");
         }
 
-        Ok(id)
+        Ok(())
     }
 
     pub fn insert_compute_instance_replica(
@@ -1007,18 +1020,18 @@ struct SettingValue {
 impl_codec!(SettingValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct GidAllocKey {
+struct IdAllocKey {
     #[prost(string)]
     name: String,
 }
-impl_codec!(GidAllocKey);
+impl_codec!(IdAllocKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
-struct GidAllocValue {
+struct IdAllocValue {
     #[prost(uint64)]
-    next_gid: u64,
+    next_id: u64,
 }
-impl_codec!(GidAllocValue);
+impl_codec!(IdAllocValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct GidMappingKey {
@@ -1040,8 +1053,8 @@ impl_codec!(GidMappingValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceKey {
-    #[prost(int64)]
-    id: i64,
+    #[prost(uint64)]
+    id: u64,
 }
 impl_codec!(ComputeInstanceKey);
 
@@ -1056,8 +1069,8 @@ impl_codec!(ComputeInstanceValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeIntrospectionSourceIndexKey {
-    #[prost(int64)]
-    compute_id: i64,
+    #[prost(uint64)]
+    compute_id: ComputeInstanceId,
     #[prost(string)]
     name: String,
 }
@@ -1086,7 +1099,7 @@ impl_codec!(ComputeInstanceReplicaKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceReplicaValue {
-    #[prost(int64)]
+    #[prost(uint64)]
     compute_instance_id: ComputeInstanceId,
     #[prost(string)]
     name: String,
@@ -1195,7 +1208,7 @@ impl_codec!(AuditLogKey);
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
-static COLLECTION_GID_ALLOC: TypedCollection<GidAllocKey, GidAllocValue> =
+static COLLECTION_ID_ALLOC: TypedCollection<IdAllocKey, IdAllocValue> =
     TypedCollection::new("gid_alloc");
 static COLLECTION_SYSTEM_GID_MAPPING: TypedCollection<GidMappingKey, GidMappingValue> =
     TypedCollection::new("system_gid_mapping");
