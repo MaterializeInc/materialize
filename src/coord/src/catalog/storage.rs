@@ -703,19 +703,16 @@ impl<'a, S: Append> Transaction<'a, S> {
     ) -> Result<(), Error> {
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
-        match self.compute_instances.insert(
+        if let Err(_) = self.compute_instances.insert(
             |_| ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
                 config: Some(config),
             },
         ) {
-            Err(()) => {
-                return Err(Error::new(ErrorKind::ClusterAlreadyExists(
-                    cluster_name.to_owned(),
-                )))
-            }
-            _ => {}
+            return Err(Error::new(ErrorKind::ClusterAlreadyExists(
+                cluster_name.to_owned(),
+            )));
         };
 
         for (builtin, index_id) in introspection_sources {
