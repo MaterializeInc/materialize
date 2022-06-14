@@ -9,7 +9,7 @@ draft: true
     #parent: 'commands'
 ---
 
-[//]: # "NOTE(morsapaes) Once we're ready to bring sinks back, check #12991 to restore the previous docs state."
+[//]: # "NOTE(morsapaes) Once we're ready to bring sinks back, check #13104 to restore the previous docs state."
 
 `CREATE SINK` sends data from Materialize to an external sink.
 
