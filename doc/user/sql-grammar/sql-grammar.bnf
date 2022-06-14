@@ -295,7 +295,9 @@ show_create_view ::=
 show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)
 show_index ::=
-    'SHOW' ('INDEX' | 'INDEXES' | 'KEYS') ('FROM' | 'IN') on_name
+    'SHOW' 'EXTENDED'? ('INDEX' | 'INDEXES' | 'KEYS')
+    (('FROM' | 'IN') on_name)?
+    ('IN' 'CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?

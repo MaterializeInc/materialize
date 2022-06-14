@@ -571,11 +571,12 @@ pub fn show_indexes<'a>(
         filter,
     }: ShowIndexesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    if extended {
-        bail_unsupported!("SHOW EXTENDED INDEXES")
-    }
-
-    let mut query_filter = vec![];
+    // Exclude system indexes unless `EXTENDED` is requested.
+    let mut query_filter = if extended {
+        vec!["TRUE".into()]
+    } else {
+        vec!["idxs.on_id NOT LIKE 's%'".into()]
+    };
 
     if let Some(table_name) = table_name {
         let from = scx.get_item_by_resolved_name(&table_name)?;
@@ -595,11 +596,6 @@ pub fn show_indexes<'a>(
     if let Some(cluster) = in_cluster {
         query_filter.push(format!("clusters.id = {}", cluster.0))
     };
-
-    assert!(
-        !query_filter.is_empty(),
-        "parsing failed to enforce either table_name or in_cluster's presence"
-    );
 
     let query = format!(
         "SELECT
