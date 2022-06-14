@@ -1,6 +1,6 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
+  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name (
     'SET' (
