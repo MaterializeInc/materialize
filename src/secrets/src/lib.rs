@@ -83,7 +83,7 @@ impl SecretsReader {
     ///
     /// (N.B. Were we ever to run with Windows / NTFS, this would also work
     /// properly _and_ mid-read edits would be disallowed)
-    pub fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
+    pub async fn read(&self, id: GlobalId) -> Result<Vec<u8>, anyhow::Error> {
         let file_path = self.config.mount_path.join(id.to_string());
 
         // Use a `File` handle directly to make clear that we are upholding our documented guarantee
@@ -94,8 +94,8 @@ impl SecretsReader {
         Ok(buf)
     }
 
-    pub fn read_string(&self, id: GlobalId) -> anyhow::Result<String> {
-        String::from_utf8(self.read(id)?).context("converting secret value to string")
+    pub async fn read_string(&self, id: GlobalId) -> anyhow::Result<String> {
+        String::from_utf8(self.read(id).await?).context("converting secret value to string")
     }
 
     /// Returns the path of the secret consisting of a configured base path

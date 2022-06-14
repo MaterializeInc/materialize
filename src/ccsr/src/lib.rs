@@ -43,4 +43,4 @@ mod config;
 pub mod tls;
 
 pub use client::*;
-pub use config::{ClientConfig, ProtoClientConfig};
+pub use config::ClientConfig;

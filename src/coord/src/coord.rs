@@ -5402,7 +5402,6 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
-        secrets_reader: connection_context.secrets_reader.clone(),
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;

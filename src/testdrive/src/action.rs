@@ -224,13 +224,9 @@ impl State {
                 ))
                 .await?;
 
-            let catalog = Catalog::open_debug_postgres(
-                url.clone(),
-                Some(schema.clone()),
-                &self.ensure_secrets_dir()?,
-                NOW_ZERO.clone(),
-            )
-            .await?;
+            let catalog =
+                Catalog::open_debug_postgres(url.clone(), Some(schema.clone()), NOW_ZERO.clone())
+                    .await?;
             let res = f(catalog.for_session(&Session::dummy()));
             client
                 .execute(format!("DROP SCHEMA {schema} CASCADE").as_str(), &[])
@@ -404,12 +400,6 @@ impl State {
                 Ok(())
             })
             .await
-    }
-
-    fn ensure_secrets_dir(&self) -> anyhow::Result<PathBuf> {
-        let secrets_dir = self.temp_path.join("secrets");
-        fs::create_dir_all(&secrets_dir).context("creating temporary secrets directory")?;
-        Ok(secrets_dir)
     }
 }
 

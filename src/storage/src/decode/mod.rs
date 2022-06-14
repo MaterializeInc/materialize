@@ -35,13 +35,10 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
-use mz_dataflow_types::{
-    sources::{
-        encoding::{AvroEncoding, DataEncoding, RegexEncoding},
-        IncludedColumnSource, MzOffset,
-    },
-    DecodeError, LinearOperator,
-};
+use mz_dataflow_types::connections::ConnectionContext;
+use mz_dataflow_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
+use mz_dataflow_types::sources::{IncludedColumnSource, MzOffset};
+use mz_dataflow_types::{DecodeError, LinearOperator};
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_repr::Datum;
 use mz_repr::{Diff, Row, Timestamp};
@@ -67,7 +64,7 @@ mod protobuf;
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
     schema: &str,
-    registry: Option<mz_ccsr::ClientConfig>,
+    registry: Option<mz_ccsr::Client>,
     confluent_wire_format: bool,
 ) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
     // We will have already checked validity of the schema by now, so this can't fail.
@@ -256,16 +253,24 @@ fn get_decoder(
     operators: &mut Option<LinearOperator>,
     is_connection_delimited: bool,
     metrics: DecodeMetrics,
+    connection_context: &ConnectionContext,
 ) -> DataDecoder {
     match encoding.inner {
         DataEncodingInner::Avro(AvroEncoding {
             schema,
-            schema_registry_config,
+            csr_connection,
             confluent_wire_format,
         }) => {
+            let csr_client = match csr_connection {
+                None => None,
+                Some(csr_connection) => Some(
+                    block_on(csr_connection.connect(&connection_context.secrets_reader))
+                        .expect("CSR connection unexpectedly missing secrets"),
+                ),
+            };
             let state = avro::AvroDecoderState::new(
                 &schema,
-                schema_registry_config,
+                csr_client,
                 debug_name.to_string(),
                 confluent_wire_format,
             )
@@ -362,6 +367,7 @@ pub fn render_decode_delimited<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
+    connection_context: &ConnectionContext,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope,
@@ -375,10 +381,24 @@ where
         value_encoding.op_name()
     );
     let mut key_decoder = key_encoding.map(|key_encoding| {
-        get_decoder(key_encoding, debug_name, operators, true, metrics.clone())
+        get_decoder(
+            key_encoding,
+            debug_name,
+            operators,
+            true,
+            metrics.clone(),
+            connection_context,
+        )
     });
 
-    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
+    let mut value_decoder = get_decoder(
+        value_encoding,
+        debug_name,
+        operators,
+        true,
+        metrics,
+        connection_context,
+    );
 
     let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>| x.value.hashed();
 
@@ -463,13 +483,21 @@ pub fn render_decode<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
+    connection_context: &ConnectionContext,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let op_name = format!("{}Decode", value_encoding.op_name());
 
-    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, false, metrics);
+    let mut value_decoder = get_decoder(
+        value_encoding,
+        debug_name,
+        operators,
+        false,
+        metrics,
+        connection_context,
+    );
 
     let mut value_buf = vec![];
 

@@ -28,7 +28,6 @@ use mz_dataflow_types::sources::SourceConnection;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
-use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::Expr;
 use uuid::Uuid;
 
@@ -188,9 +187,6 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// this means the Unix epoch. This can safely be mocked in tests and start
     /// at 0.
     fn now(&self) -> EpochMillis;
-
-    /// Returns a secrets reader associated with the catalog.
-    fn secrets_reader(&self) -> &SecretsReader;
 }
 
 /// Configuration associated with a catalog.
@@ -689,10 +685,6 @@ impl SessionCatalog for DummyCatalog {
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         name
-    }
-
-    fn secrets_reader(&self) -> &SecretsReader {
-        unimplemented!()
     }
 }
 

@@ -19,6 +19,8 @@ use mz_repr::adt::regex::any_regex;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
+use crate::connections::CsrConnection;
+
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_dataflow_types.types.sources.encoding.rs"
@@ -312,7 +314,7 @@ impl DataEncoding {
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AvroEncoding {
     pub schema: String,
-    pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
+    pub csr_connection: Option<CsrConnection>,
     pub confluent_wire_format: bool,
 }
 
@@ -320,7 +322,7 @@ impl RustType<ProtoAvroEncoding> for AvroEncoding {
     fn into_proto(self: &Self) -> ProtoAvroEncoding {
         ProtoAvroEncoding {
             schema: self.schema.clone(),
-            schema_registry_config: self.schema_registry_config.into_proto(),
+            csr_connection: self.csr_connection.into_proto(),
             confluent_wire_format: self.confluent_wire_format,
         }
     }
@@ -328,7 +330,7 @@ impl RustType<ProtoAvroEncoding> for AvroEncoding {
     fn from_proto(proto: ProtoAvroEncoding) -> Result<Self, TryFromProtoError> {
         Ok(AvroEncoding {
             schema: proto.schema,
-            schema_registry_config: proto.schema_registry_config.into_rust()?,
+            csr_connection: proto.csr_connection.into_rust()?,
             confluent_wire_format: proto.confluent_wire_format,
         })
     }

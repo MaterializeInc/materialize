@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use differential_dataflow::{AsCollection, Collection, Hashable};
+use futures::executor::block_on;
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
 use mz_interchange::json::JsonEncoder;
@@ -44,6 +45,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 use mz_avro::types::Value;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sinks::{
     KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
     SinkEnvelope,
@@ -138,7 +140,7 @@ where
             sink.as_of.clone(),
             Rc::clone(&shared_frontier),
             &compute_state.sink_metrics.kafka,
-            compute_state.connection_context.librdkafka_log_level,
+            &compute_state.connection_context,
         );
 
         compute_state
@@ -435,11 +437,11 @@ impl KafkaSinkState {
         activator: Activator,
         write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
         metrics: &KafkaBaseMetrics,
-        librdkafka_log_level: tracing::Level,
+        connection_context: &ConnectionContext,
     ) -> Self {
-        let config = Self::create_producer_config(&connection, librdkafka_log_level);
+        let config = Self::create_producer_config(&connection, connection_context);
         let consistency_client_config =
-            Self::create_consistency_client_config(&connection, librdkafka_log_level);
+            Self::create_consistency_client_config(&connection, connection_context);
 
         let metrics = Arc::new(SinkMetrics::new(
             metrics,
@@ -491,10 +493,13 @@ impl KafkaSinkState {
 
     fn create_producer_config(
         connection: &KafkaSinkConnection,
-        librdkafka_log_level: tracing::Level,
+        connection_context: &ConnectionContext,
     ) -> ClientConfig {
-        let mut config = create_new_client_config(librdkafka_log_level);
-        config.set("bootstrap.servers", &connection.addrs.to_string());
+        let mut config = create_new_client_config(connection_context.librdkafka_log_level);
+        config.set(
+            "bootstrap.servers",
+            &connection.connection.broker.to_string(),
+        );
 
         // Ensure that messages are sinked in order and without duplicates. Note that
         // this only applies to a single instance of a producer - in the case of restarts,
@@ -520,13 +525,15 @@ impl KafkaSinkState {
         // if it makes a big difference
         config.set("queue.buffering.max.ms", &format!("{}", 10));
 
-        for (k, v) in connection.config_options.iter() {
+        for (k, v) in connection.connection.options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't
             // flood the INFO log with statistics messages.
             // TODO: properly support statistics on Kafka sinks
             // We explicitly reject 'isolation.level' as it's a consumer property
             // and, while benign, will fill the log with WARN messages
             if k != "statistics.interval.ms" && k != "isolation.level" {
+                let v = block_on(v.get_string(&connection_context.secrets_reader))
+                    .expect("reading kafka secret unexpectedly failed");
                 config.set(k, v);
             }
         }
@@ -543,17 +550,22 @@ impl KafkaSinkState {
 
     fn create_consistency_client_config(
         connection: &KafkaSinkConnection,
-        librdkafka_log_level: tracing::Level,
+        connection_context: &ConnectionContext,
     ) -> ClientConfig {
-        let mut config = create_new_client_config(librdkafka_log_level);
-        config.set("bootstrap.servers", &connection.addrs.to_string());
-        for (k, v) in connection.config_options.iter() {
+        let mut config = create_new_client_config(connection_context.librdkafka_log_level);
+        config.set(
+            "bootstrap.servers",
+            &connection.connection.broker.to_string(),
+        );
+        for (k, v) in connection.connection.options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't
             // flood the INFO log with statistics messages.
             // TODO: properly support statistics on Kafka sinks
             // We explicitly reject 'isolation.level' as it's a consumer property
             // and, while benign, will fill the log with WARN messages
             if k != "statistics.interval.ms" && k != "isolation.level" {
+                let v = block_on(v.get_string(&connection_context.secrets_reader))
+                    .expect("reading kafka secret unexpectedly failed");
                 config.set(k, v);
             }
         }
@@ -1032,7 +1044,7 @@ fn kafka<G>(
     as_of: SinkAsOf,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
-    librdkafka_log_level: tracing::Level,
+    connection_context: &ConnectionContext,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1099,7 +1111,7 @@ where
         shared_gate_ts,
         write_frontier,
         metrics,
-        librdkafka_log_level,
+        connection_context,
     )
 }
 
@@ -1123,7 +1135,7 @@ pub fn produce_to_kafka<G>(
     shared_gate_ts: Rc<Cell<Option<Timestamp>>>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     metrics: &KafkaBaseMetrics,
-    librdkafka_log_level: tracing::Level,
+    connection_context: &ConnectionContext,
 ) -> Rc<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1143,7 +1155,7 @@ where
         activator,
         write_frontier,
         metrics,
-        librdkafka_log_level,
+        connection_context,
     );
 
     let mut vector = Vec::new();

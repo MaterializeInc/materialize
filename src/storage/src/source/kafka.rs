@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use futures::executor::block_on;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -99,16 +100,21 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         };
         let KafkaSourceConnection {
-            addrs,
-            config_options,
+            connection,
             topic,
             group_id_prefix,
             cluster_id,
             ..
         } = kc;
+        let mut config_options = BTreeMap::new();
+        for (k, v) in connection.options {
+            let v = block_on(v.get_string(&connection_context.secrets_reader))
+                .expect("reading kafka secret unexpectedly failed");
+            config_options.insert(k, v);
+        }
         let kafka_config = create_kafka_config(
             &source_name,
-            &addrs,
+            &connection.broker,
             group_id_prefix,
             cluster_id,
             &config_options,
