@@ -41,7 +41,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
 use mz_persist_client::PersistLocation;
-use mz_secrets::{SecretsController, SecretsReader, SecretsReaderConfig};
+use mz_secrets::SecretsController;
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
 use tracing::error;
@@ -192,7 +192,7 @@ pub enum SecretsControllerConfig {
         /// is loaded from the local kubeconfig.
         context: String,
         user_defined_secret: String,
-        user_defined_secret_mount_path: String,
+        user_defined_secret_mount_path: PathBuf,
         refresh_pod_name: String,
     },
 }
@@ -271,22 +271,15 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
 
     // Initialize secrets controller.
-    let (secrets_controller, secrets_reader) = match config.secrets_controller {
+    let secrets_controller = match config.secrets_controller {
         SecretsControllerConfig::LocalFileSystem(secrets_storage) => {
             fs::create_dir_all(&secrets_storage).with_context(|| {
                 format!("creating secrets directory: {}", secrets_storage.display())
             })?;
             let permissions = Permissions::from_mode(0o700);
             fs::set_permissions(secrets_storage.clone(), permissions)?;
-            let secrets_controller =
-                Box::new(FilesystemSecretsController::new(secrets_storage.clone()));
-            let secrets_reader = SecretsReader::new(SecretsReaderConfig {
-                mount_path: secrets_storage,
-            });
-            (
-                secrets_controller as Box<dyn SecretsController>,
-                secrets_reader,
-            )
+            let secrets_controller = Box::new(FilesystemSecretsController::new(secrets_storage));
+            secrets_controller as Box<dyn SecretsController>
         }
         SecretsControllerConfig::Kubernetes {
             context,
@@ -306,13 +299,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
                 .await
                 .context("connecting to kubernetes")?,
             );
-            let secrets_reader = SecretsReader::new(SecretsReaderConfig {
-                mount_path: PathBuf::from(user_defined_secret_mount_path),
-            });
-            (
-                secrets_controller as Box<dyn SecretsController>,
-                secrets_reader,
-            )
+            secrets_controller as Box<dyn SecretsController>
         }
     };
 
@@ -338,7 +325,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         metrics_registry: config.metrics_registry.clone(),
         now: config.now,
         secrets_controller,
-        secrets_reader,
         replica_sizes: config.replica_sizes.clone(),
         availability_zones: config.availability_zones.clone(),
         connection_context: config.connection_context,

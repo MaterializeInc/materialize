@@ -120,7 +120,7 @@ use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };
-use mz_secrets::{SecretOp, SecretsController, SecretsReader};
+use mz_secrets::{SecretOp, SecretsController};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CreateIndexStatement, CreateSourceStatement, ExplainStage, FetchStatement, Ident,
@@ -249,7 +249,6 @@ pub struct Config<S> {
     pub metrics_registry: MetricsRegistry,
     pub now: NowFn,
     pub secrets_controller: Box<dyn SecretsController>,
-    pub secrets_reader: SecretsReader,
     pub availability_zones: Vec<String>,
     pub replica_sizes: ClusterReplicaSizeMap,
     pub connection_context: ConnectionContext,
@@ -5387,7 +5386,6 @@ pub async fn serve<S: Append + 'static>(
         metrics_registry,
         now,
         secrets_controller,
-        secrets_reader,
         replica_sizes,
         availability_zones,
         connection_context,
@@ -5404,7 +5402,7 @@ pub async fn serve<S: Append + 'static>(
         now: now.clone(),
         skip_migrations: false,
         metrics_registry: &metrics_registry,
-        secrets_reader,
+        secrets_reader: connection_context.secrets_reader.clone(),
     })
     .await?;
     let cluster_id = catalog.config().cluster_id;

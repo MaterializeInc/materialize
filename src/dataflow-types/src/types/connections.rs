@@ -10,12 +10,13 @@
 //! Connection types.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use mz_kafka_util::KafkaAddrs;
 use mz_repr::GlobalId;
-use mz_secrets::SecretsReader;
+use mz_secrets::{SecretsReader, SecretsReaderConfig};
 
 use crate::types::connections::aws::AwsExternalIdPrefix;
 
@@ -46,6 +47,8 @@ pub struct ConnectionContext {
     pub librdkafka_log_level: tracing::Level,
     /// A prefix for an external ID to use for all AWS AssumeRole operations.
     pub aws_external_id_prefix: Option<AwsExternalIdPrefix>,
+    /// A secrets reader.
+    pub secrets_reader: SecretsReader,
 }
 
 impl ConnectionContext {
@@ -59,10 +62,14 @@ impl ConnectionContext {
     pub fn from_cli_args(
         filter: &tracing_subscriber::filter::Targets,
         aws_external_id_prefix: Option<String>,
+        secrets_path: PathBuf,
     ) -> ConnectionContext {
         ConnectionContext {
             librdkafka_log_level: mz_ore::tracing::target_level(filter, "librdkafka"),
             aws_external_id_prefix: aws_external_id_prefix.map(AwsExternalIdPrefix),
+            secrets_reader: SecretsReader::new(SecretsReaderConfig {
+                mount_path: secrets_path,
+            }),
         }
     }
 }
@@ -72,6 +79,10 @@ impl Default for ConnectionContext {
         ConnectionContext {
             librdkafka_log_level: tracing::Level::INFO,
             aws_external_id_prefix: None,
+            secrets_reader: SecretsReader::new(SecretsReaderConfig {
+                // NOTE(benesch): this will vanish in a future secrets PR.
+                mount_path: "/dev/null".into(),
+            }),
         }
     }
 }

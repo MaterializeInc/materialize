@@ -38,6 +38,7 @@ use mz_orchestrator::{
 };
 
 const FIELD_MANAGER: &str = "environmentd";
+const SECRETS_MOUNT_PATH: &str = "/secrets";
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -281,6 +282,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 availability_zone,
             );
         }
+        let mut args = args(&ServiceAssignments {
+            listen_host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            ports: &ports,
+            index: None,
+            peers: &peers,
+        });
+        args.push(format!("--secrets-path={SECRETS_MOUNT_PATH}"));
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -291,12 +299,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 containers: vec![Container {
                     name: "default".into(),
                     image: Some(image),
-                    args: Some(args(&ServiceAssignments {
-                        listen_host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                        ports: &ports,
-                        index: None,
-                        peers: &peers,
-                    })),
+                    args: Some(args),
                     image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                     ports: Some(
                         ports_in
@@ -313,7 +316,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         ..Default::default()
                     }),
                     volume_mounts: Some(vec![VolumeMount {
-                        mount_path: "/secrets".to_string(),
+                        mount_path: SECRETS_MOUNT_PATH.into(),
                         name: volume_name.clone(),
                         ..Default::default()
                     }]),
