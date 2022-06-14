@@ -9,7 +9,7 @@ aliases:
 ---
 
 `SHOW OBJECTS` returns a list of all objects available to your Materialize instances in a given schema.
-Objects include tables, sources, views, indexes, and sinks.
+Objects include tables, sources, views, and indexes.
 
 ## Syntax
 
@@ -40,8 +40,8 @@ SHOW OBJECTS FROM public;
 ```nofmt
 my_table
 my_source
-my_sink
-my_other_sink
+my_view
+my_other_source
 ```
 ```sql
 SHOW OBJECTS;
@@ -49,18 +49,17 @@ SHOW OBJECTS;
 ```nofmt
 my_table
 my_source
-my_sink
-my_other_sink
+my_view
 ```
 
 ```sql
 SHOW FULL OBJECTS;
 ```
 ```nofmt
-my_table        user
-my_source       user
-my_sink         user
-my_other_sink   user
+my_table
+my_source
+my_view
+my_other_source
 ```
 
 ```sql
@@ -69,8 +68,8 @@ SHOW EXTENDED FULL OBJECTS;
 ```nofmt
 my_table        user
 my_source       user
-my_sink         user
-my_other_sink   user
+my_view         user
+my_other_source user
 builtin_view    system
 ```
 
@@ -80,4 +79,3 @@ builtin_view    system
 - [`SHOW SOURCES`](../show-sources)
 - [`SHOW VIEWS`](../show-views)
 - [`SHOW INDEXES`](../show-indexes)
-- [`SHOW SINKS`](../show-sinks)

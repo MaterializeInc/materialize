@@ -1,12 +1,15 @@
 ---
 title: "CREATE SINK"
 description: "`CREATE SINK` sends data from Materialize to an external sink."
-menu:
+draft: true
+#menu:
   # This should also have a "non-content entry" under Connect, which is
   # configured in doc/user/config.toml
-  main:
-    parent: 'commands'
+  #main:
+    #parent: 'commands'
 ---
+
+[//]: # "NOTE(morsapaes) Once we're ready to bring sinks back, check #13104 to restore the previous docs state."
 
 `CREATE SINK` sends data from Materialize to an external sink.
 

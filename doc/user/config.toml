@@ -94,12 +94,6 @@ url = "/sql/create-materialized-view/"
 weight= 45
 
 [[menu.main]]
-name = "Sinks"
-parent = "reference"
-url = "/sql/create-sink/"
-weight= 60
-
-[[menu.main]]
 name = "Queries (`SELECT`)"
 parent = "reference"
 url = "/sql/select/"

@@ -1,9 +1,10 @@
 ---
 title: "DROP SINK"
 description: "`DROP SINK` removes a sink from your Materialize instances."
-menu:
-  main:
-    parent: commands
+draft: true
+#menu:
+  #main:
+    #parent: commands
 ---
 
 `DROP SINK` removes a sink from your Materialize instances.

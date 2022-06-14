@@ -24,9 +24,8 @@ Component | Use
 **Sources** | Sources represent streams (e.g. Kafka) or files that provide data to Materialize.
 **Views** | Views represent queries of sources and other views that you want to save for repeated execution.
 **Indexes** | Indexes represent query results stored in memory.
-**Sinks** | Sinks represent output streams or files that Materialize sends data to.
-**Clusters** | Clusters represent a logical set of indexes and sinks that share physical resources.
-**Cluster replicas** | Cluster replicas provide physical resources for a cluster's indexes and sinks.
+**Clusters** | Clusters represent a logical set of indexes that share physical resources.
+**Cluster replicas** | Cluster replicas provide physical resources for a cluster's indexes.
 
 ## Sources
 
@@ -178,21 +177,10 @@ Creating additional indexes on materialized views lets you store some subset of 
 
 For a deeper dive into arrangments, see [Arrangments](/overview/arrangements/).
 
-## Sinks
-
-Sinks are the inverse of sources and represent a connection to an external stream
-where Materialize outputs data. When a user defines a sink over a materialized view
-or source, Materialize automatically generates the required schema and writes down
-the stream of changes to that view or source. In effect, Materialize sinks act as
-change data capture (CDC) producers for the given source or view.
-
-Currently, Materialize only supports sending sink data to Kafka,
-encoded in Avro with the [Debezium diff envelope](/sql/create-sink#debezium-envelope-details).
-
 ## Clusters
 
 Clusters are logical components that let you express resource isolation for all
-dataflow-powered objects, e.g. indexes and sinks. When creating dataflow-powered
+dataflow-powered objects, e.g. indexes. When creating dataflow-powered
 objects, you must specify which cluster you want to use. (Not explicitly naming
 a cluster uses your session's default cluster.)
 
@@ -256,7 +244,6 @@ Add replicas to a cluster | Greater tolerance to replica failure
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 - [`CREATE VIEW`](/sql/create-view)
 - [`CREATE INDEX`](/sql/create-index)
-- [`CREATE SINK`](/sql/create-sink)
 - [`CREATE CLUSTER`](/sql/create-cluster)
 - [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)
 
