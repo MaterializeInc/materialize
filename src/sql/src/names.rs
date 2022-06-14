@@ -257,8 +257,8 @@ impl AstDisplay for ResolvedDatabaseSpecifier {
     }
 }
 
-impl From<i64> for ResolvedDatabaseSpecifier {
-    fn from(id: i64) -> Self {
+impl From<u64> for ResolvedDatabaseSpecifier {
+    fn from(id: u64) -> Self {
         Self::Id(DatabaseId(id))
     }
 }
@@ -279,7 +279,7 @@ pub enum SchemaSpecifier {
 }
 
 impl SchemaSpecifier {
-    const TEMPORARY_SCHEMA_ID: i64 = -1;
+    const TEMPORARY_SCHEMA_ID: u64 = 0;
 }
 
 impl fmt::Display for SchemaSpecifier {
@@ -297,8 +297,8 @@ impl AstDisplay for SchemaSpecifier {
     }
 }
 
-impl From<i64> for SchemaSpecifier {
-    fn from(id: i64) -> Self {
+impl From<u64> for SchemaSpecifier {
+    fn from(id: u64) -> Self {
         if id == Self::TEMPORARY_SCHEMA_ID {
             Self::Temporary
         } else {
@@ -325,13 +325,13 @@ impl From<SchemaSpecifier> for SchemaId {
     }
 }
 
-impl From<&SchemaSpecifier> for i64 {
+impl From<&SchemaSpecifier> for u64 {
     fn from(schema_spec: &SchemaSpecifier) -> Self {
         SchemaId::from(schema_spec).0
     }
 }
 
-impl From<SchemaSpecifier> for i64 {
+impl From<SchemaSpecifier> for u64 {
     fn from(schema_spec: SchemaSpecifier) -> Self {
         SchemaId::from(schema_spec).0
     }
@@ -599,12 +599,12 @@ impl AstInfo for Aug {
 
 /// The identifier for a schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct SchemaId(pub i64);
+pub struct SchemaId(pub u64);
 
 impl SchemaId {
     /// Constructs a new schema identifier. It is the caller's responsibility
     /// to provide a unique `id`.
-    pub fn new(id: i64) -> Self {
+    pub fn new(id: u64) -> Self {
         SchemaId(id)
     }
 }
@@ -619,19 +619,19 @@ impl FromStr for SchemaId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: i64 = s.parse()?;
+        let val: u64 = s.parse()?;
         Ok(SchemaId(val))
     }
 }
 
 /// The identifier for a database.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct DatabaseId(pub i64);
+pub struct DatabaseId(pub u64);
 
 impl DatabaseId {
     /// Constructs a new database identifier. It is the caller's responsibility
     /// to provide a unique `id`.
-    pub fn new(id: i64) -> Self {
+    pub fn new(id: u64) -> Self {
         DatabaseId(id)
     }
 }
@@ -646,7 +646,7 @@ impl FromStr for DatabaseId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: i64 = s.parse()?;
+        let val: u64 = s.parse()?;
         Ok(DatabaseId(val))
     }
 }
