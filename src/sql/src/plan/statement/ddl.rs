@@ -21,10 +21,8 @@ use aws_arn::ARN;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
-use mz_secrets::SecretsReader;
 use prost::Message;
 use regex::Regex;
-use reqwest::Url;
 use tracing::{debug, warn};
 
 use mz_dataflow_types::connections::{Connection, KafkaConnection};
@@ -96,7 +94,6 @@ use crate::plan::{
     DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink, Source, Table,
     Type, View,
 };
-use crate::pure::Schema;
 
 pub fn describe_create_database(
     _: &StatementContext,
@@ -344,17 +341,15 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let (broker, config_options) = match &kafka.connection {
-                mz_sql_parser::ast::KafkaConnection::Inline { broker } => (
-                    broker.to_string(),
-                    kafka_util::extract_config(scx.catalog, &mut with_options)?,
-                ),
+            let kafka_connection = match &kafka.connection {
+                mz_sql_parser::ast::KafkaConnection::Inline { broker } => KafkaConnection {
+                    broker: broker.parse()?,
+                    options: kafka_util::extract_config(scx.catalog, &mut with_options)?,
+                },
                 mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     match item.connection()? {
-                        Connection::Kafka(connection) => {
-                            (connection.broker.to_string(), connection.options.clone())
-                        }
+                        Connection::Kafka(connection) => connection.clone(),
                         _ => bail!("{} is not a kafka connection", item.name()),
                     }
                 }
@@ -400,14 +395,9 @@ pub fn plan_create_source(
 
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
 
-            // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
-            let config_options =
-                kafka_util::inline_secrets(config_options, scx.catalog.secrets_reader())?;
-
             let mut connection = KafkaSourceConnection {
-                addrs: broker.parse()?,
+                connection: kafka_connection,
                 topic: kafka.topic.clone(),
-                config_options,
                 start_offsets,
                 group_id_prefix,
                 cluster_id: scx.catalog.config().cluster_id,
@@ -1212,6 +1202,14 @@ fn get_encoding(
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
+#[derive(Debug)]
+pub struct Schema {
+    pub key_schema: Option<String>,
+    pub value_schema: String,
+    pub csr_connection: Option<mz_dataflow_types::connections::CsrConnection>,
+    pub confluent_wire_format: bool,
+}
+
 fn get_encoding_inner(
     scx: &StatementContext,
     format: &Format<Aug>,
@@ -1223,7 +1221,7 @@ fn get_encoding_inner(
             let Schema {
                 key_schema,
                 value_schema,
-                schema_registry_config,
+                csr_connection,
                 confluent_wire_format,
             } = match schema {
                 // TODO(jldlaughlin): we need a way to pass in primary key information
@@ -1239,7 +1237,7 @@ fn get_encoding_inner(
                     Schema {
                         key_schema: None,
                         value_schema: schema.clone(),
-                        schema_registry_config: None,
+                        csr_connection: None,
                         confluent_wire_format,
                     }
                 }
@@ -1258,22 +1256,16 @@ fn get_encoding_inner(
                         },
                 } => {
                     let mut normalized_options = normalize::options(&ccsr_options)?;
-                    let ccsr_config = match connection {
-                        CsrConnection::Inline { url } => {
-                            let mut options = kafka_util::extract_config_ccsr(
-                                scx.catalog,
-                                &mut normalized_options,
-                            )?;
-                            kafka_util::generate_ccsr_client_config(
-                                url.parse()?,
-                                &mut options,
-                                scx.catalog.secrets_reader(),
-                            )?
-                        }
+                    let csr_connection = match connection {
+                        CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                            scx.catalog,
+                            url.parse()?,
+                            &mut normalized_options,
+                        )?,
                         CsrConnection::Reference { connection } => {
                             let item = scx.get_item_by_resolved_name(&connection)?;
                             match item.connection()? {
-                                Connection::Csr(config) => config.clone(),
+                                Connection::Csr(connection) => connection.clone(),
                                 _ => bail!("{} is not a schema registry connection", item.name()),
                             }
                         }
@@ -1286,7 +1278,7 @@ fn get_encoding_inner(
                         Schema {
                             key_schema: seed.key_schema.clone(),
                             value_schema: seed.value_schema.clone(),
-                            schema_registry_config: Some(ccsr_config),
+                            csr_connection: Some(csr_connection),
                             confluent_wire_format: true,
                         }
                     } else {
@@ -1299,19 +1291,19 @@ fn get_encoding_inner(
                 return Ok(SourceDataEncodingInner::KeyValue {
                     key: DataEncodingInner::Avro(AvroEncoding {
                         schema: key_schema,
-                        schema_registry_config: schema_registry_config.clone(),
+                        csr_connection: csr_connection.clone(),
                         confluent_wire_format,
                     }),
                     value: DataEncodingInner::Avro(AvroEncoding {
                         schema: value_schema,
-                        schema_registry_config,
+                        csr_connection,
                         confluent_wire_format,
                     }),
                 });
             } else {
                 DataEncodingInner::Avro(AvroEncoding {
                     schema: value_schema,
-                    schema_registry_config,
+                    csr_connection,
                     confluent_wire_format,
                 })
             }
@@ -1333,21 +1325,15 @@ fn get_encoding_inner(
                     // was used during purification.)
                     let mut normalized_options = normalize::options(&ccsr_options)?;
                     let _ = match connection {
-                        CsrConnection::Inline { url } => {
-                            let mut options = kafka_util::extract_config_ccsr(
-                                scx.catalog,
-                                &mut normalized_options,
-                            )?;
-                            kafka_util::generate_ccsr_client_config(
-                                url.parse()?,
-                                &mut options,
-                                scx.catalog.secrets_reader(),
-                            )?
-                        }
+                        CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                            scx.catalog,
+                            url.parse()?,
+                            &mut normalized_options,
+                        )?,
                         CsrConnection::Reference { connection } => {
                             let item = scx.get_item_by_resolved_name(&connection)?;
                             match item.connection()? {
-                                Connection::Csr(config) => config.clone(),
+                                Connection::Csr(connection) => connection.clone(),
                                 _ => bail!("{} is not a schema registry connection", item.name()),
                             }
                         }
@@ -1823,18 +1809,12 @@ fn kafka_sink_builder(
                 bail!("SEED option does not make sense with sinks");
             }
             let mut normalized_with_options = normalize::options(&with_options)?;
-            let mut ccsr_with_options =
-                kafka_util::extract_config_ccsr(scx.catalog, &mut normalized_with_options)?;
-            normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
-
-            let schema_registry_url = url.parse::<Url>()?;
-            let ccsr_config = kafka_util::generate_ccsr_client_config(
-                schema_registry_url.clone(),
-                &mut ccsr_with_options,
-                scx.catalog.secrets_reader(),
+            let csr_connection = kafka_util::generate_ccsr_connection(
+                scx.catalog,
+                url.parse()?,
+                &mut normalized_with_options,
             )?;
-
-            normalize::ensure_empty_options(&ccsr_with_options, "CONFLUENT SCHEMA REGISTRY")?;
+            normalize::ensure_empty_options(&normalized_with_options, "CONFLUENT SCHEMA REGISTRY")?;
 
             let include_transaction =
                 reuse_topic || consistency_topic.is_some() || consistency.is_some();
@@ -1854,10 +1834,9 @@ fn kafka_sink_builder(
                 .map(|key_schema| key_schema.to_string());
 
             KafkaSinkFormat::Avro {
-                schema_registry_url,
                 key_schema,
                 value_schema,
-                ccsr_config,
+                csr_connection,
             }
         }
         Some(Format::Json) => KafkaSinkFormat::Json,
@@ -1872,7 +1851,6 @@ fn kafka_sink_builder(
         reuse_topic,
         consistency,
         consistency_topic,
-        scx.catalog.secrets_reader(),
     )?;
 
     let broker_addrs = broker.parse()?;
@@ -1952,10 +1930,11 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
-    // TODO(13017): don't inline secrets at this stage.  Push that into storaged.
-    let config_options = kafka_util::inline_secrets(config_options, scx.catalog.secrets_reader())?;
     Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
-        broker_addrs,
+        connection: KafkaConnection {
+            broker: broker_addrs,
+            options: config_options,
+        },
         format,
         topic_prefix,
         consistency_topic_prefix: consistency_topic,
@@ -1964,7 +1943,6 @@ fn kafka_sink_builder(
         partition_count,
         replication_factor,
         fuel: 10000,
-        config_options,
         relation_key_indices,
         key_desc_and_indices,
         value_desc,
@@ -1988,7 +1966,6 @@ fn get_kafka_sink_consistency_config(
     reuse_topic: bool,
     consistency: Option<KafkaConsistency<Aug>>,
     consistency_topic: Option<String>,
-    secrets_reader: &SecretsReader,
 ) -> Result<Option<(String, KafkaSinkFormat)>, anyhow::Error> {
     let result = match consistency {
         Some(KafkaConsistency {
@@ -1998,7 +1975,7 @@ fn get_kafka_sink_consistency_config(
             Some(Format::Avro(AvroSchema::Csr {
                 csr_connection:
                     CsrConnectionAvro {
-                        connection: CsrConnection::Inline { url: uri },
+                        connection: CsrConnection::Inline { url },
                         seed,
                         with_options,
                     },
@@ -2006,24 +1983,18 @@ fn get_kafka_sink_consistency_config(
                 if seed.is_some() {
                     bail!("SEED option does not make sense with sinks");
                 }
-                let schema_registry_url = uri.parse::<Url>()?;
-                let mut ccsr_with_options = kafka_util::extract_config_ccsr(
+                let csr_connection = kafka_util::generate_ccsr_connection(
                     scx.catalog,
+                    url.parse()?,
                     &mut normalize::options(&with_options)?,
-                )?;
-                let ccsr_config = kafka_util::generate_ccsr_client_config(
-                    schema_registry_url.clone(),
-                    &mut ccsr_with_options,
-                    secrets_reader,
                 )?;
 
                 Some((
                     topic,
                     KafkaSinkFormat::Avro {
-                        schema_registry_url,
                         key_schema: None,
                         value_schema: avro::get_debezium_transaction_schema().canonical_form(),
-                        ccsr_config,
+                        csr_connection,
                     },
                 ))
             }
@@ -2042,8 +2013,7 @@ fn get_kafka_sink_consistency_config(
             if reuse_topic | consistency_topic.is_some() {
                 match sink_format {
                     KafkaSinkFormat::Avro {
-                        schema_registry_url,
-                        ccsr_config,
+                        csr_connection,
                         ..
                     } => {
                         let consistency_topic = match consistency_topic {
@@ -2061,11 +2031,10 @@ fn get_kafka_sink_consistency_config(
                         Some((
                             consistency_topic,
                             KafkaSinkFormat::Avro {
-                                schema_registry_url: schema_registry_url.clone(),
                                 key_schema: None,
                                 value_schema: avro::get_debezium_transaction_schema()
                                     .canonical_form(),
-                                ccsr_config: ccsr_config.clone(),
+                                csr_connection: csr_connection.clone(),
                             },
                         ))
                     }
@@ -2904,13 +2873,10 @@ pub fn plan_create_connection(
             })
         }
         CreateConnection::Csr { url, with_options } => {
-            let connection = kafka_util::generate_ccsr_client_config(
+            let connection = kafka_util::generate_ccsr_connection(
+                scx.catalog,
                 url.parse()?,
-                &mut kafka_util::extract_config_ccsr(
-                    scx.catalog,
-                    &mut normalize::options(&with_options)?,
-                )?,
-                scx.catalog.secrets_reader(),
+                &mut normalize::options(&with_options)?,
             )?;
             Connection::Csr(connection)
         }

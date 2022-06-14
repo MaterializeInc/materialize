@@ -222,14 +222,14 @@ async fn build_kafka(
 
     // Create Kafka topic
     let mut config = create_new_client_config(connector_context.librdkafka_log_level);
-    config.set("bootstrap.servers", &builder.broker_addrs.to_string());
-    for (k, v) in builder.config_options.iter() {
+    config.set("bootstrap.servers", &builder.connection.broker.to_string());
+    for (k, v) in builder.connection.options.iter() {
         // Explicitly reject the statistics interval option here because its not
         // properly supported for this client.
         // Explicitly reject isolation.level as it's a consumer-specific
         // parameter and will generate a benign WARN for admin clients
         if k != "statistics.interval.ms" && k != "isolation.level" {
-            config.set(k, v);
+            config.set(k, v.get_string(&connector_context.secrets_reader).await?);
         }
     }
 
@@ -251,10 +251,12 @@ async fn build_kafka(
         mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
             key_schema,
             value_schema,
-            ccsr_config,
+            csr_connection,
             ..
         } => {
-            let ccsr = ccsr_config.build()?;
+            let ccsr = csr_connection
+                .connect(&connector_context.secrets_reader)
+                .await?;
             let (key_schema_id, value_schema_id) = publish_kafka_schemas(
                 &ccsr,
                 &topic,
@@ -276,7 +278,7 @@ async fn build_kafka(
     let consistency = match builder.consistency_format {
         Some(mz_dataflow_types::sinks::KafkaSinkFormat::Avro {
             value_schema,
-            ccsr_config,
+            csr_connection,
             ..
         }) => {
             let consistency_topic = maybe_append_nonce(
@@ -297,7 +299,9 @@ async fn build_kafka(
             .await
             .context("error registering kafka consistency topic for sink")?;
 
-            let ccsr = ccsr_config.build()?;
+            let ccsr = csr_connection
+                .connect(&connector_context.secrets_reader)
+                .await?;
             let (_, consistency_schema_id) = publish_kafka_schemas(
                 &ccsr,
                 &consistency_topic,
@@ -319,9 +323,9 @@ async fn build_kafka(
     };
 
     Ok(SinkConnection::Kafka(KafkaSinkConnection {
+        connection: builder.connection,
         topic,
         topic_prefix: builder.topic_prefix,
-        addrs: builder.broker_addrs,
         relation_key_indices: builder.relation_key_indices,
         key_desc_and_indices: builder.key_desc_and_indices,
         value_desc: builder.value_desc,
@@ -330,7 +334,6 @@ async fn build_kafka(
         exactly_once: builder.reuse_topic,
         transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
-        config_options: builder.config_options,
     }))
 }
 

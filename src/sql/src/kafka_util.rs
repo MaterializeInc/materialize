@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 
-use mz_dataflow_types::connections::StringOrSecret;
+use mz_dataflow_types::connections::{
+    CsrConnection, CsrConnectionHttpAuth, CsrConnectionTlsIdentity, StringOrSecret,
+};
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
@@ -25,7 +27,6 @@ use rdkafka::{Offset, TopicPartitionList};
 use reqwest::Url;
 use tokio::time::Duration;
 
-use mz_ccsr::tls::{Certificate, Identity};
 use mz_sql_parser::ast::Value;
 
 use crate::catalog::{CatalogItemType, SessionCatalog};
@@ -217,34 +218,6 @@ pub fn extract_config(
     )
 }
 
-pub fn extract_config_ccsr(
-    catalog: &dyn SessionCatalog,
-    with_options: &mut BTreeMap<String, SqlValueOrSecret>,
-) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
-    extract(
-        catalog,
-        with_options,
-        &[
-            Config::string_or_secret("ssl_ca_pem"),
-            Config::secret("ssl_key_pem"),
-            Config::string_or_secret("ssl_certificate_pem"),
-            Config::string_or_secret("username"),
-            Config::secret("password"),
-        ],
-    )
-}
-
-pub fn inline_secrets(
-    config: BTreeMap<String, StringOrSecret>,
-    secrets_reader: &SecretsReader,
-) -> anyhow::Result<BTreeMap<String, String>> {
-    config
-        .into_iter()
-        // TODO: Support more than just strings?
-        .map(|(k, v)| Ok((k, v.get_string(secrets_reader)?)))
-        .collect()
-}
-
 /// Create a new `rdkafka::ClientConfig` with the provided
 /// [`options`](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md),
 /// and test its ability to create an `rdkafka::consumer::BaseConsumer`.
@@ -264,7 +237,7 @@ pub async fn create_consumer(
     let mut config = create_new_client_config(librdkafka_log_level);
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
-        config.set(k, v.get_string(secrets_reader)?);
+        config.set(k, v.get_string(secrets_reader).await?);
     }
 
     let consumer: Arc<BaseConsumer<KafkaErrCheckContext>> =
@@ -435,61 +408,56 @@ impl ClientContext for KafkaErrCheckContext {
     }
 }
 
-// Generates a `ccsr::ClientConfig` based on the configuration extracted from
-// `extract_security_config()`. Currently only supports SSL auth.
-pub fn generate_ccsr_client_config(
-    csr_url: Url,
-    ccsr_options: &mut BTreeMap<String, StringOrSecret>,
-    secrets_reader: &SecretsReader,
-) -> Result<mz_ccsr::ClientConfig, anyhow::Error> {
-    let mut client_config = mz_ccsr::ClientConfig::new(csr_url);
+// Generates a `CsrConnection` based on the configuration extracted from
+// `extract_security_config()`.
+pub fn generate_ccsr_connection(
+    catalog: &dyn SessionCatalog,
+    url: Url,
+    ccsr_options: &mut BTreeMap<String, SqlValueOrSecret>,
+) -> Result<CsrConnection, anyhow::Error> {
+    let mut ccsr_options = extract(
+        catalog,
+        ccsr_options,
+        &[
+            Config::string_or_secret("ssl_ca_pem"),
+            Config::secret("ssl_key_pem"),
+            Config::string_or_secret("ssl_certificate_pem"),
+            Config::string_or_secret("username"),
+            Config::secret("password"),
+        ],
+    )?;
 
-    // If provided, prefer SSL options from the schema registry configuration
-    if let Some(ca) = ccsr_options
-        .remove("ssl.ca.pem")
-        .map(|v| v.get_string(secrets_reader))
-        .transpose()?
-    {
-        let cert = Certificate::from_pem(&ca.as_bytes())?;
-        client_config = client_config.add_root_certificate(cert);
-    }
-
-    let key = ccsr_options
-        .remove("ssl.key.pem")
-        .map(|v| v.get_string(secrets_reader))
-        .transpose()?;
-    let cert = ccsr_options
-        .remove("ssl.certificate.pem")
-        .map(|v| v.get_string(secrets_reader))
-        .transpose()?;
-    match (key, cert) {
-        (Some(key), Some(cert)) => {
-            // `reqwest` expects identity `pem` files to contain one key and
-            // at least one certificate. Because `librdkafka` expects these
-            // as two separate arguments, we simply concatenate them for
-            // `reqwest`'s sake.
-            let mut ident_buf = Vec::new();
-            ident_buf.extend(key.as_bytes());
-            ident_buf.push(b'\n');
-            ident_buf.extend(cert.as_bytes());
-            let ident = Identity::from_pem(&ident_buf)?;
-            client_config = client_config.identity(ident);
+    let root_certs = match ccsr_options.remove("ssl.ca.pem") {
+        None => vec![],
+        Some(cert) => vec![cert],
+    };
+    let cert = ccsr_options.remove("ssl.certificate.pem");
+    let key = ccsr_options.remove("ssl.key.pem");
+    let tls_identity = match (cert, key) {
+        (None, None) => None,
+        (Some(cert), Some(key)) => {
+            // `key` was verified to be a secret by `extract`.
+            let key = key.unwrap_secret();
+            Some(CsrConnectionTlsIdentity { cert, key })
         }
-        (None, None) => {}
-        (_, _) => bail!(
+        _ => bail!(
             "Reading from SSL-auth Confluent Schema Registry \
-             requires both ssl.key.location and ssl.certificate.location"
+             requires both ssl.key.pem and ssl.certificate.pem"
         ),
-    }
-
-    if let Some(username) = ccsr_options.remove("username") {
-        let username = username.get_string(secrets_reader)?;
-        let password = ccsr_options
-            .remove("password")
-            .map(|v| v.get_string(secrets_reader))
-            .transpose()?;
-        client_config = client_config.auth(username, password);
-    }
-
-    Ok(client_config)
+    };
+    let http_auth = match ccsr_options.remove("username") {
+        None => None,
+        Some(username) => {
+            let password = ccsr_options.remove("password");
+            // `password` was verified to be a secret by `extract`.
+            let password = password.map(|p| p.unwrap_secret());
+            Some(CsrConnectionHttpAuth { username, password })
+        }
+    };
+    Ok(CsrConnection {
+        url,
+        root_certs,
+        tls_identity,
+        http_auth,
+    })
 }

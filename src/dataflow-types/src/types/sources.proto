@@ -18,8 +18,8 @@ import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "dataflow-types/src/errors.proto";
 import "dataflow-types/src/types/connections/aws.proto";
+import "dataflow-types/src/types/connections.proto";
 import "dataflow-types/src/types/sources/encoding.proto";
-import "kafka-util/src/addr.proto";
 import "postgres-util/src/desc.proto";
 
 package mz_dataflow_types.types.sources;
@@ -160,17 +160,16 @@ message ProtoDebeziumSourceProjection {
 }
 
 message ProtoKafkaSourceConnection {
-    mz_kafka_util.addr.ProtoKafkaAddrs addrs = 1;
+    mz_dataflow_types.types.connections.ProtoKafkaConnection connection = 1;
     string topic = 2;
-    map<string, string> config_options = 3;
-    map<int32, ProtoMzOffset> start_offsets = 4;
-    optional string group_id_prefix = 5;
-    mz_repr.proto.ProtoU128 cluster_id = 6;
-    ProtoIncludedColumnPos include_timestamp = 7;
-    ProtoIncludedColumnPos include_partition = 8;
-    ProtoIncludedColumnPos include_topic = 9;
-    ProtoIncludedColumnPos include_offset = 10;
-    ProtoIncludedColumnPos include_headers = 11;
+    map<int32, ProtoMzOffset> start_offsets = 3;
+    optional string group_id_prefix = 4;
+    mz_repr.proto.ProtoU128 cluster_id = 5;
+    ProtoIncludedColumnPos include_timestamp = 6;
+    ProtoIncludedColumnPos include_partition = 7;
+    ProtoIncludedColumnPos include_topic = 8;
+    ProtoIncludedColumnPos include_offset = 9;
+    ProtoIncludedColumnPos include_headers = 10;
 }
 
 message ProtoSourceConnection {

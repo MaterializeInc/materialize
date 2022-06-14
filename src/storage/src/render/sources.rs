@@ -18,6 +18,7 @@ use std::sync::Arc;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::consolidate::ConsolidateStream;
 use differential_dataflow::{collection, AsCollection, Collection, Hashable};
+use futures::executor::block_on;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
@@ -225,7 +226,7 @@ where
                 if let SourceEnvelope::CdcV2 = &envelope {
                     let AvroEncoding {
                         schema,
-                        schema_registry_config,
+                        csr_connection,
                         confluent_wire_format,
                     } = match value_encoding.inner {
                         DataEncodingInner::Avro(enc) => enc,
@@ -235,14 +236,20 @@ where
                         SourceType::Delimited(s) => s,
                         _ => unreachable!("Attempted to create non-delimited CDCv2 source"),
                     };
+                    let csr_client = match csr_connection {
+                        None => None,
+                        Some(csr_connection) => Some(
+                            block_on(
+                                csr_connection
+                                    .connect(&storage_state.connection_context.secrets_reader),
+                            )
+                            .expect("CSR connection unexpectedly missing secrets"),
+                        ),
+                    };
                     // TODO(petrosagg): this should move to the envelope section below and
                     // made to work with a stream of Rows instead of decoding Avro directly
-                    let (oks, token) = render_decode_cdcv2(
-                        &ok_source,
-                        &schema,
-                        schema_registry_config,
-                        confluent_wire_format,
-                    );
+                    let (oks, token) =
+                        render_decode_cdcv2(&ok_source, &schema, csr_client, confluent_wire_format);
                     needed_tokens.push(Rc::new(token));
                     (oks, None)
                 } else {
@@ -258,6 +265,7 @@ where
                             metadata_columns,
                             &mut linear_operators,
                             storage_state.decode_metrics.clone(),
+                            &storage_state.connection_context,
                         ),
                         SourceType::ByteStream(source) => render_decode(
                             &source,
@@ -266,6 +274,7 @@ where
                             metadata_columns,
                             &mut linear_operators,
                             storage_state.decode_metrics.clone(),
+                            &storage_state.connection_context,
                         ),
                         SourceType::AppendRow(source) => (
                             source.map(
