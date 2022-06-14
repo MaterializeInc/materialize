@@ -55,7 +55,7 @@ The source defines how to parse the events schema.
 
 •	Kafka/Redpanda can have topics with or without a schema.
 
-For a quick start, let’s focus only on the Postgres case, where the source already defines a schema. If you want to know how it would look using Kafka/Redpanda without a schema, refer to [this repository](https://github.com/MaterializeInc/demos/tree/main/antennas-kafka).
+Let's focus only on the Postgres case, where the source already defines a schema. Refer to [this repository](https://github.com/MaterializeInc/demos/tree/main/antennas-kafka). if you want to know how it would look using Kafka/Redpanda without a schema.
 
 The first step while building an application using Postgres is making available the tables to consume from Materialize.
 It’s done through a process known as [Change Data Capture (CDC)](https://materialize.com/docs/sql/create-source/materialize-cdc/). As it refers to in the [integration guide](https://materialize.com/docs/integrations/cdc-postgres/), <i>“it allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL).”</i>
