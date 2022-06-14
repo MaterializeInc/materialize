@@ -10,6 +10,7 @@
 //! SQL purification.
 //!
 //! See the [crate-level documentation](crate) for details.
+use std::collections::BTreeMap;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
@@ -25,7 +26,7 @@ use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
 use mz_dataflow_types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
-use mz_dataflow_types::connections::{Connection, ConnectionContext};
+use mz_dataflow_types::connections::{Connection, ConnectionContext, StringOrSecret};
 use mz_dataflow_types::sources::PostgresSourceDetails;
 use mz_repr::proto::RustType;
 use mz_repr::strconv;
@@ -74,24 +75,32 @@ pub async fn purify_create_source(
         CreateSourceConnection::Kafka(KafkaSourceConnection {
             connection, topic, ..
         }) => {
-            let (broker, connection_options) = match connection {
+            let mut connection_options =
+                kafka_util::extract_config(&*catalog, &mut with_options_map)?;
+
+            let connection_options = match connection {
                 KafkaConnection::Reference { connection } => {
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connection)?;
-                    match item.connection()? {
-                        Connection::Kafka(connection) => {
-                            (connection.broker.to_string(), connection.options.clone())
-                        }
+                    let options: BTreeMap<String, StringOrSecret> = match item.connection()? {
+                        Connection::Kafka(connection) => connection.clone().into(),
                         _ => bail!("{} is not a kafka connection", item.name()),
+                    };
+
+                    for (k, v) in options {
+                        if connection_options.insert(k.clone(), v).is_some() {
+                            bail!("cannot set value {} with existing Kafka connection", k);
+                        }
                     }
+                    connection_options
                 }
-                KafkaConnection::Inline { broker } => (
-                    broker.to_string(),
-                    kafka_util::extract_config(&*catalog, &mut with_options_map)?,
-                ),
+                KafkaConnection::Inline { broker } => {
+                    connection_options
+                        .insert("bootstrap.servers".into(), broker.to_string().into());
+                    connection_options
+                }
             };
             let consumer = kafka_util::create_consumer(
-                &broker,
                 &topic,
                 &connection_options,
                 connection_context.librdkafka_log_level,

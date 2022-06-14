@@ -145,40 +145,152 @@ impl Default for ConnectionContext {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Connection {
     Kafka(KafkaConnection),
     Csr(CsrConnection),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SslConfig {
+    pub key: Option<GlobalId>,
+    pub key_password: Option<GlobalId>,
+    pub certificate: Option<StringOrSecret>,
+    pub certificate_authority: Option<StringOrSecret>,
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum Security {
+    SSL(SslConfig),
+}
+
+impl From<SslConfig> for Security {
+    fn from(c: SslConfig) -> Self {
+        Security::SSL(c)
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
-    pub broker: KafkaAddrs,
-    pub options: BTreeMap<String, StringOrSecret>,
+    pub brokers: Vec<String>,
+    pub security: Option<Security>,
+}
+
+pub struct KafkaConnectionWOptions(pub (KafkaConnection, BTreeMap<String, StringOrSecret>));
+
+impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
+    fn from(v: KafkaConnection) -> Self {
+        let mut r = BTreeMap::new();
+        r.insert("bootstrap.servers".into(), v.brokers.join(",").into());
+        if let Some(Security::SSL(SslConfig {
+            key,
+            key_password,
+            certificate,
+            certificate_authority,
+        })) = v.security
+        {
+            if let Some(id) = key {
+                r.insert("ssl.key.pem".into(), id.into());
+            }
+            if let Some(id) = key_password {
+                r.insert("ssl.key.password".into(), id.into());
+            }
+            if let Some(v) = certificate {
+                r.insert("ssl.certificate.pem".into(), v);
+            }
+            if let Some(v) = certificate_authority {
+                r.insert("ssl.ca.pem".into(), v);
+            }
+        }
+
+        r
+    }
+}
+
+impl TryFrom<BTreeMap<String, StringOrSecret>> for KafkaConnectionWOptions {
+    type Error = anyhow::Error;
+    fn try_from(mut value: BTreeMap<String, StringOrSecret>) -> Result<Self, Self::Error> {
+        let certificate_authority = value.remove("ssl.ca.pem");
+        let cert = value.remove("ssl.certificate.pem");
+        let key = value.remove("ssl.key.pem");
+        let key_password = value.remove("ssl.key.password");
+        let security = if [&certificate_authority, &cert, &key, &key_password]
+            .iter()
+            .any(|o| o.is_some())
+        {
+            Some(Security::SSL(SslConfig {
+                key: key.map(|i| i.unwrap_secret()),
+                key_password: key_password.map(|i| i.unwrap_secret()),
+                certificate: cert.clone(),
+                certificate_authority: certificate_authority.clone(),
+            }))
+        } else {
+            None
+        };
+        let brokers = value
+            .remove("bootstrap.server")
+            .map(|i| vec![i.unwrap_string().to_string()])
+            .unwrap_or_default();
+        Ok(KafkaConnectionWOptions((
+            KafkaConnection { brokers, security },
+            value,
+        )))
+    }
+}
+
+impl RustType<ProtoKafkaConnectionSslConfig> for SslConfig {
+    fn into_proto(&self) -> ProtoKafkaConnectionSslConfig {
+        ProtoKafkaConnectionSslConfig {
+            key: self.key.into_proto(),
+            key_password: self.key_password.into_proto(),
+            certificate: self.certificate.into_proto(),
+            certificate_authority: self.certificate_authority.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaConnectionSslConfig) -> Result<Self, TryFromProtoError> {
+        Ok(SslConfig {
+            key: proto.key.into_rust()?,
+            key_password: proto.key_password.into_rust()?,
+            certificate: proto.certificate.into_rust()?,
+            certificate_authority: proto.certificate_authority.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoKafkaConnectionSecurity> for Security {
+    fn into_proto(&self) -> ProtoKafkaConnectionSecurity {
+        use proto_kafka_connection_security::Kind;
+        ProtoKafkaConnectionSecurity {
+            kind: Some(match self {
+                Security::SSL(config) => Kind::Ssl(config.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaConnectionSecurity) -> Result<Self, TryFromProtoError> {
+        use proto_kafka_connection_security::Kind;
+        let kind = proto.kind.ok_or_else(|| {
+            TryFromProtoError::missing_field("ProtoKafkaConnectionSecurity::kind")
+        })?;
+        Ok(match kind {
+            Kind::Ssl(s) => Security::SSL(SslConfig::from_proto(s)?),
+        })
+    }
 }
 
 impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
-            broker: Some(self.broker.into_proto()),
-            options: self
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
+            brokers: self.brokers.into_proto(),
+            security: self.security.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
-            broker: proto
-                .broker
-                .into_rust_if_some("ProtoKafkaConnection::broker")?,
-            options: proto
-                .options
-                .into_iter()
-                .map(|(k, v)| Ok((k, StringOrSecret::from_proto(v)?)))
-                .collect::<Result<_, TryFromProtoError>>()?,
+            brokers: proto.brokers,
+            security: proto.security.into_rust()?,
         })
     }
 }

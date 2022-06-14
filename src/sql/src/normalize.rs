@@ -543,7 +543,9 @@ macro_rules! generate_extracted_config {
     };
     ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr))+]) => {
         paste::paste! {
+            #[derive(Debug)]
             pub struct [<$option_ty Extracted>] {
+                seen: HashSet::<[<$option_ty Name>]>,
                 $(
                     [<$option_name:snake>]: $t,
                 )*
@@ -552,6 +554,7 @@ macro_rules! generate_extracted_config {
             impl std::default::Default for [<$option_ty Extracted>] {
                 fn default() -> Self {
                     [<$option_ty Extracted>] {
+                        seen: HashSet::<[<$option_ty Name>]>::new(),
                         $(
                             [<$option_name:snake>]: $v.into(),
                         )*
@@ -563,10 +566,9 @@ macro_rules! generate_extracted_config {
                 type Error = anyhow::Error;
                 fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
                     use [<$option_ty Name>]::*;
-                    let mut seen = HashSet::<[<$option_ty Name>]>::new();
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
-                        if !seen.insert(option.name.clone()) {
+                        if !extracted.seen.insert(option.name.clone()) {
                             bail!("{} specified more than once", option.name.to_ast_string());
                         }
                         match option.name {

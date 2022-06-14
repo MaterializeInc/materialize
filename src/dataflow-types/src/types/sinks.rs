@@ -9,6 +9,7 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -20,7 +21,7 @@ use mz_persist_client::ShardId;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 
-use crate::connections::{CsrConnection, KafkaConnection};
+use crate::connections::{CsrConnection, KafkaConnection, StringOrSecret};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -216,6 +217,7 @@ impl RustType<ProtoKafkaSinkConsistencyConnection> for KafkaSinkConsistencyConne
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection {
     pub connection: KafkaConnection,
+    pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     pub topic_prefix: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -247,6 +249,7 @@ proptest::prop_compose! {
     ) -> KafkaSinkConnection {
         KafkaSinkConnection {
             connection,
+            options: BTreeMap::new(),
             topic,
             topic_prefix,
             key_desc_and_indices,
@@ -308,6 +311,11 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
     fn into_proto(&self) -> ProtoKafkaSinkConnection {
         ProtoKafkaSinkConnection {
             connection: Some(self.connection.into_proto()),
+            options: self
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
+                .collect(),
             topic: self.topic.clone(),
             topic_prefix: self.topic_prefix.clone(),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
@@ -322,10 +330,16 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
     }
 
     fn from_proto(proto: ProtoKafkaSinkConnection) -> Result<Self, TryFromProtoError> {
+        let options: Result<_, TryFromProtoError> = proto
+            .options
+            .into_iter()
+            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+            .collect();
         Ok(KafkaSinkConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSinkConnection::connection")?,
+            options: options?,
             topic: proto.topic,
             topic_prefix: proto.topic_prefix,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
@@ -458,6 +472,7 @@ pub struct PersistSinkConnectionBuilder {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionBuilder {
     pub connection: KafkaConnection,
+    pub options: BTreeMap<String, StringOrSecret>,
     pub format: KafkaSinkFormat,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,

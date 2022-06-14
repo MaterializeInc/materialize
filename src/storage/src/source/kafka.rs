@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -101,20 +102,21 @@ impl SourceReader for KafkaSourceReader {
         };
         let KafkaSourceConnection {
             connection,
+            options,
             topic,
             group_id_prefix,
             cluster_id,
             ..
         } = kc;
         let mut config_options = BTreeMap::new();
-        for (k, v) in connection.options {
+        for (k, v) in options {
             let v = block_on(v.get_string(&connection_context.secrets_reader))
                 .expect("reading kafka secret unexpectedly failed");
             config_options.insert(k, v);
         }
         let kafka_config = create_kafka_config(
             &source_name,
-            &connection.broker,
+            &KafkaAddrs::from_str(&connection.brokers.join(","))?,
             group_id_prefix,
             cluster_id,
             &config_options,

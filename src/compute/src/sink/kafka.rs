@@ -498,7 +498,7 @@ impl KafkaSinkState {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
         config.set(
             "bootstrap.servers",
-            &connection.connection.broker.to_string(),
+            &connection.connection.brokers.join(","),
         );
 
         // Ensure that messages are sinked in order and without duplicates. Note that
@@ -525,7 +525,7 @@ impl KafkaSinkState {
         // if it makes a big difference
         config.set("queue.buffering.max.ms", &format!("{}", 10));
 
-        for (k, v) in connection.connection.options.iter() {
+        for (k, v) in connection.options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't
             // flood the INFO log with statistics messages.
             // TODO: properly support statistics on Kafka sinks
@@ -555,9 +555,9 @@ impl KafkaSinkState {
         let mut config = create_new_client_config(connection_context.librdkafka_log_level);
         config.set(
             "bootstrap.servers",
-            &connection.connection.broker.to_string(),
+            &connection.connection.brokers.join(","),
         );
-        for (k, v) in connection.connection.options.iter() {
+        for (k, v) in connection.options.iter() {
             // We explicitly reject `statistics.interval.ms` here so that we don't
             // flood the INFO log with statistics messages.
             // TODO: properly support statistics on Kafka sinks

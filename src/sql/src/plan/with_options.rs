@@ -9,12 +9,16 @@
 
 //! Provides tooling to handle `WITH` options.
 
+use std::str::FromStr;
+
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::connections::StringOrSecret;
+use mz_kafka_util::KafkaAddrs;
 use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
+use mz_repr::GlobalId;
 
 use crate::ast::{AstInfo, IntervalValue, Value, WithOptionValue};
 use crate::names::ResolvedObjectName;
@@ -26,6 +30,48 @@ pub trait TryFromValue<T>: Sized {
 
 pub trait ImpliedValue: Sized {
     fn implied_value() -> Result<Self, anyhow::Error>;
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Secret(GlobalId);
+
+impl From<Secret> for GlobalId {
+    fn from(secret: Secret) -> Self {
+        secret.0
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for Secret {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, anyhow::Error> {
+        match StringOrSecret::try_from_value(v)? {
+            StringOrSecret::Secret(id) => Ok(Secret(id)),
+            _ => bail!("must provide a secret value"),
+        }
+    }
+}
+
+impl ImpliedValue for Secret {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide a secret value")
+    }
+}
+
+impl TryFromValue<Value> for KafkaAddrs {
+    fn try_from_value(value: Value) -> Result<Self, anyhow::Error> {
+        Ok(KafkaAddrs::from_str(&match value {
+            v @ Value::Array(..) => {
+                let s: Vec<String> = Vec::<String>::try_from_value(v)?;
+                s.join(",")
+            }
+            v => String::try_from_value(v)?,
+        })?)
+    }
+}
+
+impl ImpliedValue for KafkaAddrs {
+    fn implied_value() -> Result<Self, anyhow::Error> {
+        bail!("must provide a string or array value for Kafka addresses")
+    }
 }
 
 impl TryFromValue<WithOptionValue<Aug>> for StringOrSecret {
@@ -163,8 +209,10 @@ impl<V: TryFromValue<Value>> ImpliedValue for Vec<V> {
     }
 }
 
-impl<V: TryFromValue<Value>> TryFromValue<Value> for Option<V> {
-    fn try_from_value(v: Value) -> Result<Self, anyhow::Error> {
+impl<T: AstInfo, V: TryFromValue<WithOptionValue<T>>> TryFromValue<WithOptionValue<T>>
+    for Option<V>
+{
+    fn try_from_value(v: WithOptionValue<T>) -> Result<Self, anyhow::Error> {
         Ok(Some(V::try_from_value(v)?))
     }
 }

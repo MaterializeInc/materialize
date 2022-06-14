@@ -153,7 +153,7 @@ pub fn plan_fetch(
         options,
     }: FetchStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let FetchOptionExtracted { timeout } = options.try_into()?;
+    let FetchOptionExtracted { timeout, .. } = options.try_into()?;
     let timeout = match timeout {
         Some(timeout) => {
             // Limit FETCH timeouts to 1 day. If users have a legitimate need it can be

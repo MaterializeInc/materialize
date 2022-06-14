@@ -36,7 +36,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 pub mod encoding;
 
 use crate::connections::aws::AwsConfig;
-use crate::connections::KafkaConnection;
+use crate::connections::{KafkaConnection, StringOrSecret};
 use crate::DataflowError;
 
 include!(concat!(
@@ -1036,6 +1036,7 @@ impl UnplannedSourceEnvelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection {
     pub connection: KafkaConnection,
+    pub options: BTreeMap<String, StringOrSecret>,
     pub topic: String,
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, MzOffset>,
@@ -1083,6 +1084,7 @@ impl Arbitrary for KafkaSourceConnection {
                     include_headers,
                 )| KafkaSourceConnection {
                     connection,
+                    options: BTreeMap::new(),
                     topic,
                     start_offsets,
                     group_id_prefix,
@@ -1102,6 +1104,11 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     fn into_proto(&self) -> ProtoKafkaSourceConnection {
         ProtoKafkaSourceConnection {
             connection: Some(self.connection.into_proto()),
+            options: self
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.into_proto()))
+                .collect(),
             topic: self.topic.clone(),
             start_offsets: self
                 .start_offsets
@@ -1124,10 +1131,16 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             .into_iter()
             .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
             .collect();
+        let options: Result<_, TryFromProtoError> = proto
+            .options
+            .into_iter()
+            .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
+            .collect();
         Ok(KafkaSourceConnection {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
+            options: options?,
             topic: proto.topic,
             start_offsets: start_offsets?,
             group_id_prefix: proto.group_id_prefix,

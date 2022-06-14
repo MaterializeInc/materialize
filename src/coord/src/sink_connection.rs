@@ -222,8 +222,8 @@ async fn build_kafka(
 
     // Create Kafka topic
     let mut config = create_new_client_config(connector_context.librdkafka_log_level);
-    config.set("bootstrap.servers", &builder.connection.broker.to_string());
-    for (k, v) in builder.connection.options.iter() {
+    config.set("bootstrap.servers", builder.connection.brokers.join(","));
+    for (k, v) in builder.options.iter() {
         // Explicitly reject the statistics interval option here because its not
         // properly supported for this client.
         // Explicitly reject isolation.level as it's a consumer-specific
@@ -324,6 +324,7 @@ async fn build_kafka(
 
     Ok(SinkConnection::Kafka(KafkaSinkConnection {
         connection: builder.connection,
+        options: builder.options,
         topic,
         topic_prefix: builder.topic_prefix,
         relation_key_indices: builder.relation_key_indices,

@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 
+use mz_kafka_util::KafkaAddrs;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -44,6 +45,7 @@ enum ValType {
     // Number with range [lower, upper]
     Number(i32, i32),
     Boolean,
+    KafkaAddrs { limit_one: bool },
 }
 
 impl ValType {
@@ -70,6 +72,13 @@ impl ValType {
                 i.into()
             }
             ValType::Boolean => bool::try_from_value(v)?.into(),
+            ValType::KafkaAddrs { limit_one } => {
+                let addrs = KafkaAddrs::try_from_value(v)?;
+                if *limit_one && addrs.len() > 1 {
+                    bail!("cannot specify multiple broker addresses")
+                }
+                addrs.into()
+            }
         };
         validate_secret(catalog, &s)?;
         Ok(s)
@@ -94,13 +103,30 @@ fn validate_secret(
 }
 
 trait ConfigGen {
+    fn group(&self) -> Option<&'static str>;
     fn config_key(&self) -> &str;
     fn config_val(&self) -> ValType;
 }
 
 impl ConfigGen for KafkaConnectionOptionName {
+    fn group(&self) -> Option<&'static str> {
+        match self {
+            KafkaConnectionOptionName::Broker | KafkaConnectionOptionName::Brokers => None,
+            KafkaConnectionOptionName::SslKey
+            | KafkaConnectionOptionName::SslKeyPassword
+            | KafkaConnectionOptionName::SslCertificate
+            | KafkaConnectionOptionName::SslCertificateAuthority => Some("SSL"),
+            KafkaConnectionOptionName::SaslMechanisms
+            | KafkaConnectionOptionName::SaslUsername
+            | KafkaConnectionOptionName::SaslPassword => Some("SASL"),
+        }
+    }
+
     fn config_key(&self) -> &str {
         match self {
+            KafkaConnectionOptionName::Broker | KafkaConnectionOptionName::Brokers => {
+                "bootstrap.servers"
+            }
             KafkaConnectionOptionName::SslKey => "ssl.key.pem",
             KafkaConnectionOptionName::SslKeyPassword => "ssl.key.password",
             KafkaConnectionOptionName::SslCertificate => "ssl.certificate.pem",
@@ -111,6 +137,8 @@ impl ConfigGen for KafkaConnectionOptionName {
 
     fn config_val(&self) -> ValType {
         match self {
+            KafkaConnectionOptionName::Broker => ValType::KafkaAddrs { limit_one: true },
+            KafkaConnectionOptionName::Brokers => ValType::KafkaAddrs { limit_one: false },
             KafkaConnectionOptionName::SslKey => ValType::Secret,
             KafkaConnectionOptionName::SslKeyPassword => ValType::Secret,
             KafkaConnectionOptionName::SslCertificate => ValType::StringOrSecret,
@@ -128,40 +156,50 @@ pub fn kafka_connection_config(
     let mut seen = HashSet::<KafkaConnectionOptionName>::new();
     let mut res = BTreeMap::new();
     for KafkaConnectionOption { name, value } in options {
-        match group {
-            None => group = Some(name.group()),
-            Some(g) => {
-                if g != name.group() {
-                    debug_assert!(false, "parsed too many groups");
-                    bail!("invalid connector; too many types of configuration permitted");
-                }
+        match (group, name.group()) {
+            (None, other) => group = other,
+            (Some(g), Some(o)) if g != o => {
+                bail!("invalid connector: multiple protocols specified")
             }
+            _ => {}
         }
         if !seen.insert(name.clone()) {
-            bail!(
-                "{} ({}...) specified more than once",
-                group.unwrap(),
-                name.to_ast_string()
-            );
+            bail!("{} specified more than once", name.to_ast_string());
         }
 
-        assert!(res
+        if res
             .insert(
                 name.config_key().to_string(),
                 name.config_val().try_from_value(catalog, value)?,
             )
-            .is_none());
+            .is_some()
+        {
+            bail!(
+                "{} sets Kafka config option {}, which another option already set",
+                name.to_ast_string(),
+                name.config_key()
+            );
+        }
     }
 
-    assert!(res
-        .insert(
-            "security.protocol".to_string(),
-            match group {
-                Some("SSL") => StringOrSecret::from("ssl"),
-                _ => unreachable!(),
-            },
+    if !(seen.contains(&KafkaConnectionOptionName::Broker)
+        || seen.contains(&KafkaConnectionOptionName::Brokers))
+    {
+        bail!(
+            "must specify {} or {}",
+            KafkaConnectionOptionName::Broker.to_ast_string(),
+            KafkaConnectionOptionName::Brokers.to_ast_string()
         )
-        .is_none());
+    }
+
+    if let Some(group) = group {
+        assert!(res
+            .insert(
+                "security.protocol".to_string(),
+                StringOrSecret::from(group.to_lowercase()),
+            )
+            .is_none());
+    }
 
     Ok(res)
 }
@@ -345,14 +383,17 @@ pub fn extract_config(
 ///
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 pub async fn create_consumer(
-    broker: &str,
     topic: &str,
     options: &BTreeMap<String, StringOrSecret>,
     librdkafka_log_level: tracing::Level,
     secrets_reader: &SecretsReader,
 ) -> Result<Arc<BaseConsumer<KafkaErrCheckContext>>, anyhow::Error> {
     let mut config = create_new_client_config(librdkafka_log_level);
-    config.set("bootstrap.servers", broker);
+    let broker = options
+        .get("bootstrap.servers")
+        .expect("higher levels must have already set bootstrap.servers")
+        .get_string(secrets_reader)
+        .await?;
     for (k, v) in options {
         config.set(k, v.get_string(secrets_reader).await?);
     }
