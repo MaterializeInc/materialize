@@ -40,9 +40,7 @@ These schemas contain sources, tables, and views that expose metadata like:
 Whenever possible, applications should prefer to query `mz_catalog` over
 `pg_catalog`. The mapping between Materialize concepts and PostgreSQL concepts
 is not one-to-one, and so the data in `pg_catalog` cannot accurately represent
-the particulars of Materialize. For example, PostgreSQL has no notion of
-[sinks](/sql/create-sink), and therefore `pg_catalog` does not display
-information about the sinks available in a Materialize.
+the particulars of Materialize.
 
 ## `mz_catalog`
 
