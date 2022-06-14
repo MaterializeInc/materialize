@@ -25,19 +25,6 @@ use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const SCHEMA: &str = "
-SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-
--- Obtain an advisory lock before attempting to create the schema. This is
--- necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
--- in PostgreSQL.
---
--- See: https://github.com/MaterializeInc/materialize/issues/12560
--- See: https://www.postgresql.org/message-id/CA%2BTgmoZAdYVtwBfp1FL2sMZbiHCWT4UPrzRLNnX1Nb30Ku3-gg%40mail.gmail.com
--- See: https://stackoverflow.com/a/29908840
---
--- The lock ID was randomly generated.
-SELECT pg_advisory_xact_lock(135664303235462630);
-
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
@@ -149,6 +136,26 @@ impl PostgresConsensus {
         });
 
         let tx = client.transaction().await?;
+        tx.batch_execute("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .await?;
+        let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
+        // Only get the advisory lock on Postgres (but not Cockroach which doesn't
+        // support this function and (we suspect) doesn't have this bug anyway). Use
+        // this construction (not cockroach instead of yes postgres) to avoid
+        // accidentally not executing in Postgres.
+        if !version.starts_with("CockroachDB") {
+            // Obtain an advisory lock before attempting to create the schema. This is
+            // necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
+            // in PostgreSQL.
+            //
+            // See: https://github.com/MaterializeInc/materialize/issues/12560
+            // See: https://www.postgresql.org/message-id/CA%2BTgmoZAdYVtwBfp1FL2sMZbiHCWT4UPrzRLNnX1Nb30Ku3-gg%40mail.gmail.com
+            // See: https://stackoverflow.com/a/29908840
+            //
+            // The lock ID was randomly generated.
+            tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
+                .await?;
+        }
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
         Ok(PostgresConsensus {
