@@ -107,7 +107,8 @@ impl CatalogState {
         let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::Int64(id), Datum::String(&name)]),
+            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+            row: Row::pack_slice(&[Datum::Int64(id as i64), Datum::String(&name)]),
             diff,
         }
     }
@@ -134,7 +135,8 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_BASE),
             row: Row::pack_slice(&[
-                Datum::Int64(compute_instance_id),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(compute_instance_id as i64),
                 Datum::Int64(id),
                 Datum::String(&name),
                 Datum::from(size),
@@ -384,7 +386,8 @@ impl CatalogState {
                     Datum::String(name),
                     Datum::String(connection.name()),
                     Datum::String(self.is_volatile(id).as_str()),
-                    Datum::Int64(sink.compute_instance),
+                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                    Datum::Int64(sink.compute_instance as i64),
                 ]),
                 diff,
             });
@@ -418,7 +421,8 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
-                Datum::Int64(index.compute_instance),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(index.compute_instance as i64),
             ]),
             diff,
         });

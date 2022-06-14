@@ -1169,3 +1169,40 @@ fn test_github_12951() {
         );
     }
 }
+
+#[test]
+// Tests github issue #13100
+fn test_tail_outlive_cluster() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    // Verify sinks (TAIL) are correctly handled for a dropped cluster, when a new cluster is created.
+    let mut client1 = server.connect(postgres::NoTls).unwrap();
+    let mut client2 = server.connect(postgres::NoTls).unwrap();
+    let client2_cancel = client2.cancel_token();
+
+    client1
+        .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size '1'))")
+        .unwrap();
+    client1.batch_execute("CREATE TABLE t1(f1 int)").unwrap();
+    client2.batch_execute("SET CLUSTER = foo").unwrap();
+    client2
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR TAIL (SELECT count(*) FROM t1); FETCH 1 c")
+        .unwrap();
+    client1.batch_execute("DROP CLUSTER foo").unwrap();
+    client1
+        .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size '1'))")
+        .unwrap();
+    client2_cancel.cancel_query(postgres::NoTls).unwrap();
+    client2
+        .batch_execute("ROLLBACK; SET CLUSTER = default")
+        .unwrap();
+    assert_eq!(
+        client2
+            .query_one("SELECT count(*) FROM t1", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        0
+    );
+}
