@@ -16,6 +16,8 @@ use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
+use timely::progress::frontier::Antichain;
+use timely::progress::Timestamp as _;
 use timely::PartialOrder;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
@@ -62,7 +64,7 @@ pub fn render<G>(
         move |mut capabilities, frontiers, scheduler| async move {
             capabilities.clear();
             let mut buffer = Vec::new();
-            let mut stash: HashMap<_, Vec<_>> = HashMap::new();
+            let mut stashed_batches = HashMap::new();
 
             let mut write = persist_clients
                 .lock()
@@ -70,9 +72,7 @@ pub fn render<G>(
                 .open(storage_metadata.persist_location)
                 .await
                 .expect("could not open persist client")
-                .open_writer::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
-                    storage_metadata.persist_shard,
-                )
+                .open_writer::<SourceData, (), Timestamp, Diff>(storage_metadata.persist_shard)
                 .await
                 .expect("could not open persist shard");
 
@@ -89,45 +89,94 @@ pub fn render<G>(
                 while let Some((_cap, data)) = input.next() {
                     data.swap(&mut buffer);
 
+                    // TODO: come up with a better default batch size here
+                    // (100 was chosen arbitrarily), and avoid having to make a batch
+                    // per-timestamp.
                     for (row, ts, diff) in buffer.drain(..) {
-                        stash
+                        stashed_batches
                             .entry(ts)
-                            .or_default()
-                            .push((SourceData(row), ts, diff));
+                            .or_insert_with(|| {
+                                // TODO: the lower has to be the min because we don't know
+                                // what the minimum ts of data we will see is. In the future,
+                                // this lower should be declared in `finish` instead.
+                                write.builder(100, Antichain::from_elem(Timestamp::minimum()))
+                            })
+                            .add(&SourceData(row), &(), &ts, &diff)
+                            .await
+                            .expect("invalid usage");
                     }
                 }
 
-                let empty = Vec::new();
-                let mut updates = stash
-                    .iter()
-                    .flat_map(|(ts, updates)| {
-                        if !input_frontier.less_equal(ts) {
-                            updates.iter()
-                        } else {
-                            empty.iter()
-                        }
-                    })
-                    .map(|&(ref row, ref ts, ref diff)| ((row, &()), ts, diff));
+                // See if any timestamps are done!
+                // TODO(guswynn/petrosagg): remove this additional allocation
+                let mut finalized_timestamps: Vec<_> = stashed_batches
+                    .keys()
+                    .filter(|ts| !input_frontier.less_equal(ts))
+                    .copied()
+                    .collect();
+                finalized_timestamps.sort_unstable();
 
+                // If the frontier has advanced, we need to finalize data being written to persist
                 if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
                     // We always append, even in case we don't have any updates, because appending
                     // also advances the frontier.
-                    // TODO(aljoscha): Figure out how errors from this should be reported.
-                    let expected_upper = shared_frontier.borrow().clone();
-                    write
-                        .compare_and_append(updates, expected_upper, input_frontier.clone())
-                        .await
-                        .expect("cannot append updates")
-                        .expect("cannot append updates")
-                        .expect("invalid/outdated upper");
+                    if finalized_timestamps.is_empty() {
+                        let expected_upper = shared_frontier.borrow().clone();
+                        write
+                            .compare_and_append(
+                                Vec::<((SourceData, ()), Timestamp, Diff)>::new(),
+                                expected_upper,
+                                input_frontier.clone(),
+                            )
+                            .await
+                            .expect("cannot append updates")
+                            .expect("cannot append updates")
+                            .expect("invalid/outdated upper");
 
+                        // advance our stashed frontier
+                        *shared_frontier.borrow_mut() = input_frontier.clone();
+                        // wait for more data or a new input frontier
+                        continue;
+                    }
+
+                    // `shared_frontier` tracks the last known upper
+                    let mut expected_upper = shared_frontier.borrow().clone();
+                    let finalized_batch_count = finalized_timestamps.len();
+
+                    for (i, ts) in finalized_timestamps.into_iter().enumerate() {
+                        // TODO(aljoscha): Figure out how errors from this should be reported.
+
+                        // Set the upper to the upper of the batch (which is 1 past the ts it
+                        // manages) OR the new frontier if we are appending the final batch
+                        let new_upper = if i == finalized_batch_count - 1 {
+                            input_frontier.clone()
+                        } else {
+                            Antichain::from_elem(ts + 1)
+                        };
+
+                        let mut batch = stashed_batches
+                            .remove(&ts)
+                            .expect("batch for timestamp to still be there")
+                            .finish(new_upper.clone())
+                            .await
+                            .expect("invalid usage");
+
+                        write
+                            .compare_and_append_batch(&mut batch, expected_upper, new_upper.clone())
+                            .await
+                            .expect("cannot append updates")
+                            .expect("cannot append updates")
+                            .expect("invalid/outdated upper");
+
+                        // next `expected_upper` is the one we just successfully appended
+                        expected_upper = new_upper;
+                    }
+                    // advance our stashed frontier
                     *shared_frontier.borrow_mut() = input_frontier.clone();
                 } else {
                     // We cannot have updates without the frontier advancing
-                    assert!(updates.next().is_none());
+                    assert!(finalized_timestamps.is_empty());
                 }
-
-                stash.retain(|ts, _updates| input_frontier.less_equal(ts));
             }
         },
     )
