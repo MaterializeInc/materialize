@@ -4017,7 +4017,6 @@ dependencies = [
  "mz-ore",
  "mz-persist-types",
  "mz-postgres-util",
- "num",
  "postgres-openssl",
  "rand",
  "rusqlite",
