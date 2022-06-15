@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use mz_build_info::BuildInfo;
 use mz_ore::metrics::MetricsRegistry;
-use mz_secrets::SecretsReader;
 
 use crate::catalog::storage;
 
@@ -32,5 +31,4 @@ pub struct Config<'a, S> {
     pub skip_migrations: bool,
     /// The registry that catalog uses to report metrics.
     pub metrics_registry: &'a MetricsRegistry,
-    pub secrets_reader: SecretsReader,
 }

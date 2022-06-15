@@ -11,7 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
-import "ccsr/src/config.proto";
+import "dataflow-types/src/types/connections.proto";
 import "repr/src/adt/regex.proto";
 import "repr/src/relation_and_scalar.proto";
 
@@ -49,7 +49,7 @@ message ProtoDataEncoding {
 
 message ProtoAvroEncoding {
     string schema = 1;
-    mz_ccsr.config.ProtoClientConfig schema_registry_config = 2;
+    mz_dataflow_types.types.connections.ProtoCsrConnection csr_connection = 2;
     bool confluent_wire_format = 3;
 }
 

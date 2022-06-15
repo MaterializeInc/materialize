@@ -23,7 +23,6 @@ use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::now::{EpochMillis, NOW_ZERO};
 use mz_repr::{GlobalId, RelationDesc, ScalarType};
-use mz_secrets::SecretsReader;
 
 use crate::ast::Expr;
 use crate::catalog::{
@@ -293,10 +292,6 @@ impl SessionCatalog for TestCatalog {
 
     fn find_available_name(&self, name: QualifiedObjectName) -> QualifiedObjectName {
         name
-    }
-
-    fn secrets_reader(&self) -> &SecretsReader {
-        unimplemented!()
     }
 }
 

@@ -95,7 +95,7 @@ pub async fn purify_create_source(
                 &topic,
                 &connection_options,
                 connection_context.librdkafka_log_level,
-                catalog.secrets_reader(),
+                &connection_context.secrets_reader,
             )
             .await
             .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
@@ -171,7 +171,14 @@ pub async fn purify_create_source(
         CreateSourceConnection::PubNub { .. } => (),
     }
 
-    purify_source_format(&*catalog, format, connection, &envelope).await?;
+    purify_source_format(
+        &*catalog,
+        format,
+        connection,
+        &envelope,
+        &connection_context,
+    )
+    .await?;
 
     Ok(stmt)
 }
@@ -181,6 +188,7 @@ async fn purify_source_format(
     format: &mut CreateSourceFormat<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
         && !matches!(connection, CreateSourceConnection::Kafka { .. })
@@ -211,12 +219,15 @@ async fn purify_source_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(catalog, format, connection, envelope).await?;
+            purify_source_format_single(catalog, format, connection, envelope, connection_context)
+                .await?;
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            purify_source_format_single(catalog, key, connection, envelope).await?;
-            purify_source_format_single(catalog, val, connection, envelope).await?;
+            purify_source_format_single(catalog, key, connection, envelope, connection_context)
+                .await?;
+            purify_source_format_single(catalog, val, connection, envelope, connection_context)
+                .await?;
         }
     }
     Ok(())
@@ -227,11 +238,19 @@ async fn purify_source_format_single(
     format: &mut Format<Aug>,
     connection: &mut CreateSourceConnection<Aug>,
     envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
             AvroSchema::Csr { csr_connection } => {
-                purify_csr_connection_avro(catalog, connection, csr_connection, envelope).await?
+                purify_csr_connection_avro(
+                    catalog,
+                    connection,
+                    csr_connection,
+                    envelope,
+                    connection_context,
+                )
+                .await?
             }
             AvroSchema::InlineSchema { schema, .. } => {
                 if let mz_sql_parser::ast::Schema::File(path) = schema {
@@ -242,7 +261,14 @@ async fn purify_source_format_single(
         },
         Format::Protobuf(schema) => match schema {
             ProtobufSchema::Csr { csr_connection } => {
-                purify_csr_connection_proto(catalog, connection, csr_connection, envelope).await?;
+                purify_csr_connection_proto(
+                    catalog,
+                    connection,
+                    csr_connection,
+                    envelope,
+                    connection_context,
+                )
+                .await?;
             }
             ProtobufSchema::InlineSchema {
                 message_name: _,
@@ -281,6 +307,7 @@ async fn purify_csr_connection_proto(
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionProto<Aug>,
     envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic =
         if let CreateSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) = connection {
@@ -296,28 +323,28 @@ async fn purify_csr_connection_proto(
     } = csr_connection;
     match seed {
         None => {
-            let ccsr_config = match connection {
-                CsrConnection::Inline { url } => kafka_util::generate_ccsr_client_config(
+            let ccsr_connection = match connection {
+                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                    catalog,
                     url.parse()?,
-                    &mut kafka_util::extract_config_ccsr(
-                        &*catalog,
-                        &mut normalize::options(&ccsr_options)?,
-                    )?,
-                    catalog.secrets_reader(),
+                    &mut normalize::options(&ccsr_options)?,
                 )?,
                 CsrConnection::Reference { connection } => {
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     match item.connection()? {
-                        Connection::Csr(config) => config.clone(),
+                        Connection::Csr(connection) => connection.clone(),
                         _ => bail!("{} is not a schema registry connection", item.name()),
                     }
                 }
             };
 
-            let value =
-                compile_proto(&format!("{}-value", topic), ccsr_config.clone().build()?).await?;
-            let key = compile_proto(&format!("{}-key", topic), ccsr_config.build()?)
+            let ccsr_client = ccsr_connection
+                .connect(&connection_context.secrets_reader)
+                .await?;
+
+            let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
+            let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
                 .await
                 .ok();
 
@@ -344,6 +371,7 @@ async fn purify_csr_connection_avro(
     connection: &mut CreateSourceConnection<Aug>,
     csr_connection: &mut CsrConnectionAvro<Aug>,
     envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     let topic =
         if let CreateSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) = connection {
@@ -358,30 +386,28 @@ async fn purify_csr_connection_avro(
         with_options: ccsr_options,
     } = csr_connection;
     if seed.is_none() {
-        let ccsr_config = match connection {
-            CsrConnection::Inline { url } => kafka_util::generate_ccsr_client_config(
+        let ccsr_connection = match connection {
+            CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                catalog,
                 url.parse()?,
-                &mut kafka_util::extract_config_ccsr(
-                    &*catalog,
-                    &mut normalize::options(&ccsr_options)?,
-                )?,
-                catalog.secrets_reader(),
+                &mut normalize::options(&ccsr_options)?,
             )?,
             CsrConnection::Reference { connection } => {
                 let scx = StatementContext::new(None, &*catalog);
                 let item = scx.get_item_by_resolved_name(&connection)?;
                 match item.connection()? {
-                    Connection::Csr(config) => config.clone(),
+                    Connection::Csr(connection) => connection.clone(),
                     _ => bail!("{} is not a schema registry connection", item.name()),
                 }
             }
         };
-
+        let ccsr_client = ccsr_connection
+            .connect(&connection_context.secrets_reader)
+            .await?;
         let Schema {
             key_schema,
             value_schema,
-            ..
-        } = get_remote_csr_schema(ccsr_config, topic.clone()).await?;
+        } = get_remote_csr_schema(&ccsr_client, topic.clone()).await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
             bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
         }
@@ -399,16 +425,12 @@ async fn purify_csr_connection_avro(
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
-    pub confluent_wire_format: bool,
 }
 
 async fn get_remote_csr_schema(
-    schema_registry_config: mz_ccsr::ClientConfig,
+    ccsr_client: &mz_ccsr::Client,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
-    let ccsr_client = schema_registry_config.clone().build()?;
-
     let value_schema_name = format!("{}-value", topic);
     let value_schema = ccsr_client
         .get_schema_by_subject(&value_schema_name)
@@ -428,15 +450,13 @@ async fn get_remote_csr_schema(
     Ok(Schema {
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
-        schema_registry_config: Some(schema_registry_config),
-        confluent_wire_format: true,
     })
 }
 
 /// Collect protobuf message descriptor from CSR and compile the descriptor.
 async fn compile_proto(
     subject_name: &String,
-    ccsr_client: Client,
+    ccsr_client: &Client,
 ) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
     let (primary_subject, dependency_subjects) =
         ccsr_client.get_subject_and_references(subject_name).await?;

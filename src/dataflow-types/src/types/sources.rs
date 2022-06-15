@@ -27,7 +27,6 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use uuid::Uuid;
 
-use mz_kafka_util::KafkaAddrs;
 use mz_persist_types::Codec;
 use mz_repr::chrono::any_naive_datetime;
 use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError};
@@ -37,6 +36,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 pub mod encoding;
 
 use crate::connections::aws::AwsConfig;
+use crate::connections::KafkaConnection;
 use crate::DataflowError;
 
 include!(concat!(
@@ -1035,11 +1035,8 @@ impl UnplannedSourceEnvelope {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection {
-    pub addrs: KafkaAddrs,
+    pub connection: KafkaConnection,
     pub topic: String,
-    // Represents options specified by user when creating the source, e.g.
-    // security settings.
-    pub config_options: BTreeMap<String, String>,
     // Map from partition -> starting offset
     pub start_offsets: HashMap<i32, MzOffset>,
     pub group_id_prefix: Option<String>,
@@ -1061,9 +1058,8 @@ impl Arbitrary for KafkaSourceConnection {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
-            any::<KafkaAddrs>(),
+            any::<KafkaConnection>(),
             any::<String>(),
-            any::<BTreeMap<String, String>>(),
             any::<HashMap<i32, MzOffset>>(),
             any::<Option<String>>(),
             any_uuid(),
@@ -1075,9 +1071,8 @@ impl Arbitrary for KafkaSourceConnection {
         )
             .prop_map(
                 |(
-                    addrs,
+                    connection,
                     topic,
-                    config_options,
                     start_offsets,
                     group_id_prefix,
                     cluster_id,
@@ -1087,9 +1082,8 @@ impl Arbitrary for KafkaSourceConnection {
                     include_offset,
                     include_headers,
                 )| KafkaSourceConnection {
-                    addrs,
+                    connection,
                     topic,
-                    config_options,
                     start_offsets,
                     group_id_prefix,
                     cluster_id,
@@ -1107,9 +1101,8 @@ impl Arbitrary for KafkaSourceConnection {
 impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
     fn into_proto(&self) -> ProtoKafkaSourceConnection {
         ProtoKafkaSourceConnection {
-            addrs: Some((&self.addrs).into_proto()),
+            connection: Some(self.connection.into_proto()),
             topic: self.topic.clone(),
-            config_options: self.config_options.clone().into_iter().collect(),
             start_offsets: self
                 .start_offsets
                 .iter()
@@ -1132,11 +1125,10 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection {
             .map(|(k, v)| MzOffset::from_proto(v).map(|v| (k, v)))
             .collect();
         Ok(KafkaSourceConnection {
-            addrs: proto
-                .addrs
-                .into_rust_if_some("ProtoKafkaSourceConnection::addrs")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
             topic: proto.topic,
-            config_options: proto.config_options.into_iter().collect(),
             start_offsets: start_offsets?,
             group_id_prefix: proto.group_id_prefix,
             cluster_id: proto
