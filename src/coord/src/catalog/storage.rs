@@ -1298,7 +1298,7 @@ static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
 static COLLECTION_ID_ALLOC: TypedCollection<IdAllocKey, IdAllocValue> =
-    TypedCollection::new("gid_alloc");
+    TypedCollection::new("id_alloc");
 static COLLECTION_SYSTEM_GID_MAPPING: TypedCollection<GidMappingKey, GidMappingValue> =
     TypedCollection::new("system_gid_mapping");
 static COLLECTION_COMPUTE_INSTANCES: TypedCollection<ComputeInstanceKey, ComputeInstanceValue> =
