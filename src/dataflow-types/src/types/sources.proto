@@ -267,6 +267,5 @@ message ProtoIngestionDescription {
     repeated ProtoSourceMetadataImport source_imports = 1;
     mz_repr.global_id.ProtoGlobalId id = 2;
     ProtoSourceDesc desc = 3;
-    mz_persist.gen.persist.ProtoU64Antichain since = 4;
-    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 5;
+    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 4;
 }

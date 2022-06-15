@@ -358,7 +358,7 @@ impl<T> ComputeCommand<T> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
+    CreateSources(Vec<IngestionDescription<CollectionMetadata>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -411,11 +411,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec(
-                any::<IngestionDescription<CollectionMetadata, mz_repr::Timestamp>>(),
-                1..4
-            )
-            .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(any::<IngestionDescription<CollectionMetadata>>(), 1..4)
+                .prop_map(StorageCommand::CreateSources),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),

@@ -16,6 +16,6 @@ package mz_dataflow_types.client.controller.storage;
 message ProtoCollectionMetadata {
     string blob_uri = 1;
     string consensus_uri = 2;
-    string shard_id = 3;
-    string timestamp_shard_id = 4;
+    string data_shard = 3;
+    string remap_shard = 4;
 }

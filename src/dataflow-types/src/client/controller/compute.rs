@@ -345,7 +345,11 @@ where
         for d in dataflows {
             let mut source_imports = BTreeMap::new();
             for (id, si) in d.source_imports {
-                let metadata = self.storage_controller.collection_metadata(id)?;
+                let metadata = self
+                    .storage_controller
+                    .collection(id)?
+                    .collection_metadata
+                    .clone();
                 let desc = SourceInstanceDesc {
                     description: si.description,
                     storage_metadata: metadata,
@@ -358,7 +362,11 @@ where
             for (id, se) in d.sink_exports {
                 let connection = match se.connection {
                     SinkConnection::Persist(conn) => {
-                        let metadata = self.storage_controller.collection_metadata(id)?;
+                        let metadata = self
+                            .storage_controller
+                            .collection(id)?
+                            .collection_metadata
+                            .clone();
                         let conn = PersistSinkConnection {
                             value_desc: conn.value_desc,
                             storage_metadata: metadata,
