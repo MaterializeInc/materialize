@@ -596,7 +596,12 @@ impl<S: Append> Connection<S> {
         let key = IdAllocKey {
             name: id_type.to_string(),
         };
-        let id = tx.id_allocator.items().get(&key).expect("must exist").next_id;
+        let id = tx
+            .id_allocator
+            .items()
+            .get(&key)
+            .expect("must exist")
+            .next_id;
         let next = match id.checked_add(amount) {
             Some(next_id) => IdAllocValue { next_id },
             None => return Err(Error::new(ErrorKind::IdExhaustion)),
