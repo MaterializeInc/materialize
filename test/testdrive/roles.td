@@ -54,7 +54,7 @@ contains:unknown role 'bad'
 > SELECT id, name FROM mz_roles
 0 mz_system
 1 materialize
-2 nlb
+4 nlb
 > DROP ROLE nlb
 > SELECT id, name FROM mz_roles
 0 mz_system
