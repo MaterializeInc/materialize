@@ -2632,7 +2632,10 @@ impl<S: Append + 'static> Coordinator<S> {
         } else {
             Vec::new()
         };
-        let id = self.catalog.allocate_compute_instance_id().await?;
+        let id = match self.catalog.allocate_compute_instance_id().await {
+            Ok(id) => id,
+            Err(e) => return tx.send(Err(e.into()), session),
+        };
         let mut ops = vec![catalog::Op::CreateComputeInstance {
             id,
             name: name.clone(),
