@@ -113,8 +113,8 @@ use mz_expr::{
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
-use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::{stack, task};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
@@ -5773,6 +5773,7 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let thread = thread::Builder::new()
+        .stack_size(2 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {
