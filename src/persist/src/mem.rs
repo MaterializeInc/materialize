@@ -10,103 +10,67 @@
 //! In-memory implementations for testing and benchmarking.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
+use once_cell::sync::Lazy;
 
-use crate::error::Error;
 use crate::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
 
-/// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
-/// across dataflows
-#[cfg(test)]
-#[derive(Debug)]
-pub struct MemMultiRegistry {
-    blob_multi_by_path: HashMap<String, Arc<tokio::sync::Mutex<MemBlobMultiCore>>>,
-}
+type BlobData = Arc<Mutex<HashMap<String, Bytes>>>;
 
-#[cfg(test)]
-impl MemMultiRegistry {
-    /// Constructs a new, empty [MemMultiRegistry].
-    pub fn new() -> Self {
-        MemMultiRegistry {
-            blob_multi_by_path: HashMap::new(),
-        }
-    }
-
-    /// Opens a [MemBlobMulti] associated with `path`.
-    ///
-    /// TODO: Replace this with PersistClientCache once they're in the same
-    /// crate.
-    pub async fn blob_multi(&mut self, path: &str) -> MemBlobMulti {
-        if let Some(blob) = self.blob_multi_by_path.get(path) {
-            MemBlobMulti::open(MemBlobMultiConfig {
-                core: Arc::clone(&blob),
-            })
-        } else {
-            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobMultiCore::default()));
-            self.blob_multi_by_path
-                .insert(path.to_string(), Arc::clone(&blob));
-            MemBlobMulti::open(MemBlobMultiConfig { core: blob })
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct MemBlobMultiCore {
-    dataz: HashMap<String, Bytes>,
-}
-
-impl MemBlobMultiCore {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        Ok(self.dataz.get(key).map(|x| x.to_vec()))
-    }
-
-    fn set(&mut self, key: &str, value: Bytes) -> Result<(), ExternalError> {
-        self.dataz.insert(key.to_owned(), value);
-        Ok(())
-    }
-
-    fn list_keys(&self) -> Result<Vec<String>, ExternalError> {
-        Ok(self.dataz.keys().cloned().collect())
-    }
-
-    fn delete(&mut self, key: &str) -> Result<(), ExternalError> {
-        self.dataz.remove(key);
-        Ok(())
-    }
-}
+/// An in-memory representation of [BlobMulti]s that can be reused across dataflows
+static BLOB_REGISTRY: Lazy<Mutex<HashMap<PathBuf, BlobData>>> = Lazy::new(Default::default);
 
 /// Configuration for opening a [MemBlobMulti].
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MemBlobMultiConfig {
-    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+    path: PathBuf,
+}
+
+impl<P: AsRef<Path>> From<P> for MemBlobMultiConfig {
+    fn from(path: P) -> Self {
+        MemBlobMultiConfig {
+            path: path.as_ref().to_path_buf(),
+        }
+    }
 }
 
 /// An in-memory implementation of [BlobMulti].
 #[derive(Debug)]
 pub struct MemBlobMulti {
-    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+    dataz: BlobData,
 }
 
 impl MemBlobMulti {
     /// Opens the given location for non-exclusive read-write access.
     pub fn open(config: MemBlobMultiConfig) -> Self {
-        MemBlobMulti { core: config.core }
+        let dataz = Arc::clone(
+            BLOB_REGISTRY
+                .lock()
+                .unwrap()
+                .entry(config.path)
+                .or_default(),
+        );
+        MemBlobMulti { dataz }
     }
 }
 
 #[async_trait]
 impl BlobMulti for MemBlobMulti {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        self.core.lock().await.get(key)
+        let dataz = self.dataz.lock().unwrap();
+        Ok(dataz.get(key).map(|x| x.to_vec()))
     }
 
     async fn list_keys(&self, _deadline: Instant) -> Result<Vec<String>, ExternalError> {
-        self.core.lock().await.list_keys()
+        let dataz = self.dataz.lock().unwrap();
+        Ok(dataz.keys().cloned().collect())
     }
 
     async fn set(
@@ -117,27 +81,60 @@ impl BlobMulti for MemBlobMulti {
         _atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // NB: This is always atomic, so we're free to ignore the atomic param.
-        self.core.lock().await.set(key, value)
+        let mut dataz = self.dataz.lock().unwrap();
+        dataz.insert(key.to_owned(), value);
+        Ok(())
     }
 
     async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
-        self.core.lock().await.delete(key)
+        let mut dataz = self.dataz.lock().unwrap();
+        dataz.remove(key);
+        Ok(())
     }
 }
+
+/// Configuration to construct an in-memory implementation of [Consensus].
+#[derive(Clone, Debug, Default)]
+pub struct MemConsensusConfig {
+    path: PathBuf,
+}
+
+impl<P: AsRef<Path>> From<P> for MemConsensusConfig {
+    fn from(path: P) -> Self {
+        MemConsensusConfig {
+            path: path.as_ref().to_path_buf(),
+        }
+    }
+}
+
+type ConensusData = Arc<Mutex<HashMap<String, Vec<VersionedData>>>>;
+
+/// An in-memory representation of a set of [Consensus]s that can be reused across dataflows
+static CONSENSUS_REGISTRY: Lazy<Mutex<HashMap<PathBuf, ConensusData>>> =
+    Lazy::new(Default::default);
 
 /// An in-memory implementation of [Consensus].
 #[derive(Debug)]
 pub struct MemConsensus {
-    // TODO: This was intended to be a tokio::sync::Mutex but that seems to
-    // regularly deadlock in the `concurrency` test.
-    data: Arc<Mutex<HashMap<String, Vec<VersionedData>>>>,
+    store: ConensusData,
 }
 
 impl Default for MemConsensus {
     fn default() -> Self {
-        Self {
-            data: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self::open(MemConsensusConfig::default())
+    }
+}
+
+impl MemConsensus {
+    fn open(config: MemConsensusConfig) -> Self {
+        let store = Arc::clone(
+            CONSENSUS_REGISTRY
+                .lock()
+                .unwrap()
+                .entry(config.path)
+                .or_default(),
+        );
+        Self { store }
     }
 }
 
@@ -148,7 +145,7 @@ impl Consensus for MemConsensus {
         _deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        let store = self.data.lock().map_err(Error::from)?;
+        let store = self.store.lock().unwrap();
         let values = match store.get(key) {
             None => return Ok(None),
             Some(values) => values,
@@ -178,7 +175,7 @@ impl Consensus for MemConsensus {
                 new.seqno
             )));
         }
-        let mut store = self.data.lock().map_err(Error::from)?;
+        let mut store = self.store.lock().unwrap();
 
         let data = match store.get(key) {
             None => None,
@@ -202,7 +199,7 @@ impl Consensus for MemConsensus {
         key: &str,
         from: SeqNo,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        let store = self.data.lock().map_err(Error::from)?;
+        let store = self.store.lock().unwrap();
         let mut results = vec![];
         if let Some(values) = store.get(key) {
             // TODO: we could instead binary search to find the first valid
@@ -238,7 +235,7 @@ impl Consensus for MemConsensus {
             )));
         }
 
-        let mut store = self.data.lock().map_err(Error::from)?;
+        let mut store = self.store.lock().unwrap();
 
         if let Some(values) = store.get_mut(key) {
             values.retain(|val| val.seqno >= seqno);
@@ -250,23 +247,20 @@ impl Consensus for MemConsensus {
 
 #[cfg(test)]
 mod tests {
+    use std::future::ready;
+
     use crate::location::tests::{blob_multi_impl_test, consensus_impl_test};
 
     use super::*;
 
     #[tokio::test]
     async fn mem_blob_multi() -> Result<(), ExternalError> {
-        let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
-        blob_multi_impl_test(move |path| {
-            let path = path.to_owned();
-            let registry = Arc::clone(&registry);
-            async move { Ok(registry.lock().await.blob_multi(&path).await) }
-        })
-        .await
+        blob_multi_impl_test(|path| ready(Ok(MemBlobMulti::open(MemBlobMultiConfig::from(path)))))
+            .await
     }
 
     #[tokio::test]
     async fn mem_consensus() -> Result<(), ExternalError> {
-        consensus_impl_test(|| async { Ok(MemConsensus::default()) }).await
+        consensus_impl_test(|| ready(Ok(MemConsensus::open(MemConsensusConfig::default())))).await
     }
 }

@@ -33,7 +33,7 @@ pub enum BlobMultiConfig {
     /// Config for [MemBlobMulti], only available in testing to prevent
     /// footguns.
     #[cfg(any(test, debug_assertions))]
-    Mem,
+    Mem(MemBlobMultiConfig),
 }
 
 impl BlobMultiConfig {
@@ -47,8 +47,9 @@ impl BlobMultiConfig {
                 .await
                 .map(|x| Arc::new(x) as Arc<dyn BlobMulti + Send + Sync>),
             #[cfg(any(test, debug_assertions))]
-            BlobMultiConfig::Mem => Ok(Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()))
-                as Arc<dyn BlobMulti + Send + Sync>),
+            BlobMultiConfig::Mem(config) => {
+                Ok(Arc::new(MemBlobMulti::open(config)) as Arc<dyn BlobMulti + Send + Sync>)
+            }
         }
     }
 
@@ -80,7 +81,8 @@ impl BlobMultiConfig {
             #[cfg(any(test, debug_assertions))]
             "mem" => {
                 query_params.clear();
-                Ok(BlobMultiConfig::Mem)
+                let config = MemBlobMultiConfig::from(url.as_str());
+                Ok(BlobMultiConfig::Mem(config))
             }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",

@@ -413,10 +413,11 @@ mod tests {
         cache.cfg.blob_target_size = 10;
         cache.cfg.batch_builder_max_outstanding_parts = 1;
 
+        let uuid = uuid::Uuid::new_v4();
         cache
             .open(PersistLocation {
-                blob_uri: "mem://".to_owned(),
-                consensus_uri: "mem://".to_owned(),
+                blob_uri: format!("mem:///{uuid}/blob"),
+                consensus_uri: format!("mem:///{uuid}/consensus"),
             })
             .await
             .expect("client construction failed")

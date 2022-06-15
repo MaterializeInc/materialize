@@ -23,6 +23,7 @@ pub mod file;
 pub mod gen;
 pub mod indexed;
 pub mod location;
+#[cfg(any(test, debug_assertions))]
 pub mod mem;
 pub mod postgres;
 pub mod retry;
