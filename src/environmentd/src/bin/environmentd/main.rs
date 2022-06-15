@@ -662,16 +662,20 @@ max log level: {max_log_level}",
         bail!("--availability-zone values must be unique");
     }
 
+    let secrets_path = match args.orchestrator {
+        Orchestrator::Kubernetes => {
+            PathBuf::from(args.user_defined_secret_mount_path.unwrap_or_default())
+        }
+        Orchestrator::Process => data_directory.join("secrets"),
+    };
     let secrets_controller = match args.orchestrator {
         Orchestrator::Kubernetes => SecretsControllerConfig::Kubernetes {
             context: args.kubernetes_context,
             user_defined_secret: args.user_defined_secret.unwrap_or_default(),
-            user_defined_secret_mount_path: args.user_defined_secret_mount_path.unwrap_or_default(),
+            user_defined_secret_mount_path: secrets_path.clone(),
             refresh_pod_name: args.pod_name.unwrap_or_default(),
         },
-        Orchestrator::Process => {
-            SecretsControllerConfig::LocalFileSystem(data_directory.join("secrets"))
-        }
+        Orchestrator::Process => SecretsControllerConfig::LocalFileSystem(secrets_path.clone()),
     };
 
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
@@ -697,6 +701,7 @@ max log level: {max_log_level}",
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id_prefix,
+            secrets_path,
         ),
     }))?;
 

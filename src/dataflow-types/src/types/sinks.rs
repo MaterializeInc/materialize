@@ -9,19 +9,18 @@
 
 //! Types and traits related to reporting changing collections out of `dataflow`.
 
-use std::collections::BTreeMap;
 use std::time::Duration;
 
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
-use url::Url;
 
-use mz_kafka_util::KafkaAddrs;
 use mz_persist_client::ShardId;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
+
+use crate::connections::{CsrConnection, KafkaConnection};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -216,7 +215,7 @@ impl RustType<ProtoKafkaSinkConsistencyConnection> for KafkaSinkConsistencyConne
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnection {
-    pub addrs: KafkaAddrs,
+    pub connection: KafkaConnection,
     pub topic: String,
     pub topic_prefix: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
@@ -230,12 +229,11 @@ pub struct KafkaSinkConnection {
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
-    pub config_options: BTreeMap<String, String>,
 }
 
 proptest::prop_compose! {
     fn any_kafka_sink_connection()(
-        addrs in any::<KafkaAddrs>(),
+        connection in any::<KafkaConnection>(),
         topic in any::<String>(),
         topic_prefix in any::<String>(),
         key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
@@ -246,10 +244,9 @@ proptest::prop_compose! {
         exactly_once in any::<bool>(),
         transitive_source_dependencies in any::<Vec<GlobalId>>(),
         fuel in any::<usize>(),
-        config_options in any::<BTreeMap<String, String>>(),
     ) -> KafkaSinkConnection {
         KafkaSinkConnection {
-            addrs,
+            connection,
             topic,
             topic_prefix,
             key_desc_and_indices,
@@ -260,7 +257,6 @@ proptest::prop_compose! {
             exactly_once,
             transitive_source_dependencies,
             fuel,
-            config_options,
         }
     }
 }
@@ -311,7 +307,7 @@ impl RustType<proto_kafka_sink_connection::ProtoRelationKeyIndicesVec> for Vec<u
 impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
     fn into_proto(&self) -> ProtoKafkaSinkConnection {
         ProtoKafkaSinkConnection {
-            addrs: Some(self.addrs.into_proto()),
+            connection: Some(self.connection.into_proto()),
             topic: self.topic.clone(),
             topic_prefix: self.topic_prefix.clone(),
             key_desc_and_indices: self.key_desc_and_indices.into_proto(),
@@ -322,15 +318,14 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             exactly_once: self.exactly_once,
             transitive_source_dependencies: self.transitive_source_dependencies.into_proto(),
             fuel: self.fuel.into_proto(),
-            config_options: self.config_options.clone().into_iter().collect(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaSinkConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaSinkConnection {
-            addrs: proto
-                .addrs
-                .into_rust_if_some("ProtoKafkaSinkConnection::addrs")?,
+            connection: proto
+                .connection
+                .into_rust_if_some("ProtoKafkaSinkConnection::connection")?,
             topic: proto.topic,
             topic_prefix: proto.topic_prefix,
             key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
@@ -343,7 +338,6 @@ impl RustType<ProtoKafkaSinkConnection> for KafkaSinkConnection {
             exactly_once: proto.exactly_once,
             transitive_source_dependencies: proto.transitive_source_dependencies.into_rust()?,
             fuel: proto.fuel.into_rust()?,
-            config_options: proto.config_options.into_iter().collect(),
         })
     }
 }
@@ -463,7 +457,7 @@ pub struct PersistSinkConnectionBuilder {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSinkConnectionBuilder {
-    pub broker_addrs: KafkaAddrs,
+    pub connection: KafkaConnection,
     pub format: KafkaSinkFormat,
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
@@ -477,7 +471,6 @@ pub struct KafkaSinkConnectionBuilder {
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
-    pub config_options: BTreeMap<String, String>,
     // Forces the sink to always write to the same topic across restarts instead
     // of picking a new topic each time.
     pub reuse_topic: bool,
@@ -495,10 +488,9 @@ pub struct KafkaSinkConnectionRetention {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaSinkFormat {
     Avro {
-        schema_registry_url: Url,
         key_schema: Option<String>,
         value_schema: String,
-        ccsr_config: mz_ccsr::ClientConfig,
+        csr_connection: CsrConnection,
     },
     Json,
 }

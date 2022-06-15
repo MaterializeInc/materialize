@@ -18,7 +18,7 @@ use mz_ore::retry::Retry;
 use mz_secrets::{SecretOp, SecretsController};
 use rand::random;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io;
 use tracing::info;
@@ -29,7 +29,7 @@ const POLL_TIMEOUT: u64 = 120;
 
 pub struct KubernetesSecretsControllerConfig {
     pub user_defined_secret: String,
-    pub user_defined_secret_mount_path: String,
+    pub user_defined_secret_mount_path: PathBuf,
     pub refresh_pod_name: String,
 }
 
@@ -65,10 +65,10 @@ impl KubernetesSecretsController {
         // ensure that the secret has been created in this environment
         secret_api.get(&*config.user_defined_secret).await?;
 
-        if !Path::new(&config.user_defined_secret_mount_path).is_dir() {
+        if !config.user_defined_secret_mount_path.is_dir() {
             bail!(
                 "Configured secrets location could not be found on filesystem: ({})",
-                config.user_defined_secret_mount_path
+                config.user_defined_secret_mount_path.display()
             );
         }
 
@@ -146,8 +146,7 @@ impl SecretsController for KubernetesSecretsController {
         self.trigger_resync().await?;
 
         // guarantee that all new secrets are reflected on our local filesystem
-        let secrets_storage_path =
-            PathBuf::from(self.config.user_defined_secret_mount_path.clone());
+        let secrets_storage_path = self.config.user_defined_secret_mount_path.clone();
         for op in ops.iter() {
             match op {
                 SecretOp::Ensure { id, .. } => {

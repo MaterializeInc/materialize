@@ -23,6 +23,7 @@ fn main() {
         .extern_path(".mz_repr.proto", "::mz_repr::proto")
         .extern_path(".mz_repr.relation_and_scalar", "::mz_repr")
         .extern_path(".mz_repr.row", "::mz_repr")
+        .extern_path(".mz_repr.url", "::mz_repr::url")
         .type_attribute(
             ".mz_dataflow_types.postgres_source",
             "#[derive(Eq, serde::Serialize, serde::Deserialize)]",

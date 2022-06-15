@@ -227,6 +227,14 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                     "--pid-file-location={}",
                     pid_file_locations[i].as_ref().unwrap().display()
                 ));
+                args.push(format!(
+                    "--secrets-path={}",
+                    // TODO(benesch): avoid hardcoding this path. The
+                    // integration between the orchestrator and secrets
+                    // controller is about to change substantially, so I don't
+                    // want to do this now.
+                    self.data_dir.join("secrets").display()
+                ));
 
                 let command_wrapper = self.command_wrapper.clone();
                 handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
