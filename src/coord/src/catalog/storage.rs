@@ -233,9 +233,11 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     .upsert(
                         stash,
                         vec![(
-                            ComputeInstanceReplicaKey { id: 1 },
+                            ComputeInstanceReplicaKey {
+                                id: DEFAULT_REPLICA_ID,
+                            },
                             ComputeInstanceReplicaValue {
-                                compute_instance_id: 1,
+                                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                                 name: "default_replica".into(),
                                 config: "{ \
                                     \"Managed\": { \
