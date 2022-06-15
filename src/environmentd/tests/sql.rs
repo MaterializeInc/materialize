@@ -15,8 +15,6 @@
 
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
@@ -31,7 +29,6 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
 use mz_ore::assert_contains;
-use mz_ore::now::{NowFn, NOW_HUNDRED, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
@@ -348,25 +345,13 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
-    let now = {
-        let nowfn = Arc::clone(&nowfn);
-        NowFn::from(move || (nowfn.lock().unwrap())())
-    };
-    let config = util::Config::default().workers(2).with_now(now);
+    let config = util::Config::default().workers(2); //.with_now(now);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
 
-    // Advance nowfn enough so that group commit can execute
-    *nowfn.lock().unwrap() = NOW_HUNDRED.clone();
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
-    // Now that the index (and its since) are initialized to 0, we can resume using
-    // system time. Do a read to bump the oracle's state so it will read from the
-    // system clock during inserts below.
-    *nowfn.lock().unwrap() = SYSTEM_TIME.clone();
     client_writes.batch_execute("SELECT * FROM t")?;
     client_reads.batch_execute(
         "BEGIN;
