@@ -157,6 +157,7 @@ where
                 base_metrics: &storage_state.source_metrics,
                 as_of: ingestion.since.clone(),
                 storage_metadata: ingestion.storage_metadata,
+                persist_clients: Arc::clone(&storage_state.persist_clients),
             };
 
             // Build the _raw_ ok and error sources using `create_raw_source` and the
@@ -167,7 +168,6 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
-                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::Delimited(ok), err), cap)
                 }
@@ -177,7 +177,6 @@ where
                             base_source_config,
                             &connection,
                             storage_state.connection_context.clone(),
-                            Arc::clone(&storage_state.persist_clients),
                         );
                     ((SourceType::Delimited(ok), err), cap)
                 }
@@ -186,7 +185,6 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
-                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::ByteStream(ok), err), cap)
                 }
@@ -195,7 +193,6 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
-                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::AppendRow(ok), err), cap)
                 }
@@ -204,7 +201,6 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
-                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::Row(ok), err), cap)
                 }

@@ -34,8 +34,6 @@ use async_trait::async_trait;
 use differential_dataflow::Hashable;
 use futures::stream::LocalBoxStream;
 use futures::{Stream, StreamExt as _};
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_persist_client::cache::PersistClientCache;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
@@ -43,15 +41,16 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::{Capability, Event};
 use timely::dataflow::Scope;
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::activate::SyncActivator;
 use timely::scheduling::ActivateOnDrop;
-use timely::Data;
+use timely::{Data, PartialOrder};
 use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tracing::error;
 
 use mz_avro::types::Value;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
 use mz_dataflow_types::sources::{ExternalSourceConnection, MzOffset};
@@ -60,6 +59,7 @@ use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::now::NowFn;
+use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operator::StreamExt as _;
 
@@ -120,6 +120,8 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub storage_metadata: CollectionMetadata,
     /// As Of
     pub as_of: Antichain<Timestamp>,
+    /// A handle to the persist client cachce
+    pub persist_clients: Arc<Mutex<PersistClientCache>>,
 }
 
 /// A record produced by a source
@@ -704,7 +706,6 @@ pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_connection: &ExternalSourceConnection,
     connection_context: ConnectionContext,
-    persist_clients: Arc<Mutex<PersistClientCache>>,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
@@ -730,7 +731,7 @@ where
         as_of,
         base_metrics,
         now,
-        ..
+        persist_clients,
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
@@ -748,12 +749,11 @@ where
         let source_connection = source_connection.clone();
         let mut source_reader = Box::pin(async_stream::stream!({
             let mut timestamper = match ReclockOperator::new(
-                name.clone(),
+                persist_clients,
                 storage_metadata,
                 now,
                 timestamp_frequency.clone(),
                 as_of.clone(),
-                persist_clients,
             )
             .await
             {
@@ -791,86 +791,75 @@ where
 
             let mut timestamp_interval = tokio::time::interval(timestamp_frequency);
             timestamp_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+            let mut ts_upper = Antichain::from_elem(Timestamp::minimum());
+            let mut source_upper = HashMap::new();
             let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
-            let mut pending_messages = vec![];
+            let mut non_definite_errors = vec![];
             loop {
                 // TODO(guswyn): move lots of this out of the macro so rustfmt works better
                 tokio::select! {
                     // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
                     item = source_stream.next() => {
                         match item {
-                            Some(Ok(message)) => match message {
+                            Some(Ok(message)) => {
                                 // Note that this
                                 // 1. Requires that sources that produce `InProgress` messages
                                 //    ALWAYS produce a `Finalized` for the final message.
                                 // 2. Requires that sources that produce `InProgress` messages
                                 //    NEVER produces messages at offsets below the most recent
                                 //    `Finalized` message.
-                                // 3. Buffers EVERY message associated with a single offset. This
-                                //    can be improved, tracked in
-                                //    <https://github.com/MaterializeInc/materialize/issues/12557>
-                                SourceMessageType::Finalized(message) => {
-                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
-                                        &message.partition
-                                    ) {
-                                        pending_messages.extend(untimestamped_messages.drain(..));
-                                    }
-                                    pending_messages.push(Ok(message));
-                                }
-                                SourceMessageType::InProgress(message) => {
-                                    // this extra if-statement is just here to avoid a clone in
-                                    // case we have expensive partition id's someday
-                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
-                                        &message.partition
-                                    ) {
-                                        untimestamped_messages.push(Ok(message))
-                                    } else {
-                                        untimestamped_messages
-                                            .entry(message.partition.clone())
-                                            .or_default()
-                                            .push(Ok(message))
+                                let is_final = matches!(message, SourceMessageType::Finalized(_));
+                                match message {
+                                    SourceMessageType::Finalized(message) | SourceMessageType::InProgress(message) => {
+                                        let pid = message.partition.clone();
+                                        let offset = message.offset;
+                                        // advance the _offset_ frontier if this the final message for that offset
+                                        if is_final {
+                                            *source_upper.entry(pid.clone()).or_default() = offset + 1;
+                                        }
+                                        untimestamped_messages.entry(pid).or_default().push((message, offset));
                                     }
                                 }
                             }
                             // TODO: make errors definite
-                            Some(Err(e)) => pending_messages.push(Err(e)),
+                            Some(Err(e)) => non_definite_errors.push(e),
                             None => {},
                         }
                     }
                     // It's time to timestamp a batch
                     _ = timestamp_interval.tick() => {
-                        let mut max_offsets = HashMap::new();
-                        for message in pending_messages.iter().filter_map(|m| m.as_ref().ok()) {
-                            let entry = max_offsets.entry(message.partition.clone()).or_default();
-                            *entry = std::cmp::max(*entry, message.offset);
-                        }
-                        let (bindings, progress) = match timestamper.timestamp_offsets(&max_offsets).await {
-                            Ok((bindings, progress)) => (bindings, progress),
-                            Err(e) => {
-                                error!("Error timestamping offsets: {}", e);
-                                return;
-                            }
+                        let reclocked_msgs = match timestamper.reclock(&mut untimestamped_messages).await {
+                            Ok(msgs) => msgs,
+                            Err((pid, offset)) => panic!("failed to reclock {} @ {}", pid, offset),
                         };
-
-                        for msg in pending_messages.drain(..) {
-                            match msg{
-                                Ok(message) => {
-                                    let ts = bindings.get(&message.partition).expect("timestamper didn't return partition").0;
-                                    yield Event::Message(ts, Ok(message));
-                                },
-                                Err(e) => {
-                                    // TODO: make errors definite
-                                    yield Event::Message(0, Err(e));
-                                },
+                        for (_, part_messages) in reclocked_msgs {
+                            for (message, ts) in part_messages {
+                                yield Event::Message(ts, Ok(message));
                             }
                         }
-                        let progress_some = progress.as_option().is_some();
-                        yield Event::Progress(progress.into_option());
+
+                        timestamper.advance().await;
+
+                        for err in non_definite_errors.drain(..) {
+                            // TODO: make errors definite
+                            yield Event::Message(0, Err(err));
+                        }
+                        // TODO(petrosagg): compaction should be driven by AllowCompaction commands
+                        // coming from the storage controller
+                        let new_ts_upper = timestamper
+                            .reclock_frontier(&source_upper)
+                            .expect("compacted past upper");
+                        if PartialOrder::less_than(&ts_upper, &new_ts_upper) {
+                            // Downgrade our capability to the new upper, but only if has changed
+                            // since last time we downgraded it. Note property #2 documented above
+                            // is critical here: once this capability is downgraded, that timestamp
+                            // is sealed forever.
+                            ts_upper = new_ts_upper.clone();
+                            yield Event::Progress(new_ts_upper.into_option());
+                        }
                         if source_stream.is_done() {
-                            // We just emitted the last piece of data that needed to be timestamped
-                            if progress_some {
-                                yield Event::Progress(None);
-                            }
+                            yield Event::Progress(None);
                             break;
                         }
                     }

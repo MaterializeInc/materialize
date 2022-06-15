@@ -91,6 +91,10 @@ server = [
     "thiserror"
 ]
 
+[dev-dependencies]
+itertools = "0.10.3"
+tokio = { version = "1.19.2", features = ["test-util"] }
+
 [build-dependencies]
 prost-build = { version = "0.10.3", features = ["vendored"] }
 
