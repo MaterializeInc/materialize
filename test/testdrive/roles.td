@@ -11,8 +11,8 @@ $ set-sql-timeout duration=1s
 
 # Verify initial roles.
 > SELECT id, name FROM mz_roles
--1 mz_system
- 1 materialize
+0 mz_system
+1 materialize
 
 # Verify that invalid options are rejected.
 ! CREATE ROLE foo
