@@ -24,7 +24,7 @@ setup(
     # This adapter's minor version should match the required dbt-postgres version,
     # but patch versions may differ.
     # If you bump this version, bump it in __version__.py too.
-    version="1.1.1",
+    version="1.1.2",
     description="The Materialize adapter plugin for dbt (data build tool).",
     long_description=(Path(__file__).parent / "README.md").open().read(),
     long_description_content_type="text/markdown",
