@@ -34,7 +34,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
-use crate::r#impl::metrics::RetriesMetrics;
+use crate::r#impl::metrics::{Metrics, RetriesMetrics};
 use crate::r#impl::state::{DescriptionMeta, Since};
 use crate::ShardId;
 
@@ -81,7 +81,7 @@ pub struct SnapshotSplit {
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
-    retry_metrics: Arc<RetriesMetrics>,
+    metrics: Arc<Metrics>,
     shard_id: ShardId,
     as_of: Antichain<T>,
     batches: Vec<(String, Description<T>)>,
@@ -126,16 +126,21 @@ where
                 None => return None,
             };
 
-            let updates =
-                fetch_batch_part(self.blob.as_ref(), &self.retry_metrics, &key, &desc, |t| {
+            let updates = fetch_batch_part(
+                self.blob.as_ref(),
+                &self.metrics.retries,
+                &key,
+                &desc,
+                |t| {
                     // This would get covered by a listen started at the same as_of.
                     let keep = !self.as_of.less_than(&t);
                     if keep {
                         t.advance_by(self.as_of.borrow());
                     }
                     keep
-                })
-                .await;
+                },
+            )
+            .await;
             if updates.is_empty() {
                 // We might have filtered everything.
                 continue;
@@ -180,7 +185,7 @@ pub enum ListenEvent<K, V, T, D> {
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
 pub struct Listen<K, V, T, D> {
-    retry_metrics: Arc<RetriesMetrics>,
+    metrics: Arc<Metrics>,
     as_of: Antichain<T>,
     frontier: Antichain<T>,
     machine: Machine<K, V, T, D>,
@@ -223,7 +228,7 @@ where
         let mut updates = Vec::new();
         for key in batch_keys.iter() {
             let mut updates_part =
-                fetch_batch_part(self.blob.as_ref(), &self.retry_metrics, key, &desc, |t| {
+                fetch_batch_part(self.blob.as_ref(), &self.metrics.retries, key, &desc, |t| {
                     // This would get covered by a snapshot started at the same as_of.
                     self.as_of.less_than(&t)
                 })
@@ -282,7 +287,7 @@ where
     V: Debug + Codec,
     D: Semigroup + Codec64,
 {
-    pub(crate) retry_metrics: Arc<RetriesMetrics>,
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -341,7 +346,7 @@ where
         trace!("ReadHandle::listen as_of={:?}", as_of);
         let machine = self.machine.verify_listen(&as_of).await?;
         Ok(Listen {
-            retry_metrics: Arc::clone(&self.retry_metrics),
+            metrics: Arc::clone(&self.metrics),
             as_of: as_of.clone(),
             frontier: as_of,
             machine,
@@ -458,7 +463,7 @@ where
             .collect();
 
         let iter = SnapshotIter {
-            retry_metrics: Arc::clone(&self.retry_metrics),
+            metrics: Arc::clone(&self.metrics),
             shard_id,
             as_of: Antichain::from(
                 split
@@ -483,7 +488,7 @@ where
         let mut machine = self.machine.clone();
         let read_cap = machine.clone_reader(&self.reader_id).await;
         let new_reader = ReadHandle {
-            retry_metrics: Arc::clone(&self.retry_metrics),
+            metrics: Arc::clone(&self.metrics),
             reader_id: new_reader_id,
             machine,
             blob: Arc::clone(&self.blob),
@@ -655,8 +660,9 @@ mod tests {
     use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
 
+    use crate::r#impl::metrics::Metrics;
     use crate::tests::all_ok;
-    use crate::{Metrics, PersistClient, PersistConfig};
+    use crate::{PersistClient, PersistConfig};
 
     use super::*;
 

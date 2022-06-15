@@ -26,17 +26,16 @@ use tracing::{debug, debug_span, info, trace, trace_span, Instrument};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::metrics::{
-    CmdMetrics, CmdsMetrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
+    CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
 use crate::r#impl::state::{ReadCapability, Since, State, StateCollections, Upper};
 use crate::read::ReaderId;
-use crate::{Metrics, ShardId};
+use crate::ShardId;
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
     consensus: Arc<dyn Consensus + Send + Sync>,
-    cmd_metrics: Arc<CmdsMetrics>,
-    retry_metrics: Arc<RetriesMetrics>,
+    metrics: Arc<Metrics>,
 
     state: State<K, V, T, D>,
 }
@@ -46,8 +45,7 @@ impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
             consensus: Arc::clone(&self.consensus),
-            cmd_metrics: Arc::clone(&self.cmd_metrics),
-            retry_metrics: Arc::clone(&self.retry_metrics),
+            metrics: Arc::clone(&self.metrics),
             state: self.state.clone(),
         }
     }
@@ -63,18 +61,16 @@ where
     pub async fn new(
         shard_id: ShardId,
         consensus: Arc<dyn Consensus + Send + Sync>,
-        metrics: &Metrics,
+        metrics: Arc<Metrics>,
     ) -> Result<Self, InvalidUsage<T>> {
-        let cmd_metrics = Arc::new(metrics.cmds_metrics());
-        let retry_metrics = Arc::new(metrics.retries_metrics());
-        let state = cmd_metrics
+        let state = metrics
+            .cmds
             .init_state
-            .run_cmd(|| Self::maybe_init_state(consensus.as_ref(), &retry_metrics, shard_id))
+            .run_cmd(|| Self::maybe_init_state(consensus.as_ref(), &metrics.retries, shard_id))
             .await?;
         Ok(Machine {
             consensus,
-            cmd_metrics,
-            retry_metrics,
+            metrics,
             state,
         })
     }
@@ -93,9 +89,9 @@ where
     }
 
     pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
-        let cmd_metrics = Arc::clone(&self.cmd_metrics);
+        let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap)) = self
-            .apply_unbatched_idempotent_cmd(&cmd_metrics.register, |seqno, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
                 state.register(seqno, reader_id)
             })
             .await;
@@ -104,9 +100,9 @@ where
     }
 
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
-        let cmd_metrics = Arc::clone(&self.cmd_metrics);
+        let metrics = Arc::clone(&self.metrics);
         let (seqno, read_cap) = self
-            .apply_unbatched_idempotent_cmd(&cmd_metrics.clone_reader, |seqno, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
                 state.clone_reader(seqno, new_reader_id)
             })
             .await;
@@ -119,10 +115,10 @@ where
         keys: &[String],
         desc: &Description<T>,
     ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
-        let cmd_metrics = Arc::clone(&self.cmd_metrics);
+        let metrics = Arc::clone(&self.metrics);
         loop {
             let (seqno, res) = self
-                .apply_unbatched_cmd(&cmd_metrics.compare_and_append, |_, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
                     state.compare_and_append(keys, desc)
                 })
                 .await?;
@@ -162,17 +158,17 @@ where
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
     ) -> (SeqNo, Since<T>) {
-        let cmd_metrics = Arc::clone(&self.cmd_metrics);
-        self.apply_unbatched_idempotent_cmd(&cmd_metrics.downgrade_since, |_, state| {
+        let metrics = Arc::clone(&self.metrics);
+        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |_, state| {
             state.downgrade_since(reader_id, new_since)
         })
         .await
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
-        let cmd_metrics = Arc::clone(&self.cmd_metrics);
+        let metrics = Arc::clone(&self.metrics);
         let (seqno, _existed) = self
-            .apply_unbatched_idempotent_cmd(&cmd_metrics.expire_reader, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
                 state.expire_reader(reader_id)
             })
             .await;
@@ -197,7 +193,8 @@ where
             // maybe our state was just out of date.
             retry = Some(match retry.take() {
                 None => self
-                    .retry_metrics
+                    .metrics
+                    .retries
                     .snapshot
                     .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
                 Some(retry) => {
@@ -255,7 +252,8 @@ where
             // maybe our state was just out of date.
             retry = Some(match retry.take() {
                 None => self
-                    .retry_metrics
+                    .metrics
+                    .retries
                     .next_listen_batch
                     .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream()),
                 Some(retry) => {
@@ -284,7 +282,8 @@ where
         mut work_fn: WorkFn,
     ) -> (SeqNo, R) {
         let mut retry = self
-            .retry_metrics
+            .metrics
+            .retries
             .idempotent_cmd
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
@@ -338,7 +337,7 @@ where
                 // [Self::apply_unbatched_idempotent_cmd].
                 let payload_len = new.data.len();
                 let cas_res = retry_determinate(
-                    &self.retry_metrics.determinate.apply_unbatched_cmd_cas,
+                    &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
                     || async {
                         self.consensus
                             .compare_and_set(
@@ -368,7 +367,7 @@ where
 
                         // Bound the number of entries in consensus.
                         let () = retry_external(
-                            &self.retry_metrics.external.apply_unbatched_cmd_truncate,
+                            &self.metrics.retries.external.apply_unbatched_cmd_truncate,
                             || async {
                                 self.consensus
                                     .truncate(Instant::now() + FOREVER, &path, self.state.seqno())
@@ -464,7 +463,7 @@ where
     pub async fn fetch_and_update_state(&mut self) {
         let shard_id = self.shard_id();
         let current = retry_external(
-            &self.retry_metrics.external.fetch_and_update_state_head,
+            &self.metrics.retries.external.fetch_and_update_state_head,
             || async {
                 self.consensus
                     .head(Instant::now() + FOREVER, &shard_id.to_string())

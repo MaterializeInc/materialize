@@ -27,7 +27,7 @@ use tracing::{debug, info, instrument, trace};
 use crate::batch::{Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
-use crate::r#impl::metrics::RetriesMetrics;
+use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::Upper;
 use crate::PersistConfig;
 
@@ -52,7 +52,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     pub(crate) cfg: PersistConfig,
-    pub(crate) retry_metrics: Arc<RetriesMetrics>,
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
@@ -249,7 +249,8 @@ where
         trace!("Batch::append lower={:?} upper={:?}", lower, upper);
 
         let mut retry = self
-            .retry_metrics
+            .metrics
+            .retries
             .append_batch
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
@@ -431,7 +432,7 @@ where
         trace!("WriteHandle::builder lower={:?}", lower);
         BatchBuilder::new(
             self.cfg.clone(),
-            Arc::clone(&self.retry_metrics),
+            Arc::clone(&self.metrics),
             size_hint,
             lower,
             Arc::clone(&self.blob),

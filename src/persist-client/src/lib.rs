@@ -99,11 +99,11 @@ impl PersistLocation {
             "Location::open blob={} consensus={}",
             self.blob_uri, self.consensus_uri,
         );
-        let retry_metrics = metrics.retries_metrics();
         let blob = BlobMultiConfig::try_from(&self.blob_uri).await?;
-        let blob = retry_external(&retry_metrics.external.blob_open, || blob.clone().open()).await;
+        let blob =
+            retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
         let consensus = ConsensusConfig::try_from(&self.consensus_uri).await?;
-        let consensus = retry_external(&retry_metrics.external.consensus_open, || {
+        let consensus = retry_external(&metrics.retries.external.consensus_open, || {
             consensus.clone().open()
         })
         .await;
@@ -294,20 +294,23 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open shard_id={:?}", shard_id);
-        let mut machine =
-            Machine::new(shard_id, Arc::clone(&self.consensus), &self.metrics).await?;
+        let mut machine = Machine::new(
+            shard_id,
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.metrics),
+        )
+        .await?;
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
-        let retry_metrics = Arc::new(self.metrics.retries_metrics());
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
-            retry_metrics: Arc::clone(&retry_metrics),
+            metrics: Arc::clone(&self.metrics),
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
         };
         let reader = ReadHandle {
-            retry_metrics,
+            metrics: Arc::clone(&self.metrics),
             reader_id,
             machine,
             blob: Arc::clone(&self.blob),
@@ -357,12 +360,16 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open_writer shard_id={:?}", shard_id);
-        let mut machine =
-            Machine::new(shard_id, Arc::clone(&self.consensus), &self.metrics).await?;
+        let mut machine = Machine::new(
+            shard_id,
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.metrics),
+        )
+        .await?;
         let shard_upper = machine.fetch_upper().await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
-            retry_metrics: Arc::new(self.metrics.retries_metrics()),
+            metrics: Arc::clone(&self.metrics),
             machine,
             blob: Arc::clone(&self.blob),
             upper: shard_upper,
