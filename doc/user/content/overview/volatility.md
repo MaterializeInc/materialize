@@ -20,9 +20,7 @@ default) data is only retained for 7 days. If Materialize restarts after
 reading a Kafka stream for longer than this retention period, it might be unable to recover part of the data.
 
 While it is possible to connect to volatile sources in Materialize, the system
-internally tracks the volatility. Features that rely on
-deterministic replay, like [exactly-once sinks](/sql/create-sink/#exactly-once-sinks-with-topic-reuse-after-restart), will not
-support construction atop volatile sources.
+internally tracks the volatility.
 
 ## Rules
 

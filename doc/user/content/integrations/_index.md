@@ -36,22 +36,22 @@ For listed tools that are not yet production-ready, you can register your intere
 
 ### Kafka
 
-Kafka is supported as a [**source**](/overview/key-concepts/#sources) and as a [**sink**](/overview/key-concepts/#sinks), with features like **upserts**, **Debezium** CDC, and **exactly-once** processing.
+Kafka is supported as a [**source**](/overview/key-concepts/#sources), with features like **upserts** and **Debezium** CDC.
 
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
-| Apache Kafka | {{< supportLevel production >}} | See the [source](/sql/create-source/kafka/) and [sink](/sql/create-sink/#kafka-sinks) documentation for more details. |  |
-| Confluent Cloud Kafka | {{< supportLevel production >}} | See the [source](/sql/create-source/kafka/#saslplain) and [sink](/sql/create-sink/#kafka-sinks) documentation for more details. |  |
+| Apache Kafka | {{< supportLevel production >}} | See the [source](/sql/create-source/kafka/) documentation for more details. |  |
+| Confluent Cloud Kafka | {{< supportLevel production >}} | See the [source](/sql/create-source/kafka/#saslplain) documentation for more details. |  |
 | AWS MSK (Managed Streaming for Kafka) | {{< supportLevel production >}} | See the [source documentation](/sql/create-source/kafka/) for more details, and the [AWS MSK guide](/integrations/aws-msk/) for a step-by-step breakdown of the integration.  |  |
-| Heroku Kafka | {{< supportLevel alpha >}} | Use [`SSL` Authentication](/sql/create-source/kafka/#ssl) and the Heroku-provided provided keys and certificates for security, and the `KAFKA_URL` as the broker address (replacing `kafka+ssl://` with `ssl://`). Heroku is not supported as a sink yet ([#8378](https://github.com/MaterializeInc/materialize/issues/8378#issuecomment-1061317275)). | [](#notify) |
+| Heroku Kafka | {{< supportLevel alpha >}} | Use [`SSL` Authentication](/sql/create-source/kafka/#ssl) and the Heroku-provided provided keys and certificates for security, and the `KAFKA_URL` as the broker address (replacing `kafka+ssl://` with `ssl://`). | [](#notify) |
 
 ### Redpanda
 
-Being Kafka API-compatible, Redpanda is supported as a [**source**](/overview/key-concepts/#sources) and as a [**sink**](/overview/key-concepts/#sinks) at the same level and with the same features as Kafka.
+Being Kafka API-compatible, Redpanda is supported as a [**source**](/overview/key-concepts/#sources) at the same level and with the same features as Kafka.
 
 | Service | Support level | Notes |  |
 | --- | --- | --- | --- |
-| Redpanda | {{< supportLevel beta >}} | See the [source](/sql/create-source/kafka/) and [sink](/sql/create-sink/#kafka-sinks) documentation for more details. | [](#notify) |
+| Redpanda | {{< supportLevel beta >}} | See the [source](/sql/create-source/kafka/) and documentation for more details. | [](#notify) |
 | Redpanda Cloud | {{< supportLevel beta >}} | Use [`SASL` authentication](/sql/create-source/kafka/#sasl) to securely connect to Redpanda Cloud clusters. See the [Redpanda documentation](https://docs.redpanda.com/docs/security/acls/#acls) for more details. | [](#notify) |
 
 ### Kinesis Data Streams

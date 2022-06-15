@@ -792,12 +792,9 @@ tables or sources in the system catalog.
 Materialize maintains three correctness guarantees.
 
 1. *Transactions in Materialize are strictly serializable with
-   respect to the operations that occur inside of Materialize.*
-   Operations include:
-    * `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements (but not `TAIL`)
-    * Materialize initiated acknowledgements of upstream sources (*e.g., the
-      commit of an offset by a Kafka source, the acknowledge of an LSN by a
-      PostgresSQL source, etcetera*)
+   respect to the client initiated operations that occur inside of Materialize.*
+   Operations include: `SELECT`, `INSERT`, `UPDATE`, and `DELETE` statements
+   (but not `TAIL`).
 2. *Materialize respects the explicit or implied event order of its sources.
    This includes partial orders.*  In practice this means Materialize assigns
    new timestamps to events in sources.  This assignment of new timestamps is called
@@ -815,6 +812,11 @@ Materialize maintains three correctness guarantees.
    must block on a query until it has complete certainty about the events.
    Blocking may not be desirable in practice, so Materialize makes the behavior
    optional. Non-blocking behavior comes with no guarantees of recency.
+4. *Materialize provides durability guarantees with respect to acknowledgements of
+   upstream sources.* This means that any data from an upstream source that
+   Materialize sends an acknowledgement for (*e.g., the commit of an offset by a
+   Kafka source, the acknowledgement of an LSN by a PostgresSQL source, etcetera*),
+   will be saved in durable storage.
 
 ## Discussion
 

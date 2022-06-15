@@ -73,6 +73,9 @@ struct Args {
     /// Details: <https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html>
     #[clap(long, value_name = "ID")]
     aws_external_id: Option<String>,
+    /// The path at which secrets are stored.
+    #[clap(long)]
+    secrets_path: PathBuf,
     /// Whether or not process should die when connection with ADAPTER is lost.
     #[clap(long)]
     linger: bool,
@@ -177,6 +180,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         connection_context: ConnectionContext::from_cli_args(
             &args.tracing.log_filter.inner,
             args.aws_external_id,
+            args.secrets_path,
         ),
     };
 
