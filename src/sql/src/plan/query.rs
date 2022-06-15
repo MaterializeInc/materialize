@@ -1822,11 +1822,34 @@ fn plan_scalar_table_funcs(
     from_scope: &Scope,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
     let rows_from_qcx = qcx.derived_context(from_scope.clone(), qcx.relation_type(&relation_expr));
-    let (expr, mut scope, num_cols) =
-        plan_rows_from_internal(&rows_from_qcx, table_funcs.keys(), None)?;
+
     for (table_func, id) in table_funcs.iter() {
         table_func_names.insert(id.clone(), table_func.name.0.last().unwrap().clone());
     }
+    // If there's only a single table function, we can skip generating
+    // ordinality columns.
+    if table_funcs.len() == 1 {
+        let (table_func, id) = table_funcs.iter().next().unwrap();
+        let (expr, mut scope) =
+            plan_solitary_table_function(&rows_from_qcx, table_func, None, false)?;
+
+        // A single table-function might return several columns as a record
+        let num_cols = scope.len();
+        for i in 0..scope.len() {
+            scope.items[i].table_name = Some(PartialObjectName {
+                database: None,
+                schema: None,
+                item: id.clone(),
+            });
+            scope.items[i].from_single_column_function = num_cols == 1;
+            scope.items[i].allow_unqualified_references = false;
+        }
+        return Ok((expr, scope));
+    }
+    // Otherwise, plan as usual, emulating the ROWS FROM behavior
+    let (expr, mut scope, num_cols) =
+        plan_rows_from_internal(&rows_from_qcx, table_funcs.keys(), None)?;
+
     // Munge the scope so table names match with the generated ids.
     let mut i = 0;
     for (id, num_cols) in table_funcs.values().zip(num_cols) {
