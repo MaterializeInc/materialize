@@ -27,6 +27,34 @@ use prometheus::{CounterVec, IntCounterVec};
 /// Arc.
 #[derive(Debug)]
 pub struct Metrics {
+    _vecs: MetricsVecs,
+
+    /// Metrics for [BlobMulti] usage.
+    pub blob: BlobMetrics,
+    /// Metrics for [Consensus] usage.
+    pub consensus: ConsensusMetrics,
+    /// Metrics of command evaluation.
+    pub cmds: CmdsMetrics,
+    /// Metrics for each retry loop.
+    pub retries: RetriesMetrics,
+}
+
+impl Metrics {
+    /// Returns a new [Metrics] instance connected to the given registry.
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        let vecs = MetricsVecs::new(registry);
+        Metrics {
+            blob: vecs.blob_metrics(),
+            consensus: vecs.consensus_metrics(),
+            cmds: vecs.cmds_metrics(),
+            retries: vecs.retries_metrics(),
+            _vecs: vecs,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MetricsVecs {
     cmd_started: IntCounterVec,
     cmd_succeeded: IntCounterVec,
     cmd_failed: IntCounterVec,
@@ -44,10 +72,9 @@ pub struct Metrics {
     retry_sleep_seconds: CounterVec,
 }
 
-impl Metrics {
-    /// Returns a new [Metrics] instance connected to the given registry.
-    pub fn new(registry: &MetricsRegistry) -> Self {
-        Metrics {
+impl MetricsVecs {
+    fn new(registry: &MetricsRegistry) -> Self {
+        MetricsVecs {
             cmd_started: registry.register(metric!(
                 name: "mz_persist_cmd_started_count",
                 help: "count of commands started",
@@ -117,10 +144,8 @@ impl Metrics {
             )),
         }
     }
-}
 
-impl Metrics {
-    pub(crate) fn cmds_metrics(&self) -> CmdsMetrics {
+    fn cmds_metrics(&self) -> CmdsMetrics {
         CmdsMetrics {
             init_state: self.cmd_metrics("init_state"),
             register: self.cmd_metrics("register"),
@@ -141,7 +166,7 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn retries_metrics(&self) -> RetriesMetrics {
+    fn retries_metrics(&self) -> RetriesMetrics {
         RetriesMetrics {
             determinate: RetryDeterminate {
                 apply_unbatched_cmd_cas: self.retry_metrics("apply_unbatched_cmd::cas"),
@@ -376,12 +401,11 @@ pub struct BlobMetrics {
 #[derive(Debug)]
 pub struct MetricsBlobMulti {
     blob: Arc<dyn BlobMulti + Send + Sync>,
-    metrics: BlobMetrics,
+    metrics: Arc<Metrics>,
 }
 
 impl MetricsBlobMulti {
-    pub fn new(blob: Arc<dyn BlobMulti + Send + Sync>, metrics: &Metrics) -> Self {
-        let metrics = metrics.blob_metrics();
+    pub fn new(blob: Arc<dyn BlobMulti + Send + Sync>, metrics: Arc<Metrics>) -> Self {
         MetricsBlobMulti { blob, metrics }
     }
 }
@@ -391,11 +415,16 @@ impl BlobMulti for MetricsBlobMulti {
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let res = self
             .metrics
+            .blob
             .get
             .run_op(|| self.blob.get(deadline, key))
             .await;
         if let Ok(Some(value)) = res.as_ref() {
-            self.metrics.get.bytes.inc_by(u64::cast_from(value.len()));
+            self.metrics
+                .blob
+                .get
+                .bytes
+                .inc_by(u64::cast_from(value.len()));
         }
         res
     }
@@ -403,12 +432,17 @@ impl BlobMulti for MetricsBlobMulti {
     async fn list_keys(&self, deadline: Instant) -> Result<Vec<String>, ExternalError> {
         let res = self
             .metrics
+            .blob
             .list_keys
             .run_op(|| self.blob.list_keys(deadline))
             .await;
         if let Ok(keys) = res.as_ref() {
             let bytes = keys.iter().map(|x| x.len()).sum();
-            self.metrics.list_keys.bytes.inc_by(u64::cast_from(bytes));
+            self.metrics
+                .blob
+                .list_keys
+                .bytes
+                .inc_by(u64::cast_from(bytes));
         }
         res
     }
@@ -423,11 +457,12 @@ impl BlobMulti for MetricsBlobMulti {
         let bytes = value.len();
         let res = self
             .metrics
+            .blob
             .set
             .run_op(|| self.blob.set(deadline, key, value, atomic))
             .await;
         if res.is_ok() {
-            self.metrics.set.bytes.inc_by(u64::cast_from(bytes));
+            self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));
         }
         res
     }
@@ -435,6 +470,7 @@ impl BlobMulti for MetricsBlobMulti {
     async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
         // It'd be nice if this could also track bytes somehow.
         self.metrics
+            .blob
             .delete
             .run_op(|| self.blob.delete(deadline, key))
             .await
@@ -452,12 +488,11 @@ pub struct ConsensusMetrics {
 #[derive(Debug)]
 pub struct MetricsConsensus {
     consensus: Arc<dyn Consensus + Send + Sync>,
-    metrics: ConsensusMetrics,
+    metrics: Arc<Metrics>,
 }
 
 impl MetricsConsensus {
-    pub fn new(consensus: Arc<dyn Consensus + Send + Sync>, metrics: &Metrics) -> Self {
-        let metrics = metrics.consensus_metrics();
+    pub fn new(consensus: Arc<dyn Consensus + Send + Sync>, metrics: Arc<Metrics>) -> Self {
         MetricsConsensus { consensus, metrics }
     }
 }
@@ -471,11 +506,13 @@ impl Consensus for MetricsConsensus {
     ) -> Result<Option<VersionedData>, ExternalError> {
         let res = self
             .metrics
+            .consensus
             .head
             .run_op(|| self.consensus.head(deadline, key))
             .await;
         if let Ok(Some(data)) = res.as_ref() {
             self.metrics
+                .consensus
                 .head
                 .bytes
                 .inc_by(u64::cast_from(data.data.len()));
@@ -493,11 +530,13 @@ impl Consensus for MetricsConsensus {
         let bytes = new.data.len();
         let res = self
             .metrics
+            .consensus
             .compare_and_set
             .run_op(|| self.consensus.compare_and_set(deadline, key, expected, new))
             .await;
         if let Ok(Ok(())) = res.as_ref() {
             self.metrics
+                .consensus
                 .compare_and_set
                 .bytes
                 .inc_by(u64::cast_from(bytes));
@@ -513,12 +552,17 @@ impl Consensus for MetricsConsensus {
     ) -> Result<Vec<VersionedData>, ExternalError> {
         let res = self
             .metrics
+            .consensus
             .scan
             .run_op(|| self.consensus.scan(deadline, key, from))
             .await;
         if let Ok(dataz) = res.as_ref() {
             let bytes = dataz.iter().map(|x| x.data.len()).sum();
-            self.metrics.scan.bytes.inc_by(u64::cast_from(bytes));
+            self.metrics
+                .consensus
+                .scan
+                .bytes
+                .inc_by(u64::cast_from(bytes));
         }
         res
     }
@@ -530,6 +574,7 @@ impl Consensus for MetricsConsensus {
         seqno: SeqNo,
     ) -> Result<(), ExternalError> {
         self.metrics
+            .consensus
             .truncate
             .run_op(|| self.consensus.truncate(deadline, key, seqno))
             .await
