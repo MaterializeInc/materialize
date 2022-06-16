@@ -2496,7 +2496,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let if_not_exists = plan.if_not_exists;
         let ops = match self.sequence_create_database_inner(plan).await {
             Ok(ops) => ops,
-            Err(e) => return tx.send(Err(e), sesion),
+            Err(e) => return tx.send(Err(e), session),
         };
         self.client_catalog_transact(
             session,
