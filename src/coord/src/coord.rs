@@ -86,7 +86,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{warn, Instrument};
+use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
@@ -456,14 +456,14 @@ impl AdvanceTables {
     }
 
     // Decreases the batch size to return from insert.
-    fn _decrease_batch(&mut self) {
+    fn decrease_batch(&mut self) {
         if self.batch_size > 1 {
             self.batch_size = self.batch_size.saturating_sub(1);
         }
     }
 
     // Increases the batch size to return from insert.
-    fn _increase_batch(&mut self) {
+    fn increase_batch(&mut self) {
         self.batch_size = self.batch_size.saturating_add(1);
     }
 }
@@ -1060,75 +1060,6 @@ impl<S: Append + 'static> Coordinator<S> {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn advance_local_input(&mut self, inputs: AdvanceLocalInput) {
         self.submit_table_advancement(inputs.ids);
-        // TODO(jkosh44) How do we dynamically adjust now that table advancments are thrown in with
-        //group commit.
-
-        // We split up table advancement into batches of requests so that user queries
-        // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
-        // maximum amount of time we are willing to block user queries for. We could
-        // process tables one at a time, but that increases the overall processing time
-        // because we miss out on batching the requests to the postgres server. To
-        // balance these two goals (not blocking user queries, minimizing time to
-        // advance tables), we record how long a batch takes to process, and will
-        // adjust the size of the next batch up or down based on the response time.
-        //
-        // On one extreme, should we ever be able to advance all tables in less time
-        // than MAX_WAIT (probably due to connection pools or other actual parallelism
-        // on the persist side), great, we've minimized the total processing time
-        // without blocking user queries for more than our target. On the other extreme
-        // where we can only process one table at a time (probably due to the postgres
-        // server being over used or some other cloud/network slowdown inbetween), the
-        // AdvanceTables struct will gracefully attempt to close tables in a bounded
-        // and fair manner.
-        /*
-        const MAX_WAIT: Duration = Duration::from_millis(50);
-        // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
-        // change the batch size.
-        const WINDOW: Duration = Duration::from_millis(10);
-        let start = Instant::now();
-        let storage = self.dataflow_client.storage();
-        let appends = inputs
-            .ids
-            .into_iter()
-            .filter_map(|id| {
-                if self.catalog.try_get_entry(&id).is_none()
-                    || !storage
-                    .collection(id)
-                    .unwrap()
-                    .write_frontier
-                    .less_than(&inputs.advance_to)
-                {
-                    // Filter out tables that were dropped while waiting for advancement.
-                    // Filter out tables whose upper is already advanced. This is not needed for
-                    // correctness (advance_to and write_frontier should be equal here), just
-                    // performance, as it's a no-op.
-                    None
-                } else {
-                    Some((id, vec![], inputs.advance_to))
-                }
-            })
-            .collect::<Vec<_>>();
-        let num_updates = appends.len();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
-        let elapsed = start.elapsed();
-        trace!(
-            "advance_local_inputs for {} tables to {} took: {} ms",
-            num_updates,
-            inputs.advance_to,
-            elapsed.as_millis()
-        );
-        if elapsed > (MAX_WAIT + WINDOW) {
-            self.advance_tables.decrease_batch();
-        } else if elapsed < (MAX_WAIT - WINDOW) && num_updates == self.advance_tables.batch_size {
-            // Only increase the batch size if it completed under the window and the batch
-            // was full.
-            self.advance_tables.increase_batch();
-        }
-        */
     }
 
     /// Attempts to commit all pending write transactions in a group commit. If the timestamp
@@ -1236,15 +1167,57 @@ impl<S: Append + 'static> Coordinator<S> {
         for id in self.pending_group_commit.table_advances.drain() {
             appends.entry(id).or_insert(Vec::new());
         }
-        let appends = appends
+        let appends: Vec<_> = appends
             .into_iter()
             .map(|(id, updates)| (id, updates, advance_to))
             .collect();
+
+        // We split up table advancement into batches of requests so that user queries
+        // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
+        // maximum amount of time we are willing to block user queries for. We could
+        // process tables one at a time, but that increases the overall processing time
+        // because we miss out on batching the requests to the postgres server. To
+        // balance these two goals (not blocking user queries, minimizing time to
+        // advance tables), we record how long a batch takes to process, and will
+        // adjust the size of the next batch up or down based on the response time. We
+        // include regular table write times in this calculation so that when we are
+        // experiencing a lot of writes we will lower the number of table advancements
+        // to compensate and vice versa.
+        //
+        // On one extreme, should we ever be able to advance all tables in less time
+        // than MAX_WAIT (probably due to connection pools or other actual parallelism
+        // on the persist side), great, we've minimized the total processing time
+        // without blocking user queries for more than our target. On the other extreme
+        // where we can only process one table at a time (probably due to the postgres
+        // server being over used or some other cloud/network slowdown inbetween), the
+        // AdvanceTables struct will gracefully attempt to close tables in a bounded
+        // and fair manner.
+        const MAX_WAIT: Duration = Duration::from_millis(50);
+        // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
+        // change the batch size.
+        const WINDOW: Duration = Duration::from_millis(10);
+        let start = Instant::now();
+        let num_tables = appends.len();
         self.dataflow_client
             .storage_mut()
             .append(appends)
             .await
             .unwrap();
+        let elapsed = start.elapsed();
+        trace!(
+            "group commit for {} tables to {} took: {} ms",
+            num_tables,
+            advance_to,
+            elapsed.as_millis()
+        );
+        if elapsed > (MAX_WAIT + WINDOW) {
+            self.advance_tables.decrease_batch();
+        } else if elapsed < (MAX_WAIT - WINDOW) && num_tables >= self.advance_tables.batch_size {
+            // Only increase the batch size if it completed under the window and the batch
+            // was full.
+            self.advance_tables.increase_batch();
+        }
+
         for (client_transmitter, response, mut session, action) in responses {
             if let Some(action) = action {
                 session.vars_mut().end_transaction(action);
