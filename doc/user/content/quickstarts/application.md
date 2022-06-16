@@ -12,7 +12,7 @@ aliases:
 **tl;dr** Materialize unleashes real-time powers for your applications. Process, serve, and display information quickly as a blink.
 
 {{< figure
-    src="https://user-images.githubusercontent.com/11491779/166932582-e5a9fd47-e397-4419-b221-e8f38c6f06f5.mp4"
+    src="https://materialize.com/wp-content/uploads/2022/06/Jun-16-2022-18-38-42.gif"
     alt="Materialize real-time application"
 >}}
 
