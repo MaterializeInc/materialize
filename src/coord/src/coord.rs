@@ -300,6 +300,8 @@ enum PendingWriteTxn {
         response: Result<ExecuteResponse, CoordError>,
         /// Session of the client who initiated the transaction.
         session: Session,
+        /// The action to take at the end of the transaction.
+        action: Option<EndTransactionAction>,
     },
     /// System initiated writes.
     System { writes: Vec<BuiltinTableUpdate> },
@@ -1196,6 +1198,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     client_transmitter,
                     response,
                     session,
+                    action,
                 } => {
                     for write in writes {
                         // If the object that some write was targeting has been deleted by a DDL
@@ -1217,7 +1220,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             appends.entry(id).or_default().extend(updates);
                         }
                     }
-                    responses.push((client_transmitter, response, session));
+                    responses.push((client_transmitter, response, session, action));
                 }
                 PendingWriteTxn::System { writes } => {
                     for write in writes {
@@ -1242,7 +1245,10 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
-        for (client_transmitter, response, session) in responses {
+        for (client_transmitter, response, mut session, action) in responses {
+            if let Some(action) = action {
+                session.vars_mut().end_transaction(action);
+            }
             client_transmitter.send(response, session);
         }
     }
@@ -3766,14 +3772,21 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
 
         match result {
-            Ok(Some(writes)) if writes.is_empty() => tx.send(response, session),
+            Ok(Some(writes)) if writes.is_empty() => {
+                session.vars_mut().end_transaction(action);
+                tx.send(response, session);
+            }
             Ok(Some(writes)) => self.submit_write(PendingWriteTxn::User {
                 writes: writes.into_iter().map(|write| write.into()).collect(),
                 response,
                 client_transmitter: tx,
                 session,
+                action: Some(action),
             }),
-            Ok(None) => tx.send(response, session),
+            Ok(None) => {
+                session.vars_mut().end_transaction(action);
+                tx.send(response, session);
+            }
             Err(err) => {
                 session
                     .vars_mut()
@@ -5259,6 +5272,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 client_transmitter: tx,
                 response,
                 session,
+                action: None,
             }),
             Err(e) => tx.send(cine(e), session),
         }
