@@ -164,6 +164,16 @@ impl PostgresConsensus {
             _handle: handle,
         })
     }
+
+    /// Drops and recreates the `consensus` table in Postgres
+    ///
+    /// ONLY FOR TESTING
+    pub async fn drop_and_recreate(&self) -> Result<(), ExternalError> {
+        // this could be a TRUNCATE if we're confident the db won't reuse any state
+        self.client.execute("DROP TABLE consensus", &[]).await?;
+        self.client.execute(SCHEMA, &[]).await?;
+        Ok(())
+    }
 }
 
 // This function is copied from mz-postgres-util because of a cyclic dependency
@@ -387,7 +397,9 @@ impl Consensus for PostgresConsensus {
 #[cfg(test)]
 mod tests {
     use crate::location::tests::consensus_impl_test;
+    use std::time::Duration;
     use tracing::info;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -404,6 +416,33 @@ mod tests {
             }
         };
 
-        consensus_impl_test(|| PostgresConsensus::open(config.clone())).await
+        consensus_impl_test(|| PostgresConsensus::open(config.clone())).await?;
+
+        // and now verify the implementation-specific `drop_and_recreate` works as intended
+        let consensus = PostgresConsensus::open(config.clone()).await?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let key = Uuid::new_v4().to_string();
+        let state = VersionedData {
+            seqno: SeqNo(5),
+            data: Bytes::from("abc"),
+        };
+
+        assert_eq!(
+            consensus
+                .compare_and_set(deadline, &key, None, state.clone())
+                .await,
+            Ok(Ok(()))
+        );
+
+        assert_eq!(
+            consensus.head(deadline, &key).await,
+            Ok(Some(state.clone()))
+        );
+
+        consensus.drop_and_recreate().await?;
+
+        assert_eq!(consensus.head(deadline, &key).await, Ok(None));
+
+        Ok(())
     }
 }
