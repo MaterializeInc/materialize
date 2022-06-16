@@ -9,6 +9,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
@@ -73,6 +74,36 @@ impl<S: Stash> Memory<S> {
             }
         }
     }
+
+    async fn get_entry<K, V>(
+        &mut self,
+        collection: StashCollection<K, V>,
+    ) -> Result<&mut Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>, StashError>
+    where
+        K: Data,
+        V: Data,
+    {
+        if !self.entries.contains_key(&collection.id) {
+            let entries = self
+                .stash
+                .iter(collection)
+                .await?
+                .iter()
+                .map(|((k, v), ts, diff)| {
+                    let mut k_buf = Vec::new();
+                    let mut v_buf = Vec::new();
+                    k.encode(&mut k_buf);
+                    v.encode(&mut v_buf);
+                    ((k_buf, v_buf), *ts, *diff)
+                })
+                .collect();
+            self.entries.insert(collection.id, entries);
+        }
+        Ok(self
+            .entries
+            .get_mut(&collection.id)
+            .expect("inserted above"))
+    }
 }
 
 #[async_trait]
@@ -103,33 +134,16 @@ impl<S: Stash> Stash for Memory<S> {
         K: Data,
         V: Data,
     {
-        Ok(match self.entries.entry(collection.id) {
-            Entry::Occupied(entry) => entry
-                .get()
-                .iter()
-                .map(|((k, v), ts, diff)| {
-                    let k: K = K::decode(k)?;
-                    let v: V = V::decode(v)?;
-                    Ok(((k, v), *ts, *diff))
-                })
-                .collect::<Result<Vec<_>, StashError>>()?,
-            Entry::Vacant(entry) => {
-                let entries = self.stash.iter(collection).await?;
-                entry.insert(
-                    entries
-                        .iter()
-                        .map(|((k, v), ts, diff)| {
-                            let mut k_buf = Vec::new();
-                            let mut v_buf = Vec::new();
-                            k.encode(&mut k_buf);
-                            v.encode(&mut v_buf);
-                            ((k_buf, v_buf), *ts, *diff)
-                        })
-                        .collect(),
-                );
-                entries
-            }
-        })
+        Ok(self
+            .get_entry(collection)
+            .await?
+            .iter()
+            .map(|((k, v), ts, diff)| {
+                let k: K = K::decode(k)?;
+                let v: V = V::decode(v)?;
+                Ok(((k, v), *ts, *diff))
+            })
+            .collect::<Result<Vec<_>, StashError>>()?)
     }
 
     async fn iter_key<K, V>(
@@ -167,7 +181,7 @@ impl<S: Stash> Stash for Memory<S> {
             })
             .collect();
         self.stash.update_many(collection, entries).await?;
-        let entry = self.entries.entry(collection.id).or_insert_with(Vec::new);
+        let entry = self.get_entry(collection).await?;
         entry.extend(local_entries);
         self.consolidate_collection(collection).await?;
         Ok(())
@@ -294,23 +308,22 @@ impl<S: Stash> Stash for Memory<S> {
 
 #[async_trait]
 impl<S: Append> Append for Memory<S> {
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
+    async fn append<I, K, V>(&mut self, batches: I) -> Result<(), StashError>
     where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
+        I: IntoIterator<Item = Box<AppendBatch<K, V>>> + Send + 'static,
         I::IntoIter: Send,
+        K: Data + Debug + Clone,
+        V: Data + Debug + Clone,
     {
         let batches: Vec<_> = batches.into_iter().collect();
         self.stash.append(batches.clone()).await?;
         for batch in batches {
-            let entry = self
-                .entries
-                .entry(batch.collection_id)
-                .or_insert_with(Vec::new);
+            let entry = self.get_entry(batch.collection).await?;
             entry.extend(batch.entries);
-            self.uppers.insert(batch.collection_id, batch.upper);
+            self.uppers.insert(batch.collection.id, batch.upper);
             self.sinces
-                .insert(batch.collection_id, batch.compact.clone());
-            self.consolidate_id(&batch.collection_id, batch.compact);
+                .insert(batch.collection.id, batch.compact.clone());
+            self.consolidate_id(&batch.collection.id, batch.compact);
         }
         Ok(())
     }

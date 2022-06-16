@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::iter::once;
 
@@ -902,13 +903,13 @@ impl<'a, S: Append> Transaction<'a, S> {
         let mut batches = Vec::new();
         async fn add_batch<K, V, S, I>(
             stash: &mut S,
-            batches: &mut Vec<AppendBatch>,
+            batches: &mut Vec<Box<AppendBatch<K, V>>>,
             collection: &TypedCollection<K, V>,
             changes: I,
         ) -> Result<(), Error>
         where
-            K: mz_stash::Data,
-            V: mz_stash::Data,
+            K: mz_stash::Data + Debug,
+            V: mz_stash::Data + Debug,
             S: Append,
             I: IntoIterator<Item = (K, V, mz_stash::Diff)>,
         {
@@ -921,7 +922,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             for (k, v, diff) in changes {
                 collection.append_to_batch(&mut batch, &k, &v, diff);
             }
-            batches.push(batch);
+            batches.push(Box::new(batch));
             Ok(())
         }
         add_batch(

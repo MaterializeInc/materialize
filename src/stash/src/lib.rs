@@ -415,6 +415,7 @@ pub trait Stash: std::fmt::Debug + Send {
 /// [`seal`]: Stash::seal
 /// [correctness vocabulary document]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md
 /// [`Collection`]: differential_dataflow::collection::Collection
+#[derive(Debug)]
 pub struct StashCollection<K, V> {
     id: Id,
     _kv: PhantomData<(K, V)>,
@@ -530,15 +531,21 @@ pub trait Append: Stash {
     /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
     ///
     /// If this method returns `Ok`, the entries have been made durable and uppers advanced, otherwise no changes were committed.
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
+    async fn append<I, K, V>(&mut self, batches: I) -> Result<(), StashError>
     where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
-        I::IntoIter: Send;
+        I: IntoIterator<Item = Box<AppendBatch<K, V>>> + Send + 'static,
+        I::IntoIter: Send,
+        K: Data + Debug + Clone,
+        V: Data + Debug + Clone;
 }
 
 #[derive(Clone, Debug)]
-pub struct AppendBatch {
-    pub collection_id: Id,
+pub struct AppendBatch<K, V>
+where
+    K: Data + Debug,
+    V: Data + Debug,
+{
+    pub collection: StashCollection<K, V>,
     pub lower: Antichain<Timestamp>,
     pub upper: Antichain<Timestamp>,
     pub compact: Antichain<Timestamp>,
@@ -548,11 +555,14 @@ pub struct AppendBatch {
 
 impl<K, V> StashCollection<K, V>
 where
-    K: Data,
-    V: Data,
+    K: Data + Debug,
+    V: Data + Debug,
 {
     /// Create a new AppendBatch for this collection from its current upper.
-    pub async fn make_batch<S: Stash>(&self, stash: &mut S) -> Result<AppendBatch, StashError> {
+    pub async fn make_batch<S: Stash>(
+        &self,
+        stash: &mut S,
+    ) -> Result<AppendBatch<K, V>, StashError> {
         let lower = stash.upper(*self).await?;
         let timestamp: Timestamp = match lower.elements() {
             [ts] => *ts,
@@ -564,7 +574,7 @@ where
         };
         let compact = Antichain::from_elem(timestamp);
         Ok(AppendBatch {
-            collection_id: self.id,
+            collection: *self,
             lower,
             upper,
             compact,
@@ -573,7 +583,7 @@ where
         })
     }
 
-    pub fn append_to_batch(&self, batch: &mut AppendBatch, key: &K, value: &V, diff: Diff) {
+    pub fn append_to_batch(&self, batch: &mut AppendBatch<K, V>, key: &K, value: &V, diff: Diff) {
         let mut key_buf = vec![];
         let mut value_buf = vec![];
         key.encode(&mut key_buf);
@@ -611,8 +621,8 @@ impl<K, V> TypedCollection<K, V> {
 
 impl<K, V> TypedCollection<K, V>
 where
-    K: Data,
-    V: Data,
+    K: Data + Debug + Clone,
+    V: Data + Debug + Clone,
 {
     pub async fn get(&self, stash: &mut impl Stash) -> Result<StashCollection<K, V>, StashError> {
         stash.collection(self.name).await
@@ -659,7 +669,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(once(Box::new(batch))).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_key_one(collection, key).await?
                 }
@@ -670,7 +680,7 @@ where
             Some(prev) => Ok(prev),
             None => {
                 collection.append_to_batch(&mut batch, &key, &value, 1);
-                stash.append(once(batch)).await?;
+                stash.append(once(Box::new(batch))).await?;
                 Ok(value)
             }
         }
@@ -689,7 +699,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(once(Box::new(batch))).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_key_one(collection, key).await?
                 }
@@ -700,7 +710,7 @@ where
             collection.append_to_batch(&mut batch, &key, &prev, -1);
         }
         collection.append_to_batch(&mut batch, &key, &value, 1);
-        stash.append(once(batch)).await?;
+        stash.append(once(Box::new(batch))).await?;
         Ok(())
     }
 
@@ -719,7 +729,7 @@ where
                 InternalStashError::PeekSinceUpper(_) => {
                     // If the upper isn't > since, bump the upper and try again to find a sealed
                     // entry. Do this by appending the empty batch which will advance the upper.
-                    stash.append(once(batch)).await?;
+                    stash.append(once(Box::new(batch))).await?;
                     batch = collection.make_batch(stash).await?;
                     stash.peek_one(collection).await?
                 }
@@ -732,7 +742,7 @@ where
             }
             collection.append_to_batch(&mut batch, &k, &v, 1);
         }
-        stash.append(once(batch)).await?;
+        stash.append(once(Box::new(batch))).await?;
         Ok(())
     }
 }

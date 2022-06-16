@@ -10,6 +10,7 @@
 //! Durable metadata storage.
 
 use std::cmp;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::Path;
 
@@ -521,22 +522,24 @@ impl From<rusqlite::Error> for StashError {
 
 #[async_trait]
 impl Append for Sqlite {
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
+    async fn append<I, K, V>(&mut self, batches: I) -> Result<(), StashError>
     where
-        I: IntoIterator<Item = AppendBatch> + Send,
+        I: IntoIterator<Item = Box<AppendBatch<K, V>>> + Send,
         I::IntoIter: Send,
+        K: Data + Debug + Clone,
+        V: Data + Debug + Clone,
     {
         let tx = self.conn.transaction()?;
         let mut consolidate = Vec::new();
         for batch in batches {
-            consolidate.push(batch.collection_id);
-            let upper = Self::upper_tx(&tx, batch.collection_id)?;
+            consolidate.push(batch.collection.id);
+            let upper = Self::upper_tx(&tx, batch.collection.id)?;
             if upper != batch.lower {
                 return Err("unexpected lower".into());
             }
-            Self::update_many_tx(&tx, batch.collection_id, batch.entries.into_iter())?;
-            Self::seal_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.upper)))?;
-            Self::compact_batch_tx(&tx, std::iter::once((batch.collection_id, &batch.compact)))?;
+            Self::update_many_tx(&tx, batch.collection.id, batch.entries.into_iter())?;
+            Self::seal_batch_tx(&tx, std::iter::once((batch.collection.id, &batch.upper)))?;
+            Self::compact_batch_tx(&tx, std::iter::once((batch.collection.id, &batch.compact)))?;
         }
         Self::consolidate_batch_tx(&tx, consolidate.iter().map(|id| *id))?;
         tx.commit()?;

@@ -9,6 +9,7 @@
 
 //! Durable metadata storage.
 
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::{cmp, time::Duration};
 
@@ -714,10 +715,12 @@ impl From<tokio_postgres::Error> for StashError {
 
 #[async_trait]
 impl Append for Postgres {
-    async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
+    async fn append<I, K, V>(&mut self, batches: I) -> Result<(), StashError>
     where
-        I: IntoIterator<Item = AppendBatch> + Send + 'static,
+        I: IntoIterator<Item = Box<AppendBatch<K, V>>> + Send + 'static,
         I::IntoIter: Send,
+        K: Data + Debug + Clone,
+        V: Data + Debug + Clone,
     {
         let batches = batches.into_iter().collect::<Vec<_>>();
         self.transact(move |tx| {
@@ -725,18 +728,18 @@ impl Append for Postgres {
             Box::pin(async move {
                 let mut consolidate = Vec::new();
                 for batch in batches {
-                    consolidate.push(batch.collection_id);
-                    let upper = Self::upper_tx(tx, batch.collection_id).await?;
+                    consolidate.push(batch.collection.id);
+                    let upper = Self::upper_tx(tx, batch.collection.id).await?;
                     if upper != batch.lower {
                         return Err("unexpected lower".into());
                     }
-                    Self::update_many_tx(tx, batch.collection_id, batch.entries.into_iter())
+                    Self::update_many_tx(tx, batch.collection.id, batch.entries.into_iter())
                         .await?;
-                    Self::seal_batch_tx(tx, std::iter::once((batch.collection_id, &batch.upper)))
+                    Self::seal_batch_tx(tx, std::iter::once((batch.collection.id, &batch.upper)))
                         .await?;
                     Self::compact_batch_tx(
                         tx,
-                        std::iter::once((batch.collection_id, &batch.compact)),
+                        std::iter::once((batch.collection.id, &batch.compact)),
                     )
                     .await?;
                 }
