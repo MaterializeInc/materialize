@@ -592,29 +592,20 @@ impl<S: Append> Connection<S> {
     }
 
     async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
-        let mut tx = self.transaction().await?;
         let key = IdAllocKey {
             name: id_type.to_string(),
         };
-        let id = tx
-            .id_allocator
-            .items()
-            .get(&key)
-            .expect("must exist")
-            .next_id;
+        let prev = COLLECTION_ID_ALLOC
+            .peek_key_one(&mut self.stash, &key)
+            .await?;
+        let id = prev.expect("must exist").next_id;
         let next = match id.checked_add(amount) {
-            Some(next_id) => IdAllocValue { next_id },
+            Some(next_gid) => IdAllocValue { next_id: next_gid },
             None => return Err(Error::new(ErrorKind::IdExhaustion)),
         };
-        let diff = tx.id_allocator.update(|k, _v| {
-            if k.name == key.name {
-                Some(next.clone())
-            } else {
-                None
-            }
-        })?;
-        assert_eq!(diff, 1);
-        tx.commit().await?;
+        COLLECTION_ID_ALLOC
+            .upsert_key(&mut self.stash, &key, &next)
+            .await?;
         Ok((id..next.next_id).collect())
     }
 
