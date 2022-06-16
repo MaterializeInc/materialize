@@ -86,6 +86,11 @@ def main() -> int:
         help="Activate the Tokio console",
         action="store_true",
     )
+    parser.add_argument(
+        "--build-only",
+        help="Only build, don't run",
+        action="store_true",
+    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -95,7 +100,10 @@ def main() -> int:
         del args.args[0]
 
     if args.program in KNOWN_PROGRAMS:
-        _build(args, extra_programs=[args.program])
+        build_retcode = _build(args, extra_programs=[args.program])
+        if args.build_only:
+            return build_retcode
+
         if args.release:
             path = ROOT / "target" / "release" / args.program
         else:
@@ -119,7 +127,10 @@ def main() -> int:
         elif args.program == "sqllogictest":
             command += [f"--postgres-url={args.postgres}"]
     elif args.program == "test":
-        _build(args)
+        build_retcode = _build(args)
+        if args.build_only:
+            return build_retcode
+
         command = _cargo_command(args, "test")
         for package in args.package:
             command += ["--package", package]
@@ -135,7 +146,7 @@ def main() -> int:
     os.execvp(command[0], command)
 
 
-def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> None:
+def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     env = dict(os.environ)
     command = _cargo_command(args, "build")
     if args.tokio_console:
@@ -143,7 +154,8 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> None:
         env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
     for program in [*REQUIRED_SERVICES, *extra_programs]:
         command += ["--bin", program]
-    spawn.runv(command, env=env)
+    completed_proc = spawn.runv(command, env=env)
+    return completed_proc.returncode
 
 
 def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
