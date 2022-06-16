@@ -22,7 +22,7 @@ aliases:
 
 An infrastructure working safe and healthy is critical. We, developers, know this very well. In other businesses, there are different vital infrastructures, such as mobile antennas (4G, 5G) in telecommunications companies. If there is an issue, then addressing and fixing it quickly is a must; otherwise, customers will complain or, even worse, churn.
 
-Telecommunications companies use [antenna manufacturers’ key performance indicators (KPIs)](https://www.ericsson.com/en/reports-and-papers/white-papers/performance-verification-for-5g-nr-deployments) to run analytics. Let’s use these indicators as “performance” and use them to calculate different performance health statuses over an antenna.
+Telecommunications companies use [antenna manufacturers' key performance indicators (KPIs)](https://www.ericsson.com/en/reports-and-papers/white-papers/performance-verification-for-5g-nr-deployments) to run analytics. Let's use these indicators as "performance" and use them to calculate different performance health statuses over an antenna.
 
 •	If the <strong> last-half-minute average performance</strong> is greater than 5, it is <span style='border-bottom:1px solid green;'>healthy</span>.
 
@@ -30,11 +30,11 @@ Telecommunications companies use [antenna manufacturers’ key performance indic
 
 •	If it is less than 4.75, it is <span style='border-bottom:1px solid red;'>unhealthy</span>.
 
-Every time the operational analytics detects an unhealthy case during a brief period, it will deploy a whole set of helper antennas in the area. Once the area improves and becomes healthy, these antennas are deactivated to save money.
+Whenever an unhealthy antenna is detected, the team will deploy a whole set of helper antennas in the area. Once the area improves and becomes healthy, these antennas are deactivated to save money.
 
-Each antenna has a known fixed range capable of serving customers. Operations teams watch a map of green, yellow, or red circles (antenna’s range area and health status) to understand where the issues are.
+Each antenna has a known fixed range capable of serving customers. The antenna's range and health status is visualized on a map of green, yellow, and red circles.
 
-A traditional approach like batch processing demands extra time to detect any issue, exposing the clients to a bad experience. A real-time application should be able to keep customers, businesses, and operational people happy.
+A traditional approach like batch processing demands extra time to detect any issue, exposing clients to a bad experience. A real-time application will keep customers, businesses, and operational people happy.
 
 ## Conceptual Overview
 
@@ -55,7 +55,7 @@ The source defines how to parse the events schema.
 
 •	Kafka/Redpanda can have topics with or without a schema.
 
-For a quick start, let’s focus only on the Postgres case, where the source already defines a schema. If you want to know how it would look using Kafka/Redpanda without a schema, refer to [this repository](https://github.com/MaterializeInc/demos/tree/main/antennas-kafka).
+Let's focus only on the Postgres case, where the source already defines a schema. Refer to [this repository](https://github.com/MaterializeInc/demos/tree/main/antennas-kafka). if you want to know how it would look using Kafka/Redpanda without a schema.
 
 The first step while building an application using Postgres is making available the tables to consume from Materialize.
 It’s done through a process known as [Change Data Capture (CDC)](https://materialize.com/docs/sql/create-source/materialize-cdc/). As it refers to in the [integration guide](https://materialize.com/docs/integrations/cdc-postgres/), <i>“it allows you to track and propagate changes in a Postgres database to downstream consumers based on its Write-Ahead Log (WAL).”</i>
@@ -76,7 +76,6 @@ After setting up, Materialize will consume the current data and any future chang
     CREATE MATERIALIZED VIEWS FROM SOURCE antennas_publication_source;
 ```
 
-Otherwise, it is possible to filter the rows for each table using the `oid` in the `antennas_publication_source`.
 
 ### Aggregate
 
