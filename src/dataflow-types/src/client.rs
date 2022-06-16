@@ -842,8 +842,15 @@ where
     client: partitioned::Partitioned<G, C, R>,
 }
 
-pub type ComputedRemoteClient<T> =
-    RemoteClient<ComputeCommand<T>, ComputeResponse<T>, tcp::GrpcComputedClient>;
+pub type ComputedRemoteClient<T> = RemoteClient<
+    ComputeCommand<T>,
+    ComputeResponse<T>,
+    tcp::GrpcClient<
+        proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
+        ProtoComputeCommand,
+        ProtoComputeResponse,
+    >,
+>;
 
 pub type StoragedRemoteClient<T> = RemoteClient<
     StorageCommand<T>,
@@ -988,7 +995,7 @@ pub mod tcp {
     use serde::ser::Serialize;
     use tokio::io::{self, AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
-    use tokio::sync::mpsc::{self, UnboundedSender};
+    use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
     use tokio::sync::Mutex;
     use tokio::sync::Notify;
     use tokio::time::{self, Instant};
@@ -1001,8 +1008,6 @@ pub mod tcp {
     use tonic::Streaming;
 
     use super::proto_compute_client::ProtoComputeClient;
-    use super::ComputeCommand;
-    use super::ComputeResponse;
     use super::FromAddr;
     use super::GenericClient;
     use super::Reconnect;
@@ -1019,94 +1024,84 @@ pub mod tcp {
     /// Streaming<ComputeResponse> instance). The recv and send functions interact with the two
     /// mpsc channel or the streaming instance respectively.
     #[derive(Debug)]
-    pub struct GrpcComputedClient {
+    pub struct GrpcClient<Client, PC, PR> {
         addr: String,
-        state: GrpcComputedTcpConn,
+        state: GrpcTcpConn<Client, PC, PR>,
         backoff: Duration,
     }
 
-    /// The connection state of the GrpcComputedClient.
+    /// The connection state of the GrpcClient.
     #[derive(Debug)]
-    enum GrpcComputedTcpConn {
+    enum GrpcTcpConn<Client, PC, PR> {
         // Initial, disconnected state
         Disconnected,
 
         // We have a TCP client connection, but we have to wait for RPC answer for setting up the streams
-        AwaitResponse(ProtoComputeClient<tonic::transport::Channel>),
+        AwaitResponse(Client),
 
         // Ready to go!
-        Connected(
-            (
-                UnboundedSender<super::ProtoComputeCommand>,
-                Streaming<super::ProtoComputeResponse>,
-            ),
-        ),
+        Connected((UnboundedSender<PC>, Streaming<PR>)),
 
         // Unable to connect, wait on next connect
         Backoff(Instant),
     }
 
-    impl FromAddr for GrpcComputedClient {
-        fn from_addr(addr: String) -> GrpcComputedClient {
-            GrpcComputedClient {
+    impl<Client, PC, PR> FromAddr for GrpcClient<Client, PC, PR> {
+        fn from_addr(addr: String) -> Self {
+            GrpcClient {
                 addr: format!("http://{}", addr),
-                state: GrpcComputedTcpConn::Disconnected,
+                state: GrpcTcpConn::Disconnected,
                 backoff: Duration::from_millis(10),
             }
         }
     }
 
-    impl GrpcComputedClient {
+    impl<Client, PC, PR> GrpcClient<Client, PC, PR>
+    where
+        Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR>,
+    {
         // This is and must be cancellation safe
         pub async fn connect(&mut self) -> () {
             loop {
                 match &mut self.state {
-                    GrpcComputedTcpConn::Disconnected => {
-                        debug!("GrpcComputedClient {}: Attempt to connect", &self.addr);
-                        match ProtoComputeClient::connect(self.addr.clone()).await {
+                    GrpcTcpConn::Disconnected => {
+                        debug!("GrpcClient {}: Attempt to connect", &self.addr);
+                        match Client::connect(self.addr.clone()).await {
                             Ok(client) => {
                                 self.backoff = Duration::from_millis(10);
-                                self.state = GrpcComputedTcpConn::AwaitResponse(client);
+                                self.state = GrpcTcpConn::AwaitResponse(client);
                             }
                             Err(e) => {
                                 self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
                                 warn!(
-                                    "GrpcComputedClient {}: Connection refused: {}. Backoff {}ms",
+                                    "GrpcClient {}: Connection refused: {}. Backoff {}ms",
                                     &self.addr,
                                     e,
                                     self.backoff.as_millis()
                                 );
-                                self.state =
-                                    GrpcComputedTcpConn::Backoff(Instant::now() + self.backoff);
+                                self.state = GrpcTcpConn::Backoff(Instant::now() + self.backoff);
                             }
                         }
                     }
-                    GrpcComputedTcpConn::AwaitResponse(client) => {
+                    GrpcTcpConn::AwaitResponse(client) => {
                         // The channel size is a arbitrary, but it should be a
                         // small bounded channel such that backpressure is applied early.
                         let (tx, rx) = mpsc::unbounded_channel();
-                        match client
-                            .command_response_stream(UnboundedReceiverStream::new(rx))
-                            .await
-                        {
-                            Ok(resp_rx_wrap) => {
-                                let resp_rx = resp_rx_wrap.into_inner();
-                                info!("GrpcComputedClient {}: connected", &self.addr);
-                                self.state = GrpcComputedTcpConn::Connected((tx, resp_rx));
+                        match client.create_stream(rx).await {
+                            Ok(stream) => {
+                                info!("GrpcClient {}: connected", &self.addr);
+                                self.state = GrpcTcpConn::Connected((tx, stream));
                             }
                             Err(err) => {
-                                debug!(
-                                    "GrpcComputedClient {}: Connection refused: {}",
-                                    &self.addr, err
-                                );
-                                self.state = GrpcComputedTcpConn::Disconnected;
+                                debug!("GrpcClient {}: Connection refused: {}", &self.addr, err);
+                                self.state = GrpcTcpConn::Disconnected;
                             }
                         }
                     }
-                    GrpcComputedTcpConn::Connected(_) => break,
-                    GrpcComputedTcpConn::Backoff(deadline) => {
+                    GrpcTcpConn::Connected(_) => break,
+                    GrpcTcpConn::Backoff(deadline) => {
                         time::sleep_until(*deadline).await;
-                        self.state = GrpcComputedTcpConn::Disconnected;
+                        self.state = GrpcTcpConn::Disconnected;
                     }
                 }
             }
@@ -1114,28 +1109,30 @@ pub mod tcp {
     }
 
     #[async_trait]
-    impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for GrpcComputedClient
+    impl<Client, C, R, PC, PR> GenericClient<C, R> for GrpcClient<Client, PC, PR>
     where
-        T: 'static + std::fmt::Debug + Send,
-        ComputeCommand<T>: RustType<super::ProtoComputeCommand>,
-        ComputeResponse<T>: RustType<super::ProtoComputeResponse>,
+        C: RustType<PC> + Send + Sync + 'static,
+        R: RustType<PR> + Send + Sync,
+        Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR> + Send + fmt::Debug,
+        PC: Send + Sync + fmt::Debug,
+        PR: Send + Sync + fmt::Debug,
     {
-        async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-            let sender = if let GrpcComputedTcpConn::Connected((sender, _)) = &self.state {
+        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+            let sender = if let GrpcTcpConn::Connected((sender, _)) = &self.state {
                 sender
             } else {
                 return Err(anyhow::anyhow!("Sent into disconnected channel"));
             };
             if sender.send(cmd.into_proto()).is_err() {
-                self.state = GrpcComputedTcpConn::Disconnected;
+                self.state = GrpcTcpConn::Disconnected;
                 Err(anyhow::anyhow!("Sent into disconnected channel"))
             } else {
                 Ok(())
             }
         }
 
-        async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
-            if let GrpcComputedTcpConn::Connected(channels) = &mut self.state {
+        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
+            if let GrpcTcpConn::Connected(channels) = &mut self.state {
                 match channels.1.next().await {
                     Some(Ok(x)) => match x.into_rust() {
                         Ok(r) => return Ok(Some(r)),
@@ -1144,7 +1141,7 @@ pub mod tcp {
                                 "could not decode protobuf message, terminating connection: {}",
                                 e
                             );
-                            self.state = GrpcComputedTcpConn::Disconnected;
+                            self.state = GrpcTcpConn::Disconnected;
                             anyhow::bail!("Connection severed");
                         }
                     },
@@ -1155,7 +1152,7 @@ pub mod tcp {
                             Some(Err(e)) => error!("connection unexpectedly errored: {}", e),
                         }
 
-                        self.state = GrpcComputedTcpConn::Disconnected;
+                        self.state = GrpcTcpConn::Disconnected;
                         anyhow::bail!("Connection severed")
                     }
                 }
@@ -1166,14 +1163,19 @@ pub mod tcp {
     }
 
     #[async_trait]
-    impl Reconnect for GrpcComputedClient {
+    impl<
+            Client: BidiProtoClient<ProtoCommand = PC, ProtoResponse = PR> + Send + Sync,
+            PC: Send,
+            PR,
+        > Reconnect for GrpcClient<Client, PC, PR>
+    {
         fn disconnect(&mut self) {
-            debug!("GrpcComputedClient {}: disconnect called", &self.addr);
-            self.state = GrpcComputedTcpConn::Disconnected;
+            debug!("GrpcClient {}: disconnect called", &self.addr);
+            self.state = GrpcTcpConn::Disconnected;
         }
 
         async fn reconnect(&mut self) {
-            debug!("GrpcComputedClient {}: reconnect called", &self.addr);
+            debug!("GrpcClient {}: reconnect called", &self.addr);
             self.connect().await
         }
     }
@@ -1331,7 +1333,18 @@ pub mod tcp {
         )
     }
 
-    /// The server side gRPC implementation that will run in computed.
+    /// Constructs a framed connection for the client.
+    pub fn framed_client<A, C, R>(conn: A) -> FramedClient<A, C, R>
+    where
+        A: AsyncRead + AsyncWrite,
+    {
+        tokio_serde::Framed::new(
+            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
+            Bincode::default(),
+        )
+    }
+
+    /// The server side gRPC implementation that will run in computed or storaged.
     ///
     /// There are two main tasks involved: The gRPC callback implementations will execute in their own tasks,
     /// receive commands from the network and send responses to the network. Upon reception of a command,
@@ -1348,38 +1361,36 @@ pub mod tcp {
     ///
     /// This is the shared datastructure between server and consumer.
     ///
-    pub struct GrpcComputedShared {
+    pub struct GrpcShared<PC, PR> {
         // These are endpoints for the consumer. The other end of these queues is consumed by the
         // stream implementation. `queue` is None if no client is connected, otherwise the
         // endpoints are forwarded to the single client. If a client is connecting but a client is
         // already connected, this mutex is used to block. If the consumer calls send or recv and
         // queue is None, the consumer will wait on the queue_change notification to proceed only
         // when a client has connected.
-        queue: Mutex<
-            Option<(
-                Streaming<super::ProtoComputeCommand>,
-                UnboundedSender<super::ProtoComputeResponse>,
-            )>,
-        >,
+        queue: Mutex<Option<(Streaming<PC>, UnboundedSender<PR>)>>,
 
         // If queue changes, the server side will publish a notification here.
         queue_change: Notify,
     }
 
     /// Server side implementation.
-    struct GrpcComputedServer {
-        shared: Arc<GrpcComputedShared>,
+    struct GrpcServer<PC, PR> {
+        shared: Arc<GrpcShared<PC, PR>>,
     }
 
     /// Consumer side functions such as send and recv. These will not directly interact with the
     /// network, but put messages in a mpsc queue which will be read and sent to the network in a
     /// separate server task.
-    pub struct GrpcComputedServerInterface {
-        shared: Arc<GrpcComputedShared>,
+    pub struct GrpcServerInterface<PC, PR> {
+        shared: Arc<GrpcShared<PC, PR>>,
     }
 
-    impl GrpcComputedServerInterface {
-        pub async fn send(&self, resp: ComputeResponse) -> Result<(), anyhow::Error> {
+    impl<PC: Send + Sync, PR: Send + Sync + fmt::Debug + 'static> GrpcServerInterface<PC, PR> {
+        pub async fn send<R: RustType<PR> + Send + Sync>(
+            &self,
+            resp: R,
+        ) -> Result<(), anyhow::Error> {
             loop {
                 let res = match self.shared.queue.lock().await.as_ref() {
                     Some(x) => Some(x.1.send((&resp).into_proto()).map_err(Into::into)),
@@ -1416,7 +1427,7 @@ pub mod tcp {
         // internally a permit: If a notifier comes first, and this function calls notified().await,
         // it will immediately return (and clear the permit).
         // See https://docs.rs/tokio/0.2.12/tokio/sync/struct.Notify.html
-        pub async fn recv(&mut self) -> Result<ComputeCommand, anyhow::Error> {
+        pub async fn recv<C: RustType<PC>>(&mut self) -> Result<C, anyhow::Error> {
             loop {
                 let res = match self.shared.queue.lock().await.as_mut() {
                     Some(x) => {
@@ -1459,18 +1470,24 @@ pub mod tcp {
         }
     }
 
-    type ResponseStream =
-        Pin<Box<dyn Stream<Item = Result<super::ProtoComputeResponse, tonic::Status>> + Send>>;
+    type ResponseStream<PR> = Pin<Box<dyn Stream<Item = Result<PR, tonic::Status>> + Send>>;
 
+    // The following traits and impls are here because of limitations in prost; namely,
+    // it does not provide traits that are generic over the request/response types,
+    // for clients and servers.
+
+    /// The implementations of this trait MUST be identical minus the types.
     #[tonic::async_trait]
-    impl super::proto_compute_server::ProtoCompute for GrpcComputedServer {
-        type CommandResponseStreamStream = ResponseStream;
+    impl super::proto_compute_server::ProtoCompute
+        for GrpcServer<super::ProtoComputeCommand, super::ProtoComputeResponse>
+    {
+        type CommandResponseStreamStream = ResponseStream<super::ProtoComputeResponse>;
 
         async fn command_response_stream(
             &self,
             req: Request<Streaming<super::ProtoComputeCommand>>,
         ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, tonic::Status> {
-            debug!("GrpcComputedServer: remote client connected");
+            debug!("GrpcServer: remote client connected");
 
             // Consistent with the ActiveReplication client, we use unbounded channels.
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
@@ -1487,19 +1504,65 @@ pub mod tcp {
         }
     }
 
+    // TODO(guswynn): if prost ever presents the client api as a trait, move to that
+    // instead of this verbose
+    /// Encapsulates the core functionality of a prost client for a bidirectional stream.
+    ///
+    /// The implementations for this trait MUST be identical minus the types
+    #[async_trait::async_trait]
+    pub trait BidiProtoClient {
+        type ProtoCommand;
+        type ProtoResponse;
+        async fn connect(addr: String) -> Result<Self, anyhow::Error>
+        where
+            Self: Sized;
+        async fn create_stream(
+            &mut self,
+            rx: UnboundedReceiver<Self::ProtoCommand>,
+        ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error>;
+    }
+    #[async_trait::async_trait]
+    impl BidiProtoClient for ProtoComputeClient<tonic::transport::Channel> {
+        type ProtoCommand = super::ProtoComputeCommand;
+        type ProtoResponse = super::ProtoComputeResponse;
+        async fn connect(addr: String) -> Result<Self, anyhow::Error>
+        where
+            Self: Sized,
+        {
+            Ok(ProtoComputeClient::connect(addr).await?)
+        }
+        async fn create_stream(
+            &mut self,
+            rx: UnboundedReceiver<Self::ProtoCommand>,
+        ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error> {
+            match self
+                .command_response_stream(UnboundedReceiverStream::new(rx))
+                .await
+            {
+                Ok(resp_rx_wrap) => Ok(resp_rx_wrap.into_inner()),
+                Err(err) => Err(err)?,
+            }
+        }
+    }
+
+    // The following helpers are to make specific instances of `GrpcServer`'s. An enterprising
+    // rust programmer could merge them using code generic over `tower::Service`.
+
     /// Creates a running gRPC based computed server that can receive ComputeCommands
     /// and send ComputeResponses. Returns a a tuple of ComputedServerInterface that
     /// can be used to recv and send from. As well as a shutdown signal, which should
     /// be used to terminate the mainloop if a message is sent.
-    pub fn grpc_computed_server(listen_addr: String) -> GrpcComputedServerInterface {
+    pub fn grpc_computed_server(
+        listen_addr: String,
+    ) -> GrpcServerInterface<super::ProtoComputeCommand, super::ProtoComputeResponse> {
         // The channel size is a arbitrary, but it should be a
         // small bounded channel such that backpressure is applied early.
-        let shared = Arc::new(GrpcComputedShared {
+        let shared = Arc::new(GrpcShared {
             queue: Mutex::new(None),
             queue_change: Notify::new(),
         });
 
-        let server = GrpcComputedServer {
+        let server = GrpcServer {
             shared: Arc::clone(&shared),
         };
 
@@ -1512,18 +1575,7 @@ pub mod tcp {
                 .unwrap();
         });
 
-        GrpcComputedServerInterface { shared }
-    }
-
-    /// Constructs a framed connection for the client.
-    pub fn framed_client<A, C, R>(conn: A) -> FramedClient<A, C, R>
-    where
-        A: AsyncRead + AsyncWrite,
-    {
-        tokio_serde::Framed::new(
-            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
-            Bincode::default(),
-        )
+        GrpcServerInterface { shared }
     }
 }
 
