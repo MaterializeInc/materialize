@@ -118,10 +118,12 @@ async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     const TYPED: TypedCollection<String, String> = TypedCollection::new("typed");
 
     // Can't peek if since == upper.
-    assert_eq!(
-        TYPED.peek_one(stash).await.unwrap_err().to_string(),
-        "stash error: collection 1 since {-9223372036854775808} is not less than upper {-9223372036854775808}",
-    );
+    assert!(TYPED
+        .peek_one(stash)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("since {-9223372036854775808} is not less than upper {-9223372036854775808}"));
     TYPED
         .upsert_key(stash, &"k1".to_string(), &"v1".to_string())
         .await?;

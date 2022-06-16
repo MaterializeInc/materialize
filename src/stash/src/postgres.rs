@@ -37,6 +37,8 @@ CREATE TABLE fence (
 );
 INSERT INTO fence VALUES (1, '');
 
+-- bigserial is not ideal for Cockroach, but we have a stable number of
+-- collections, so our use of it here is fine and compatible with Postgres.
 CREATE TABLE collections (
     collection_id bigserial PRIMARY KEY,
     name text NOT NULL UNIQUE
@@ -106,14 +108,20 @@ impl Postgres {
         // Do the initial connection once here so we don't get stuck in transact's
         // retry loop if the url is bad.
         conn.connect().await?;
+
         let tx = conn.client.as_mut().unwrap().transaction().await?;
-        let fence_oid: Option<u32> = tx
-            // `to_regclass` returns the regclass (OID) of the named object (table) or NULL
-            // if it doesn't exist. This is a check for "does the fence table exist".
-            .query_one("SELECT to_regclass('fence')::oid", &[])
+        let fence_exists: bool = tx
+            .query_one(
+                r#"
+            SELECT EXISTS (
+                SELECT 1 FROM pg_tables
+                WHERE schemaname = current_schema() AND tablename = 'fence'
+            )"#,
+                &[],
+            )
             .await?
             .get(0);
-        if fence_oid.is_none() {
+        if !fence_exists {
             tx.batch_execute(SCHEMA).await?;
         }
         // Bump the epoch, which will cause any previous connection to fail. Add a
