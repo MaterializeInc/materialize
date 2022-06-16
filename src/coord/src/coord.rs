@@ -6504,28 +6504,6 @@ mod timeline {
             }
         }
 
-        /// Electively advance the tracked times.
-        ///
-        /// If `lower_bound` is strictly greater than the current time (of either state), the
-        /// resulting state will be `Writing(lower_bound)`.
-        pub fn _fast_forward(&mut self, lower_bound: T) {
-            match &self.state {
-                TimestampOracleState::Writing(ts) => {
-                    if ts.less_than(&lower_bound) {
-                        self.advance_to = Some(lower_bound.clone());
-                        self.state = TimestampOracleState::Writing(lower_bound);
-                    }
-                }
-                TimestampOracleState::Reading(ts) => {
-                    if ts.less_than(&lower_bound) {
-                        // This may result in repetition in the case `lower_bound == ts + 1`.
-                        // This is documented as fine, and concerned users can protect themselves.
-                        self.advance_to = Some(lower_bound.clone());
-                        self.state = TimestampOracleState::Writing(lower_bound);
-                    }
-                }
-            }
-        }
         /// Whether and to what the next value of `self.write_ts() has advanced since this method was last called.
         ///
         /// This method may produce the same value multiple times, and should not be used as a test for whether
