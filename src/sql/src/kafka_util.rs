@@ -9,13 +9,13 @@
 
 //! Provides parsing and convenience functions for working with Kafka from the `sql` package.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::convert::{self, TryInto};
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 
-use mz_kafka_util::KafkaAddrs;
+// use mz_kafka_util::KafkaAddrs;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -28,15 +28,10 @@ use mz_dataflow_types::connections::{
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::task;
 use mz_secrets::SecretsReader;
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{
-    KafkaConnectionOption, KafkaConnectionOptionName, Value, WithOptionValue,
-};
+use mz_sql_parser::ast::Value;
 
 use crate::catalog::{CatalogItemType, SessionCatalog};
-use crate::names::Aug;
 use crate::normalize::SqlValueOrSecret;
-use crate::plan::with_options::TryFromValue;
 
 enum ValType {
     String { transform: fn(String) -> String },
@@ -45,44 +40,6 @@ enum ValType {
     // Number with range [lower, upper]
     Number(i32, i32),
     Boolean,
-    KafkaAddrs { limit_one: bool },
-}
-
-impl ValType {
-    fn try_from_value(
-        &self,
-        catalog: &dyn SessionCatalog,
-        v: Option<WithOptionValue<Aug>>,
-    ) -> Result<StringOrSecret, anyhow::Error> {
-        let s = match self {
-            ValType::String { transform } => {
-                let s = String::try_from_value(v)?;
-                transform(s).into()
-            }
-            ValType::StringOrSecret => StringOrSecret::try_from_value(v)?,
-            ValType::Secret => match StringOrSecret::try_from_value(v)? {
-                StringOrSecret::String(_) => bail!("must provide a secret"),
-                secret @ StringOrSecret::Secret(_) => secret,
-            },
-            ValType::Number(lower, upper) => {
-                let i = i32::try_from_value(v)?;
-                if i < *lower || *upper < i {
-                    bail!("must be a number between {} and {}", lower, upper)
-                }
-                i.into()
-            }
-            ValType::Boolean => bool::try_from_value(v)?.into(),
-            ValType::KafkaAddrs { limit_one } => {
-                let addrs = KafkaAddrs::try_from_value(v)?;
-                if *limit_one && addrs.len() > 1 {
-                    bail!("cannot specify multiple broker addresses")
-                }
-                addrs.into()
-            }
-        };
-        validate_secret(catalog, &s)?;
-        Ok(s)
-    }
 }
 
 fn validate_secret(
@@ -100,108 +57,6 @@ fn validate_secret(
     }
 
     Ok(())
-}
-
-trait ConfigGen {
-    fn group(&self) -> Option<&'static str>;
-    fn config_key(&self) -> &str;
-    fn config_val(&self) -> ValType;
-}
-
-impl ConfigGen for KafkaConnectionOptionName {
-    fn group(&self) -> Option<&'static str> {
-        match self {
-            KafkaConnectionOptionName::Broker | KafkaConnectionOptionName::Brokers => None,
-            KafkaConnectionOptionName::SslKey
-            | KafkaConnectionOptionName::SslKeyPassword
-            | KafkaConnectionOptionName::SslCertificate
-            | KafkaConnectionOptionName::SslCertificateAuthority => Some("SSL"),
-            KafkaConnectionOptionName::SaslMechanisms
-            | KafkaConnectionOptionName::SaslUsername
-            | KafkaConnectionOptionName::SaslPassword => Some("SASL"),
-        }
-    }
-
-    fn config_key(&self) -> &str {
-        match self {
-            KafkaConnectionOptionName::Broker | KafkaConnectionOptionName::Brokers => {
-                "bootstrap.servers"
-            }
-            KafkaConnectionOptionName::SslKey => "ssl.key.pem",
-            KafkaConnectionOptionName::SslKeyPassword => "ssl.key.password",
-            KafkaConnectionOptionName::SslCertificate => "ssl.certificate.pem",
-            KafkaConnectionOptionName::SslCertificateAuthority => "ssl.ca.pem",
-            _ => unreachable!(),
-        }
-    }
-
-    fn config_val(&self) -> ValType {
-        match self {
-            KafkaConnectionOptionName::Broker => ValType::KafkaAddrs { limit_one: true },
-            KafkaConnectionOptionName::Brokers => ValType::KafkaAddrs { limit_one: false },
-            KafkaConnectionOptionName::SslKey => ValType::Secret,
-            KafkaConnectionOptionName::SslKeyPassword => ValType::Secret,
-            KafkaConnectionOptionName::SslCertificate => ValType::StringOrSecret,
-            KafkaConnectionOptionName::SslCertificateAuthority => ValType::StringOrSecret,
-            _ => unreachable!(),
-        }
-    }
-}
-
-pub fn kafka_connection_config(
-    catalog: &dyn SessionCatalog,
-    options: Vec<KafkaConnectionOption<Aug>>,
-) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
-    let mut group = None;
-    let mut seen = HashSet::<KafkaConnectionOptionName>::new();
-    let mut res = BTreeMap::new();
-    for KafkaConnectionOption { name, value } in options {
-        match (group, name.group()) {
-            (None, other) => group = other,
-            (Some(g), Some(o)) if g != o => {
-                bail!("invalid connector: multiple protocols specified")
-            }
-            _ => {}
-        }
-        if !seen.insert(name.clone()) {
-            bail!("{} specified more than once", name.to_ast_string());
-        }
-
-        if res
-            .insert(
-                name.config_key().to_string(),
-                name.config_val().try_from_value(catalog, value)?,
-            )
-            .is_some()
-        {
-            bail!(
-                "{} sets Kafka config option {}, which another option already set",
-                name.to_ast_string(),
-                name.config_key()
-            );
-        }
-    }
-
-    if !(seen.contains(&KafkaConnectionOptionName::Broker)
-        || seen.contains(&KafkaConnectionOptionName::Brokers))
-    {
-        bail!(
-            "must specify {} or {}",
-            KafkaConnectionOptionName::Broker.to_ast_string(),
-            KafkaConnectionOptionName::Brokers.to_ast_string()
-        )
-    }
-
-    if let Some(group) = group {
-        assert!(res
-            .insert(
-                "security.protocol".to_string(),
-                StringOrSecret::from(group.to_lowercase()),
-            )
-            .is_none());
-    }
-
-    Ok(res)
 }
 
 // Describes Kafka cluster configurations users can supply using `CREATE

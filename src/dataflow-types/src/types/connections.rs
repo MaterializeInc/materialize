@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_kafka_util::KafkaAddrs;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
