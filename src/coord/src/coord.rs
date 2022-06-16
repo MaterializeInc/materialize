@@ -1062,10 +1062,10 @@ impl<S: Append + 'static> Coordinator<S> {
         self.submit_table_advancement(inputs.ids);
     }
 
-    /// Attempts to commit all pending write transactions in a group commit. If the timestamp
-    /// chosen for the writes is not ahead of `now()`, then we can execute and commit the writes
-    /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
-    /// writes.
+    /// Attempts to commit all pending write transactions and table advancements in a group commit.
+    /// If the timestamp chosen for the writes is not ahead of `now()`, then we can execute and
+    /// commit the writes immediately. Otherwise we must wait for `now()` to advance past the
+    /// timestamp chosen for the writes.
     async fn try_group_commit(
         &mut self,
         WriteTimestamp {
@@ -1107,11 +1107,12 @@ impl<S: Append + 'static> Coordinator<S> {
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the writes.
-    /// The timestamps used in this method still might be ahead of `now()` if `now()` has gone
+    /// A batch of tables may also be advanced at the same timestamp as the tables writes.
+    /// The timestamps used in this method might be ahead of `now()` if `now()` has gone
     /// backwards at any point during this method. We will still commit the write without waiting
     /// for `now()` to advance. This is ok because the next batch of writes will trigger the wait
-    /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline, preventing
-    /// an unbounded advancing of the global timeline ahead of `now()`.
+    /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline. This
+    /// approach prevents an unbounded advancing of the global timeline ahead of `now()`.
     async fn group_commit(
         &mut self,
         WriteTimestamp {
@@ -1120,7 +1121,12 @@ impl<S: Append + 'static> Coordinator<S> {
         }: WriteTimestamp,
     ) {
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
+        appends.reserve(
+            self.pending_group_commit.pending_writes.len()
+                + self.pending_group_commit.table_advances.len(),
+        );
         let mut responses = Vec::new();
+        responses.reserve(self.pending_group_commit.pending_writes.len());
 
         for pending_write_txn in self.pending_group_commit.pending_writes.drain(..) {
             match pending_write_txn {
@@ -1968,7 +1974,6 @@ impl<S: Append + 'static> Coordinator<S> {
             // All other statements are handled immediately.
             _ => match self.handle_statement(&mut session, stmt, &params).await {
                 Ok(plan) => self.sequence_plan(tx, session, plan, depends_on).await,
-
                 Err(e) => tx.send(Err(e), session),
             },
         }
@@ -2489,28 +2494,25 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: CreateDatabasePlan,
     ) {
         let if_not_exists = plan.if_not_exists;
-        match self.sequence_create_database_inner(plan).await {
-            Ok(ops) => {
-                self.client_catalog_transact(
-                    session,
-                    ops,
-                    |_| Ok(()),
-                    tx,
-                    Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-                    |e| match e {
-                        CoordError::Catalog(catalog::Error {
-                            kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
-                            ..
-                        }) if if_not_exists => {
-                            Ok(ExecuteResponse::CreatedDatabase { existed: true })
-                        }
-                        _ => Err(e),
-                    },
-                )
-                .await;
-            }
-            Err(e) => tx.send(Err(e), session),
-        }
+        let ops = match self.sequence_create_database_inner(plan).await {
+            Ok(ops) => ops,
+            Err(e) => return tx.send(Err(e), sesion),
+        };
+        self.client_catalog_transact(
+            session,
+            ops,
+            |_| Ok(()),
+            tx,
+            Ok(ExecuteResponse::CreatedDatabase { existed: false }),
+            |e| match e {
+                CoordError::Catalog(catalog::Error {
+                    kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
+                    ..
+                }) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+                _ => Err(e),
+            },
+        )
+        .await;
     }
 
     async fn sequence_create_database_inner(
@@ -3337,12 +3339,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 },
                 tx,
                 Ok(ExecuteResponse::CreatedView { existed: false }),
-                |e| {
-                    if plan.if_not_exists {
-                        Ok(ExecuteResponse::CreatedView { existed: true })
-                    } else {
-                        Err(e)
-                    }
+                |e| match e {
+                    _ if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+                    _ => Err(e),
                 },
             )
             .await
@@ -5211,9 +5210,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// building [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called
     /// after this function successfully returns on any built `DataflowDesc`.
     ///
-    /// All errors are consumed and sent back to the client. An additional
-    /// closure can be passed to convert certain errors to responses for CINE
-    /// (CREATE IF NOT EXISTS) usage.
+    /// All errors are consumed and sent back to the client. The value returned by the
+    /// closure is returned as an Option to the caller. An additional closure can be
+    /// passed to convert certain errors to responses for CINE (CREATE IF NOT EXISTS)
+    /// functionality.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
     async fn client_catalog_transact<F, R, C>(
