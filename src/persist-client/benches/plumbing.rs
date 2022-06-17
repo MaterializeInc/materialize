@@ -153,6 +153,7 @@ pub fn bench_blob_get(
                 &key,
                 Bytes::clone(&payload),
                 Atomicity::RequireAtomic,
+                &HashMap::new(),
             ))
             .expect("failed to set blob");
         b.iter(|| {
@@ -203,6 +204,7 @@ async fn bench_blob_set_one_iter(
         &key,
         Bytes::clone(payload),
         Atomicity::RequireAtomic,
+        &HashMap::new(),
     )
     .await
 }

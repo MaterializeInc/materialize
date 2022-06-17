@@ -219,6 +219,7 @@ impl BlobMulti for MaelstromBlobMulti {
         key: &str,
         value: Bytes,
         _atomic: Atomicity,
+        _tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError> {
         // lin_kv_write is always atomic, so we're free to ignore the atomic
         // param.
@@ -295,10 +296,11 @@ impl BlobMulti for CachingBlobMulti {
         key: &str,
         value: Bytes,
         atomic: Atomicity,
+        tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError> {
         // Intentionally don't put this in the cache on set, so that this blob
         // gets fetched at least once (exercising those code paths).
-        self.blob.set(deadline, key, value, atomic).await
+        self.blob.set(deadline, key, value, atomic, tags).await
     }
 
     async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {

@@ -9,6 +9,7 @@
 
 //! Abstractions over files, cloud storage, etc used in persistence.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::time::Instant;
 
@@ -367,12 +368,16 @@ pub trait BlobMulti: std::fmt::Debug {
     ///
     /// When atomicity is required, writes must be atomic and either succeed or
     /// leave the previous value intact.
+    ///
+    /// The given tags are added as "object tags" in S3 and ignored by all other
+    /// BlobMulti implementations.
     async fn set(
         &self,
         deadline: Instant,
         key: &str,
         value: Bytes,
         atomic: Atomicity,
+        tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError>;
 
     /// Remove a key from the map.
@@ -408,6 +413,7 @@ pub mod tests {
         new_fn: NewFn,
     ) -> Result<(), ExternalError> {
         let no_timeout = Instant::now() + Duration::from_secs(1_000_000);
+        let no_tags = HashMap::new();
         let values = vec!["v0".as_bytes().to_vec(), "v1".as_bytes().to_vec()];
 
         let blob0 = new_fn("path0").await?;
@@ -430,14 +436,26 @@ pub mod tests {
 
         // Set a key with AllowNonAtomic and get it back.
         blob0
-            .set(no_timeout, "k0", values[0].clone().into(), AllowNonAtomic)
+            .set(
+                no_timeout,
+                "k0",
+                values[0].clone().into(),
+                AllowNonAtomic,
+                &no_tags,
+            )
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[0].clone()));
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[0].clone()));
 
         // Set a key with RequireAtomic and get it back.
         blob0
-            .set(no_timeout, "k0a", values[0].clone().into(), RequireAtomic)
+            .set(
+                no_timeout,
+                "k0a",
+                values[0].clone().into(),
+                RequireAtomic,
+                &no_tags,
+            )
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[0].clone()));
         assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[0].clone()));
@@ -452,13 +470,25 @@ pub mod tests {
 
         // Can overwrite a key with AllowNonAtomic.
         blob0
-            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
+            .set(
+                no_timeout,
+                "k0",
+                values[1].clone().into(),
+                AllowNonAtomic,
+                &no_tags,
+            )
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
         // Can overwrite a key with RequireAtomic.
         blob0
-            .set(no_timeout, "k0a", values[1].clone().into(), RequireAtomic)
+            .set(
+                no_timeout,
+                "k0a",
+                values[1].clone().into(),
+                RequireAtomic,
+                &no_tags,
+            )
             .await?;
         assert_eq!(blob0.get(no_timeout, "k0a").await?, Some(values[1].clone()));
         assert_eq!(blob1.get(no_timeout, "k0a").await?, Some(values[1].clone()));
@@ -483,7 +513,13 @@ pub mod tests {
         assert_eq!(blob_keys, empty_keys);
         // Can reset a deleted key to some other value.
         blob0
-            .set(no_timeout, "k0", values[1].clone().into(), AllowNonAtomic)
+            .set(
+                no_timeout,
+                "k0",
+                values[1].clone().into(),
+                AllowNonAtomic,
+                &no_tags,
+            )
             .await?;
         assert_eq!(blob1.get(no_timeout, "k0").await?, Some(values[1].clone()));
         assert_eq!(blob0.get(no_timeout, "k0").await?, Some(values[1].clone()));
@@ -494,7 +530,13 @@ pub mod tests {
         for i in 1..=5 {
             let key = format!("k{}", i);
             blob0
-                .set(no_timeout, &key, values[0].clone().into(), AllowNonAtomic)
+                .set(
+                    no_timeout,
+                    &key,
+                    values[0].clone().into(),
+                    AllowNonAtomic,
+                    &no_tags,
+                )
                 .await?;
             expected_keys.push(key);
         }

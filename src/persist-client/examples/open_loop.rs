@@ -461,6 +461,8 @@ mod api {
 }
 
 mod raw_persist_benchmark {
+    use std::collections::HashMap;
+
     use async_trait::async_trait;
     use timely::progress::Antichain;
     use tokio::sync::mpsc::Sender;
@@ -496,7 +498,9 @@ mod raw_persist_benchmark {
 
         let mut readers = vec![];
         for _ in 0..num_readers {
-            let (_writer, reader) = persist.open::<Vec<u8>, Vec<u8>, u64, i64>(id).await?;
+            let (_writer, reader) = persist
+                .open::<Vec<u8>, Vec<u8>, u64, i64>(id, HashMap::new())
+                .await?;
 
             let listen = reader
                 .listen(Antichain::from_elem(0))
@@ -525,7 +529,7 @@ mod raw_persist_benchmark {
             let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(10);
 
             let mut write = persist
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id)
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id, HashMap::new())
                 .await?;
 
             // Intentionally create the span outside the task to set the parent.
@@ -569,7 +573,7 @@ mod raw_persist_benchmark {
             handles.push(handle);
 
             let mut write = persist
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id)
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(id, HashMap::new())
                 .await?;
 
             // Intentionally create the span outside the task to set the parent.

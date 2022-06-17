@@ -9,6 +9,7 @@
 
 //! Test utilities for injecting latency and errors.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, UNIX_EPOCH};
@@ -162,10 +163,11 @@ impl BlobMulti for UnreliableBlobMulti {
         key: &str,
         value: Bytes,
         atomic: Atomicity,
+        tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError> {
         self.handle
             .run_op(deadline, "set", || {
-                self.blob.set(deadline, key, value, atomic)
+                self.blob.set(deadline, key, value, atomic, tags)
             })
             .await
     }

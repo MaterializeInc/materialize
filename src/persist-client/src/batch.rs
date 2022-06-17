@@ -9,7 +9,7 @@
 
 //! A handle to a batch of updates
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -180,6 +180,7 @@ where
         size_hint: usize,
         lower: Antichain<T>,
         blob: Arc<dyn BlobMulti + Send + Sync>,
+        blob_tags: HashMap<String, String>,
         shard_id: ShardId,
     ) -> Self {
         let parts = BatchParts::new(
@@ -188,6 +189,7 @@ where
             shard_id,
             lower.clone(),
             Arc::clone(&blob),
+            blob_tags,
         );
         Self {
             size_hint,
@@ -302,6 +304,8 @@ struct BatchParts<T> {
     shard_id: ShardId,
     lower: Antichain<T>,
     blob: Arc<dyn BlobMulti + Send + Sync>,
+    blob_tags: HashMap<String, String>,
+
     writing_parts: VecDeque<(String, JoinHandle<()>)>,
     finished_parts: Vec<String>,
 }
@@ -313,6 +317,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         shard_id: ShardId,
         lower: Antichain<T>,
         blob: Arc<dyn BlobMulti + Send + Sync>,
+        blob_tags: HashMap<String, String>,
     ) -> Self {
         BatchParts {
             max_outstanding,
@@ -320,6 +325,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             shard_id,
             lower,
             blob,
+            blob_tags,
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
         }
@@ -332,6 +338,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         let blob = Arc::clone(&self.blob);
         let key = Uuid::new_v4().to_string();
         let blob_key = key.clone();
+        let blob_tags = self.blob_tags.clone();
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
 
         let write_span = debug_span!("batch::write_part", shard = %self.shard_id).or_current();
@@ -390,6 +397,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                         &blob_key,
                         Bytes::clone(&buf),
                         Atomicity::RequireAtomic,
+                        &blob_tags,
                     )
                     .await
                 })

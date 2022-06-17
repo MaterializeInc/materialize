@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use criterion::{black_box, Criterion, Throughput};
@@ -59,7 +60,7 @@ async fn bench_writes_one_iter(
     data: &DataGenerator,
 ) -> Result<usize, anyhow::Error> {
     let mut write = client
-        .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(ShardId::new())
+        .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(ShardId::new(), HashMap::new())
         .await?;
 
     // Write the data as fast as we can while keeping each batch in its own
@@ -104,7 +105,7 @@ async fn bench_write_to_listen_one_iter(
     data: &DataGenerator,
 ) -> Result<usize, anyhow::Error> {
     let (mut write, read) = client
-        .open::<Vec<u8>, Vec<u8>, u64, i64>(ShardId::new())
+        .open::<Vec<u8>, Vec<u8>, u64, i64>(ShardId::new(), HashMap::new())
         .await?;
 
     // Start the listener in a task before the write so it can't "cheat" by
@@ -191,7 +192,7 @@ pub fn bench_snapshot(
         let shard_id = ShardId::new();
         let (_, as_of) = runtime.block_on(async {
             let mut write = client
-                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(shard_id)
+                .open_writer::<Vec<u8>, Vec<u8>, u64, i64>(shard_id, HashMap::new())
                 .await
                 .expect("failed to open shard");
             load(&mut write, data).await

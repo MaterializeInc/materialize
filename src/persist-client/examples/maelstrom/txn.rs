@@ -106,7 +106,7 @@ pub struct Transactor {
 
 impl Transactor {
     pub async fn new(client: &PersistClient, shard_id: ShardId) -> Result<Self, MaelstromError> {
-        let (mut write, read) = client.open(shard_id).await?;
+        let (mut write, read) = client.open(shard_id, HashMap::new()).await?;
         let since_ts = Self::extract_ts(read.since())?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
         Ok(Transactor {

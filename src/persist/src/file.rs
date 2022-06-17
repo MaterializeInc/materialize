@@ -9,6 +9,7 @@
 
 //! File backed implementations for testing and benchmarking.
 
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -114,6 +115,7 @@ impl BlobMulti for FileBlobMulti {
         key: &str,
         value: Bytes,
         atomic: Atomicity,
+        _tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError> {
         let file_path = self.blob_path(key);
         match atomic {

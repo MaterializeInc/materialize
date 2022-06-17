@@ -9,6 +9,7 @@
 
 //! Prometheus monitoring metrics.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -453,13 +454,14 @@ impl BlobMulti for MetricsBlobMulti {
         key: &str,
         value: Bytes,
         atomic: Atomicity,
+        tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError> {
         let bytes = value.len();
         let res = self
             .metrics
             .blob
             .set
-            .run_op(|| self.blob.set(deadline, key, value, atomic))
+            .run_op(|| self.blob.set(deadline, key, value, atomic, &tags))
             .await;
         if res.is_ok() {
             self.metrics.blob.set.bytes.inc_by(u64::cast_from(bytes));

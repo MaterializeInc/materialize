@@ -108,6 +108,9 @@ where
                 // Row. Our output type is `(Row, Row)` instead of `(Option<Row>, Option<Row>)`.
                 let empty_row = Row::default();
 
+                // TODO: Get these from somewhere.
+                let s3_object_tags = HashMap::new();
+
                 // TODO(aljoscha): We need to figure out what to do with error results from these calls.
                 let persist_client = persist_location
                     .open()
@@ -115,7 +118,7 @@ where
                     .expect("cannot open persist client");
 
                 let mut write = persist_client
-                    .open_writer::<Row, Row, Timestamp, Diff>(shard_id)
+                    .open_writer::<Row, Row, Timestamp, Diff>(shard_id, s3_object_tags)
                     .await
                     .expect("could not open persist shard");
 

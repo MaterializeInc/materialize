@@ -10,6 +10,7 @@
 //! Write capabilities and handles
 
 use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -55,6 +56,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
+    pub(crate) blob_tags: HashMap<String, String>,
 
     pub(crate) upper: Antichain<T>,
 }
@@ -436,6 +438,7 @@ where
             size_hint,
             lower,
             Arc::clone(&self.blob),
+            self.blob_tags.clone(),
             self.machine.shard_id().clone(),
         )
     }

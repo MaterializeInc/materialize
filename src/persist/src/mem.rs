@@ -115,6 +115,7 @@ impl BlobMulti for MemBlobMulti {
         key: &str,
         value: Bytes,
         _atomic: Atomicity,
+        _tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError> {
         // NB: This is always atomic, so we're free to ignore the atomic param.
         self.core.lock().await.set(key, value)

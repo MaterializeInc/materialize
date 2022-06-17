@@ -64,6 +64,9 @@ pub fn render<G>(
             let mut buffer = Vec::new();
             let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
+            // TODO: Get these from somewhere.
+            let s3_object_tags = HashMap::new();
+
             let mut write = persist_clients
                 .lock()
                 .await
@@ -72,6 +75,7 @@ pub fn render<G>(
                 .expect("could not open persist client")
                 .open_writer::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
                     storage_metadata.persist_shard,
+                    s3_object_tags,
                 )
                 .await
                 .expect("could not open persist shard");

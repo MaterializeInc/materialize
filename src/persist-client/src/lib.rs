@@ -17,6 +17,7 @@
     clippy::cast_sign_loss
 )]
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -282,10 +283,16 @@ impl PersistClient {
     /// If `shard_id` has never been used before, initializes a new shard and
     /// returns handles with `since` and `upper` frontiers set to initial values
     /// of `Antichain::from_elem(T::minimum())`.
+    ///
+    /// The given `blob_tags` are added as [S3 object tags] to all blobs written
+    /// on behalf of this WriteHandle.
+    ///
+    /// [S3 object tags]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-tagging.html
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        blob_tags: HashMap<String, String>,
     ) -> Result<(WriteHandle<K, V, T, D>, ReadHandle<K, V, T, D>), InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -307,6 +314,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
+            blob_tags,
             upper: shard_upper.0,
         };
         let reader = ReadHandle {
@@ -340,7 +348,7 @@ impl PersistClient {
         // At the moment, writers aren't registered, so there's nothing special
         // to do here. Introduce the method, though, so that code using persist
         // doesn't have to change if we bring writer registration back.
-        let (_, reader) = self.open(shard_id).await?;
+        let (_, reader) = self.open(shard_id, HashMap::new()).await?;
         Ok(reader)
     }
 
@@ -348,10 +356,16 @@ impl PersistClient {
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [ReadHandle].
+    ///
+    /// The given `blob_tags` are added as [S3 object tags] to all blobs written
+    /// on behalf of this WriteHandle.
+    ///
+    /// [S3 object tags]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-tagging.html
     #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn open_writer<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        blob_tags: HashMap<String, String>,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -372,6 +386,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             machine,
             blob: Arc::clone(&self.blob),
+            blob_tags,
             upper: shard_upper,
         };
         Ok(writer)
@@ -390,7 +405,9 @@ impl PersistClient {
         T: Timestamp + Lattice + Codec64,
         D: Semigroup + Codec64,
     {
-        self.open(shard_id).await.expect("codec mismatch")
+        self.open(shard_id, HashMap::new())
+            .await
+            .expect("codec mismatch")
     }
 }
 
@@ -514,7 +531,7 @@ mod tests {
         let shard_id = ShardId::new();
         let client = new_test_client().await;
         let mut write1 = client
-            .open_writer::<String, String, u64, i64>(shard_id)
+            .open_writer::<String, String, u64, i64>(shard_id, HashMap::new())
             .await
             .expect("codec mismatch");
         let read1 = client
@@ -526,7 +543,7 @@ mod tests {
             .await
             .expect("codec mismatch");
         let mut write2 = client
-            .open_writer::<String, String, u64, i64>(shard_id)
+            .open_writer::<String, String, u64, i64>(shard_id, HashMap::new())
             .await
             .expect("codec mismatch");
 
@@ -571,7 +588,7 @@ mod tests {
 
             assert_eq!(
                 client
-                    .open::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .open::<Vec<u8>, String, u64, i64>(shard_id0, HashMap::new())
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch {
@@ -581,7 +598,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, Vec<u8>, u64, i64>(shard_id0)
+                    .open::<String, Vec<u8>, u64, i64>(shard_id0, HashMap::new())
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch {
@@ -591,7 +608,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, i64, i64>(shard_id0)
+                    .open::<String, String, i64, i64>(shard_id0, HashMap::new())
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch {
@@ -601,7 +618,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open::<String, String, u64, u64>(shard_id0)
+                    .open::<String, String, u64, u64>(shard_id0, HashMap::new())
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch {
@@ -625,7 +642,7 @@ mod tests {
             );
             assert_eq!(
                 client
-                    .open_writer::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .open_writer::<Vec<u8>, String, u64, i64>(shard_id0, HashMap::new())
                     .await
                     .unwrap_err(),
                 InvalidUsage::CodecMismatch {

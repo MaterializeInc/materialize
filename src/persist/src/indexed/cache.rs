@@ -164,7 +164,13 @@ impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
         let write_start = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
         self.blob
-            .set(deadline, &key, val, Atomicity::AllowNonAtomic)
+            .set(
+                deadline,
+                &key,
+                val,
+                Atomicity::AllowNonAtomic,
+                &HashMap::new(),
+            )
             .await
             .map_err(|err| self.metric_set_error(err.into()))?;
         self.metrics

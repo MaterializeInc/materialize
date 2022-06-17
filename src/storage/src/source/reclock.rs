@@ -63,8 +63,11 @@ impl ReclockOperator {
             .await
             .with_context(|| "error creating persist client")?;
 
+        // TODO: Get these from somewhere.
+        let s3_object_tags = HashMap::new();
+
         let (write_handle, read_handle) = persist_client
-            .open::<_, _, _, MzOffset>(timestamp_shard_id)
+            .open::<_, _, _, MzOffset>(timestamp_shard_id, s3_object_tags)
             .await
             .expect("persist handles open err");
 

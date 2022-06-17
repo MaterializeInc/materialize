@@ -10,6 +10,7 @@
 //! An S3 implementation of [BlobMulti] storage.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,7 @@ use futures_util::FutureExt;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
 use tracing::{debug, debug_span, trace, trace_span, Instrument};
+use url::Url;
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
@@ -440,6 +442,7 @@ impl BlobMulti for S3BlobMulti {
         key: &str,
         value: Bytes,
         _atomic: Atomicity,
+        tags: &HashMap<String, String>,
     ) -> Result<(), ExternalError> {
         // NB: S3 is always atomic, so we're free to ignore the atomic param.
         let value_len = value.len();
@@ -448,11 +451,11 @@ impl BlobMulti for S3BlobMulti {
             .should_multipart(value_len)
             .map_err(anyhow::Error::msg)?
         {
-            self.set_multi_part(key, value)
+            self.set_multi_part(key, value, tags)
                 .instrument(debug_span!("s3set_multi", payload_len = value_len))
                 .await
         } else {
-            self.set_single_part(key, value).await
+            self.set_single_part(key, value, tags).await
         }
     }
 
@@ -470,7 +473,20 @@ impl BlobMulti for S3BlobMulti {
 }
 
 impl S3BlobMulti {
-    async fn set_single_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+    fn encode_tags(tags: &HashMap<String, String>) -> String {
+        let mut url = Url::parse("placeholder://").expect("invalid url");
+        for (k, v) in tags.iter() {
+            url.query_pairs_mut().append_pair(k, v);
+        }
+        url.query().unwrap_or_default().to_owned()
+    }
+
+    async fn set_single_part(
+        &self,
+        key: &str,
+        value: Bytes,
+        tags: &HashMap<String, String>,
+    ) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -480,6 +496,7 @@ impl S3BlobMulti {
             .put_object()
             .bucket(&self.bucket)
             .key(path)
+            .tagging(Self::encode_tags(tags))
             .body(ByteStream::from(value))
             .send()
             .instrument(part_span)
@@ -493,7 +510,12 @@ impl S3BlobMulti {
         Ok(())
     }
 
-    async fn set_multi_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+    async fn set_multi_part(
+        &self,
+        key: &str,
+        value: Bytes,
+        tags: &HashMap<String, String>,
+    ) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -504,6 +526,7 @@ impl S3BlobMulti {
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(&path)
+            .tagging(Self::encode_tags(tags))
             .send()
             .instrument(debug_span!("s3set_multi_start"))
             .await
@@ -773,6 +796,7 @@ fn openssl_sys_hack() {
 #[cfg(test)]
 mod tests {
     use crate::location::tests::blob_multi_impl_test;
+    use aws_sdk_s3::model::Tag;
     use tracing::info;
 
     use super::*;
@@ -813,7 +837,8 @@ mod tests {
         // uses the multipart code path but only writes a single part.
         {
             let blob = S3BlobMulti::open(config_multipart).await?;
-            blob.set_multi_part("multipart", "foobar".into()).await?;
+            blob.set_multi_part("multipart", "foobar".into(), &HashMap::new())
+                .await?;
             let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
             assert_eq!(
                 blob.get(deadline, "multipart").await?,
@@ -879,5 +904,56 @@ mod tests {
             iter.collect::<Vec<_>>(),
             vec![(1, 0..10), (2, 10..20), (3, 20..21)]
         );
+    }
+
+    #[test]
+    fn encode_tags() {
+        let mut tags = HashMap::new();
+        assert_eq!(S3BlobMulti::encode_tags(&tags), "");
+        tags.insert("foo".into(), "bar".into());
+        assert_eq!(S3BlobMulti::encode_tags(&tags), "foo=bar");
+        tags.insert("baz".into(), "qux".into());
+        assert_eq!(S3BlobMulti::encode_tags(&tags), "foo=bar&baz=qux");
+    }
+
+    #[tokio::test]
+    async fn s3_object_tags() -> Result<(), ExternalError> {
+        mz_ore::test::init_logging();
+        let config = match S3BlobConfig::new_for_test().await? {
+            Some(client) => client,
+            None => {
+                info!(
+                    "{} env not set: skipping test that uses external service",
+                    S3BlobConfig::EXTERNAL_TESTS_S3_BUCKET
+                );
+                return Ok(());
+            }
+        };
+
+        let blob = S3BlobMulti::open(config).await?;
+
+        let no_deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        let key = Uuid::new_v4().to_string();
+        let tags = [("foo".into(), "bar".into())].into_iter().collect();
+        blob.set(
+            no_deadline,
+            &key,
+            Bytes::from(""),
+            Atomicity::RequireAtomic,
+            &tags,
+        )
+        .await?;
+
+        let actual = blob
+            .client
+            .get_object_tagging()
+            .bucket(&blob.bucket)
+            .key(blob.get_path(&key))
+            .send()
+            .await
+            .map_err(anyhow::Error::new)?;
+        let expected = [Tag::builder().key("foo").value("bar").build()];
+        assert_eq!(actual.tag_set(), Some(&expected[..]));
+        Ok(())
     }
 }

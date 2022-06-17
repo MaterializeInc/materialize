@@ -372,11 +372,13 @@ where
 
         // Install collection state for each bound source.
         for ingestion in ingestions {
+            // TODO: Get these from somewhere.
+            let s3_object_tags = HashMap::new();
             // TODO(petrosagg): durably record the persist shard we mint here
             let persist_shard = ShardId::new();
             let (write, read) = self
                 .persist_client
-                .open(persist_shard)
+                .open(persist_shard, s3_object_tags)
                 .await
                 .expect("invalid persist usage");
             self.state
