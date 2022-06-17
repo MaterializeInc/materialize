@@ -976,7 +976,7 @@ pub struct Schema {
 #[derive(Debug, Serialize, Clone)]
 pub struct Role {
     pub name: String,
-    pub id: i64,
+    pub id: u64,
     #[serde(skip)]
     pub oid: u32,
 }
@@ -2125,10 +2125,6 @@ impl<S: Append> Catalog<S> {
         self.storage().await.allocate_user_id().await
     }
 
-    pub async fn allocate_compute_instance_id(&mut self) -> Result<ComputeInstanceId, Error> {
-        self.storage().await.allocate_compute_instance_id().await
-    }
-
     pub async fn allocate_oid(&mut self) -> Result<u32, Error> {
         self.state.allocate_oid()
     }
@@ -2479,7 +2475,7 @@ impl<S: Append> Catalog<S> {
                 schema_name: String,
             },
             CreateRole {
-                id: i64,
+                id: u64,
                 oid: u32,
                 name: String,
             },
@@ -2624,7 +2620,6 @@ impl<S: Append> Catalog<S> {
                     }]
                 }
                 Op::CreateComputeInstance {
-                    id,
                     name,
                     config,
                     introspection_sources,
@@ -2634,7 +2629,7 @@ impl<S: Append> Catalog<S> {
                             ErrorKind::ReservedClusterName(name),
                         )));
                     }
-                    tx.insert_compute_instance(id, &name, &config, &introspection_sources)?;
+                    let id = tx.insert_compute_instance(&name, &config, &introspection_sources)?;
                     self.add_to_audit_log(
                         session,
                         &mut tx,
@@ -3449,7 +3444,6 @@ pub enum Op {
         oid: u32,
     },
     CreateComputeInstance {
-        id: ComputeInstanceId,
         name: String,
         config: Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: Vec<(&'static BuiltinLog, GlobalId)>,
@@ -3842,7 +3836,7 @@ impl mz_sql::catalog::CatalogRole for Role {
         &self.name
     }
 
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.id
     }
 }

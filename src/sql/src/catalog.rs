@@ -249,7 +249,7 @@ pub trait CatalogRole {
     fn name(&self) -> &str;
 
     /// Returns a stable ID for the role.
-    fn id(&self) -> i64;
+    fn id(&self) -> u64;
 }
 
 /// A compute instance in a [`SessionCatalog`].

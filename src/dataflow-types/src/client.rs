@@ -56,7 +56,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
 pub type ComputeInstanceId = u64;
 
 /// An abstraction allowing us to name different replicas.
-pub type ReplicaId = i64;
+pub type ReplicaId = u64;
 
 /// Identifier of a process within a replica.
 pub type ProcessId = i64;

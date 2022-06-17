@@ -45,7 +45,7 @@ SELECT * FROM mz_clusters
 ----
 1 default
 3 foo
-6 bar
+4 bar
 
 query T rowsort
 SHOW CLUSTERS
@@ -106,49 +106,49 @@ bar  v  v_primary_idx  1  ?column?  NULL  false
 query TTTTTTT
 SHOW EXTENDED INDEXES IN CLUSTER bar;
 ----
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_6_primary_idx  1  operator  NULL  false
-bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_6_primary_idx  2  worker  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_6_primary_idx  1  operator  NULL  false
-bar  mz_arrangement_records_internal  mz_arrangement_records_internal_6_primary_idx  2  worker  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_6_primary_idx  1  operator  NULL  false
-bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_6_primary_idx  2  worker  NULL  false
-bar  mz_dataflow_channels  mz_dataflow_channels_6_primary_idx  1  id  NULL  false
-bar  mz_dataflow_channels  mz_dataflow_channels_6_primary_idx  2  worker  NULL  false
-bar  mz_dataflow_operator_addresses  mz_dataflow_operator_addresses_6_primary_idx  1  id  NULL  false
-bar  mz_dataflow_operator_addresses  mz_dataflow_operator_addresses_6_primary_idx  2  worker  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_6_primary_idx  1  address  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_6_primary_idx  2  port  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_6_primary_idx  3  worker  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_6_primary_idx  4  update_type  NULL  false
-bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_6_primary_idx  5  timestamp  NULL  true
-bar  mz_dataflow_operators  mz_dataflow_operators_6_primary_idx  1  id  NULL  false
-bar  mz_dataflow_operators  mz_dataflow_operators_6_primary_idx  2  worker  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_6_primary_idx  1  dataflow  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_6_primary_idx  2  source  NULL  false
-bar  mz_materialization_dependencies  mz_materialization_dependencies_6_primary_idx  3  worker  NULL  false
-bar  mz_materializations  mz_materializations_6_primary_idx  1  name  NULL  false
-bar  mz_materializations  mz_materializations_6_primary_idx  2  worker  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_6_primary_idx  1  channel  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_6_primary_idx  2  source_worker  NULL  false
-bar  mz_message_counts_received_internal  mz_message_counts_received_internal_6_primary_idx  3  target_worker  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_6_primary_idx  1  channel  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_6_primary_idx  2  source_worker  NULL  false
-bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_6_primary_idx  3  target_worker  NULL  false
-bar  mz_peek_active  mz_peek_active_6_primary_idx  1  id  NULL  false
-bar  mz_peek_active  mz_peek_active_6_primary_idx  2  worker  NULL  false
-bar  mz_peek_durations  mz_peek_durations_6_primary_idx  1  worker  NULL  false
-bar  mz_peek_durations  mz_peek_durations_6_primary_idx  2  duration_ns  NULL  false
-bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_6_primary_idx  1  id  NULL  false
-bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_6_primary_idx  2  worker  NULL  false
-bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_6_primary_idx  1  id  NULL  false
-bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_6_primary_idx  2  worker  NULL  false
-bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_6_primary_idx  3  duration_ns  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_6_primary_idx  1  worker  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_6_primary_idx  2  slept_for  NULL  false
-bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_6_primary_idx  3  requested  NULL  false
-bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_6_primary_idx  1  global_id  NULL  false
-bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_6_primary_idx  2  worker  NULL  false
-bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_6_primary_idx  3  time  NULL  false
+bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  1  operator  NULL  false
+bar  mz_arrangement_batches_internal  mz_arrangement_batches_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  1  operator  NULL  false
+bar  mz_arrangement_records_internal  mz_arrangement_records_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  1  operator  NULL  false
+bar  mz_arrangement_sharing_internal  mz_arrangement_sharing_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_dataflow_channels  mz_dataflow_channels_4_primary_idx  1  id  NULL  false
+bar  mz_dataflow_channels  mz_dataflow_channels_4_primary_idx  2  worker  NULL  false
+bar  mz_dataflow_operator_addresses  mz_dataflow_operator_addresses_4_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operator_addresses  mz_dataflow_operator_addresses_4_primary_idx  2  worker  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  1  address  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  2  port  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  3  worker  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  4  update_type  NULL  false
+bar  mz_dataflow_operator_reachability_internal  mz_dataflow_operator_reachability_internal_4_primary_idx  5  timestamp  NULL  true
+bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operators  mz_dataflow_operators_4_primary_idx  2  worker  NULL  false
+bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  1  dataflow  NULL  false
+bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  2  source  NULL  false
+bar  mz_materialization_dependencies  mz_materialization_dependencies_4_primary_idx  3  worker  NULL  false
+bar  mz_materializations  mz_materializations_4_primary_idx  1  name  NULL  false
+bar  mz_materializations  mz_materializations_4_primary_idx  2  worker  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  1  channel  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  2  source_worker  NULL  false
+bar  mz_message_counts_received_internal  mz_message_counts_received_internal_4_primary_idx  3  target_worker  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  1  channel  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  2  source_worker  NULL  false
+bar  mz_message_counts_sent_internal  mz_message_counts_sent_internal_4_primary_idx  3  target_worker  NULL  false
+bar  mz_peek_active  mz_peek_active_4_primary_idx  1  id  NULL  false
+bar  mz_peek_active  mz_peek_active_4_primary_idx  2  worker  NULL  false
+bar  mz_peek_durations  mz_peek_durations_4_primary_idx  1  worker  NULL  false
+bar  mz_peek_durations  mz_peek_durations_4_primary_idx  2  duration_ns  NULL  false
+bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_4_primary_idx  1  id  NULL  false
+bar  mz_scheduling_elapsed_internal  mz_scheduling_elapsed_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primary_idx  1  id  NULL  false
+bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primary_idx  2  worker  NULL  false
+bar  mz_scheduling_histogram_internal  mz_scheduling_histogram_internal_4_primary_idx  3  duration_ns  NULL  false
+bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  1  worker  NULL  false
+bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  2  slept_for  NULL  false
+bar  mz_scheduling_parks_internal  mz_scheduling_parks_internal_4_primary_idx  3  requested  NULL  false
+bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  1  global_id  NULL  false
+bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  2  worker  NULL  false
+bar  mz_worker_materialization_frontiers  mz_worker_materialization_frontiers_4_primary_idx  3  time  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
 query TTTTTTT
