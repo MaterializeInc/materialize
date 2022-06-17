@@ -3733,7 +3733,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let response = Ok(ExecuteResponse::TransactionExited {
+        let mut response = Ok(ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
         });
@@ -3743,29 +3743,22 @@ impl<S: Append + 'static> Coordinator<S> {
             .sequence_end_transaction_inner(&mut session, action)
             .await;
 
-        match result {
-            Ok(Some(writes)) if writes.is_empty() => {
-                session.vars_mut().end_transaction(action);
-                tx.send(response, session);
+        let (response, action) = match result {
+            Ok(Some(writes)) if writes.is_empty() => (response, action),
+            Ok(Some(writes)) => {
+                self.submit_write(PendingWriteTxn::User {
+                    writes: writes.into_iter().map(|write| write.into()).collect(),
+                    response,
+                    client_transmitter: tx,
+                    session,
+                    action: Some(action),
+                });
+                return;
             }
-            Ok(Some(writes)) => self.submit_write(PendingWriteTxn::User {
-                writes: writes.into_iter().map(|write| write.into()).collect(),
-                response,
-                client_transmitter: tx,
-                session,
-                action: Some(action),
-            }),
-            Ok(None) => {
-                session.vars_mut().end_transaction(action);
-                tx.send(response, session);
-            }
-            Err(err) => {
-                session
-                    .vars_mut()
-                    .end_transaction(EndTransactionAction::Rollback);
-                tx.send(Err(err), session)
-            }
-        }
+            Err(err) => (Err(err), EndTransactionAction::Rollback),
+        };
+        session.vars_mut().end_transaction(action);
+        tx.send(response, session);
     }
 
     async fn sequence_end_transaction_inner(
