@@ -10,6 +10,7 @@
 //! Structured name types for SQL objects.
 
 use anyhow::Error;
+use mz_sql_parser::ast::WithOptionValue;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
@@ -1002,6 +1003,31 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     ResolvedClusterName(0)
                 }
             },
+        }
+    }
+
+    fn fold_with_option_value(
+        &mut self,
+        node: mz_sql_parser::ast::WithOptionValue<Raw>,
+    ) -> mz_sql_parser::ast::WithOptionValue<Aug> {
+        use mz_sql_parser::ast::WithOptionValue::*;
+        match node {
+            Value(v) => Value(self.fold_value(v)),
+            Ident(i) => Ident(self.fold_ident(i)),
+            DataType(dt) => DataType(self.fold_data_type(dt)),
+            Secret(secret) => {
+                let object_name = self.fold_object_name(secret);
+                if let ResolvedObjectName::Object { id, .. } = &object_name {
+                    let item = self.catalog.get_item(&id);
+                    if item.item_type() != CatalogItemType::Secret {
+                        self.status = Err(PlanError::Unsupported {
+                            feature: "non-secret SECRET".to_string(),
+                            issue_no: None,
+                        });
+                    }
+                }
+                Secret(object_name)
+            }
         }
     }
 }
