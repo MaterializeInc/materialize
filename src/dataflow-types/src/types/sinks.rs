@@ -236,6 +236,7 @@ pub struct KafkaSinkConnection {
 proptest::prop_compose! {
     fn any_kafka_sink_connection()(
         connection in any::<KafkaConnection>(),
+        options in any::<BTreeMap<String, StringOrSecret>>(),
         topic in any::<String>(),
         topic_prefix in any::<String>(),
         key_desc_and_indices in any::<Option<(RelationDesc, Vec<usize>)>>(),
@@ -249,7 +250,7 @@ proptest::prop_compose! {
     ) -> KafkaSinkConnection {
         KafkaSinkConnection {
             connection,
-            options: BTreeMap::new(),
+            options,
             topic,
             topic_prefix,
             key_desc_and_indices,

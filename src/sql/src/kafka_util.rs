@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
 
-// use mz_kafka_util::KafkaAddrs;
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::{Offset, TopicPartitionList};
@@ -40,23 +39,6 @@ enum ValType {
     // Number with range [lower, upper]
     Number(i32, i32),
     Boolean,
-}
-
-fn validate_secret(
-    catalog: &dyn SessionCatalog,
-    s: &mz_dataflow_types::connections::StringOrSecret,
-) -> Result<(), anyhow::Error> {
-    if let StringOrSecret::Secret(id) = s {
-        let item = catalog.get_item(&id);
-        if item.item_type() != CatalogItemType::Secret {
-            bail!(
-                "'{}' is not a SECRET",
-                catalog.resolve_full_name(&item.name())
-            );
-        }
-    }
-
-    Ok(())
 }
 
 // Describes Kafka cluster configurations users can supply using `CREATE
@@ -162,7 +144,6 @@ fn extract(
                 );
             }
         };
-        validate_secret(catalog, &value)?;
         out.insert(config.get_kafka_config_key(), value);
     }
     Ok(out)

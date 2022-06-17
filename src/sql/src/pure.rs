@@ -78,7 +78,7 @@ pub async fn purify_create_source(
             let mut connection_options =
                 kafka_util::extract_config(&*catalog, &mut with_options_map)?;
 
-            let connection_options = match connection {
+            match connection {
                 KafkaConnection::Reference { connection } => {
                     let scx = StatementContext::new(None, &*catalog);
                     let item = scx.get_item_by_resolved_name(&connection)?;
@@ -89,15 +89,13 @@ pub async fn purify_create_source(
 
                     for (k, v) in options {
                         if connection_options.insert(k.clone(), v).is_some() {
-                            bail!("cannot set value {} with existing Kafka connection", k);
+                            bail!("cannot set value {} with Kafka CONNECTION", k);
                         }
                     }
-                    connection_options
                 }
                 KafkaConnection::Inline { broker } => {
                     connection_options
                         .insert("bootstrap.servers".into(), broker.to_string().into());
-                    connection_options
                 }
             };
             let consumer = kafka_util::create_consumer(

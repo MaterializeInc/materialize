@@ -26,7 +26,7 @@ use regex::Regex;
 use tracing::{debug, warn};
 
 use mz_dataflow_types::connections::{
-    Connection, KafkaConnection, KafkaConnectionWOptions, Security, SslConfig, StringOrSecret,
+    Connection, KafkaConnection, Security, SslConfig, StringOrSecret,
 };
 use mz_dataflow_types::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
@@ -344,15 +344,21 @@ pub fn plan_create_source(
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
             let mut options = kafka_util::extract_config(scx.catalog, &mut with_options)?;
+            // Determine if config generates a valid KafkaConnection
+            let kafka_connection_derived = KafkaConnection::try_from(&mut options);
             let kafka_connection = match &kafka.connection {
                 mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
+                    // Consume derived KafkaConnection, or error
+                    let kafka_connection = kafka_connection_derived?;
                     options.insert("bootstrap.servers".into(), broker.clone().into());
-                    let KafkaConnectionWOptions((kafka_connection, remaining_options)) =
-                        options.try_into()?;
-                    options = remaining_options;
                     kafka_connection
                 }
                 mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
+                    // If options could create a valid KafkaConnection, error
+                    // because we already have a valid Kafka connection
+                    if kafka_connection_derived.is_ok() {
+                        bail!("cannot specify bootstrap.servers alongside a Kafka CONNECTION");
+                    }
                     let item = scx.get_item_by_resolved_name(&connection)?;
                     match item.connection()? {
                         Connection::Kafka(connection) => connection.clone(),
@@ -1937,10 +1943,10 @@ fn kafka_sink_builder(
     let consistency_topic = consistency_config.clone().map(|config| config.0);
     let consistency_format = consistency_config.map(|config| config.1);
 
-    let KafkaConnectionWOptions((connection, options)) = config_options.try_into()?;
+    let connection = KafkaConnection::try_from(&mut config_options)?;
     Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
         connection,
-        options,
+        options: config_options,
         format,
         topic_prefix,
         consistency_topic_prefix: consistency_topic,
@@ -2858,7 +2864,7 @@ pub fn describe_create_connection(
 
 generate_extracted_config!(
     KafkaConnectionOption,
-    (Broker, Vec<String>),
+    (Broker, String),
     (Brokers, Vec<String>),
     (SslKey, with_options::Secret),
     (SslKeyPassword, with_options::Secret),
@@ -2874,7 +2880,8 @@ impl KafkaConnectionOptionExtracted {
         match (&self.broker, &self.brokers) {
             (Some(_), Some(_)) => bail!("cannot set BROKER and BROKERS"),
             (None, None) => bail!("must set either BROKER or BROKERS"),
-            (Some(v), None) | (None, Some(v)) => Ok(v.to_vec()),
+            (Some(v), None) => Ok(vec![v.to_string()]),
+            (None, Some(v)) => Ok(v.to_vec()),
         }
     }
     pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
@@ -2940,8 +2947,8 @@ pub fn plan_create_connection(
     } = stmt;
     let connection = match connection {
         CreateConnection::Kafka { with_options } => {
-            let k: KafkaConnectionOptionExtracted = with_options.try_into()?;
-            Connection::Kafka(k.try_into()?)
+            let k = KafkaConnectionOptionExtracted::try_from(with_options)?;
+            Connection::Kafka(KafkaConnection::try_from(k)?)
         }
         CreateConnection::Csr { url, with_options } => {
             let connection = kafka_util::generate_ccsr_connection(

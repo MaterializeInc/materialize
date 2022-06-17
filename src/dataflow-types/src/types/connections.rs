@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use anyhow::bail;
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -160,12 +161,12 @@ pub struct SslConfig {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Security {
-    SSL(SslConfig),
+    Ssl(SslConfig),
 }
 
 impl From<SslConfig> for Security {
     fn from(c: SslConfig) -> Self {
-        Security::SSL(c)
+        Security::Ssl(c)
     }
 }
 
@@ -175,13 +176,11 @@ pub struct KafkaConnection {
     pub security: Option<Security>,
 }
 
-pub struct KafkaConnectionWOptions(pub (KafkaConnection, BTreeMap<String, StringOrSecret>));
-
 impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
     fn from(v: KafkaConnection) -> Self {
         let mut r = BTreeMap::new();
         r.insert("bootstrap.servers".into(), v.brokers.join(",").into());
-        if let Some(Security::SSL(SslConfig {
+        if let Some(Security::Ssl(SslConfig {
             key,
             key_password,
             certificate,
@@ -206,34 +205,47 @@ impl From<KafkaConnection> for BTreeMap<String, StringOrSecret> {
     }
 }
 
-impl TryFrom<BTreeMap<String, StringOrSecret>> for KafkaConnectionWOptions {
+impl TryFrom<&mut BTreeMap<String, StringOrSecret>> for KafkaConnection {
     type Error = anyhow::Error;
-    fn try_from(mut value: BTreeMap<String, StringOrSecret>) -> Result<Self, Self::Error> {
+    /// Extracts only the options necessary to create a `KafkaConnection` from
+    /// a `BTreeMap<String, StringOrSecret>`, and returns the remaining
+    /// options.
+    ///
+    /// # Panics
+    /// - If `value` was not sufficiently or incorrectly type checked and
+    ///   parameters expected to reference objects (i.e. secrets) are instead
+    ///   `String`s, or vice versa.
+    fn try_from(value: &mut BTreeMap<String, StringOrSecret>) -> Result<Self, Self::Error> {
         let certificate_authority = value.remove("ssl.ca.pem");
-        let cert = value.remove("ssl.certificate.pem");
+        let certificate = value.remove("ssl.certificate.pem");
         let key = value.remove("ssl.key.pem");
         let key_password = value.remove("ssl.key.password");
-        let security = if [&certificate_authority, &cert, &key, &key_password]
+        let security = if [&certificate_authority, &certificate, &key, &key_password]
             .iter()
             .any(|o| o.is_some())
         {
-            Some(Security::SSL(SslConfig {
+            Some(Security::Ssl(SslConfig {
                 key: key.map(|i| i.unwrap_secret()),
                 key_password: key_password.map(|i| i.unwrap_secret()),
-                certificate: cert.clone(),
-                certificate_authority: certificate_authority.clone(),
+                certificate,
+                certificate_authority,
             }))
         } else {
             None
         };
         let brokers = value
             .remove("bootstrap.server")
-            .map(|i| vec![i.unwrap_string().to_string()])
+            .map(|i| {
+                i.unwrap_string()
+                    .split(',')
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
-        Ok(KafkaConnectionWOptions((
-            KafkaConnection { brokers, security },
-            value,
-        )))
+        if brokers.is_empty() {
+            bail!("must provide at least one Kafka broker");
+        }
+        Ok(KafkaConnection { brokers, security })
     }
 }
 
@@ -262,7 +274,7 @@ impl RustType<ProtoKafkaConnectionSecurity> for Security {
         use proto_kafka_connection_security::Kind;
         ProtoKafkaConnectionSecurity {
             kind: Some(match self {
-                Security::SSL(config) => Kind::Ssl(config.into_proto()),
+                Security::Ssl(config) => Kind::Ssl(config.into_proto()),
             }),
         }
     }
@@ -273,7 +285,7 @@ impl RustType<ProtoKafkaConnectionSecurity> for Security {
             TryFromProtoError::missing_field("ProtoKafkaConnectionSecurity::kind")
         })?;
         Ok(match kind {
-            Kind::Ssl(s) => Security::SSL(SslConfig::from_proto(s)?),
+            Kind::Ssl(s) => Security::Ssl(SslConfig::from_proto(s)?),
         })
     }
 }

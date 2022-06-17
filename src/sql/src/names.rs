@@ -10,7 +10,6 @@
 //! Structured name types for SQL objects.
 
 use anyhow::Error;
-use mz_sql_parser::ast::WithOptionValue;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;

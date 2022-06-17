@@ -1060,6 +1060,7 @@ impl Arbitrary for KafkaSourceConnection {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         (
             any::<KafkaConnection>(),
+            any::<BTreeMap<String, StringOrSecret>>(),
             any::<String>(),
             any::<HashMap<i32, MzOffset>>(),
             any::<Option<String>>(),
@@ -1073,6 +1074,7 @@ impl Arbitrary for KafkaSourceConnection {
             .prop_map(
                 |(
                     connection,
+                    options,
                     topic,
                     start_offsets,
                     group_id_prefix,
@@ -1084,7 +1086,7 @@ impl Arbitrary for KafkaSourceConnection {
                     include_headers,
                 )| KafkaSourceConnection {
                     connection,
-                    options: BTreeMap::new(),
+                    options,
                     topic,
                     start_offsets,
                     group_id_prefix,
