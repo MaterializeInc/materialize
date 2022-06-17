@@ -24,6 +24,7 @@ use axum::response::Response;
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
+use mz_ore::retry::Retry;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -1053,10 +1054,21 @@ source materialize.public.t1 (u1, storage):
  read frontier:[         <TIMESTAMP>]
 write frontier:[         <TIMESTAMP>]\n";
 
-    let row = client.query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])?;
-    let explain: String = row.get(0);
-    let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
-    assert_eq!(explain, expect);
+    // Upper starts at 0, which the regex doesn't cover. Wait until it moves ahead.
+    Retry::default()
+        .retry(|_| {
+            let row = client
+                .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
+                .unwrap();
+            let explain: String = row.get(0);
+            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+            if explain != expect {
+                Err(format!("expected {expect}, got {explain}"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
 
     Ok(())
 }
