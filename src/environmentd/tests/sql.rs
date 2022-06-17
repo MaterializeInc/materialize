@@ -22,6 +22,7 @@ use axum::response::Response;
 use axum::{routing, Json, Router};
 use chrono::{DateTime, Utc};
 use http::StatusCode;
+use mz_ore::retry::Retry;
 use postgres::Row;
 use regex::Regex;
 use serde_json::json;
@@ -1024,7 +1025,7 @@ fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
     let timestamp_str = "<TIMESTAMP>";
-    let timestamp_re = Regex::new(r"(\d{13}|0)").unwrap();
+    let timestamp_re = Regex::new(r"(\d{13})").unwrap();
     let whitespace_re = Regex::new(r"\s+<TIMESTAMP>").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
@@ -1041,11 +1042,22 @@ source materialize.public.t1 (u1, storage):
 write frontier:[{timestamp_str}]\n"
     );
 
-    let row = client.query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])?;
-    let explain: String = row.get(0);
-    let explain = timestamp_re.replace_all(&explain, timestamp_str);
-    let explain = whitespace_re.replace_all(&explain, timestamp_str);
-    assert_eq!(explain, expect);
+    // Upper starts at 0, which the regex doesn't cover. Wait until it moves ahead.
+    Retry::default()
+        .retry(|_| {
+            let row = client
+                .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
+                .unwrap();
+            let explain: String = row.get(0);
+            let explain = timestamp_re.replace_all(&explain, timestamp_str);
+            let explain = whitespace_re.replace_all(&explain, timestamp_str);
+            if explain != expect {
+                Err(format!("expected {expect}, got {explain}"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap();
 
     Ok(())
 }

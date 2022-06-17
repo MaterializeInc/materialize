@@ -1,8 +1,15 @@
 # dbt-materialize Changelog
 
+## 1.1.2 - 2022-06-15
+
+* Mark the adapter as not supporting query cancellation, as Materialize does not
+  support the `pg_terminate_backend` function that dbt uses to cancel
+  queries.
+
 ## 1.1.1 - 2022-05-04
 
-* Provide support for storing the results of a test query in a `materializedview` using the [`store_failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures).
+* Provide support for storing the results of a test query in a `materializedview`
+  using the [`store_failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures).
 
 ## 1.1.0 - 2022-05-02
 
