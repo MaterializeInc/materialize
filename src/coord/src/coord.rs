@@ -6235,7 +6235,7 @@ mod timeline {
 
     /// A type that wraps a [`TimestampOracle`] and provides durable timestamps. This allows us to
     /// recover a timestamp that is larger than all previous timestamps on restart. The protocol
-    /// is based on timestamp recovery from Percolator (https://research.google/pubs/pub36726/). We
+    /// is based on timestamp recovery from Percolator <https://research.google/pubs/pub36726/>. We
     /// "pre-allocate" a group of timestamps at once, and only durably store the largest of those
     /// timestamps. All timestamps within that interval can be served directly from memory, without
     /// going to disk. On restart, we re-initialize the current timestamp to a value one larger
