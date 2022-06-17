@@ -849,9 +849,6 @@ name = "bytesize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c58ec36aac5066d5ca17df51b3e70279f5670a72102f5752cb7e7c856adfc70"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "cast"
@@ -2942,7 +2939,6 @@ name = "mz-audit-log"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bytesize",
  "serde",
  "serde_json",
  "serde_plain",
@@ -3827,7 +3823,6 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
- "mz-sql-parser",
  "num-traits",
  "num_enum",
  "once_cell",
@@ -4072,7 +4067,6 @@ dependencies = [
  "thiserror",
  "timely",
  "tokio",
- "tokio-byteorder",
  "tokio-postgres",
  "tokio-serde",
  "tokio-util",
@@ -6176,16 +6170,6 @@ dependencies = [
  "tokio-macros",
  "tracing",
  "winapi",
-]
-
-[[package]]
-name = "tokio-byteorder"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cf347e8ae1d1ffd16c8aed569172a71bd81098a001d0f4964d476c0097aba4a"
-dependencies = [
- "byteorder",
- "tokio",
 ]
 
 [[package]]
