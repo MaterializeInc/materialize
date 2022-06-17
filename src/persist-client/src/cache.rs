@@ -19,7 +19,7 @@ use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use tracing::debug;
 
 use crate::r#impl::machine::retry_external;
-use crate::r#impl::metrics::{Metrics, MetricsBlobMulti, MetricsConsensus, RetriesMetrics};
+use crate::r#impl::metrics::{Metrics, MetricsBlobMulti, MetricsConsensus};
 use crate::{PersistClient, PersistConfig, PersistLocation};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -34,7 +34,6 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    retry_metrics: Arc<RetriesMetrics>,
     blob_by_uri: HashMap<String, Arc<dyn BlobMulti + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
 }
@@ -42,12 +41,9 @@ pub struct PersistClientCache {
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].
     pub fn new(registry: &MetricsRegistry) -> Self {
-        let metrics = Arc::new(Metrics::new(registry));
-        let retry_metrics = Arc::new(metrics.retries_metrics());
         PersistClientCache {
             cfg: PersistConfig::default(),
-            metrics,
-            retry_metrics,
+            metrics: Arc::new(Metrics::new(registry)),
             blob_by_uri: HashMap::new(),
             consensus_by_uri: HashMap::new(),
         }
@@ -78,14 +74,14 @@ impl PersistClientCache {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
                 let blob = BlobMultiConfig::try_from(x.key()).await?;
-                let blob = retry_external(&self.retry_metrics.external.blob_open, || {
+                let blob = retry_external(&self.metrics.retries.external.blob_open, || {
                     blob.clone().open()
                 })
                 .await;
                 Arc::clone(x.insert(blob))
             }
         };
-        let blob = Arc::new(MetricsBlobMulti::new(blob, &self.metrics))
+        let blob = Arc::new(MetricsBlobMulti::new(blob, Arc::clone(&self.metrics)))
             as Arc<dyn BlobMulti + Send + Sync>;
         let consensus = match self.consensus_by_uri.entry(location.consensus_uri) {
             Entry::Occupied(x) => Arc::clone(x.get()),
@@ -93,14 +89,15 @@ impl PersistClientCache {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
                 let consensus = ConsensusConfig::try_from(x.key()).await?;
-                let consensus = retry_external(&self.retry_metrics.external.consensus_open, || {
-                    consensus.clone().open()
-                })
-                .await;
+                let consensus =
+                    retry_external(&self.metrics.retries.external.consensus_open, || {
+                        consensus.clone().open()
+                    })
+                    .await;
                 Arc::clone(x.insert(consensus))
             }
         };
-        let consensus = Arc::new(MetricsConsensus::new(consensus, &self.metrics))
+        let consensus = Arc::new(MetricsConsensus::new(consensus, Arc::clone(&self.metrics)))
             as Arc<dyn Consensus + Send + Sync>;
         PersistClient::new(self.cfg.clone(), blob, consensus, Arc::clone(&self.metrics)).await
     }

@@ -4016,6 +4016,7 @@ dependencies = [
  "postgres-openssl",
  "rand",
  "rusqlite",
+ "tempfile",
  "timely",
  "tokio",
  "tokio-postgres",

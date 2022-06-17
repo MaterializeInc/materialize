@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, FOREVER};
-use crate::r#impl::metrics::RetriesMetrics;
+use crate::r#impl::metrics::Metrics;
 use crate::{PersistConfig, ShardId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -176,7 +176,7 @@ where
 {
     pub(crate) fn new(
         cfg: PersistConfig,
-        retry_metrics: Arc<RetriesMetrics>,
+        metrics: Arc<Metrics>,
         size_hint: usize,
         lower: Antichain<T>,
         blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -184,7 +184,7 @@ where
     ) -> Self {
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
-            retry_metrics,
+            metrics,
             shard_id,
             lower.clone(),
             Arc::clone(&blob),
@@ -298,7 +298,7 @@ where
 #[derive(Debug)]
 struct BatchParts<T> {
     max_outstanding: usize,
-    retry_metrics: Arc<RetriesMetrics>,
+    metrics: Arc<Metrics>,
     shard_id: ShardId,
     lower: Antichain<T>,
     blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -309,14 +309,14 @@ struct BatchParts<T> {
 impl<T: Timestamp + Codec64> BatchParts<T> {
     fn new(
         max_outstanding: usize,
-        retry_metrics: Arc<RetriesMetrics>,
+        metrics: Arc<Metrics>,
         shard_id: ShardId,
         lower: Antichain<T>,
         blob: Arc<dyn BlobMulti + Send + Sync>,
     ) -> Self {
         BatchParts {
             max_outstanding,
-            retry_metrics,
+            metrics,
             shard_id,
             lower,
             blob,
@@ -328,7 +328,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     async fn write(&mut self, updates: ColumnarRecords, upper: Antichain<T>) {
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(self.lower.clone(), upper, since);
-        let retry_metrics = Arc::clone(&self.retry_metrics);
+        let metrics = Arc::clone(&self.metrics);
         let blob = Arc::clone(&self.blob);
         let key = Uuid::new_v4().to_string();
         let blob_key = key.clone();
@@ -384,7 +384,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .await
                 .expect("part encode task failed");
 
-                let () = retry_external(&retry_metrics.external.batch_set, || async {
+                let () = retry_external(&metrics.retries.external.batch_set, || async {
                     blob.set(
                         Instant::now() + FOREVER,
                         &blob_key,
