@@ -17,7 +17,7 @@ The `dbt-materialize` adapter can only be used with dbt Core. We are working wit
 
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for data transformation ("the T in ELT"). It combines the accessibility of SQL with software engineering best practices, allowing you to not only build reliable data pipelines, but also document, test and version-control them.
 
-While dbt is a great fit for **batch** transformations, it can only **approximate** transforming streaming data (officially through [incremental models](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/configuring-incremental-models), and unofficially through [lambda views](https://discourse.getdbt.com/t/how-to-create-near-real-time-models-with-just-dbt-sql/1457)). In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
+In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
 
 ## Setup
 
@@ -217,7 +217,19 @@ Because Materialize is optimized for real-time transformations of streaming data
 
 {{% dbt-materializations %}}
 
-## Document and test a dbt project
+## Test a dbt project
+
+Run [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) on your models to ensure your code is working correctly.
+
+```bash
+dbt test
+```
+Under the hood, dbt creates a `SELECT` query for each test that returns the rows where this assertion is _not_ true; if the test returns zero rows, the assertion passes.
+
+If you set the optional `--store-failures` flag or create a [`store_failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures), dbt will create a materialized view using the test query.
+This view is a continuously updating representation of failures. It allows you to examine failing records *both* as they happen while you are developing your data model, and later in production if an upstream change causes an assertion to fail.
+
+## Document a dbt project
 
 dbt can automatically generate [documentation](https://docs.getdbt.com/docs/building-a-dbt-project/documentation) for your project as a shareable website. This brings **data governance** to your streaming pipelines, speeding up life-saving processes like data discovery (_where_ to find _what_ data) and lineage (the path data takes from source(s) to sink(s), as well as the transformations that happen along the way).
 
@@ -247,7 +259,7 @@ dbt can automatically generate [documentation](https://docs.getdbt.com/docs/buil
             description: "The average bid price"
     ```
 
-1. To generate documentation for your project, run:
+2. To generate documentation for your project, run:
 
     ```bash
     dbt docs generate
@@ -255,22 +267,14 @@ dbt can automatically generate [documentation](https://docs.getdbt.com/docs/buil
 
     dbt will grab any additional project information and Materialize catalog metadata, then compile it into `.json` files (`manifest.json` and `catalog.json`, respectively) that can be used to feed the documentation website. You can find the compiled files under `/target`, in the dbt project folder.
 
-1. Launch the documentation website. By default, this command starts a web server on port 8000:
+3. Launch the documentation website. By default, this command starts a web server on port 8000:
 
     ```bash
     dbt docs serve #--port <port>
     ```
 
-1. In a browser, navigate to `localhost:8000`. There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on.
+4. In a browser, navigate to `localhost:8000`. There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on.
 
     If you click **View Lineage Graph** in the lower right corner, you can even inspect the lineage of your streaming pipelines!
 
     ![dbt lineage graph](https://user-images.githubusercontent.com/23521087/138125450-cf33284f-2a33-4c1e-8bce-35f22685213d.png)
-
-1. Finally, run some [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) on your models:
-
-    ```bash
-    dbt test
-    ```
-
-    Under the hood, dbt creates a `SELECT` query for each test that returns the rows where this assertion is _not_ true; if the test returns zero rows, the assertion passes.
