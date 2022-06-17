@@ -14,9 +14,9 @@ futures-core = "0.3.21"
 http = "0.2.8"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
-mz-repr = { path = "../repr" }
+mz-repr = { path = "../repr", optional = true }
 tracing-subscriber = { version = "0.3.11", default-features = false }
 opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
 
 [features]
-tokio-console = ["mz-ore/tokio-console"]
+tokio-console = ["mz-ore/tokio-console", "mz-repr"]
