@@ -262,17 +262,15 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-impl RustType<proto_compute_command::ProtoCompaction> for (GlobalId, Antichain<u64>) {
-    fn into_proto(self: &Self) -> proto_compute_command::ProtoCompaction {
-        proto_compute_command::ProtoCompaction {
+impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
+    fn into_proto(self: &Self) -> ProtoCompaction {
+        ProtoCompaction {
             id: Some(self.0.into_proto()),
             frontier: Some((&self.1).into()),
         }
     }
 
-    fn from_proto(
-        proto: proto_compute_command::ProtoCompaction,
-    ) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoCompaction) -> Result<Self, TryFromProtoError> {
         Ok((
             proto.id.into_rust_if_some("ProtoCompaction::id")?,
             proto
@@ -320,18 +318,6 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-/// Commands related to the ingress and egress of collections.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum StorageCommand<T = mz_repr::Timestamp> {
-    /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
-    /// Enable compaction in storage-managed collections.
-    ///
-    /// Each entry in the vector names a collection and provides a frontier after which
-    /// accumulations must be correct.
-    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-}
-
 impl<T> ComputeCommand<T> {
     /// Indicates which global ids should start and cease frontier tracking.
     ///
@@ -365,6 +351,86 @@ impl<T> ComputeCommand<T> {
                 // Other commands have no known impact on frontier tracking.
             }
         }
+    }
+}
+
+/// Commands related to the ingress and egress of collections.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Create the enumerated sources, each associated with its identifier.
+    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
+    /// Enable compaction in storage-managed collections.
+    ///
+    /// Each entry in the vector names a collection and provides a frontier after which
+    /// accumulations must be correct.
+    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+}
+
+impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoStorageCommand {
+        use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
+        ProtoStorageCommand {
+            kind: Some(match self {
+                StorageCommand::CreateSources(ingestion_descriptions) => {
+                    CreateSources(ProtoCreateSources {
+                        ingestion_descriptions: ingestion_descriptions.into_proto(),
+                    })
+                }
+                StorageCommand::AllowCompaction(collections) => {
+                    AllowCompaction(ProtoAllowCompaction {
+                        collections: collections.into_proto(),
+                    })
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
+        use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
+        match proto.kind {
+            Some(CreateSources(ProtoCreateSources {
+                ingestion_descriptions,
+            })) => Ok(StorageCommand::CreateSources(
+                ingestion_descriptions.into_rust()?,
+            )),
+            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
+                Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
+            }
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoStorageCommand::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec(
+                any::<IngestionDescription<CollectionMetadata, mz_repr::Timestamp>>(),
+                1..4
+            )
+            .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(
+                (
+                    any::<GlobalId>(),
+                    proptest::collection::vec(any::<u64>(), 1..4)
+                ),
+                1..4
+            )
+            .prop_map(|collections| StorageCommand::AllowCompaction(
+                collections
+                    .into_iter()
+                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
+                    .collect()
+            )),
+        ]
+        .boxed()
     }
 }
 
@@ -1730,5 +1796,13 @@ mod tests {
                 assert_eq!(actual, expect);
             }
         }
+
+        #[test]
+        fn storage_command_protobuf_roundtrip(expect in any::<StorageCommand<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoStorageCommand>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
     }
 }
