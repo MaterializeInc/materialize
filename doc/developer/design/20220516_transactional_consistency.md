@@ -38,7 +38,7 @@ The following items' impact on consistency is not considered:
 Strict Serializability (in simplified terms) means that you can assign a total order to all transactions in the system,
 and that the total order is constrained by the real time occurrences of those transactions. In other words, if
 transaction A finishes in real time before transaction B starts in real time, then transaction A MUST be ordered before
-transaction B in the total order. Concurrent transaction can be ordered arbitrarily. For a more in depth discussion
+transaction B in the total order. Concurrent transactions can be ordered arbitrarily. For a more in depth discussion
 please
 read [https://jepsen.io/consistency/models/strict-serializable](https://jepsen.io/consistency/models/strict-serializable)
 and chapters 7 and 9 of [Designing Data-Intensive Applications](https://dataintensive.net/).
@@ -56,7 +56,8 @@ We can then use these timestamp to form a total order constrained by real time:
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, the timestamp for T1
   was assigned before the timestamp of T2, T1 is read-only, and T2 is read-only.
 - Transaction T1 is ordered before Transaction T2 if the timestamp of T1 == the timestamp of T2, the Global ID of T1 is
-  less than the Global ID of T2, T1 is write-only, and T2 is write-only.
+  less than the Global ID of T2, T1 is write-only, and T2 is write-only. NOTE: This works because currently you can only
+  write to a single table in a transaction.
 
 ### Timelines
 
@@ -66,10 +67,10 @@ Timelines are the unit of consistency that Materialize provides and can be read 
 timeline. Each timeline defines their own notion of time and consistency guarantees are only provided within a single
 timeline. There can only be at most a single Coordinator thread assigning timestamps per timeline (though multiple
 timelines can share a thread if they want). All the properties discussed below need to happen on a per-timeline basis,
-and require no communication across timelines (except maybe to serialize access to the catalog).
+and require no communication across timelines (except to serialize access to the catalog).
 
 Each timeline needs some definition for the current time. For example timelines that track real time can use the system
-clock for the current time. The current time can go backwards, but timestamps assigned must be monotonically increasing.
+clock for the current time. The current time can go backwards, but timestamps assigned must be non-decreasing.
 
 The document also allows user tables to exist in any timeline.
 
@@ -114,8 +115,8 @@ Materialize (i.e. not between restarts).
 - [X] Each timestamp is assigned to an event at some real-time moment within the event's bounds: For any two events e1
   and e2, if e2 starts after e1 finished, then e2's timestamp will be larger or equal timestamp to e1's timestamp.
 - [X] Each timestamp transition is made durable before any subsequent response is issued: writes wait for an `append`
-  command to be made durable before returning a response to the client, additionally all timestamp transitions are
-  persisted to disk (See [Global Timestamp Recovery](#Global Timestamp Recovery)).
+  command to be made durable before returning a response to the client, additionally timestamp transitions are persisted
+  to disk (See [Global Timestamp Recovery](#Global Timestamp Recovery)).
 
 ### Global Timestamp Recovery
 
@@ -124,9 +125,10 @@ of the previous global timestamp before the restart. This ensures that a read or
 timestamp greater than or equal to all reads and writes before the restart.
 
 Proposal: Use a [Percolator](https://storage.googleapis.com/pub-tools-public-publication-data/pdf/36726.pdf) inspired
-timestamp recovery protocol (See section 2.3 Timestamps). Periodically we durably store some value greater than the
-current global timestamp. We never allocate a timestamp larger than the one durably stored, without first updating the
-durably stored timestamp. When Materialize restarts, it uses a value one larger than the value durably stored.
+timestamp recovery protocol (See section 2.3 Timestamps of the Percolator paper). Periodically we durably store some
+value greater than the current global timestamp. We never allocate a timestamp larger than the one durably stored,
+without first updating the durably stored timestamp. When Materialize restarts, it uses a value one larger than the
+value durably stored.
 
 The properties described in this section and the [Global Timestamp](#Global Timestamp) section are sufficient to ensure
 Strict Serializability across restarts.
@@ -161,7 +163,7 @@ NOTE: This would also fix the problem discussed in [#12198](https://github.com/M
 
 ### Read Capabilities on Global Timestamp
 
-Proposal: Explicitly hold read capabilities for a timestamp less than or equal to the global timestamp for all sources.
+Proposal: Explicitly hold read capabilities for a timestamp less than or equal to the global timestamp on all objects.
 All reads are assigned a timestamp equal to the global timestamp.
 
 This approach guarantees that when a read completes, the global timestamp is equal to or larger than the timestamp of
@@ -217,12 +219,9 @@ aren't separate proposals, they can all work together):
 - STORAGE will send an `ACK` request to the Coordinator timestamped with `ts`. The Coordinator will wait for the global
   timestamp to advance to `ts` and then send a response back to STORAGE indicating that it's OK to send the
   acknowledgement.
-- If STORAGE receives a read that doesn't use `AS OF`, is in the same timeline as the data being acknowledged, and has a
-  timestamp larger than or equal to `ts`, then it knows that the global timestamp must have advanced to `ts` or greater,
-  and it's safe to send the acknowledgement.
-- If STORAGE receives an updated Read Capability for the global timestamp (see
-  [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp)) larger than or equal to `ts`, then it
-  knows that the global timestamp must have advanced to `ts` or greater, and it's safe to send the acknowledgement.
+- If STORAGE receives a write or read that doesn't use `AS OF`, is in the same timeline as the data being acknowledged,
+  and has a timestamp larger than or equal to `ts`, then it knows that the global timestamp must have advanced to `ts`
+  or greater, and it's safe to send the acknowledgement.
 
 NOTE: There are some race conditions here such as:
 
@@ -257,10 +256,10 @@ This is fine and STORAGE can just ignore the ACK OK response.
   in-between the writes or if we read from a view that's ahead of the wall clock.
 - Hybrid Logical Timestamps (HLT) are timestamps where the X most significant bits are used for the epoch and the Y
   least significant bits are used for a counter. Every clock tick the X bits are increased by 1 and the Y bytes are all
-  reset to 0. Every write increments the Y bits by 1. This would allow us to have 2^Y writes per clock tick per object,
-  without blocking any queries. Any write in excess of 2^Y per clock tick per object must be blocked until the next
-  clock tick. This way no object's `upper` would have to advance past the current global timestamp if the global
-  timestamp tracked the wall clock. CockroachDB uses similar timestamps
+  reset to 0. Every write increments the Y bits by 1. This would allow us to have 2^Y writes per clock tick, without
+  blocking any queries. Any write in excess of 2^Y per clock tick must be blocked until the next clock tick. This way no
+  object's `upper` would have to advance past the current global timestamp if the global timestamp tracked the wall
+  clock. CockroachDB uses similar timestamps
   here: https://github.com/cockroachdb/cockroach/blob/711ccb5b8fba4e6a826ed6ba46c0fc346233a0f7/pkg/sql/sem/builtins/builtins.go#L8548-L8560
 
 ## Open Questions
