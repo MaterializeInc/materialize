@@ -3728,7 +3728,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let mut response = Ok(ExecuteResponse::TransactionExited {
+        let response = Ok(ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
         });
@@ -3750,6 +3750,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
                 return;
             }
+            Ok(None) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
