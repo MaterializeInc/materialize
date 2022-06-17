@@ -37,8 +37,13 @@ pub struct Metrics {
     pub cmds: CmdsMetrics,
     /// Metrics for each retry loop.
     pub retries: RetriesMetrics,
-    /// Metrics for various encodings and decodings.
-    pub codec: CodecMetrics,
+    /// Metrics for batches written directly on behalf of a user (BatchBuilder
+    /// or one of the sugar methods that use it).
+    pub user: BatchWriteMetrics,
+    /// Metrics for compaction.
+    pub compaction: CompactionMetrics,
+        /// Metrics for various encodings and decodings.
+        pub codec: CodecMetrics,
 }
 
 impl Metrics {
@@ -50,8 +55,25 @@ impl Metrics {
             consensus: vecs.consensus_metrics(),
             cmds: vecs.cmds_metrics(),
             retries: vecs.retries_metrics(),
+            user: BatchWriteMetrics::new(registry, "user"),
+            compaction: CompactionMetrics::new(registry),
             codec: CodecMetrics::new(registry),
             _vecs: vecs,
+        }
+    }
+
+    /// Returns the current lifetime write amplification reflected in these
+    /// metrics.
+    ///
+    /// Only exposed for tests, persistcli, and benchmarks.
+    pub fn write_amplification(&self) -> f64 {
+        // This intentionally uses "bytes" for total and "goodbytes" for user so
+        // that the overhead of our blob format is included.
+        let total_written = self.blob.set.bytes.get();
+        let user_written = self.user.goodbytes.get();
+        #[allow(clippy::cast_precision_loss)]
+        {
+            total_written as f64 / user_written as f64
         }
     }
 }
@@ -162,6 +184,7 @@ impl MetricsVecs {
             compare_and_append: self.cmd_metrics("compare_and_append"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             expire_reader: self.cmd_metrics("expire_reader"),
+            merge_res: self.cmd_metrics("merge_res"),
         }
     }
 
@@ -277,6 +300,7 @@ pub struct CmdsMetrics {
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
+    pub(crate) merge_res: CmdMetrics,
 }
 
 #[derive(Debug)]
@@ -321,6 +345,69 @@ pub struct RetriesMetrics {
     pub(crate) idempotent_cmd: RetryMetrics,
     pub(crate) next_listen_batch: RetryMetrics,
     pub(crate) snapshot: RetryMetrics,
+}
+
+// This one is Clone in contrast to the others because it has to get moved into
+// a task.
+#[derive(Debug, Clone)]
+pub struct BatchWriteMetrics {
+    pub(crate) bytes: IntCounter,
+    pub(crate) goodbytes: IntCounter,
+}
+
+impl BatchWriteMetrics {
+    fn new(registry: &MetricsRegistry, name: &str) -> Self {
+        // WIP should this be another CounterVec with the name as a label?
+        BatchWriteMetrics {
+            bytes: registry.register(metric!(
+                name: format!("mz_persist_{}_bytes", name),
+                help: format!("total size represented by {} writes", name),
+            )),
+            goodbytes: registry.register(metric!(
+                name: format!("mz_persist_{}_goodbytes", name),
+                help: format!("total goodbytes size represented by {} writes", name),
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionMetrics {
+    pub(crate) started: IntCounter,
+    pub(crate) applied: IntCounter,
+    pub(crate) failed: IntCounter,
+    pub(crate) noop: IntCounter,
+    pub(crate) seconds: Counter,
+
+    pub(crate) batch: BatchWriteMetrics,
+}
+
+impl CompactionMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        CompactionMetrics {
+            started: registry.register(metric!(
+                name: "mz_persist_compaction_started",
+                help: "count of compactions started",
+            )),
+            failed: registry.register(metric!(
+                name: "mz_persist_compaction_failed",
+                help: "count of compactions failed",
+            )),
+            applied: registry.register(metric!(
+                name: "mz_persist_compaction_applied",
+                help: "count of compactions applied to state",
+            )),
+            noop: registry.register(metric!(
+                name: "mz_persist_compaction_noop",
+                help: "count of compactions discarded (obsolete)",
+            )),
+            seconds: registry.register(metric!(
+                name: "mz_persist_compaction_seconds",
+                help: "time spent in compaction",
+            )),
+            batch: BatchWriteMetrics::new(registry, "compaction"),
+        }
+    }
 }
 
 struct IncOnDrop(IntCounter);

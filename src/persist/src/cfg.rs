@@ -17,11 +17,9 @@ use url::Url;
 
 use crate::file::{FileBlobConfig, FileBlobMulti};
 use crate::location::{BlobMulti, Consensus, ExternalError};
+use crate::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3BlobConfig, S3BlobMulti};
-
-#[cfg(any(test, debug_assertions))]
-use crate::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
 
 /// Config for an implementation of [BlobMulti].
 #[derive(Debug, Clone)]
@@ -32,7 +30,6 @@ pub enum BlobMultiConfig {
     S3(S3BlobConfig),
     /// Config for [MemBlobMulti], only available in testing to prevent
     /// footguns.
-    #[cfg(any(test, debug_assertions))]
     Mem,
 }
 
@@ -46,7 +43,6 @@ impl BlobMultiConfig {
             BlobMultiConfig::S3(config) => S3BlobMulti::open(config)
                 .await
                 .map(|x| Arc::new(x) as Arc<dyn BlobMulti + Send + Sync>),
-            #[cfg(any(test, debug_assertions))]
             BlobMultiConfig::Mem => Ok(Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()))
                 as Arc<dyn BlobMulti + Send + Sync>),
         }
@@ -77,8 +73,8 @@ impl BlobMultiConfig {
                 let config = S3BlobConfig::new(bucket, prefix, role_arn).await?;
                 Ok(BlobMultiConfig::S3(config))
             }
-            #[cfg(any(test, debug_assertions))]
             "mem" => {
+                // WIP log a warning if we're in release mode
                 query_params.clear();
                 Ok(BlobMultiConfig::Mem)
             }
@@ -111,7 +107,6 @@ pub enum ConsensusConfig {
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
-    #[cfg(any(test, debug_assertions))]
     Mem,
 }
 
@@ -122,7 +117,6 @@ impl ConsensusConfig {
             ConsensusConfig::Postgres(config) => PostgresConsensus::open(config)
                 .await
                 .map(|x| Arc::new(x) as Arc<dyn Consensus + Send + Sync>),
-            #[cfg(any(test, debug_assertions))]
             ConsensusConfig::Mem => {
                 Ok(Arc::new(MemConsensus::default()) as Arc<dyn Consensus + Send + Sync>)
             }
@@ -143,8 +137,10 @@ impl ConsensusConfig {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(value).await?,
             )),
-            #[cfg(any(test, debug_assertions))]
-            "mem" => Ok(ConsensusConfig::Mem),
+            "mem" => {
+                // WIP log a warning if we're in release mode
+                Ok(ConsensusConfig::Mem)
+            }
             p => Err(anyhow!(
                 "unknown persist consensus scheme {}: {}",
                 p,

@@ -33,6 +33,7 @@ use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
+use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
@@ -47,6 +48,7 @@ pub use crate::r#impl::state::{Since, Upper};
 
 /// An implementation of the public crate interface.
 pub(crate) mod r#impl {
+    pub mod compact;
     pub mod machine;
     pub mod metrics;
     pub mod state;
@@ -176,6 +178,8 @@ pub struct PersistConfig {
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
     /// calls on previous ones finishing.
     pub batch_builder_max_outstanding_parts: usize,
+    /// Whether to physically and logically compact batches in blob storage.
+    pub compaction_enabled: bool,
 }
 
 // Tuning inputs:
@@ -205,10 +209,14 @@ pub struct PersistConfig {
 //   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
 impl Default for PersistConfig {
     fn default() -> Self {
+        // Use an env var to enable compaction so it's easier to experiment with
+        // in cloud.
+        let compaction_enabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_ENABLED");
         const MB: usize = 1024 * 1024;
         Self {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
+            compaction_enabled,
         }
     }
 }
@@ -291,12 +299,20 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         )
         .await?;
+        let compactor = self.cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                self.cfg.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+            )
+        });
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             machine: machine.clone(),
+            compactor,
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
         };
@@ -357,11 +373,19 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         )
         .await?;
+        let compactor = self.cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                self.cfg.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+            )
+        });
         let shard_upper = machine.fetch_upper().await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             machine,
+            compactor,
             blob: Arc::clone(&self.blob),
             upper: shard_upper,
         };
@@ -382,6 +406,13 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         self.open(shard_id).await.expect("codec mismatch")
+    }
+
+    /// Return the metrics being used by this client.
+    ///
+    /// Only exposed for tests, persistcli, and benchmarks.
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
     }
 }
 
@@ -411,6 +442,9 @@ mod tests {
         let mut cache = PersistClientCache::new_no_metrics();
         cache.cfg.blob_target_size = 10;
         cache.cfg.batch_builder_max_outstanding_parts = 1;
+
+        // WIP
+        cache.cfg.compaction_enabled = true;
 
         cache
             .open(PersistLocation {

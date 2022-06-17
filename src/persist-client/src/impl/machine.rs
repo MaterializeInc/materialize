@@ -28,7 +28,8 @@ use crate::error::InvalidUsage;
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
-use crate::r#impl::state::{ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::ShardId;
 
@@ -116,20 +117,22 @@ where
 
     pub async fn compare_and_append(
         &mut self,
-        keys: &[String],
-        desc: &Description<T>,
-    ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
+        batch: &HollowBatch<T>,
+    ) -> Result<
+        Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>>,
+        Indeterminate,
+    > {
         let metrics = Arc::clone(&self.metrics);
         loop {
             let (seqno, res) = self
                 .apply_unbatched_cmd(&metrics.cmds.compare_and_append, &metrics, |_, state| {
-                    state.compare_and_append(keys, desc)
+                    state.compare_and_append(batch)
                 })
                 .await?;
 
             match res {
-                Ok(()) => {
-                    return Ok(Ok(Ok(seqno)));
+                Ok(merge_reqs) => {
+                    return Ok(Ok(Ok((seqno, merge_reqs))));
                 }
                 Err(Ok(_current_upper)) => {
                     // If the state machine thinks that the shard upper is not
@@ -143,7 +146,7 @@ where
 
                     // We tried to to a compare_and_append with the wrong
                     // expected upper, that won't work.
-                    if &current_upper != desc.lower() {
+                    if &current_upper != batch.desc.lower() {
                         return Ok(Ok(Err(Upper(current_upper))));
                     } else {
                         // The upper stored in state was outdated. Retry after
@@ -155,6 +158,16 @@ where
                 }
             }
         }
+    }
+
+    pub async fn merge_res(&mut self, res: FueledMergeRes<T>) -> bool {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, applied) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, &metrics, |_, state| {
+                state.apply_merge_res(&res)
+            })
+            .await;
+        applied
     }
 
     pub async fn downgrade_since(
@@ -243,14 +256,11 @@ where
         }
     }
 
-    pub async fn next_listen_batch(
-        &mut self,
-        frontier: &Antichain<T>,
-    ) -> (Vec<String>, Description<T>) {
+    pub async fn next_listen_batch(&mut self, frontier: &Antichain<T>) -> HollowBatch<T> {
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
-            if let Some((keys, desc)) = self.state.next_listen_batch(frontier) {
-                return (keys.to_owned(), desc.clone());
+            if let Some(b) = self.state.next_listen_batch(frontier) {
+                return b;
             }
             // Only sleep after the first fetch, because the first time through
             // maybe our state was just out of date.

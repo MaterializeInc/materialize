@@ -3630,6 +3630,7 @@ dependencies = [
  "bytes",
  "clap",
  "criterion",
+ "datadriven",
  "differential-dataflow",
  "futures",
  "futures-task",
