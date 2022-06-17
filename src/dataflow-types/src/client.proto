@@ -36,6 +36,20 @@ message ProtoAllowCompaction {
     repeated ProtoCompaction collections = 1;
 }
 
+message ProtoFrontierUppersKind {
+    repeated ProtoTrace traces = 1;
+}
+
+message ProtoTrace {
+    mz_repr.global_id.ProtoGlobalId id = 1;
+    repeated ProtoUpdate updates = 2;
+}
+
+message ProtoUpdate {
+    uint64 timestamp = 1;
+    int64 diff = 2;
+}
+
 message ProtoInstanceConfig {
     mz_dataflow_types.logging.ProtoLoggingConfig logging = 1;
     uint64 replica_id = 2;
@@ -72,20 +86,6 @@ message ProtoComputeCommand {
 }
 
 message ProtoComputeResponse {
-    message ProtoUpdate {
-        uint64 timestamp = 1;
-        int64 diff = 2;
-    }
-
-    message ProtoTrace {
-        mz_repr.global_id.ProtoGlobalId id = 1;
-        repeated ProtoUpdate updates = 2;
-    }
-
-    message ProtoFrontierUppersKind {
-        repeated ProtoTrace traces = 1;
-    }
-
     message ProtoPeekResponseKind {
         mz_repr.proto.ProtoU128 id = 1;
         mz_dataflow_types.types.ProtoPeekResponse resp = 2;
@@ -115,3 +115,13 @@ message ProtoStorageCommand {
     }
 }
 
+message ProtoStorageResponse {
+    message ProtoLinearizedTimestampBindingFeedback {
+        uint64 timestamp = 1;
+        mz_repr.proto.ProtoU128 peek_id = 3;
+    }
+    oneof kind {
+        ProtoFrontierUppersKind frontier_uppers = 1;
+        ProtoLinearizedTimestampBindingFeedback linearized_timestamps = 2;
+    }
+}
