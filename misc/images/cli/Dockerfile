@@ -18,5 +18,4 @@ RUN apt-get update -o Acquire::Languages=none \
         /var/lib/apt/lists/* \
     ;
 
-COPY watch-sql /usr/local/bin/watch-sql
 ENTRYPOINT ["psql", "-U", "materialize", "-h", "materialized", "-p", "6875", "materialize"]
