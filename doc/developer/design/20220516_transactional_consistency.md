@@ -81,16 +81,18 @@ The logic for determining what timestamp to return must satisfy:
 
 - If it's a read, then it is larger than or equal to the `since` of all objects involved in the query.
 - If it's a write, then it is larger than or equal to the `upper` of the table.
-- It is larger than or equal to the timestamp of the most recently completed query.
+- It is larger than or equal to the timestamp of the most recently completed query in the same timeline.
     - If the query is a write and the most recently completed query was a read, then the timestamp returned must be
       strictly larger than the previous timestamp.
 
 We can accomplish this by using a single global timestamp per timeline. The timestamp will be initialized to some valid
 initial value and be advanced periodically to some valid value that is higher than the previous value. The periodic
 advancements should maintain the property that the global timestamp is within some error bound of all the timestamps
-being assigned to data from upstream sources. All reads are given a timestamp equal to the global timestamp. All writes
-to user tables are given a timestamp larger than the global timestamp, and when the write completes then the timestamp
-should be advanced to the timestamp of that write.
+being assigned to data from upstream sources. All reads are given a timestamp equal to the global timestamp, which is
+greater than or equal to the `since` of all involved objects as described
+in [Read Capabilities on Global Timestamp](#Read Capabilities on Global Timestamp). All writes to user tables are given
+a timestamp larger than the global timestamp, and when the write completes then the timestamp should be advanced to the
+timestamp of that write.
 
 As an example, a timeline's timestamp can be initialized to the current system time and be advanced periodically to the
 current value of a monotonically increasing system clock. Another example is that a timeline's timestamps can be
