@@ -11,7 +11,12 @@ syntax = "proto3";
 
 package mz_repr.proto;
 
-message ProtoU128{
+message ProtoU128 {
     uint64 hi = 1;
     uint64 lo = 2;
+}
+
+message ProtoDuration {
+    uint64 secs = 1;
+    uint32 nanos = 2;
 }

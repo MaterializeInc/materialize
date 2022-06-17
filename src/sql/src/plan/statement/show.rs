@@ -18,19 +18,18 @@ use anyhow::bail;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::ShowCreateConnectorStatement;
+use mz_sql_parser::ast::ShowCreateConnectionStatement;
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
+    ObjectType, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowSchemasStatement, ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{
-    resolve_names_stmt, resolve_names_stmt_show, Aug, NameSimplifier, ResolvedClusterName,
-    ResolvedDatabaseName, ResolvedSchemaName,
+    self, Aug, NameSimplifier, ResolvedClusterName, ResolvedDatabaseName, ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
@@ -38,7 +37,7 @@ use crate::plan::{Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
-    _: &ShowCreateViewStatement<Raw>,
+    _: ShowCreateViewStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -57,7 +56,7 @@ pub fn plan_show_create_view(
         let view_sql = view.create_sql();
         let parsed = parse::parse(view_sql)?;
         let parsed = parsed[0].clone();
-        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
@@ -76,7 +75,7 @@ pub fn plan_show_create_view(
 
 pub fn describe_show_create_table(
     _: &StatementContext,
-    _: &ShowCreateTableStatement<Raw>,
+    _: ShowCreateTableStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -93,7 +92,7 @@ pub fn plan_show_create_table(
     if let CatalogItemType::Table = table.item_type() {
         let name = table_name.full_name_str();
         let parsed = parse::parse(table.create_sql())?.into_element();
-        let (mut resolved, _) = resolve_names_stmt(scx, parsed)?;
+        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
         let mut s = NameSimplifier {
             catalog: scx.catalog,
         };
@@ -111,7 +110,7 @@ pub fn plan_show_create_table(
 
 pub fn describe_show_create_source(
     _: &StatementContext,
-    _: &ShowCreateSourceStatement<Raw>,
+    _: ShowCreateSourceStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -140,7 +139,7 @@ pub fn plan_show_create_source(
 
 pub fn describe_show_create_sink(
     _: &StatementContext,
-    _: &ShowCreateSinkStatement<Raw>,
+    _: ShowCreateSinkStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -169,7 +168,7 @@ pub fn plan_show_create_sink(
 
 pub fn describe_show_create_index(
     _: &StatementContext,
-    _: &ShowCreateIndexStatement<Raw>,
+    _: ShowCreateIndexStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
@@ -196,32 +195,32 @@ pub fn plan_show_create_index(
     }
 }
 
-pub fn describe_show_create_connector(
+pub fn describe_show_create_connection(
     _: &StatementContext,
-    _: &ShowCreateConnectorStatement<Raw>,
+    _: ShowCreateConnectionStatement<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Connector", ScalarType::String.nullable(false))
-            .with_column("Create Connector", ScalarType::String.nullable(false)),
+            .with_column("Connection", ScalarType::String.nullable(false))
+            .with_column("Create Connection", ScalarType::String.nullable(false)),
     )))
 }
 
-pub fn plan_show_create_connector(
+pub fn plan_show_create_connection(
     scx: &StatementContext,
-    ShowCreateConnectorStatement { connector_name }: ShowCreateConnectorStatement<Aug>,
+    ShowCreateConnectionStatement { connection_name }: ShowCreateConnectionStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let connector = scx.get_item_by_resolved_name(&connector_name)?;
-    if let CatalogItemType::Connector = connector.item_type() {
-        let name = connector_name.full_name_str();
+    let connection = scx.get_item_by_resolved_name(&connection_name)?;
+    if let CatalogItemType::Connection = connection.item_type() {
+        let name = connection_name.full_name_str();
         Ok(Plan::SendRows(SendRowsPlan {
             rows: vec![Row::pack_slice(&[
                 Datum::String(&name),
-                Datum::String(connector.create_sql()),
+                Datum::String(connection.create_sql()),
             ])],
         }))
     } else {
-        bail!("'{}' is not a connector", connector_name.full_name_str());
+        bail!("'{}' is not a connection", connection_name.full_name_str());
     }
 }
 
@@ -306,11 +305,11 @@ pub fn show_objects<'a>(
         ObjectType::ClusterReplica => show_cluster_replicas(scx, filter),
         ObjectType::Secret => show_secrets(scx, from, filter),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
-        ObjectType::Connector => show_connectors(scx, extended, full, from, filter),
+        ObjectType::Connection => show_connections(scx, extended, full, from, filter),
     }
 }
 
-fn show_connectors<'a>(
+fn show_connections<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
@@ -320,7 +319,7 @@ fn show_connectors<'a>(
     let schema_spec = scx.resolve_optional_schema(&from)?;
     let mut query = format!(
         "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
-        FROM mz_catalog.mz_connectors t
+        FROM mz_catalog.mz_connections t
         JOIN mz_catalog.mz_schemas on t.schema_id = s.id
         WHERE schema_id = {}",
         schema_spec,
@@ -394,7 +393,7 @@ fn show_sources<'a>(
                  mz_internal.mz_classify_object_id(id) AS type,
                  mz_internal.mz_is_materialized(id) AS materialized,
                  volatility,
-                 connector_type
+                 type
              FROM
                  mz_catalog.mz_sources
              WHERE
@@ -406,7 +405,7 @@ fn show_sources<'a>(
                  name,
                  mz_internal.mz_classify_object_id(id) AS type,
                  volatility,
-                 connector_type
+                 type
              FROM
                  mz_catalog.mz_sources
              WHERE
@@ -572,11 +571,12 @@ pub fn show_indexes<'a>(
         filter,
     }: ShowIndexesStatement<Aug>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    if extended {
-        bail_unsupported!("SHOW EXTENDED INDEXES")
-    }
-
-    let mut query_filter = vec![];
+    // Exclude system indexes unless `EXTENDED` is requested.
+    let mut query_filter = if extended {
+        vec!["TRUE".into()]
+    } else {
+        vec!["idxs.on_id NOT LIKE 's%'".into()]
+    };
 
     if let Some(table_name) = table_name {
         let from = scx.get_item_by_resolved_name(&table_name)?;
@@ -596,11 +596,6 @@ pub fn show_indexes<'a>(
     if let Some(cluster) = in_cluster {
         query_filter.push(format!("clusters.id = {}", cluster.0))
     };
-
-    assert!(
-        !query_filter.is_empty(),
-        "parsing failed to enforce either table_name or in_cluster's presence"
-    );
 
     let query = format!(
         "SELECT
@@ -696,8 +691,6 @@ pub fn show_secrets<'a>(
     from: Option<ResolvedSchemaName>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    scx.require_experimental_mode("SHOW SECRETS")?;
-
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
     let query = format!(
@@ -753,11 +746,8 @@ impl<'a> ShowSelect<'a> {
             Statement::Select(select) => select,
             _ => panic!("ShowSelect::new called with non-SELECT statement"),
         };
-        let stmt = resolve_names_stmt_show(scx, Statement::Select(stmt))?;
-        if let Statement::Select(stmt) = stmt {
-            return Ok(ShowSelect { scx, stmt });
-        }
-        unreachable!()
+        let (stmt, _) = names::resolve(scx.catalog, stmt)?;
+        Ok(ShowSelect { scx, stmt })
     }
 
     /// Computes the shape of this `ShowSelect`.

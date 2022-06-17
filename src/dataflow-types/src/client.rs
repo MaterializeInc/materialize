@@ -13,7 +13,11 @@
 // for each variant of the `Command` enum, each of which are documented.
 // #![warn(missing_docs)]
 
-use std::collections::{BTreeMap, BTreeSet};
+// Tonic generates code that calls clone on an Arc. Allow this here.
+// TODO: Remove this once tonic does not produce this code anymore.
+#![allow(clippy::clone_on_ref_ptr)]
+
+use std::collections::BTreeSet;
 use std::fmt;
 use std::pin::Pin;
 
@@ -29,13 +33,13 @@ use tracing::trace;
 use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
-use mz_repr::proto::newapi::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::proto::{any_uuid, FromProtoIfSome, TryFromProtoError, TryIntoIfSome};
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::proto::any_uuid;
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
-use crate::sources::SourceDesc;
-use crate::{DataflowDescription, PeekResponse, Plan, SourceInstanceDesc, TailResponse, Update};
+use crate::{sources::IngestionDescription, DataflowDescription, PeekResponse, TailResponse};
 
 pub mod controller;
 pub use controller::Controller;
@@ -49,14 +53,13 @@ pub mod replicated;
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.client.rs"));
 
 /// An abstraction allowing us to name different compute instances.
-// TODO(benesch): this is an `i64` rather than a `u64` because SQLite does not
-// support natively storing `u64`. Revisit this before shipping Platform, as we
-// might not like to bake in this decision based on a SQLite limitation.
-// See #11123.
-pub type ComputeInstanceId = i64;
+pub type ComputeInstanceId = u64;
 
 /// An abstraction allowing us to name different replicas.
-pub type ReplicaId = i64;
+pub type ReplicaId = u64;
+
+/// Identifier of a process within a replica.
+pub type ProcessId = i64;
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,8 +71,10 @@ pub enum ConcreteComputeInstanceReplicaConfig {
     },
     /// A remote but managed replica
     Managed {
-        /// The size of the replica
+        /// The size configuration of the replica.
         size_config: ClusterReplicaSizeConfig,
+        /// A readable name for the replica size.
+        size_name: String,
         /// The replica's availability zone, if `Some`.
         availability_zone: Option<String>,
     },
@@ -84,24 +89,24 @@ pub struct InstanceConfig {
     pub logging: Option<LoggingConfig>,
 }
 
-impl From<&InstanceConfig> for ProtoInstanceConfig {
-    fn from(x: &InstanceConfig) -> Self {
+impl RustType<ProtoInstanceConfig> for InstanceConfig {
+    fn into_proto(&self) -> ProtoInstanceConfig {
         ProtoInstanceConfig {
-            replica_id: x.replica_id,
-            logging: x.logging.as_ref().map(Into::into),
+            replica_id: self.replica_id,
+            logging: self.logging.into_proto(),
         }
+    }
+
+    fn from_proto(proto: ProtoInstanceConfig) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            replica_id: proto.replica_id,
+            logging: proto.logging.into_rust()?,
+        })
     }
 }
 
-impl TryFrom<ProtoInstanceConfig> for InstanceConfig {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoInstanceConfig) -> Result<Self, Self::Error> {
-        Ok(Self {
-            replica_id: x.replica_id,
-            logging: x.logging.map(TryInto::try_into).transpose()?,
-        })
-    }
+fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
+    (0..1).prop_map(|_| OpenTelemetryContext::empty())
 }
 
 /// Peek at an arrangement.
@@ -138,39 +143,39 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// If `Some`, the peek is only handled by the given replica.
     /// If `None`, the peek is handled by all replicas.
     pub target_replica: Option<ReplicaId>,
+    /// An `OpenTelemetryContext` to forward trace information along
+    /// to the compute worker to allow associating traces between
+    /// the compute controller and the compute worker.
+    #[proptest(strategy = "empty_otel_ctx()")]
+    pub otel_ctx: OpenTelemetryContext,
 }
 
-impl From<&Peek> for ProtoPeek {
-    fn from(x: &Peek) -> Self {
+impl RustType<ProtoPeek> for Peek {
+    fn into_proto(&self) -> ProtoPeek {
         ProtoPeek {
-            id: Some(x.id.into_proto()),
-            key: x.key.into_proto(),
-            uuid: Some(x.uuid.into_proto()),
-            timestamp: x.timestamp,
-            finishing: Some((&x.finishing).into()),
-            map_filter_project: Some((&x.map_filter_project).into()),
-            target_replica: x.target_replica,
+            id: Some(self.id.into_proto()),
+            key: self.key.into_proto(),
+            uuid: Some(self.uuid.into_proto()),
+            timestamp: self.timestamp,
+            finishing: Some(self.finishing.into_proto()),
+            map_filter_project: Some(self.map_filter_project.into_proto()),
+            target_replica: self.target_replica,
+            otel_ctx: self.otel_ctx.clone().into(),
         }
     }
-}
 
-impl TryFrom<ProtoPeek> for Peek {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoPeek) -> Result<Self, Self::Error> {
+    fn from_proto(x: ProtoPeek) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             id: x.id.into_rust_if_some("ProtoPeek::id")?,
             key: x.key.into_rust()?,
-            uuid: Uuid::from_proto(
-                x.uuid
-                    .ok_or_else(|| TryFromProtoError::missing_field("ProtoPeek::uuid"))?,
-            )?,
+            uuid: x.uuid.into_rust_if_some("ProtoPeek::uuid")?,
             timestamp: x.timestamp,
-            finishing: x.finishing.try_into_if_some("ProtoPeek::finishing")?,
+            finishing: x.finishing.into_rust_if_some("ProtoPeek::finishing")?,
             map_filter_project: x
                 .map_filter_project
-                .try_into_if_some("ProtoPeek::map_filter_project")?,
+                .into_rust_if_some("ProtoPeek::map_filter_project")?,
             target_replica: x.target_replica,
+            otel_ctx: x.otel_ctx.into(),
         })
     }
 }
@@ -208,82 +213,73 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     },
 }
 
-impl From<&ComputeCommand<mz_repr::Timestamp>> for ProtoComputeCommand {
-    fn from(x: &ComputeCommand<mz_repr::Timestamp>) -> Self {
+impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoComputeCommand {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         ProtoComputeCommand {
-            kind: Some(match x {
-                ComputeCommand::CreateInstance(config) => CreateInstance(config.into()),
+            kind: Some(match self {
+                ComputeCommand::CreateInstance(config) => CreateInstance(config.into_proto()),
                 ComputeCommand::DropInstance => DropInstance(()),
                 ComputeCommand::CreateDataflows(dataflows) => {
                     CreateDataflows(ProtoCreateDataflows {
-                        dataflows: dataflows.iter().map(Into::into).collect(),
+                        dataflows: dataflows.into_proto(),
                     })
                 }
                 ComputeCommand::AllowCompaction(collections) => {
                     AllowCompaction(ProtoAllowCompaction {
-                        collections: collections
-                            .iter()
-                            .map(|(id, frontier)| ProtoCompaction {
-                                id: Some(id.into_proto()),
-                                frontier: Some(frontier.into()),
-                            })
-                            .collect(),
+                        collections: collections.into_proto(),
                     })
                 }
-                ComputeCommand::Peek(peek) => Peek(peek.into()),
+                ComputeCommand::Peek(peek) => Peek(peek.into_proto()),
                 ComputeCommand::CancelPeeks { uuids } => CancelPeeks(ProtoCancelPeeks {
-                    uuids: uuids.into_iter().map(|id| id.into_proto()).collect(),
+                    uuids: uuids.into_proto(),
                 }),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoComputeCommand) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoComputeCommand) -> Result<Self, TryFromProtoError> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
-        match x.kind {
-            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.try_into()?)),
+        match proto.kind {
+            Some(CreateInstance(config)) => Ok(ComputeCommand::CreateInstance(config.into_rust()?)),
             Some(DropInstance(())) => Ok(ComputeCommand::DropInstance),
             Some(CreateDataflows(ProtoCreateDataflows { dataflows })) => {
-                Ok(ComputeCommand::CreateDataflows(
-                    dataflows
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<_>, _>>()?,
-                ))
+                Ok(ComputeCommand::CreateDataflows(dataflows.into_rust()?))
             }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
-                Ok(ComputeCommand::AllowCompaction(
-                    collections
-                        .into_iter()
-                        .map(|collection| {
-                            Ok((
-                                collection.id.into_rust_if_some("ProtoCompaction::id")?,
-                                collection.frontier.map(Into::into).ok_or_else(|| {
-                                    TryFromProtoError::missing_field("ProtoCompaction::frontier")
-                                })?,
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-                ))
+                Ok(ComputeCommand::AllowCompaction(collections.into_rust()?))
             }
-            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.try_into()?)),
+            Some(Peek(peek)) => Ok(ComputeCommand::Peek(peek.into_rust()?)),
             Some(CancelPeeks(ProtoCancelPeeks { uuids })) => Ok(ComputeCommand::CancelPeeks {
-                uuids: uuids
-                    .into_iter()
-                    .map(Uuid::from_proto)
-                    .collect::<Result<BTreeSet<_>, _>>()?,
+                uuids: uuids.into_rust()?,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeCommand::kind",
             )),
         }
+    }
+}
+
+impl RustType<proto_compute_command::ProtoCompaction> for (GlobalId, Antichain<u64>) {
+    fn into_proto(self: &Self) -> proto_compute_command::ProtoCompaction {
+        proto_compute_command::ProtoCompaction {
+            id: Some(self.0.into_proto()),
+            frontier: Some((&self.1).into()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_compute_command::ProtoCompaction,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok((
+            proto.id.into_rust_if_some("ProtoCompaction::id")?,
+            proto
+                .frontier
+                .map(Into::into)
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoCompaction::frontier"))?,
+        ))
     }
 }
 
@@ -296,7 +292,7 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
             any::<InstanceConfig>().prop_map(ComputeCommand::CreateInstance),
             Just(ComputeCommand::DropInstance),
             proptest::collection::vec(
-                any::<DataflowDescription<Plan, CollectionMetadata, mz_repr::Timestamp>>(),
+                any::<DataflowDescription<crate::plan::Plan, CollectionMetadata, mz_repr::Timestamp>>(),
                 1..4
             )
             .prop_map(ComputeCommand::CreateDataflows),
@@ -324,50 +320,16 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-/// A command creating a single source
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CreateSourceCommand<T> {
-    /// The source identifier
-    pub id: GlobalId,
-    /// The source description
-    pub desc: SourceDesc,
-    /// The initial `since` frontier
-    pub since: Antichain<T>,
-    /// Additional storage controller metadata needed to ingest this source
-    pub storage_metadata: CollectionMetadata,
-}
-
-/// A command to render a single source
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RenderSourcesCommand<T> {
-    /// A human-readable name.
-    pub debug_name: String,
-    /// The dataflow's ID.
-    pub dataflow_id: uuid::Uuid,
-    /// An optional frontier to which the input should be advanced.
-    pub as_of: Option<Antichain<T>>,
-    /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<CollectionMetadata>>,
-}
-
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<CreateSourceCommand<T>>),
-    /// Render the enumerated sources.
-    RenderSources(Vec<RenderSourcesCommand<T>>),
+    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
     /// accumulations must be correct.
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-    /// Append data and advance the frontier of the enumerated collections
-    ///
-    /// Each entry in the vector names a collection and provides a list of updates to insert and a
-    /// frontier that the collection must be advanced to. The times of the updates not be beyond
-    /// the given frontier.
-    Append(Vec<(GlobalId, Vec<Update<T>>, T)>),
 }
 
 impl<T> ComputeCommand<T> {
@@ -426,7 +388,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
     /// response or cancellation.
     ///
     /// Returns the number of distinct commands that remain.
-    pub fn reduce(&mut self, peeks: &std::collections::HashSet<uuid::Uuid>) -> usize {
+    pub fn reduce<V>(&mut self, peeks: &std::collections::HashMap<uuid::Uuid, V>) -> usize {
         // First determine what the final compacted frontiers will be for each collection.
         // These will determine for each collection whether the command that creates it is required,
         // and if required what `as_of` frontier should be used for its updated command.
@@ -463,7 +425,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
                     live_peeks.push(peek);
                 }
                 ComputeCommand::CancelPeeks { mut uuids } => {
-                    uuids.retain(|uuid| peeks.contains(uuid));
+                    uuids.retain(|uuid| peeks.contains_key(uuid));
                     live_cancels.extend(uuids);
                 }
             }
@@ -497,7 +459,7 @@ impl<T: timely::progress::Timestamp> ComputeCommandHistory<T> {
         live_dataflows.retain(|dataflow| dataflow.as_of != Some(Antichain::new()));
 
         // Retain only those peeks that have not yet been processed.
-        live_peeks.retain(|peek| peeks.contains(&peek.uuid));
+        live_peeks.retain(|peek| peeks.contains_key(&peek.uuid));
 
         // Record the volume of post-compaction commands.
         let mut command_count = 1;
@@ -571,7 +533,11 @@ pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// The worker's response to a specified (by connection id) peek.
-    PeekResponse(Uuid, PeekResponse),
+    ///
+    /// Additionally, an `OpenTelemetryContext` to forward trace information
+    /// back into coord. This allows coord traces to be children of work
+    /// done in compute!
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
     /// Data about timestamp bindings, sent to the coordinator, in service
@@ -586,17 +552,17 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
     /// The worker's response to a specified (by connection id) peek.
-    PeekResponse(Uuid, PeekResponse),
+    PeekResponse(Uuid, PeekResponse, OpenTelemetryContext),
     /// The worker's next response to a specified tail.
     TailResponse(GlobalId, TailResponse<T>),
 }
 
-impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
-    fn from(x: &ComputeResponse<mz_repr::Timestamp>) -> Self {
+impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoComputeResponse {
         use proto_compute_response::Kind::*;
         use proto_compute_response::*;
         ProtoComputeResponse {
-            kind: Some(match x {
+            kind: Some(match self {
                 ComputeResponse::FrontierUppers(traces) => {
                     FrontierUppers(ProtoFrontierUppersKind {
                         traces: traces
@@ -617,25 +583,24 @@ impl From<&ComputeResponse<mz_repr::Timestamp>> for ProtoComputeResponse {
                             .collect(),
                     })
                 }
-                ComputeResponse::PeekResponse(id, resp) => PeekResponse(ProtoPeekResponseKind {
-                    id: Some(id.into_proto()),
-                    resp: Some(resp.into()),
-                }),
+                ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
+                    PeekResponse(ProtoPeekResponseKind {
+                        id: Some(id.into_proto()),
+                        resp: Some(resp.into_proto()),
+                        otel_ctx: otel_ctx.clone().into(),
+                    })
+                }
                 ComputeResponse::TailResponse(id, resp) => TailResponse(ProtoTailResponseKind {
                     id: Some(id.into_proto()),
-                    resp: Some(resp.into()),
+                    resp: Some(resp.into_proto()),
                 }),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoComputeResponse) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
-        match x.kind {
+        match proto.kind {
             Some(FrontierUppers(traces)) => Ok(ComputeResponse::FrontierUppers(
                 traces
                     .traces
@@ -653,12 +618,13 @@ impl TryFrom<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
                     .collect::<Result<Vec<_>, TryFromProtoError>>()?,
             )),
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
-                resp.id.from_proto_if_some("ProtoPeekResponseKind::id")?,
-                resp.resp.try_into_if_some("ProtoPeekResponseKind::resp")?,
+                resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
+                resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
+                resp.otel_ctx.into(),
             )),
             Some(TailResponse(resp)) => Ok(ComputeResponse::TailResponse(
                 resp.id.into_rust_if_some("ProtoTailResponseKind::id")?,
-                resp.resp.try_into_if_some("ProtoTailResponseKind::resp")?,
+                resp.resp.into_rust_if_some("ProtoTailResponseKind::resp")?,
             )),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoComputeResponse::kind",
@@ -685,8 +651,9 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
         prop_oneof![
             proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
                 .prop_map(ComputeResponse::FrontierUppers),
-            (any_uuid(), any::<PeekResponse>())
-                .prop_map(|(id, resp)| ComputeResponse::PeekResponse(id, resp)),
+            (any_uuid(), any::<PeekResponse>()).prop_map(|(id, resp)| {
+                ComputeResponse::PeekResponse(id, resp, OpenTelemetryContext::empty())
+            }),
             (any::<GlobalId>(), any::<TailResponse>())
                 .prop_map(|(id, resp)| ComputeResponse::TailResponse(id, resp)),
         ]
@@ -729,15 +696,17 @@ pub trait GenericClient<C, R>: fmt::Debug + Send {
     where
         R: Send + 'a,
     {
-        Box::pin(async_stream::stream! {
+        Box::pin(async_stream::stream!({
             loop {
                 match self.recv().await {
                     Ok(Some(response)) => yield Ok(response),
                     Err(error) => yield Err(error),
-                    Ok(None) => { return; }
+                    Ok(None) => {
+                        return;
+                    }
                 }
             }
-        })
+        }))
     }
 }
 
@@ -856,28 +825,44 @@ pub trait Reconnect {
     async fn reconnect(&mut self);
 }
 
-/// A convenience type for compatibility.
-#[derive(Debug)]
-pub struct RemoteClient<C, R>
-where
-    (C, R): partitioned::Partitionable<C, R>,
-    C: fmt::Debug + Send,
-    R: fmt::Debug + Send,
-{
-    client: partitioned::Partitioned<tcp::TcpClient<C, R>, C, R>,
+/// Trait for clients that can connect to an address
+pub trait FromAddr {
+    fn from_addr(addr: String) -> Self;
 }
 
-impl<C, R> RemoteClient<C, R>
+/// A convenience type for compatibility.
+#[derive(Debug)]
+pub struct RemoteClient<C, R, G = tcp::TcpClient<C, R>>
 where
     (C, R): partitioned::Partitionable<C, R>,
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
+    G: GenericClient<C, R> + Reconnect + FromAddr,
+{
+    client: partitioned::Partitioned<G, C, R>,
+}
+
+pub type ComputedRemoteClient<T> =
+    RemoteClient<ComputeCommand<T>, ComputeResponse<T>, tcp::GrpcComputedClient>;
+
+pub type StoragedRemoteClient<T> = RemoteClient<
+    StorageCommand<T>,
+    StorageResponse<T>,
+    tcp::TcpClient<StorageCommand<T>, StorageResponse<T>>,
+>;
+
+impl<C, R, G> RemoteClient<C, R, G>
+where
+    (C, R): partitioned::Partitionable<C, R>,
+    C: fmt::Debug + Send,
+    R: fmt::Debug + Send,
+    G: GenericClient<C, R> + Reconnect + FromAddr,
 {
     /// Construct a client backed by multiple tcp connections
     pub fn new(addrs: &[impl tokio::net::ToSocketAddrs + std::fmt::Display]) -> Self {
         let mut remotes = Vec::with_capacity(addrs.len());
         for addr in addrs.iter() {
-            remotes.push(tcp::TcpClient::new(addr.to_string()));
+            remotes.push(G::from_addr(addr.to_string()));
         }
         Self {
             client: partitioned::Partitioned::new(remotes),
@@ -892,11 +877,12 @@ where
 }
 
 #[async_trait]
-impl<C, R> GenericClient<C, R> for RemoteClient<C, R>
+impl<C, R, G> GenericClient<C, R> for RemoteClient<C, R, G>
 where
     (C, R): partitioned::Partitionable<C, R>,
     C: Serialize + fmt::Debug + Unpin + Send,
     R: DeserializeOwned + fmt::Debug + Unpin + Send,
+    G: GenericClient<C, R> + Reconnect + FromAddr,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!("Sending dataflow command: {:?}", cmd);
@@ -983,27 +969,214 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod tcp {
+    use mz_repr::proto::ProtoType;
+    use mz_repr::proto::RustType;
     use std::cmp;
     use std::fmt;
     use std::future::Future;
+    use std::net::ToSocketAddrs;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::time::Duration;
+    use tracing::{debug, error, info, warn};
 
     use async_trait::async_trait;
     use futures::sink::SinkExt;
     use futures::stream::StreamExt;
+    use futures::Stream;
     use serde::de::DeserializeOwned;
     use serde::ser::Serialize;
     use tokio::io::{self, AsyncRead, AsyncWrite};
     use tokio::net::TcpStream;
+    use tokio::sync::mpsc::{self, UnboundedSender};
+    use tokio::sync::Mutex;
+    use tokio::sync::Notify;
     use tokio::time::{self, Instant};
     use tokio_serde::formats::Bincode;
+    use tokio_stream::wrappers::UnboundedReceiverStream;
     use tokio_util::codec::LengthDelimitedCodec;
-    use tracing::error;
+    use tonic::transport::Server;
+    use tonic::Request;
+    use tonic::Response;
+    use tonic::Streaming;
 
-    use crate::client::GenericClient;
-
+    use super::proto_compute_client::ProtoComputeClient;
+    use super::ComputeCommand;
+    use super::ComputeResponse;
+    use super::FromAddr;
+    use super::GenericClient;
     use super::Reconnect;
+
+    /// A client to a remote dataflow server using gRPC and protobuf based communication.
+    ///
+    /// The client opens a connection using the ProtoComputeClient stubs that are generated by
+    /// tonic from the service definition in `client.proto`. After creation, the client is in
+    /// disconnected state. To connect it, `connect` has to be called. Once the client is
+    /// connected, it will call automatically the only RPC defined in the service description:
+    /// `CommandResponseStream`. `CommandResponseStream` sets up two streams that persist after the
+    /// RPC has returned: A command stream (backed by a unbounded mpsc queue) going from this
+    /// instance to the server and a response stream coming back (represented directly as a
+    /// Streaming<ComputeResponse> instance). The recv and send functions interact with the two
+    /// mpsc channel or the streaming instance respectively.
+    #[derive(Debug)]
+    pub struct GrpcComputedClient {
+        addr: String,
+        state: GrpcComputedTcpConn,
+        backoff: Duration,
+    }
+
+    /// The connection state of the GrpcComputedClient.
+    #[derive(Debug)]
+    enum GrpcComputedTcpConn {
+        // Initial, disconnected state
+        Disconnected,
+
+        // We have a TCP client connection, but we have to wait for RPC answer for setting up the streams
+        AwaitResponse(ProtoComputeClient<tonic::transport::Channel>),
+
+        // Ready to go!
+        Connected(
+            (
+                UnboundedSender<super::ProtoComputeCommand>,
+                Streaming<super::ProtoComputeResponse>,
+            ),
+        ),
+
+        // Unable to connect, wait on next connect
+        Backoff(Instant),
+    }
+
+    impl FromAddr for GrpcComputedClient {
+        fn from_addr(addr: String) -> GrpcComputedClient {
+            GrpcComputedClient {
+                addr: format!("http://{}", addr),
+                state: GrpcComputedTcpConn::Disconnected,
+                backoff: Duration::from_millis(10),
+            }
+        }
+    }
+
+    impl GrpcComputedClient {
+        // This is and must be cancellation safe
+        pub async fn connect(&mut self) -> () {
+            loop {
+                match &mut self.state {
+                    GrpcComputedTcpConn::Disconnected => {
+                        debug!("GrpcComputedClient {}: Attempt to connect", &self.addr);
+                        match ProtoComputeClient::connect(self.addr.clone()).await {
+                            Ok(client) => {
+                                self.backoff = Duration::from_millis(10);
+                                self.state = GrpcComputedTcpConn::AwaitResponse(client);
+                            }
+                            Err(e) => {
+                                self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
+                                warn!(
+                                    "GrpcComputedClient {}: Connection refused: {}. Backoff {}ms",
+                                    &self.addr,
+                                    e,
+                                    self.backoff.as_millis()
+                                );
+                                self.state =
+                                    GrpcComputedTcpConn::Backoff(Instant::now() + self.backoff);
+                            }
+                        }
+                    }
+                    GrpcComputedTcpConn::AwaitResponse(client) => {
+                        // The channel size is a arbitrary, but it should be a
+                        // small bounded channel such that backpressure is applied early.
+                        let (tx, rx) = mpsc::unbounded_channel();
+                        match client
+                            .command_response_stream(UnboundedReceiverStream::new(rx))
+                            .await
+                        {
+                            Ok(resp_rx_wrap) => {
+                                let resp_rx = resp_rx_wrap.into_inner();
+                                info!("GrpcComputedClient {}: connected", &self.addr);
+                                self.state = GrpcComputedTcpConn::Connected((tx, resp_rx));
+                            }
+                            Err(err) => {
+                                debug!(
+                                    "GrpcComputedClient {}: Connection refused: {}",
+                                    &self.addr, err
+                                );
+                                self.state = GrpcComputedTcpConn::Disconnected;
+                            }
+                        }
+                    }
+                    GrpcComputedTcpConn::Connected(_) => break,
+                    GrpcComputedTcpConn::Backoff(deadline) => {
+                        time::sleep_until(*deadline).await;
+                        self.state = GrpcComputedTcpConn::Disconnected;
+                    }
+                }
+            }
+        }
+    }
+
+    #[async_trait]
+    impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for GrpcComputedClient
+    where
+        T: 'static + std::fmt::Debug + Send,
+        ComputeCommand<T>: RustType<super::ProtoComputeCommand>,
+        ComputeResponse<T>: RustType<super::ProtoComputeResponse>,
+    {
+        async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
+            let sender = if let GrpcComputedTcpConn::Connected((sender, _)) = &self.state {
+                sender
+            } else {
+                return Err(anyhow::anyhow!("Sent into disconnected channel"));
+            };
+            if sender.send(cmd.into_proto()).is_err() {
+                self.state = GrpcComputedTcpConn::Disconnected;
+                Err(anyhow::anyhow!("Sent into disconnected channel"))
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+            if let GrpcComputedTcpConn::Connected(channels) = &mut self.state {
+                match channels.1.next().await {
+                    Some(Ok(x)) => match x.into_rust() {
+                        Ok(r) => return Ok(Some(r)),
+                        Err(e) => {
+                            error!(
+                                "could not decode protobuf message, terminating connection: {}",
+                                e
+                            );
+                            self.state = GrpcComputedTcpConn::Disconnected;
+                            anyhow::bail!("Connection severed");
+                        }
+                    },
+                    other => {
+                        match other {
+                            Some(Ok(_)) => unreachable!("handled above"),
+                            None => error!("connection unexpectedly terminated cleanly"),
+                            Some(Err(e)) => error!("connection unexpectedly errored: {}", e),
+                        }
+
+                        self.state = GrpcComputedTcpConn::Disconnected;
+                        anyhow::bail!("Connection severed")
+                    }
+                }
+            } else {
+                Err(anyhow::anyhow!("Connection severed"))
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Reconnect for GrpcComputedClient {
+        fn disconnect(&mut self) {
+            debug!("GrpcComputedClient {}: disconnect called", &self.addr);
+            self.state = GrpcComputedTcpConn::Disconnected;
+        }
+
+        async fn reconnect(&mut self) {
+            debug!("GrpcComputedClient {}: reconnect called", &self.addr);
+            self.connect().await
+        }
+    }
 
     enum TcpConn<C, R> {
         Disconnected,
@@ -1020,10 +1193,8 @@ pub mod tcp {
 
     /// A client to a remote dataflow server.
     ///
-    /// If the client experiences errors, it will attempt a reconnection in the `recv` method and
-    /// produce an error for the call in which that reconnection happens, allowing a bearer to
-    /// re-issue commands. As the reconnection happens in `recv()`, the bearer is advised to use
-    /// a `select` style construct to avoid suspending their task by a call to `recv()`.
+    /// If the client experiences errors, it will return an error from the `recv` method, allowing a
+    /// bearer to re-issue commands. The reconnection happens in `reconnect()`.
     #[derive(Debug)]
     pub struct TcpClient<C, R> {
         connection: TcpConn<C, R>,
@@ -1031,21 +1202,16 @@ pub mod tcp {
         addr: String,
     }
 
-    impl<C, R> TcpClient<C, R> {
+    impl<C, R> FromAddr for TcpClient<C, R> {
         /// Creates a new `TcpClient` initially in a disconnected state.
         ///
-        /// Use the `connect()` method to put the client into a connected state.
-        pub fn new(addr: String) -> TcpClient<C, R> {
+        /// Use the `reconnect()` of the Reconnect trait method to put the client into a connected state.
+        fn from_addr(addr: String) -> TcpClient<C, R> {
             Self {
                 connection: TcpConn::Disconnected,
                 backoff: Duration::from_millis(10),
                 addr,
             }
-        }
-
-        /// Reports whether the client is actively connected.
-        pub fn connected(&self) -> bool {
-            matches!(self.connection, TcpConn::Connected(_))
         }
     }
 
@@ -1163,6 +1329,190 @@ pub mod tcp {
             tokio_util::codec::Framed::new(conn, length_delimited_codec()),
             Bincode::default(),
         )
+    }
+
+    /// The server side gRPC implementation that will run in computed.
+    ///
+    /// There are two main tasks involved: The gRPC callback implementations will execute in their own tasks,
+    /// receive commands from the network and send responses to the network. Upon reception of a command,
+    /// the implementation will put it in a mpsc queue, out of which the consumer (running in another
+    /// task) will read it with a recv call. The same goes for the send path: The consumer calls `send` which
+    /// puts the response in a mpsc queue, from which the gRPC stubs will read and send it over the network.
+    ///
+    /// If an error occurs, the consumer receives an error from the recv call. If no client is
+    /// connected recv will block until a client is available. To implement the "waiting for
+    /// client" the queue_change notification is used. recv will check first if a client is connected using
+    /// queue. If queue is None, no client is connected and recv will await on the queue_change notification.
+    /// The server does this vice-versa. Upon connection of a client, it will insert the endpoints
+    /// into queue and trigger the queue_change, which will wake up the waiting clients.
+    ///
+    /// This is the shared datastructure between server and consumer.
+    ///
+    pub struct GrpcComputedShared {
+        // These are endpoints for the consumer. The other end of these queues is consumed by the
+        // stream implementation. `queue` is None if no client is connected, otherwise the
+        // endpoints are forwarded to the single client. If a client is connecting but a client is
+        // already connected, this mutex is used to block. If the consumer calls send or recv and
+        // queue is None, the consumer will wait on the queue_change notification to proceed only
+        // when a client has connected.
+        queue: Mutex<
+            Option<(
+                Streaming<super::ProtoComputeCommand>,
+                UnboundedSender<super::ProtoComputeResponse>,
+            )>,
+        >,
+
+        // If queue changes, the server side will publish a notification here.
+        queue_change: Notify,
+    }
+
+    /// Server side implementation.
+    struct GrpcComputedServer {
+        shared: Arc<GrpcComputedShared>,
+    }
+
+    /// Consumer side functions such as send and recv. These will not directly interact with the
+    /// network, but put messages in a mpsc queue which will be read and sent to the network in a
+    /// separate server task.
+    pub struct GrpcComputedServerInterface {
+        shared: Arc<GrpcComputedShared>,
+    }
+
+    impl GrpcComputedServerInterface {
+        pub async fn send(&self, resp: ComputeResponse) -> Result<(), anyhow::Error> {
+            loop {
+                let res = match self.shared.queue.lock().await.as_ref() {
+                    Some(x) => Some(x.1.send((&resp).into_proto()).map_err(Into::into)),
+
+                    // Other end absent, wait for connection, can't inline queue reset
+                    // here as we are still holding the lock.
+                    None => None,
+                };
+
+                match res {
+                    Some(r) => {
+                        if r.is_err() {
+                            *self.shared.queue.lock().await = None;
+                        }
+                        return r;
+                    }
+                    None => self.shared.queue_change.notified().await,
+                }
+            }
+        }
+
+        // Recv returns an error if a faulty connection is detected (for example when
+        // the other queue endpoint has been dropped).
+        // If there is no current connection, it will await a connection from the coordinator.
+        //
+        // This function is and must be cancellation safe.
+        // If a message is received from the streaming instance and it does not cause an error,
+        // the message will be delivered, as there are no await points on the path.
+        // If there is an error more await point will be passed, however the hope is that in the
+        // error case, the next interaction with the queue will produce another error, such that
+        // the errors are not lost due to cancellation.
+        //
+        // There is no race between the creation of new queue pair, as the Notify will store
+        // internally a permit: If a notifier comes first, and this function calls notified().await,
+        // it will immediately return (and clear the permit).
+        // See https://docs.rs/tokio/0.2.12/tokio/sync/struct.Notify.html
+        pub async fn recv(&mut self) -> Result<ComputeCommand, anyhow::Error> {
+            loop {
+                let res = match self.shared.queue.lock().await.as_mut() {
+                    Some(x) => {
+                        let res = match x.0.next().await {
+                            Some(Ok(x)) => x.into_rust().map_err(Into::into),
+                            Some(Err(e)) => {
+                                info!("Connection severed: {}", e);
+                                Err(e.into())
+                            }
+                            None => {
+                                info!("Connection severed: Endpoint gone");
+                                Err(anyhow::anyhow!("Connection severed: Endpoint gone"))
+                            }
+                        };
+                        Some(res)
+                    }
+
+                    // Other end absent, wait for connection
+                    None => {
+                        debug!("recv called while no coordinator connected, waiting for coordinator connection.");
+                        None
+                    }
+                };
+
+                // Don't move queue reset in block above as we are still holding the queue lock
+                // there.
+                match res {
+                    None => {
+                        // No queue
+                        self.shared.queue_change.notified().await;
+                    }
+                    Some(res) => {
+                        if res.is_err() {
+                            *self.shared.queue.lock().await = None;
+                        }
+                        return res;
+                    }
+                }
+            }
+        }
+    }
+
+    type ResponseStream =
+        Pin<Box<dyn Stream<Item = Result<super::ProtoComputeResponse, tonic::Status>> + Send>>;
+
+    #[tonic::async_trait]
+    impl super::proto_compute_server::ProtoCompute for GrpcComputedServer {
+        type CommandResponseStreamStream = ResponseStream;
+
+        async fn command_response_stream(
+            &self,
+            req: Request<Streaming<super::ProtoComputeCommand>>,
+        ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, tonic::Status> {
+            debug!("GrpcComputedServer: remote client connected");
+
+            // Consistent with the ActiveReplication client, we use unbounded channels.
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            // Store channels in state
+            *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
+            self.shared.queue_change.notify_waiters();
+
+            let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
+
+            Ok(Response::new(
+                Box::pin(receiver_stream) as Self::CommandResponseStreamStream
+            ))
+        }
+    }
+
+    /// Creates a running gRPC based computed server that can receive ComputeCommands
+    /// and send ComputeResponses. Returns a a tuple of ComputedServerInterface that
+    /// can be used to recv and send from. As well as a shutdown signal, which should
+    /// be used to terminate the mainloop if a message is sent.
+    pub fn grpc_computed_server(listen_addr: String) -> GrpcComputedServerInterface {
+        // The channel size is a arbitrary, but it should be a
+        // small bounded channel such that backpressure is applied early.
+        let shared = Arc::new(GrpcComputedShared {
+            queue: Mutex::new(None),
+            queue_change: Notify::new(),
+        });
+
+        let server = GrpcComputedServer {
+            shared: Arc::clone(&shared),
+        };
+
+        mz_ore::task::spawn(|| "ComputedProtoServer", async move {
+            info!("Starting to listen on {}", listen_addr);
+            Server::builder()
+                .add_service(super::proto_compute_server::ProtoComputeServer::new(server))
+                .serve(listen_addr.to_socket_addrs().unwrap().next().unwrap())
+                .await
+                .unwrap();
+        });
+
+        GrpcComputedServerInterface { shared }
     }
 
     /// Constructs a framed connection for the client.

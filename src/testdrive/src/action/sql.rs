@@ -9,7 +9,7 @@
 
 use std::ascii;
 use std::error::Error;
-use std::fmt::{self, Write as _};
+use std::fmt::{self, Display, Formatter, Write as _};
 use std::io::{self, Write};
 use std::time::SystemTime;
 
@@ -224,7 +224,7 @@ impl Action for SqlAction {
                 if let Some(disk_state) = disk_state {
                     let mem_state = reqwest::get(&format!(
                         "http://{}/api/internal/catalog",
-                        state.materialized_addr,
+                        state.materialize_http_addr,
                     ))
                     .await?
                     .text()
@@ -297,7 +297,7 @@ impl SqlAction {
                     while let (Some(e), Some(a)) = (expected_rows.get(left), actual.get(right)) {
                         match e.cmp(a) {
                             std::cmp::Ordering::Less => {
-                                writeln!(buf, "row missing: {:?}", e).unwrap();
+                                writeln!(buf, "- {}", TestdriveRow(e)).unwrap();
                                 left += 1;
                             }
                             std::cmp::Ordering::Equal => {
@@ -305,21 +305,21 @@ impl SqlAction {
                                 right += 1;
                             }
                             std::cmp::Ordering::Greater => {
-                                writeln!(buf, "extra row: {:?}", a).unwrap();
+                                writeln!(buf, "+ {}", TestdriveRow(a)).unwrap();
                                 right += 1;
                             }
                         }
                     }
                     while let Some(e) = expected_rows.get(left) {
-                        writeln!(buf, "row missing: {:?}", e).unwrap();
+                        writeln!(buf, "- {}", TestdriveRow(e)).unwrap();
                         left += 1;
                     }
                     while let Some(a) = actual.get(right) {
-                        writeln!(buf, "extra row: {:?}", a).unwrap();
+                        writeln!(buf, "+ {}", TestdriveRow(a)).unwrap();
                         right += 1;
                     }
                     bail!(
-                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
+                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nPoor diff:\n{}",
                         expected_rows,
                         actual,
                         buf
@@ -496,10 +496,10 @@ impl Action for FailSqlAction {
 impl FailSqlAction {
     async fn try_redo(&self, state: &State, query: &str) -> Result<(), anyhow::Error> {
         match state.pgclient.query(query, &[]).await {
-            Ok(_) => bail!("query succeeded, but expected {}", self.expected_error,),
+            Ok(_) => bail!("query succeeded, but expected {}", self.expected_error),
             Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
                 Some(err) => {
-                    let mut err_string = err.to_string();
+                    let mut err_string = err.message().to_string();
                     if let Some(regex) = &state.regex {
                         err_string = regex
                             .replace_all(&err_string, state.regex_replacement.as_str())
@@ -613,4 +613,22 @@ pub fn decode_row(state: &State, row: Row) -> Result<Vec<String>, anyhow::Error>
         out.push(value);
     }
     Ok(out)
+}
+
+struct TestdriveRow<'a>(&'a Vec<String>);
+
+impl Display for TestdriveRow<'_> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mut cols = Vec::<String>::new();
+
+        for col_str in &self.0[0..self.0.len()] {
+            if col_str.contains(' ') || col_str.contains('"') {
+                cols.push(format!("{:?}", col_str));
+            } else {
+                cols.push(col_str.to_string());
+            }
+        }
+
+        write!(f, "{}", cols.join(" "))
+    }
 }

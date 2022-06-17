@@ -140,6 +140,7 @@ impl ConnClient {
     ///
     /// Returns a new client that is bound to the session and a response
     /// containing various details about the startup.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn startup(
         self,
         session: Session,
@@ -299,11 +300,13 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
             session,
             tx,
+            span: tracing::Span::current(),
         })
         .await
     }
@@ -469,7 +472,7 @@ impl SessionClient {
                 ExecuteResponse::Canceled => {
                     results.push(SimpleResult::err("statement canceled due to user request"));
                 }
-                ExecuteResponse::CreatedConnector { existed: _ }
+                ExecuteResponse::CreatedConnection { existed: _ }
                 | ExecuteResponse::CreatedDatabase { existed: _ }
                 | ExecuteResponse::CreatedSchema { existed: _ }
                 | ExecuteResponse::CreatedRole
@@ -498,7 +501,7 @@ impl SessionClient {
                 | ExecuteResponse::DroppedView
                 | ExecuteResponse::DroppedType
                 | ExecuteResponse::DroppedSecret
-                | ExecuteResponse::DroppedConnector
+                | ExecuteResponse::DroppedConnection
                 | ExecuteResponse::EmptyQuery
                 | ExecuteResponse::Inserted(_)
                 | ExecuteResponse::StartedTransaction { duplicated: _ }
@@ -513,7 +516,10 @@ impl SessionClient {
                 | ExecuteResponse::Prepare => {
                     results.push(SimpleResult::Ok);
                 }
-                ExecuteResponse::SendingRows(rows) => {
+                ExecuteResponse::SendingRows {
+                    future: rows,
+                    span: _,
+                } => {
                     let rows = match rows.await {
                         PeekResponseUnary::Rows(rows) => rows,
                         PeekResponseUnary::Error(e) => {

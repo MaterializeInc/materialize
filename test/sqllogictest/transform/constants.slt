@@ -1,0 +1,44 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+statement ok
+CREATE VIEW billion AS SELECT * FROM generate_series(0, 999) AS x, generate_series(0, 999) AS y, generate_series(0, 999) AS z;
+
+# Test that this query doesn't compute the answer entirely as a constant
+# (as the way that works currently would require a huge memory blowup).
+#
+# If we make it so that reductions on constants
+# can be computed without writing out
+# out the entire input constant in unary, we can get rid of this test:
+# See https://github.com/MaterializeInc/materialize/issues/12963 .
+
+query T multiline
+EXPLAIN SELECT count(*) FROM billion;
+----
+%0 = Let l0 =
+| Constant (() x 1000000000)
+| Reduce group=()
+| | agg count(true)
+
+%1 =
+| Get %0 (l0)
+| Project ()
+| Negate
+
+%2 =
+| Constant ()
+
+%3 =
+| Union %1 %2
+| Map 0
+
+%4 =
+| Union %0 %3
+
+EOF

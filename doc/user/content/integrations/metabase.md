@@ -6,16 +6,11 @@ aliases:
 menu:
   main:
     parent: "integration-guides"
-    name: "Metabase BI"
+    name: "Metabase"
 ---
 
 You can use [Metabase] to create business intelligence dashboards using the
 real-time data streams in your Materialize instance.
-
-{{< version-changed v0.11.0 >}}
-Materialize no longer requires a patched version of Metabase. Install the
-official release or use Metabase Cloud.
-{{< /version-changed >}}
 
 ## Database connection details
 

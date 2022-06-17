@@ -27,9 +27,7 @@ use mz_expr::permutation_for_arrangement;
 use mz_expr::JoinInputMapper;
 use mz_expr::MapFilterProject;
 use mz_expr::MirScalarExpr;
-use mz_repr::proto::ProtoRepr;
-use mz_repr::proto::TryFromProtoError;
-use mz_repr::proto::TryIntoIfSome;
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -63,24 +61,16 @@ impl Arbitrary for DeltaJoinPlan {
     }
 }
 
-impl From<&DeltaJoinPlan> for ProtoDeltaJoinPlan {
-    fn from(x: &DeltaJoinPlan) -> Self {
-        Self {
-            path_plans: x.path_plans.iter().map(Into::into).collect(),
+impl RustType<ProtoDeltaJoinPlan> for DeltaJoinPlan {
+    fn into_proto(&self) -> ProtoDeltaJoinPlan {
+        ProtoDeltaJoinPlan {
+            path_plans: self.path_plans.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoDeltaJoinPlan> for DeltaJoinPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoDeltaJoinPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoDeltaJoinPlan) -> Result<Self, TryFromProtoError> {
         Ok(DeltaJoinPlan {
-            path_plans: x
-                .path_plans
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, _>>()?,
+            path_plans: proto.path_plans.into_rust()?,
         })
     }
 }
@@ -129,38 +119,25 @@ impl Arbitrary for DeltaPathPlan {
     }
 }
 
-impl From<&DeltaPathPlan> for ProtoDeltaPathPlan {
-    fn from(x: &DeltaPathPlan) -> Self {
-        Self {
-            source_relation: x.source_relation.into_proto(),
-            source_key: x.source_key.iter().map(Into::into).collect(),
-            initial_closure: Some((&x.initial_closure).into()),
-            stage_plans: x.stage_plans.iter().map(Into::into).collect(),
-            final_closure: x.final_closure.as_ref().map(Into::into),
+impl RustType<ProtoDeltaPathPlan> for DeltaPathPlan {
+    fn into_proto(&self) -> ProtoDeltaPathPlan {
+        ProtoDeltaPathPlan {
+            source_relation: self.source_relation.into_proto(),
+            source_key: self.source_key.into_proto(),
+            initial_closure: Some(self.initial_closure.into_proto()),
+            stage_plans: self.stage_plans.into_proto(),
+            final_closure: self.final_closure.into_proto(),
         }
     }
-}
-
-impl TryFrom<ProtoDeltaPathPlan> for DeltaPathPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoDeltaPathPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoDeltaPathPlan) -> Result<Self, TryFromProtoError> {
         Ok(DeltaPathPlan {
-            source_relation: x.source_relation.try_into()?,
-            source_key: x
-                .source_key
-                .into_iter()
-                .map(|x| x.try_into())
-                .collect::<Result<_, _>>()?,
-            initial_closure: x
+            source_relation: proto.source_relation.try_into()?,
+            source_key: proto.source_key.into_rust()?,
+            initial_closure: proto
                 .initial_closure
-                .try_into_if_some("ProtoDeltaPathPlan::initial_closure")?,
-            stage_plans: x
-                .stage_plans
-                .into_iter()
-                .map(|x| x.try_into())
-                .collect::<Result<_, _>>()?,
-            final_closure: x.final_closure.map(|x| x.try_into()).transpose()?,
+                .into_rust_if_some("ProtoDeltaPathPlan::initial_closure")?,
+            stage_plans: proto.stage_plans.into_rust()?,
+            final_closure: proto.final_closure.into_rust()?,
         })
     }
 }
@@ -212,40 +189,26 @@ impl Arbitrary for DeltaStagePlan {
     }
 }
 
-impl From<&DeltaStagePlan> for ProtoDeltaStagePlan {
-    fn from(x: &DeltaStagePlan) -> Self {
-        Self {
-            lookup_relation: x.lookup_relation.into_proto(),
-            stream_key: x.stream_key.iter().map(Into::into).collect(),
-            stream_thinning: x.stream_thinning.iter().map(|x| x.into_proto()).collect(),
-            lookup_key: x.lookup_key.iter().map(Into::into).collect(),
-            closure: Some((&x.closure).into()),
+impl RustType<ProtoDeltaStagePlan> for DeltaStagePlan {
+    fn into_proto(&self) -> ProtoDeltaStagePlan {
+        ProtoDeltaStagePlan {
+            lookup_relation: self.lookup_relation.into_proto(),
+            stream_key: self.stream_key.into_proto(),
+            stream_thinning: self.stream_thinning.into_proto(),
+            lookup_key: self.lookup_key.into_proto(),
+            closure: Some(self.closure.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoDeltaStagePlan> for DeltaStagePlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoDeltaStagePlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoDeltaStagePlan) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            lookup_relation: usize::from_proto(x.lookup_relation)?,
-            stream_key: x
-                .stream_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            stream_thinning: x
-                .stream_thinning
-                .into_iter()
-                .map(ProtoRepr::from_proto)
-                .collect::<Result<_, _>>()?,
-            lookup_key: x
-                .lookup_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            closure: x.closure.try_into_if_some("ProtoDeltaStagePlan::closure")?,
+            lookup_relation: proto.lookup_relation.into_rust()?,
+            stream_key: proto.stream_key.into_rust()?,
+            stream_thinning: proto.stream_thinning.into_rust()?,
+            lookup_key: proto.lookup_key.into_rust()?,
+            closure: proto
+                .closure
+                .into_rust_if_some("ProtoDeltaStagePlan::closure")?,
         })
     }
 }

@@ -1,5 +1,5 @@
 ---
-title: "Aggregate Function Filters"
+title: "Aggregate function filters"
 description: "Use FILTER to specify which rows are sent to an aggregate function"
 menu:
   main:

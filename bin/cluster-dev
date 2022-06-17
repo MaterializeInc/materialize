@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# cluster-dev — build and deploy materialized to Minikube.
+# cluster-dev — build and deploy Materialize to Minikube.
 
 set -euo pipefail
 
@@ -23,9 +23,75 @@ eval "$(minikube docker-env --shell bash)"
 
 bin/mzimage acquire --dev storaged
 bin/mzimage acquire --dev computed
-bin/mzimage acquire --dev materialized-slim
+bin/mzimage acquire --dev environmentd
 
 kubectl apply --context=minikube  -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+data:
+  schemas.sql: |
+    CREATE SCHEMA consensus;
+    CREATE SCHEMA catalog;
+    CREATE SCHEMA storage;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  type: NodePort
+  ports:
+  - port: 5432
+    name: sql
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:14.3
+        env:
+        - name: POSTGRES_HOST_AUTH_METHOD
+          value: trust
+        ports:
+        - containerPort: 5432
+          name: sql
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: postgres-init
+          mountPath: /docker-entrypoint-initdb.d
+      volumes:
+      - name: postgres-init
+        configMap:
+          name: postgres-init
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -41,43 +107,43 @@ subjects:
 apiVersion: v1
 kind: Service
 metadata:
-  name: materialized
+  name: environmentd
   labels:
-    app: materialized
+    app: environmentd
 spec:
   type: NodePort
   ports:
   - port: 6875
     name: sql
   selector:
-    app: materialized
+    app: environmentd
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: user-managed-secrets
   labels:
-    app: materialized
+    app: environmentd
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: materialized
+  name: environmentd
 spec:
-  serviceName: materialized
+  serviceName: environmentd
   replicas: 1
   podManagementPolicy: Parallel
   selector:
     matchLabels:
-      app: materialized
+      app: environmentd
   template:
     metadata:
       labels:
-        app: materialized
+        app: environmentd
     spec:
       containers:
-      - name: materialized
-        image: $(bin/mzimage spec --dev materialized-slim)
+      - name: environmentd
+        image: $(bin/mzimage spec --dev environmentd)
         args:
             - --storaged-image=$(bin/mzimage spec --dev storaged)
             - --computed-image=$(bin/mzimage spec --dev computed)
@@ -85,10 +151,13 @@ spec:
             - --orchestrator=kubernetes
             - --orchestrator-service-label=materialize.cloud/example1=label1
             - --orchestrator-service-label=materialize.cloud/example2=label2
+            - --persist-consensus-url=postgres://postgres@postgres.default?options=--search_path=consensus
+            - --catalog-postgres-stash=postgres://postgres@postgres.default?options=--search_path=catalog
+            - --storage-postgres-stash=postgres://postgres@postgres.default?options=--search_path=storage
             - --kubernetes-image-pull-policy=never
             - --user-defined-secret=user-managed-secrets
             - --user-defined-secret-mount-path=/secrets
-            - --experimental
+            - --unsafe-mode
         ports:
         - containerPort: 6875
           name: sql

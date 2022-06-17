@@ -56,7 +56,7 @@ use mz_repr::{
 
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AsOf, Assignment, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
+    AsOf, Assignment, AstInfo, DeleteStatement, Distinct, Expr, Function, FunctionArgs,
     HomogenizingFunction, Ident, InsertSource, IsExprConstruct, Join, JoinConstraint, JoinOperator,
     Limit, OrderByExpr, Query, Select, SelectItem, SetExpr, SetOperator, SubscriptPosition,
     TableAlias, TableFactor, TableFunction, TableWithJoins, UnresolvedObjectName, UpdateStatement,
@@ -66,7 +66,7 @@ use mz_sql_parser::ast::{
 use crate::catalog::{CatalogItemType, CatalogType, SessionCatalog};
 use crate::func::{self, Func, FuncSpec};
 use crate::names::{Aug, PartialObjectName, ResolvedDataType, ResolvedObjectName};
-use crate::normalize;
+use crate::normalize::{self, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, BinaryFunc,
@@ -324,7 +324,7 @@ pub fn plan_copy_from(
     }
     let mut desc = table
         .desc(&scx.catalog.resolve_full_name(table.name()))?
-        .clone();
+        .into_owned();
     let _ = table
         .table_details()
         .expect("attempted to insert into non-table");
@@ -1415,12 +1415,12 @@ fn plan_view_select(
     // don't need to clone the Select.
 
     // Extract hints about group size if there are any
-    let mut options = crate::normalize::options(&s.options);
+    let mut options = crate::normalize::options(&s.options)?;
 
     let option = options.remove("expected_group_size");
 
     let expected_group_size = match option {
-        Some(Value::Number(n)) => Some(n.parse::<usize>()?),
+        Some(SqlValueOrSecret::Value(Value::Number(n))) => Some(n.parse::<usize>()?),
         Some(_) => sql_bail!("expected_group_size must be a number"),
         None => None,
     };
@@ -1943,10 +1943,7 @@ fn plan_order_by_exprs(
                 ecx.relation_type.arity() + map_exprs.len() - 1
             }
         };
-        order_by.push(ColumnOrder {
-            column,
-            desc: !obe.asc.unwrap_or(true),
-        });
+        order_by.push(resolve_desc_and_nulls_last(obe, column));
     }
     Ok((order_by, map_exprs))
 }
@@ -3394,7 +3391,7 @@ fn plan_array_subquery(
     ecx: &ExprContext,
     query: &Query<Aug>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    ecx.require_experimental_mode("array subquery")?;
+    ecx.require_unsafe_mode("array subquery")?;
     plan_vector_like_subquery(
         ecx,
         query,
@@ -3496,7 +3493,7 @@ where
         .order_by
         .into_iter()
         .enumerate()
-        .map(|(i, ColumnOrder { column: _, desc })| ColumnOrder { column: i, desc })
+        .map(|(i, order)| ColumnOrder { column: i, ..order })
         .collect();
 
     let reduced_expr = expr
@@ -3726,6 +3723,19 @@ pub fn coerce_homogeneous_exprs(
     Ok(out)
 }
 
+/// Creates a `ColumnOrder` from an `OrderByExpr` and column index.
+/// Column index is specified by the caller, but `desc` and `nulls_last` is figured out here.
+fn resolve_desc_and_nulls_last<T: AstInfo>(obe: &OrderByExpr<T>, column: usize) -> ColumnOrder {
+    let desc = !obe.asc.unwrap_or(true);
+    ColumnOrder {
+        column,
+        desc,
+        /// https://www.postgresql.org/docs/14/queries-order.html
+        ///   "NULLS FIRST is the default for DESC order, and NULLS LAST otherwise"
+        nulls_last: obe.nulls_last.unwrap_or(!desc),
+    }
+}
+
 fn plan_function_order_by(
     ecx: &ExprContext,
     order_by: &[OrderByExpr<Aug>],
@@ -3739,10 +3749,7 @@ fn plan_function_order_by(
             // `plan_expr` directly rather than `plan_order_by_or_distinct_expr`.
             let expr = plan_expr(ecx, &obe.expr)?.type_as_any(ecx)?;
             order_by_exprs.push(expr);
-            col_orders.push(ColumnOrder {
-                column: i,
-                desc: !obe.asc.unwrap_or(true),
-            });
+            col_orders.push(resolve_desc_and_nulls_last(obe, i));
         }
     }
     Ok((order_by_exprs, col_orders))
@@ -4949,8 +4956,8 @@ impl<'a> ExprContext<'a> {
         self.qcx.derived_context(scope, self.relation_type.clone())
     }
 
-    pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
-        self.qcx.scx.require_experimental_mode(feature_name)
+    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+        self.qcx.scx.require_unsafe_mode(feature_name)
     }
 
     pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {

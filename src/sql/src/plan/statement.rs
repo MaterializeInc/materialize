@@ -19,15 +19,15 @@ use anyhow::bail;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, ScalarType};
 use mz_sql_parser::ast::{RawObjectName, UnresolvedDatabaseName, UnresolvedSchemaName};
 
-use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
+use crate::ast::{Ident, ObjectType, Statement, UnresolvedObjectName};
 use crate::catalog::{
     CatalogComputeInstance, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema,
     SessionCatalog,
 };
 use crate::names::{
-    resolve_names_stmt, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName,
-    QualifiedObjectName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName,
-    ResolvedSchemaName, SchemaSpecifier,
+    Aug, DatabaseId, FullObjectName, ObjectQualifiers, PartialObjectName, QualifiedObjectName,
+    RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedObjectName, ResolvedSchemaName,
+    SchemaSpecifier,
 };
 use crate::plan::error::PlanError;
 use crate::plan::query;
@@ -88,7 +88,7 @@ impl StatementDesc {
 pub fn describe(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    stmt: Statement<Raw>,
+    stmt: Statement<Aug>,
     param_types_in: &[Option<ScalarType>],
 ) -> Result<StatementDesc, anyhow::Error> {
     let mut param_types = BTreeMap::new();
@@ -98,127 +98,80 @@ pub fn describe(
         }
     }
 
-    let mut scx = StatementContext {
+    let scx = StatementContext {
         pcx: Some(pcx),
         catalog,
         param_types: RefCell::new(param_types),
     };
 
-    // most statements can be described with a raw statement
-    let desc = match &stmt {
+    let desc = match stmt {
         // DDL statements.
-        Statement::CreateConnector(stmt) => Some(ddl::describe_create_connector(&scx, stmt)?),
-        Statement::CreateDatabase(stmt) => Some(ddl::describe_create_database(&scx, stmt)?),
-        Statement::CreateSchema(stmt) => Some(ddl::describe_create_schema(&scx, stmt)?),
-        Statement::CreateTable(stmt) => Some(ddl::describe_create_table(&scx, stmt)?),
-        Statement::CreateSource(stmt) => Some(ddl::describe_create_source(&scx, stmt)?),
-        Statement::CreateView(stmt) => Some(ddl::describe_create_view(&scx, stmt)?),
-        Statement::CreateViews(stmt) => Some(ddl::describe_create_views(&scx, stmt)?),
-        Statement::CreateSink(stmt) => Some(ddl::describe_create_sink(&scx, stmt)?),
-        Statement::CreateIndex(stmt) => Some(ddl::describe_create_index(&scx, stmt)?),
-        Statement::CreateType(stmt) => Some(ddl::describe_create_type(&scx, stmt)?),
-        Statement::CreateRole(stmt) => Some(ddl::describe_create_role(&scx, stmt)?),
-        Statement::CreateCluster(stmt) => Some(ddl::describe_create_cluster(&scx, stmt)?),
-        Statement::CreateClusterReplica(stmt) => {
-            Some(ddl::describe_create_cluster_replica(&scx, stmt)?)
-        }
-        Statement::CreateSecret(stmt) => Some(ddl::describe_create_secret(&scx, stmt)?),
-        Statement::DropDatabase(stmt) => Some(ddl::describe_drop_database(&scx, stmt)?),
-        Statement::DropSchema(stmt) => Some(ddl::describe_drop_schema(&scx, stmt)?),
-        Statement::DropObjects(stmt) => Some(ddl::describe_drop_objects(&scx, stmt)?),
-        Statement::DropRoles(stmt) => Some(ddl::describe_drop_role(&scx, stmt)?),
-        Statement::DropClusters(stmt) => Some(ddl::describe_drop_cluster(&scx, stmt)?),
-        Statement::DropClusterReplicas(stmt) => {
-            Some(ddl::describe_drop_cluster_replica(&scx, stmt)?)
-        }
-        Statement::AlterObjectRename(stmt) => Some(ddl::describe_alter_object_rename(&scx, stmt)?),
-        Statement::AlterIndex(stmt) => Some(ddl::describe_alter_index_options(&scx, stmt)?),
-        Statement::AlterSecret(stmt) => Some(ddl::describe_alter_secret_options(&scx, stmt)?),
+        Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
+        Statement::AlterSecret(stmt) => ddl::describe_alter_secret_options(&scx, stmt)?,
+        Statement::CreateCluster(stmt) => ddl::describe_create_cluster(&scx, stmt)?,
+        Statement::CreateClusterReplica(stmt) => ddl::describe_create_cluster_replica(&scx, stmt)?,
+        Statement::CreateConnection(stmt) => ddl::describe_create_connection(&scx, stmt)?,
+        Statement::CreateDatabase(stmt) => ddl::describe_create_database(&scx, stmt)?,
+        Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
+        Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
+        Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
+        Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
+        Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
+        Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
+        Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
+        Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
+        Statement::CreateViews(stmt) => ddl::describe_create_views(&scx, stmt)?,
+        Statement::DropClusterReplicas(stmt) => ddl::describe_drop_cluster_replica(&scx, stmt)?,
+        Statement::DropClusters(stmt) => ddl::describe_drop_cluster(&scx, stmt)?,
+        Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
+        Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
+        Statement::DropRoles(stmt) => ddl::describe_drop_role(&scx, stmt)?,
+        Statement::DropSchema(stmt) => ddl::describe_drop_schema(&scx, stmt)?,
 
         // `SHOW` statements.
-        Statement::ShowCreateTable(stmt) => Some(show::describe_show_create_table(&scx, stmt)?),
-        Statement::ShowCreateSource(stmt) => Some(show::describe_show_create_source(&scx, stmt)?),
-        Statement::ShowCreateView(stmt) => Some(show::describe_show_create_view(&scx, stmt)?),
-        Statement::ShowCreateSink(stmt) => Some(show::describe_show_create_sink(&scx, stmt)?),
-        Statement::ShowCreateIndex(stmt) => Some(show::describe_show_create_index(&scx, stmt)?),
-        Statement::ShowCreateConnector(stmt) => {
-            Some(show::describe_show_create_connector(&scx, stmt)?)
-        }
-        Statement::ShowColumns(_) => None,
-        Statement::ShowDatabases(_) => None,
-        Statement::ShowSchemas(_) => None,
-        Statement::ShowObjects(_) => None,
-        Statement::ShowIndexes(_) => None,
+        Statement::ShowColumns(stmt) => show::show_columns(&scx, stmt)?.describe()?,
+        Statement::ShowCreateConnection(stmt) => show::describe_show_create_connection(&scx, stmt)?,
+        Statement::ShowCreateIndex(stmt) => show::describe_show_create_index(&scx, stmt)?,
+        Statement::ShowCreateSink(stmt) => show::describe_show_create_sink(&scx, stmt)?,
+        Statement::ShowCreateSource(stmt) => show::describe_show_create_source(&scx, stmt)?,
+        Statement::ShowCreateTable(stmt) => show::describe_show_create_table(&scx, stmt)?,
+        Statement::ShowCreateView(stmt) => show::describe_show_create_view(&scx, stmt)?,
+        Statement::ShowDatabases(stmt) => show::show_databases(&scx, stmt)?.describe()?,
+        Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
+        Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
+        Statement::ShowSchemas(stmt) => show::show_schemas(&scx, stmt)?.describe()?,
 
         // SCL statements.
-        Statement::SetVariable(stmt) => Some(scl::describe_set_variable(&scx, stmt)?),
-        Statement::ShowVariable(stmt) => Some(scl::describe_show_variable(&scx, stmt)?),
-        Statement::Discard(stmt) => Some(scl::describe_discard(&scx, stmt)?),
-        Statement::Declare(stmt) => Some(scl::describe_declare(&scx, stmt)?),
-        Statement::Fetch(stmt) => Some(scl::describe_fetch(&scx, stmt)?),
-        Statement::Close(stmt) => Some(scl::describe_close(&scx, stmt)?),
-        Statement::Prepare(stmt) => Some(scl::describe_prepare(&scx, stmt)?),
-        Statement::Execute(_) => None,
-        Statement::Deallocate(stmt) => Some(scl::describe_deallocate(&scx, stmt)?),
+        Statement::Close(stmt) => scl::describe_close(&scx, stmt)?,
+        Statement::Deallocate(stmt) => scl::describe_deallocate(&scx, stmt)?,
+        Statement::Declare(stmt) => scl::describe_declare(&scx, stmt)?,
+        Statement::Discard(stmt) => scl::describe_discard(&scx, stmt)?,
+        Statement::Execute(stmt) => scl::describe_execute(&scx, stmt)?,
+        Statement::Fetch(stmt) => scl::describe_fetch(&scx, stmt)?,
+        Statement::Prepare(stmt) => scl::describe_prepare(&scx, stmt)?,
+        Statement::ResetVariable(stmt) => scl::describe_reset_variable(&scx, stmt)?,
+        Statement::SetVariable(stmt) => scl::describe_set_variable(&scx, stmt)?,
+        Statement::ShowVariable(stmt) => scl::describe_show_variable(&scx, stmt)?,
 
         // DML statements.
-        Statement::Insert(_) => None,
-        Statement::Update(_) => None,
-        Statement::Delete(_) => None,
-        Statement::Select(_) => None,
-        Statement::Explain(_) => None,
-        Statement::Tail(_) => None,
-        Statement::Copy(_) => None,
+        Statement::Copy(stmt) => dml::describe_copy(&scx, stmt)?,
+        Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
+        Statement::Explain(stmt) => dml::describe_explain(&scx, stmt)?,
+        Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
+        Statement::Select(stmt) => dml::describe_select(&scx, stmt)?,
+        Statement::Tail(stmt) => dml::describe_tail(&scx, stmt)?,
+        Statement::Update(stmt) => dml::describe_update(&scx, stmt)?,
 
         // TCL statements.
-        Statement::StartTransaction(stmt) => Some(tcl::describe_start_transaction(&scx, stmt)?),
-        Statement::SetTransaction(stmt) => Some(tcl::describe_set_transaction(&scx, stmt)?),
-        Statement::Rollback(stmt) => Some(tcl::describe_rollback(&scx, stmt)?),
-        Statement::Commit(stmt) => Some(tcl::describe_commit(&scx, stmt)?),
+        Statement::Commit(stmt) => tcl::describe_commit(&scx, stmt)?,
+        Statement::Rollback(stmt) => tcl::describe_rollback(&scx, stmt)?,
+        Statement::SetTransaction(stmt) => tcl::describe_set_transaction(&scx, stmt)?,
+        Statement::StartTransaction(stmt) => tcl::describe_start_transaction(&scx, stmt)?,
 
-        // RAISE statements.
-        Statement::Raise(stmt) => Some(raise::describe_raise(&scx, stmt)?),
-    };
-
-    // The following statement types require augmented statements to describe
-    let stmt = match &stmt {
-        Statement::ShowColumns(_)
-        | Statement::ShowDatabases(_)
-        | Statement::ShowSchemas(_)
-        | Statement::ShowObjects(_)
-        | Statement::ShowIndexes(_)
-        | Statement::Insert(_)
-        | Statement::Update(_)
-        | Statement::Delete(_)
-        | Statement::Select(_)
-        | Statement::Explain(_)
-        | Statement::Tail(_)
-        | Statement::Copy(_)
-        | Statement::Execute(_) => Some(resolve_names_stmt(&mut scx, stmt.clone())?.0),
-        _ => None,
-    };
-
-    let desc = match stmt {
-        // `SHOW` statements.
-        Some(Statement::ShowColumns(stmt)) => show::show_columns(&scx, stmt)?.describe()?,
-        Some(Statement::ShowDatabases(stmt)) => show::show_databases(&scx, stmt)?.describe()?,
-        Some(Statement::ShowSchemas(stmt)) => show::show_schemas(&scx, stmt)?.describe()?,
-        Some(Statement::ShowObjects(stmt)) => show::show_objects(&scx, stmt)?.describe()?,
-        Some(Statement::ShowIndexes(stmt)) => show::show_indexes(&scx, stmt)?.describe()?,
-
-        // SCL statements.
-        Some(Statement::Execute(stmt)) => scl::describe_execute(&scx, stmt)?,
-
-        // DML statements.
-        Some(Statement::Insert(stmt)) => dml::describe_insert(&scx, stmt)?,
-        Some(Statement::Update(stmt)) => dml::describe_update(&scx, stmt)?,
-        Some(Statement::Delete(stmt)) => dml::describe_delete(&scx, stmt)?,
-        Some(Statement::Select(stmt)) => dml::describe_select(&scx, stmt)?,
-        Some(Statement::Explain(stmt)) => dml::describe_explain(&scx, stmt)?,
-        Some(Statement::Tail(stmt)) => dml::describe_tail(&scx, stmt)?,
-        Some(Statement::Copy(stmt)) => dml::describe_copy(&scx, stmt)?,
-
-        _ => desc.expect("desc created with raw statement"),
+        // Other statements.
+        Statement::Raise(stmt) => raise::describe_raise(&scx, stmt)?,
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -238,23 +191,9 @@ pub fn describe(
 pub fn plan(
     pcx: Option<&PlanContext>,
     catalog: &dyn SessionCatalog,
-    stmt: Statement<Raw>,
+    stmt: Statement<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    macro_rules! resolve_stmt {
-        ($statement_type:path, $scx:expr, $stmt:expr) => {{
-            let (stmt, depends_on) = resolve_names_stmt($scx, $stmt)?;
-            if let $statement_type(stmt) = stmt {
-                (stmt, depends_on)
-            } else {
-                panic!(
-                    "tried to extract the wrong inner statement type for statement {:?}",
-                    stmt
-                )
-            }
-        }};
-    }
-
     let param_types = params
         .types
         .iter()
@@ -268,228 +207,74 @@ pub fn plan(
         param_types: RefCell::new(param_types),
     };
 
-    // Delay name resolution of DECLARE and PREPARE until they're executed
-    if let Statement::Declare(stmt) = stmt {
-        return scl::plan_declare(scx, stmt);
-    } else if let Statement::Prepare(stmt) = stmt {
-        return scl::plan_prepare(scx, stmt);
-    }
-
     match stmt {
         // DDL statements.
-        stmt @ Statement::CreateDatabase(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateDatabase, scx, stmt);
-            ddl::plan_create_database(scx, stmt)
-        }
-        stmt @ Statement::CreateSchema(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateSchema, scx, stmt);
-            ddl::plan_create_schema(scx, stmt)
-        }
-        stmt @ Statement::CreateTable(_) => {
-            let (stmt, depends_on) = resolve_stmt!(Statement::CreateTable, scx, stmt);
-            ddl::plan_create_table(scx, stmt, depends_on)
-        }
-        stmt @ Statement::CreateSource(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateSource, scx, stmt);
-            ddl::plan_create_source(scx, stmt)
-        }
-        stmt @ Statement::CreateView(_) => {
-            let (stmt, depends_on) = resolve_stmt!(Statement::CreateView, scx, stmt);
-            ddl::plan_create_view(scx, stmt, params, depends_on)
-        }
-        stmt @ Statement::CreateViews(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateViews, scx, stmt);
-            ddl::plan_create_views(scx, stmt)
-        }
-        stmt @ Statement::CreateSink(_) => {
-            let (stmt, depends_on) = resolve_stmt!(Statement::CreateSink, scx, stmt);
-            ddl::plan_create_sink(scx, stmt, depends_on)
-        }
-        stmt @ Statement::CreateIndex(_) => {
-            let (stmt, depends_on) = resolve_stmt!(Statement::CreateIndex, scx, stmt);
-            ddl::plan_create_index(scx, stmt, depends_on)
-        }
-        stmt @ Statement::CreateType(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateType, scx, stmt);
-            ddl::plan_create_type(scx, stmt)
-        }
-        stmt @ Statement::CreateRole(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateRole, scx, stmt);
-            ddl::plan_create_role(scx, stmt)
-        }
-        stmt @ Statement::CreateCluster(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateCluster, scx, stmt);
-            ddl::plan_create_cluster(scx, stmt)
-        }
-        stmt @ Statement::CreateClusterReplica(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateClusterReplica, scx, stmt);
-            ddl::plan_create_cluster_replica(scx, stmt)
-        }
-        stmt @ Statement::CreateSecret(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateSecret, scx, stmt);
-            ddl::plan_create_secret(scx, stmt)
-        }
-        stmt @ Statement::CreateConnector(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::CreateConnector, scx, stmt);
-            ddl::plan_create_connector(scx, stmt)
-        }
-        Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
-        Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),
-        Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
-        stmt @ Statement::DropRoles(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::DropRoles, scx, stmt);
-            ddl::plan_drop_role(scx, stmt)
-        }
-        stmt @ Statement::DropClusters(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::DropClusters, scx, stmt);
-            ddl::plan_drop_cluster(scx, stmt)
-        }
-        stmt @ Statement::DropClusterReplicas(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::DropClusterReplicas, scx, stmt);
-            ddl::plan_drop_cluster_replica(scx, stmt)
-        }
-        stmt @ Statement::AlterIndex(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::AlterIndex, scx, stmt);
-            ddl::plan_alter_index_options(scx, stmt)
-        }
+        Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
-
-        stmt @ Statement::AlterSecret(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::AlterSecret, scx, stmt);
-            ddl::plan_alter_secret(scx, stmt)
-        }
+        Statement::AlterSecret(stmt) => ddl::plan_alter_secret(scx, stmt),
+        Statement::CreateCluster(stmt) => ddl::plan_create_cluster(scx, stmt),
+        Statement::CreateClusterReplica(stmt) => ddl::plan_create_cluster_replica(scx, stmt),
+        Statement::CreateConnection(stmt) => ddl::plan_create_connection(scx, stmt),
+        Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),
+        Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
+        Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
+        Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
+        Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
+        Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
+        Statement::CreateTable(stmt) => ddl::plan_create_table(scx, stmt),
+        Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
+        Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt, params),
+        Statement::CreateViews(stmt) => ddl::plan_create_views(scx, stmt),
+        Statement::DropClusterReplicas(stmt) => ddl::plan_drop_cluster_replica(scx, stmt),
+        Statement::DropClusters(stmt) => ddl::plan_drop_cluster(scx, stmt),
+        Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
+        Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
+        Statement::DropRoles(stmt) => ddl::plan_drop_role(scx, stmt),
+        Statement::DropSchema(stmt) => ddl::plan_drop_schema(scx, stmt),
 
         // DML statements.
-        stmt @ Statement::Insert(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Insert, scx, stmt);
-            dml::plan_insert(scx, stmt, params)
-        }
-        stmt @ Statement::Update(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Update, scx, stmt);
-            dml::plan_update(scx, stmt, params)
-        }
-        stmt @ Statement::Delete(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Delete, scx, stmt);
-            dml::plan_delete(scx, stmt, params)
-        }
-        stmt @ Statement::Select(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Select, scx, stmt);
-            dml::plan_select(scx, stmt, params, None)
-        }
-        stmt @ Statement::Explain(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Explain, scx, stmt);
-            dml::plan_explain(scx, stmt, params)
-        }
-        stmt @ Statement::Tail(_) => {
-            let (stmt, depends_on) = resolve_stmt!(Statement::Tail, scx, stmt);
-            dml::plan_tail(scx, stmt, None, depends_on)
-        }
-        stmt @ Statement::Copy(_) => {
-            let (stmt, depends_on) = resolve_stmt!(Statement::Copy, scx, stmt);
-            dml::plan_copy(scx, stmt, depends_on)
-        }
+        Statement::Copy(stmt) => dml::plan_copy(scx, stmt),
+        Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
+        Statement::Explain(stmt) => dml::plan_explain(scx, stmt, params),
+        Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
+        Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
+        Statement::Tail(stmt) => dml::plan_tail(scx, stmt, None),
+        Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
         // `SHOW` statements.
-        stmt @ Statement::ShowCreateTable(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowCreateTable, scx, stmt);
-            show::plan_show_create_table(scx, stmt)
-        }
-        stmt @ Statement::ShowCreateSource(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowCreateSource, scx, stmt);
-            show::plan_show_create_source(scx, stmt)
-        }
-        stmt @ Statement::ShowCreateView(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowCreateView, scx, stmt);
-            show::plan_show_create_view(scx, stmt)
-        }
-        stmt @ Statement::ShowCreateSink(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowCreateSink, scx, stmt);
-            show::plan_show_create_sink(scx, stmt)
-        }
-        stmt @ Statement::ShowCreateIndex(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowCreateIndex, scx, stmt);
-            show::plan_show_create_index(scx, stmt)
-        }
-        stmt @ Statement::ShowCreateConnector(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowCreateConnector, scx, stmt);
-            show::plan_show_create_connector(scx, stmt)
-        }
-        stmt @ Statement::ShowColumns(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowColumns, scx, stmt);
-            show::show_columns(scx, stmt)?.plan()
-        }
-        stmt @ Statement::ShowIndexes(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowIndexes, scx, stmt);
-            show::show_indexes(scx, stmt)?.plan()
-        }
-        stmt @ Statement::ShowDatabases(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowDatabases, scx, stmt);
-            show::show_databases(scx, stmt)?.plan()
-        }
-        stmt @ Statement::ShowSchemas(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowSchemas, scx, stmt);
-            show::show_schemas(scx, stmt)?.plan()
-        }
-        stmt @ Statement::ShowObjects(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowObjects, scx, stmt);
-            show::show_objects(scx, stmt)?.plan()
-        }
+        Statement::ShowColumns(stmt) => show::show_columns(scx, stmt)?.plan(),
+        Statement::ShowCreateConnection(stmt) => show::plan_show_create_connection(scx, stmt),
+        Statement::ShowCreateIndex(stmt) => show::plan_show_create_index(scx, stmt),
+        Statement::ShowCreateSink(stmt) => show::plan_show_create_sink(scx, stmt),
+        Statement::ShowCreateSource(stmt) => show::plan_show_create_source(scx, stmt),
+        Statement::ShowCreateTable(stmt) => show::plan_show_create_table(scx, stmt),
+        Statement::ShowCreateView(stmt) => show::plan_show_create_view(scx, stmt),
+        Statement::ShowDatabases(stmt) => show::show_databases(scx, stmt)?.plan(),
+        Statement::ShowIndexes(stmt) => show::show_indexes(scx, stmt)?.plan(),
+        Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.plan(),
+        Statement::ShowSchemas(stmt) => show::show_schemas(scx, stmt)?.plan(),
 
         // SCL statements.
-        stmt @ Statement::SetVariable(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::SetVariable, scx, stmt);
-            scl::plan_set_variable(scx, stmt)
-        }
-        stmt @ Statement::ShowVariable(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::ShowVariable, scx, stmt);
-            scl::plan_show_variable(scx, stmt)
-        }
-        stmt @ Statement::Discard(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Discard, scx, stmt);
-            scl::plan_discard(scx, stmt)
-        }
+        Statement::Close(stmt) => scl::plan_close(scx, stmt),
+        Statement::Deallocate(stmt) => scl::plan_deallocate(scx, stmt),
         Statement::Declare(stmt) => scl::plan_declare(scx, stmt),
-        stmt @ Statement::Fetch(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Fetch, scx, stmt);
-            scl::plan_fetch(scx, stmt)
-        }
-        stmt @ Statement::Close(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Close, scx, stmt);
-            scl::plan_close(scx, stmt)
-        }
+        Statement::Discard(stmt) => scl::plan_discard(scx, stmt),
+        Statement::Execute(stmt) => scl::plan_execute(scx, stmt),
+        Statement::Fetch(stmt) => scl::plan_fetch(scx, stmt),
         Statement::Prepare(stmt) => scl::plan_prepare(scx, stmt),
-        stmt @ Statement::Execute(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Execute, scx, stmt);
-            scl::plan_execute(scx, stmt)
-        }
-        stmt @ Statement::Deallocate(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Deallocate, scx, stmt);
-            scl::plan_deallocate(scx, stmt)
-        }
+        Statement::ResetVariable(stmt) => scl::plan_reset_variable(scx, stmt),
+        Statement::SetVariable(stmt) => scl::plan_set_variable(scx, stmt),
+        Statement::ShowVariable(stmt) => scl::plan_show_variable(scx, stmt),
 
         // TCL statements.
-        stmt @ Statement::StartTransaction(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::StartTransaction, scx, stmt);
-            tcl::plan_start_transaction(scx, stmt)
-        }
-        stmt @ Statement::SetTransaction(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::SetTransaction, scx, stmt);
-            tcl::plan_set_transaction(scx, stmt)
-        }
-        stmt @ Statement::Rollback(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Rollback, scx, stmt);
-            tcl::plan_rollback(scx, stmt)
-        }
-        stmt @ Statement::Commit(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Commit, scx, stmt);
-            tcl::plan_commit(scx, stmt)
-        }
+        Statement::Commit(stmt) => tcl::plan_commit(scx, stmt),
+        Statement::Rollback(stmt) => tcl::plan_rollback(scx, stmt),
+        Statement::SetTransaction(stmt) => tcl::plan_set_transaction(scx, stmt),
+        Statement::StartTransaction(stmt) => tcl::plan_start_transaction(scx, stmt),
 
-        // RAISE statements.
-        stmt @ Statement::Raise(_) => {
-            let (stmt, _) = resolve_stmt!(Statement::Raise, scx, stmt);
-            raise::plan_raise(scx, stmt)
-        }
+        // Other statements.
+        Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
     }
 }
 
@@ -519,7 +304,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::Index, ObjectType::Index)
             | (CatalogItemType::Type, ObjectType::Type)
             | (CatalogItemType::Secret, ObjectType::Secret)
-            | (CatalogItemType::Connector, ObjectType::Connector) => true,
+            | (CatalogItemType::Connection, ObjectType::Connection) => true,
             (_, _) => false,
         }
     }
@@ -752,17 +537,13 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_compute_instance(name)?)
     }
 
-    pub fn experimental_mode(&self) -> bool {
-        self.catalog.config().experimental_mode
+    pub fn unsafe_mode(&self) -> bool {
+        self.catalog.config().unsafe_mode
     }
 
-    pub fn require_experimental_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
-        if !self.experimental_mode() {
-            bail!(
-                "{} requires experimental mode; see \
-                https://materialize.com/docs/cli/#experimental-mode",
-                feature_name
-            )
+    pub fn require_unsafe_mode(&self, feature_name: &str) -> Result<(), anyhow::Error> {
+        if !self.unsafe_mode() {
+            bail!("{} is unsupported", feature_name)
         }
         Ok(())
     }

@@ -323,8 +323,6 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
-    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     CF: Fn(&G::Timestamp, &G::Timestamp) -> bool + 'static,
 {
     let (updates, errs) = updates.map_fallible("DeltaJoinKeyPreparation", {
@@ -404,8 +402,6 @@ where
     G: Scope,
     G::Timestamp: crate::render::RenderTimestamp,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = Diff> + Clone + 'static,
-    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
-    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
     use differential_dataflow::AsCollection;
     use mz_timely_util::operator::StreamExt;

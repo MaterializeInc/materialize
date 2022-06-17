@@ -1,6 +1,6 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 alter_rename ::=
-  'ALTER' ('INDEX' | 'SINK' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
+  'ALTER' ('INDEX' | 'SOURCE' | 'VIEW' | 'TABLE') name 'RENAME TO' new_name
 alter_index ::=
   'ALTER' 'INDEX' name (
     'SET' (
@@ -10,7 +10,7 @@ alter_index ::=
     | 'RESET' '(' field ( ',' field )* ')'
   )
 array_agg ::=
-  'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+  'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
   'AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression
 begin ::=
@@ -30,12 +30,23 @@ copy_to ::=
 copy_from ::=
   'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
+create_cluster ::=
+  'CREATE' 'CLUSTER' name (
+    'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
+  )?
+cluster_replica_def ::=
+  replica_name '(' replica_option ( ',' replica_option )* ')'
+create_cluster_replica ::=
+  'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name replica_option ( ',' replica_option )*
+replica_option ::=
+    'SIZE' size |
+    'AVAILABILITY' 'ZONE' az
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
     'CREATE' (
-        'INDEX' index_name 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
-        | 'DEFAULT INDEX ON' obj_name ('USING' method)?
+        'INDEX' index_name 'ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
+        | 'DEFAULT INDEX ON' obj_name ('IN' 'CLUSTER' cluster_name)? ('USING' method)?
     )
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
@@ -48,6 +59,7 @@ create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name
+    ('IN' 'CLUSTER' cluster_name)?
     'FROM' item_name
     'INTO' sink_kafka_connector
     ( sink_with_options )?
@@ -235,15 +247,15 @@ join_expr ::=
 join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
 jsonb_agg ::=
-    'jsonb_agg' '(' expression ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+    'jsonb_agg' '(' expression ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 jsonb_object_agg ::=
-  'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+  'jsonb_object_agg' '(' keys ',' values ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
     ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('CONSISTENCY' '(' 'TOPIC' consistency_topic ('FORMAT' consistency_format_spec)? ')' )?
 list_agg ::=
-  'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+  'list_agg' '(' value  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 lit_cast ::=
   type val
 op_cast ::=
@@ -263,7 +275,7 @@ select_stmt ::=
   ( 'GROUP' 'BY' col_ref ( ',' col_ref )* )?
   ( 'OPTION' '(' ( option '=' val ) ( ( ',' option '=' val ) )* ')' )?
   ( 'HAVING' expr )?
-  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )?
+  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )?
   ( 'LIMIT' expr )?
   ( 'OFFSET' expr )?
   ( ( 'UNION' | 'INTERSECT' | 'EXCEPT' ) ( 'ALL' | 'DISTINCT' )? another_select_stmt )?
@@ -283,7 +295,9 @@ show_create_view ::=
 show_databases ::=
     'SHOW' 'DATABASES' ('LIKE' 'pattern' | 'WHERE' expr)
 show_index ::=
-    'SHOW' ('INDEX' | 'INDEXES' | 'KEYS') ('FROM' | 'IN') on_name
+    'SHOW' 'EXTENDED'? ('INDEX' | 'INDEXES' | 'KEYS')
+    (('FROM' | 'IN') on_name)?
+    ('IN' 'CLUSTER' cluster_name)?
     ('LIKE' 'pattern' | 'WHERE' expr)
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
@@ -300,7 +314,7 @@ show_views ::=
 show_objects ::=
   'SHOW' 'EXTENDED'? 'FULL'?  'OBJECTS' ('FROM' schema_name)?
 string_agg ::=
-  'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( ',' col_ref ( 'ASC' | 'DESC' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
+  'string_agg' '(' value ',' delimiter    ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 table_ref ::=
   (
     table_name

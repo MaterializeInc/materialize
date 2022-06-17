@@ -158,27 +158,6 @@ contains:creating admin client failed: Client config error: Invalid value "FOO" 
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 contains:Meta data fetch error: BrokerTransportFailure (Local: Broker transport failure)
 
-! CREATE SINK invalid_ssl_certificate_location FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH (security_protocol = SSL , ssl_certificate_location = 'foo')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Invalid WITH option ssl_certificate_location='foo': file does not exist
-
-! CREATE SINK invalid_ssl_key_location FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH (security_protocol = SSL , ssl_key_location = 'foo')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Invalid WITH option ssl_key_location='foo': file does not exist
-
-! CREATE SINK invalid_ssl_ca_location FROM v1
-  INTO KAFKA BROKER '${testdrive.kafka-addr}'
-  TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH (security_protocol = SSL , ssl_ca_location = 'foo')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-contains:Invalid WITH option ssl_ca_location='foo': file does not exist
-
 #
 # Kerberos options
 #

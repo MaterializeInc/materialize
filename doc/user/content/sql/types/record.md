@@ -1,12 +1,10 @@
 ---
-title: "record Data Type"
+title: "record type"
 description: "A tuple with arbitrary contents"
 menu:
   main:
     parent: sql-types
 ---
-
-{{< version-added v0.4.0 />}}
 
 A `record` is a tuple that can contain an arbitrary number of elements of any
 type.

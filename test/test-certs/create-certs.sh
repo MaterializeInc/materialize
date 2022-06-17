@@ -136,7 +136,6 @@ done
 
 for i in kafka kafka1 kafka2 schema-registry
 do
-
     create_cert $i "ca" $i
     create_cert "materialized-$i" "ca-selective" "materialized"
 

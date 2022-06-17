@@ -19,7 +19,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
-    sources::{UpsertEnvelope, UpsertStyle},
+    sources::{MzOffset, UpsertEnvelope, UpsertStyle},
     DataflowError, DecodeError, LinearOperator,
 };
 use mz_expr::{EvalError, MirScalarExpr};
@@ -35,7 +35,7 @@ struct UpsertSourceData {
     /// The actual value
     value: Option<Result<Row, DataflowError>>,
     /// The source's reported position for this record
-    position: i64,
+    position: MzOffset,
     /// The time that the upstream source believes that the message was created
     /// Currently only applies to Kafka
     upstream_time_millis: Option<i64>,
@@ -234,6 +234,19 @@ where
             let mut row_packer = mz_repr::Row::default();
             let mut dv = DatumVec::new();
 
+            // Prepare sorted and structured `key_indices` required
+            // by the upsert operator, and a `DatumVec` used to avoid
+            // an allocation.
+            let mut key_indices_sorted = upsert_envelope.key_indices.clone();
+            key_indices_sorted.sort_unstable();
+            let key_indices_map = upsert_envelope
+                .key_indices
+                .iter()
+                .enumerate()
+                .map(|(idx, value_idx)| (*value_idx, idx))
+                .collect();
+            let mut kdv = DatumVec::new();
+
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
@@ -263,6 +276,9 @@ where
                         &mut row_packer,
                         &mut dv,
                         &upsert_envelope,
+                        &key_indices_sorted,
+                        &key_indices_map,
+                        &mut kdv,
                         &predicates,
                         &position_or,
                         &mut removed_times,
@@ -317,7 +333,15 @@ fn process_new_data(
             .entry(key);
 
         let new_entry = UpsertSourceData {
-            value: new_value.map(ResultExt::err_into),
+            value: new_value.map(ResultExt::err_into).map(|res| {
+                res.map(|(v, diff)| match diff {
+                    1 => v,
+                    _ => unreachable!(
+                        "Upsert should only be used with sources \
+                                        with no explicit diff"
+                    ),
+                })
+            }),
             position: new_position,
             // upsert sources don't have a column for this, so setting it to
             // `None` is fine.
@@ -356,8 +380,15 @@ fn process_pending_values_batch(
     row_packer: &mut Row,
     // A shared row used to build a Vec<Datum<'_>> for evaluation
     dv: &mut DatumVec,
-    // Additional source properties used to correctly inter
+    // Additional source properties used to correctly manage key-value pairs
     upsert_envelope: &UpsertEnvelope,
+    // `key_indices` in `upsert_envelope`, but sorted
+    key_indices_sorted: &[usize],
+    // `key_indices` in `upsert_envelope`, but turned into a value index to
+    // key index map
+    key_indices_map: &BTreeMap<usize, usize>,
+    // A shared row used to build a Vec<Datum<'_>> for key thinning
+    kdv: &mut DatumVec,
     // Additional information used to pre-evaluate predicates that reduces the output
     // stream size
     predicates: &[MirScalarExpr],
@@ -425,19 +456,20 @@ fn process_pending_values_batch(
                 // key columns, cloning when need-be
                 let thinned_value = new_value
                     .as_ref()
-                    .map(|full_row| thin(&upsert_envelope.key_indices, &full_row, row_packer))
+                    .map(|full_row| thin(key_indices_sorted, &full_row, row_packer))
                     .map_err(|e| e.clone());
                 current_values
                     .insert(decoded_key.clone(), thinned_value)
                     .map(|res| {
                         res.map(|v| {
                             rehydrate(
-                                &upsert_envelope.key_indices,
+                                &key_indices_map,
                                 // The value is never `Ok`
                                 // unless the key is also
                                 decoded_key.as_ref().unwrap(),
                                 &v,
                                 row_packer,
+                                kdv,
                             )
                         })
                     })
@@ -445,12 +477,13 @@ fn process_pending_values_batch(
                 current_values.remove(&decoded_key).map(|res| {
                     res.map(|v| {
                         rehydrate(
-                            &upsert_envelope.key_indices,
+                            key_indices_map,
                             // The value is never `Ok`
                             // unless the key is also
                             decoded_key.as_ref().unwrap(),
                             &v,
                             row_packer,
+                            kdv,
                         )
                     })
                 })
@@ -501,13 +534,13 @@ fn build_datum_vec_for_evaluation<'row>(
     }
 }
 
-/// `thin` uses information from the source description to find which indexes in the row
-/// are keys and skip them.
-fn thin(key_indices: &[usize], value: &Row, row_buf: &mut Row) -> Row {
+/// `thin` uses information from the source description to find which indices in the row
+/// are keys and skip them. It requires that `key_indices` is sorted.
+fn thin(key_indices_sorted: &[usize], value: &Row, row_buf: &mut Row) -> Row {
     let mut row_packer = row_buf.packer();
     let values = &mut value.iter();
     let mut next_idx = 0;
-    for &key_idx in key_indices {
+    for &key_idx in key_indices_sorted {
         // First, push the datums that are before `key_idx`
         row_packer.extend(values.take(key_idx - next_idx));
         // Then, skip this key datum
@@ -520,22 +553,34 @@ fn thin(key_indices: &[usize], value: &Row, row_buf: &mut Row) -> Row {
     row_buf.clone()
 }
 
-/// `rehydrate` uses information from the source description to find which indexes in the row
-/// are keys and add them back in in the right places.
-fn rehydrate(key_indices: &[usize], key: &Row, thinned_value: &Row, row_buf: &mut Row) -> Row {
+/// `rehydrate` uses information from the source description to find which indices in the row
+/// are keys and add them back in in the right places. `key_indices` is a map
+/// from the each key-part's index in the value to its index in the key.
+fn rehydrate(
+    key_indices_map: &BTreeMap<usize, usize>,
+    key: &Row,
+    thinned_value: &Row,
+    row_buf: &mut Row,
+    kdv: &mut DatumVec,
+) -> Row {
     let mut row_packer = row_buf.packer();
     let values = &mut thinned_value.iter();
+
+    let mut key_datums = kdv.borrow();
+    key_datums.extend(key.iter());
+
     let mut next_idx = 0;
-    for (&key_idx, key_datum) in key_indices.iter().zip(key.iter()) {
+    let mut key_indices_iter = key_indices_map.iter().peekable();
+
+    while let Some((value_idx, key_idx)) = key_indices_iter.next() {
         // First, push the datums that are before `key_idx`
-        row_packer.extend(values.take(key_idx - next_idx));
+        row_packer.extend(values.take(*value_idx - next_idx));
         // Then, push this key datum
-        row_packer.push(key_datum);
-        next_idx = key_idx + 1;
+        row_packer.push(key_datums[*key_idx]);
+        next_idx = *value_idx + 1;
     }
     // Finally, push any columns after the last key index
     row_packer.extend(values);
-
     row_buf.clone()
 }
 
@@ -546,27 +591,43 @@ mod tests {
     #[test]
     fn test_rehydrate_thin_first() {
         let mut packer = Row::default();
+        let mut kdv = DatumVec::new();
 
         let key_indices = vec![0];
+        let mut key_indices_sorted = key_indices.clone();
+        key_indices_sorted.sort_unstable();
+        let key_indices_map = key_indices
+            .iter()
+            .enumerate()
+            .map(|(idx, value_idx)| (*value_idx, idx))
+            .collect();
         let key = Row::pack([Datum::String("key")]);
 
         let thinned = Row::pack([Datum::String("two")]);
 
-        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+        let rehydrated = rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv);
 
         assert_eq!(
             rehydrated,
             Row::pack([Datum::String("key"), Datum::String("two"),])
         );
 
-        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+        assert_eq!(thin(&key_indices_sorted, &rehydrated, &mut packer), thinned);
     }
 
     #[test]
     fn test_rehydrate_thin_middle() {
         let mut packer = Row::default();
+        let mut kdv = DatumVec::new();
 
         let key_indices = vec![2];
+        let mut key_indices_sorted = key_indices.clone();
+        key_indices_sorted.sort_unstable();
+        let key_indices_map = key_indices
+            .iter()
+            .enumerate()
+            .map(|(idx, value_idx)| (*value_idx, idx))
+            .collect();
         let key = Row::pack([Datum::String("key")]);
 
         let thinned = Row::pack([
@@ -575,7 +636,7 @@ mod tests {
             Datum::String("four"),
         ]);
 
-        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+        let rehydrated = rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv);
 
         assert_eq!(
             rehydrated,
@@ -587,14 +648,22 @@ mod tests {
             ])
         );
 
-        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+        assert_eq!(thin(&key_indices_sorted, &rehydrated, &mut packer), thinned);
     }
 
     #[test]
     fn test_rehydrate_thin_multiple() {
         let mut packer = Row::default();
+        let mut kdv = DatumVec::new();
 
         let key_indices = vec![2, 4];
+        let mut key_indices_sorted = key_indices.clone();
+        key_indices_sorted.sort_unstable();
+        let key_indices_map = key_indices
+            .iter()
+            .enumerate()
+            .map(|(idx, value_idx)| (*value_idx, idx))
+            .collect();
         let key = Row::pack([Datum::String("key1"), Datum::String("key2")]);
 
         let thinned = Row::pack([
@@ -604,7 +673,7 @@ mod tests {
             Datum::String("six"),
         ]);
 
-        let rehydrated = rehydrate(&key_indices, &key, &thinned, &mut packer);
+        let rehydrated = rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv);
 
         assert_eq!(
             rehydrated,
@@ -618,7 +687,47 @@ mod tests {
             ])
         );
 
-        assert_eq!(thin(&key_indices, &rehydrated, &mut packer), thinned);
+        assert_eq!(thin(&key_indices_sorted, &rehydrated, &mut packer), thinned);
+    }
+
+    #[test]
+    fn test_rehydrate_thin_unordered() {
+        let mut packer = Row::default();
+        let mut kdv = DatumVec::new();
+
+        // Note these are unordered
+        let key_indices = vec![4, 2];
+        let mut key_indices_sorted = key_indices.clone();
+        key_indices_sorted.sort_unstable();
+        let key_indices_map = key_indices
+            .iter()
+            .enumerate()
+            .map(|(idx, value_idx)| (*value_idx, idx))
+            .collect();
+
+        let key = Row::pack([Datum::String("key2"), Datum::String("key1")]);
+
+        let thinned = Row::pack([
+            Datum::String("one"),
+            Datum::String("two"),
+            Datum::String("four"),
+            Datum::String("six"),
+        ]);
+        let full = Row::pack([
+            Datum::String("one"),
+            Datum::String("two"),
+            Datum::String("key1"),
+            Datum::String("four"),
+            Datum::String("key2"),
+            Datum::String("six"),
+        ]);
+
+        assert_eq!(thin(&key_indices_sorted, &full, &mut packer), thinned);
+
+        assert_eq!(
+            rehydrate(&key_indices_map, &key, &thinned, &mut packer, &mut kdv),
+            full
+        );
     }
 
     #[test]

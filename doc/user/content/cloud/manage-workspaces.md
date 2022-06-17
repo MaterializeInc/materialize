@@ -1,5 +1,5 @@
 ---
-title: "Manage a Workspace"
+title: "Manage a workspace"
 description: "Add or remove users to a Materialize Cloud workspace and set up workspace security."
 disable_toc: false
 menu:

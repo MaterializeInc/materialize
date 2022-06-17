@@ -35,12 +35,12 @@ pub mod linear_join;
 
 use std::collections::HashMap;
 
-use mz_repr::proto::{TryFromProtoError, TryIntoIfSome};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
+use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row, RowArena};
 
 pub use delta_join::DeltaJoinPlan;
@@ -57,30 +57,26 @@ pub enum JoinPlan {
     Delta(DeltaJoinPlan),
 }
 
-impl TryFrom<ProtoJoinPlan> for JoinPlan {
-    type Error = TryFromProtoError;
+impl RustType<ProtoJoinPlan> for JoinPlan {
+    fn into_proto(&self) -> ProtoJoinPlan {
+        use proto_join_plan::Kind::*;
+        ProtoJoinPlan {
+            kind: Some(match self {
+                JoinPlan::Linear(inner) => Linear(inner.into_proto()),
+                JoinPlan::Delta(inner) => Delta(inner.into_proto()),
+            }),
+        }
+    }
 
-    fn try_from(value: ProtoJoinPlan) -> Result<Self, Self::Error> {
-        use proto_join_plan::Kind;
+    fn from_proto(value: ProtoJoinPlan) -> Result<Self, TryFromProtoError> {
+        use proto_join_plan::Kind::*;
         let kind = value
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoJoinPlan::kind"))?;
         Ok(match kind {
-            Kind::Linear(inner) => JoinPlan::Linear(inner.try_into()?),
-            Kind::Delta(inner) => JoinPlan::Delta(inner.try_into()?),
+            Linear(inner) => JoinPlan::Linear(inner.into_rust()?),
+            Delta(inner) => JoinPlan::Delta(inner.into_rust()?),
         })
-    }
-}
-
-impl From<&JoinPlan> for ProtoJoinPlan {
-    fn from(repr: &JoinPlan) -> Self {
-        use proto_join_plan::Kind;
-        ProtoJoinPlan {
-            kind: Some(match repr {
-                JoinPlan::Linear(inner) => Kind::Linear(inner.into()),
-                JoinPlan::Delta(inner) => Kind::Delta(inner.into()),
-            }),
-        }
     }
 }
 
@@ -113,27 +109,18 @@ impl Arbitrary for JoinClosure {
     }
 }
 
-impl From<&JoinClosure> for ProtoJoinClosure {
-    fn from(x: &JoinClosure) -> Self {
-        Self {
-            ready_equivalences: x.ready_equivalences.iter().map(Into::into).collect(),
-            before: Some((&x.before).into()),
+impl RustType<ProtoJoinClosure> for JoinClosure {
+    fn into_proto(&self) -> ProtoJoinClosure {
+        ProtoJoinClosure {
+            ready_equivalences: self.ready_equivalences.into_proto(),
+            before: Some(self.before.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoJoinClosure> for JoinClosure {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoJoinClosure) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoJoinClosure) -> Result<Self, TryFromProtoError> {
         Ok(Self {
-            ready_equivalences: x
-                .ready_equivalences
-                .into_iter()
-                .map(TryFrom::try_from)
-                .collect::<Result<_, TryFromProtoError>>()?,
-
-            before: x.before.try_into_if_some("ProtoJoinClosure::before")?,
+            ready_equivalences: proto.ready_equivalences.into_rust()?,
+            before: proto.before.into_rust_if_some("ProtoJoinClosure::before")?,
         })
     }
 }

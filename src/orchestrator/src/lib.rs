@@ -9,13 +9,16 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::net::IpAddr;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use futures_core::stream::BoxStream;
 use serde::de::Unexpected;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -33,8 +36,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// The intent is that you can implement `Orchestrator` with pods in Kubernetes,
 /// containers in Docker, or processes on your local machine.
 pub trait Orchestrator: fmt::Debug + Send + Sync {
-    // Default host used to bind to.
-    fn listen_host(&self) -> &str;
     /// Enter a namespace in the orchestrator.
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator>;
 }
@@ -58,10 +59,33 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
+
+    /// Watch for status changes of all known services.
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;
+}
+
+/// An event describing a status change of an orchestrated service.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServiceEvent {
+    pub service_id: String,
+    pub process_id: i64,
+    pub status: ServiceStatus,
+    pub time: DateTime<Utc>,
+}
+
+/// Describes the status of an orchestrated service.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum ServiceStatus {
+    /// Service is ready to accept requests.
+    Ready,
+    /// Service is not ready to accept requests.
+    NotReady,
+    /// Service status is unknown.
+    Unknown,
 }
 
 /// Describes a running service managed by an `Orchestrator`.
-pub trait Service: fmt::Debug {
+pub trait Service: fmt::Debug + Send + Sync {
     /// Given the name of a port, returns the addresses for each of the
     /// service's processes, in order.
     ///
@@ -78,22 +102,9 @@ pub struct ServiceConfig<'a> {
     /// Often names a container on Docker Hub or a path on the local machine.
     pub image: String,
     /// A function that generates the arguments for each process of the service
-    /// given various information about the process to be configured.
-    ///
-    /// The first argument is the port mappings for each host; the second mapping is the
-    /// port mappings for the host or set of hosts presently being configured.
-    ///
-    /// The third argument is the index of this process in the service, _if available_.
-    /// It is not available from all orchestrators; for example, the Kubernetes orchestrator
-    /// configures the arguments for all processes at once.
+    /// given the assignments that the orchestrator has made.
     #[derivative(Debug = "ignore")]
-    pub args: &'a (dyn Fn(
-        &[(String, HashMap<String, u16>)],
-        &HashMap<String, u16>,
-        Option<usize>,
-    ) -> Vec<String>
-             + Send
-             + Sync),
+    pub args: &'a (dyn Fn(&ServiceAssignments) -> Vec<String> + Send + Sync),
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
     /// An optional limit on the memory that the service can use.
@@ -125,6 +136,26 @@ pub struct ServicePort {
     pub port_hint: u16,
 }
 
+/// Assignments that the orchestrator has made for a service.
+pub struct ServiceAssignments<'a> {
+    /// The host that the service should bind to.
+    pub listen_host: IpAddr,
+    /// The assigned port for each entry in [`ServiceConfig::ports`].
+    pub ports: &'a HashMap<String, u16>,
+    /// The index of this service in [`peers`](ServiceAssignments::peers), if
+    /// known.
+    ///
+    /// Not all orchestrators are capable of providing this information.
+    pub index: Option<usize>,
+    /// The hostname and port assignments for each peer in the service. The
+    /// order of peers is significant. Each peer is uniquely identified by its
+    /// position in the slice.
+    ///
+    /// The number of peers is determined by [`ServiceConfig::scale`].
+    pub peers: &'a [(String, HashMap<String, u16>)],
+}
+
+/// Describes a limit on memory.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MemoryLimit(pub ByteSize);
 

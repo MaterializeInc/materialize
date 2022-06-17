@@ -39,6 +39,7 @@ use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
 use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 
 use super::ReadPolicy;
@@ -56,7 +57,7 @@ pub(super) struct ComputeControllerState<T> {
 /// An immutable controller for a compute instance.
 #[derive(Debug, Copy, Clone)]
 pub struct ComputeController<'a, T> {
-    pub(super) _instance: ComputeInstanceId, // likely to be needed soon
+    pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a ComputeControllerState<T>,
     pub(super) storage_controller: &'a dyn StorageController<Timestamp = T>,
 }
@@ -180,6 +181,11 @@ impl<'a, T> ComputeController<'a, T>
 where
     T: Timestamp + Lattice,
 {
+    /// Returns this controller's compute instance ID.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance
+    }
+
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
     pub fn storage(&self) -> &dyn crate::client::controller::StorageController<Timestamp = T> {
@@ -202,7 +208,7 @@ where
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
         ComputeController {
-            _instance: self.instance,
+            instance: self.instance,
             storage_controller: self.storage_controller,
             compute: &self.compute,
         }
@@ -217,8 +223,8 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub async fn add_replica(&mut self, id: ReplicaId, client: Box<dyn ComputeClient<T>>) {
-        self.compute.client.add_replica(id, client).await;
+    pub fn add_replica(&mut self, id: ReplicaId, client: Box<dyn ComputeClient<T>>) {
+        self.compute.client.add_replica(id, client);
     }
 
     pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
@@ -393,6 +399,7 @@ where
         Ok(())
     }
     /// Initiate a peek request for the contents of `id` at `timestamp`.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn peek(
         &mut self,
         id: GlobalId,
@@ -425,6 +432,9 @@ where
                 finishing,
                 map_filter_project,
                 target_replica,
+                // Obtain an `OpenTelemetryContext` from the thread-local tracing
+                // tree to forward it on to the compute worker.
+                otel_ctx: OpenTelemetryContext::obtain(),
             }))
             .await
             .map_err(ComputeError::from)
@@ -687,7 +697,7 @@ pub struct CollectionState<T> {
     ///
     /// Importantly, this is not a write capability, but what we have heard about the
     /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `upper_frontier.frontier()`.
+    /// equal to `write_frontier.frontier()`.
     pub write_frontier: MutableAntichain<T>,
 }
 

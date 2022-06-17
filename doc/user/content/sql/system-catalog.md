@@ -1,5 +1,5 @@
 ---
-title: "System Catalog"
+title: "System catalog"
 description: "The system catalog stores metadata about your Materialize instance."
 aliases:
   - /sql/system-tables
@@ -8,8 +8,6 @@ menu:
     parent: 'reference'
     weight: 160
 ---
-
-{{< version-added v0.5.0 />}}
 
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.
@@ -42,9 +40,7 @@ These schemas contain sources, tables, and views that expose metadata like:
 Whenever possible, applications should prefer to query `mz_catalog` over
 `pg_catalog`. The mapping between Materialize concepts and PostgreSQL concepts
 is not one-to-one, and so the data in `pg_catalog` cannot accurately represent
-the particulars of Materialize. For example, PostgreSQL has no notion of
-[sinks](/sql/create-sink), and therefore `pg_catalog` does not display
-information about the sinks available in a Materialize.
+the particulars of Materialize.
 
 ## `mz_catalog`
 
@@ -82,6 +78,20 @@ Field      | Type       | Meaning
 `worker`   | [`bigint`] | The worker hosting the arrangement.
 `records`  | [`bigint`] | The number of records in the arrangement.
 `batches`  | [`bigint`] | The number of batches in the arrangement.
+
+### `mz_audit_events`
+
+The `mz_audit_events` table records create, alter, and drop events for the
+other objects in the system catalog.
+
+Field           | Type                         | Meaning
+----------------|------------------------------|--------
+`uuid`          | [`uuid`]                     | A unique identifier for the event.
+`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, or `rename`.
+`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `index`, `sink`, `source`, or `view`.
+`event_details` | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
+`user`          | [`text`]                     | The user who triggered the event.
+`occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred.
 
 ### `mz_base_types`
 
@@ -463,7 +473,7 @@ Field            | Type        | Meaning
 `oid`            | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
-`connector_type` | [`text`]    | The type of the sink: `kafka`.
+`type`           | [`text`]    | The type of the sink: `kafka`.
 `volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_sources`
@@ -476,7 +486,7 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
-`connector_type` | [`text`]   | The type of the source: `file`, `kafka`, `kinesis`, `s3`, `postgres`, or `pubnub`.
+`type`           | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
 `volatility`     | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_tables`

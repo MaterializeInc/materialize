@@ -23,7 +23,7 @@ use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
 use tokio::select;
 use tokio::time::{self, Duration, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, warn, Instrument};
 
 use mz_coord::session::{
     EndTransactionAction, InProgressRows, Portal, PortalState, RowBatchStream, Session,
@@ -44,7 +44,6 @@ use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
-use crate::metrics::Metrics;
 use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
@@ -79,8 +78,6 @@ pub struct RunParams<'a, A> {
     pub version: i32,
     /// The parameters that the client provided in the startup message.
     pub params: HashMap<String, String>,
-    /// The server's metrics.
-    pub metrics: &'a Metrics,
     pub frontegg: Option<&'a FronteggAuthentication>,
 }
 
@@ -93,6 +90,7 @@ pub struct RunParams<'a, A> {
 /// error to the client. It only returns `Err` if an unexpected I/O error occurs
 /// while communicating with the client, e.g., if the connection is severed in
 /// the middle of a request.
+#[tracing::instrument(level = "debug", skip_all)]
 pub async fn run<'a, A>(
     RunParams {
         tls_mode,
@@ -100,7 +98,6 @@ pub async fn run<'a, A>(
         conn,
         version,
         mut params,
-        metrics,
         frontegg,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
@@ -229,7 +226,6 @@ where
     conn.flush().await?;
 
     let machine = StateMachine {
-        metrics,
         conn,
         coord_client: &mut coord_client,
     };
@@ -255,7 +251,6 @@ enum State {
 struct StateMachine<'a, A> {
     conn: &'a mut FramedConn<A>,
     coord_client: &'a mut mz_coord::SessionClient,
-    metrics: &'a Metrics,
 }
 
 impl<'a, A> StateMachine<'a, A>
@@ -266,6 +261,7 @@ where
     // error message is produced if there are problems with Send or other traits
     // somewhere within the Future.
     #[allow(clippy::manual_async_fn)]
+    #[tracing::instrument(level = "debug", skip_all)]
     fn run(mut self) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
         async move {
             let mut state = State::Ready;
@@ -281,16 +277,20 @@ where
 
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
         let message = self.conn.recv().await?;
-        let timer = Instant::now();
-        let name = match &message {
-            Some(message) => message.name(),
-            None => "eof",
-        };
 
         self.coord_client.reset_canceled();
 
+        // NOTE(guswynn): we could consider adding spans to all message types. Currently
+        // only a few message types seem useful.
+        let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
+
         let next_state = match message {
-            Some(FrontendMessage::Query { sql }) => self.query(sql).await?,
+            Some(FrontendMessage::Query { sql }) => {
+                let query_root_span =
+                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                query_root_span.follows_from(tracing::Span::current());
+                self.query(sql).instrument(query_root_span).await?
+            }
             Some(FrontendMessage::Parse {
                 name,
                 sql,
@@ -316,11 +316,13 @@ where
                 portal_name,
                 max_rows,
             }) => {
-                self.metrics.query_count.inc();
                 let max_rows = match usize::try_from(max_rows) {
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
                 };
+                let execute_root_span =
+                    tracing::debug_span!(parent: None, "advance_ready", otel.name = message_name);
+                execute_root_span.follows_from(tracing::Span::current());
                 self.execute(
                     portal_name,
                     max_rows,
@@ -328,6 +330,7 @@ where
                     None,
                     ExecuteTimeout::None,
                 )
+                .instrument(execute_root_span)
                 .await?
             }
             Some(FrontendMessage::DescribeStatement { name }) => {
@@ -346,15 +349,6 @@ where
             | Some(FrontendMessage::Password { .. }) => State::Drain,
             None => State::Done,
         };
-
-        let status = match next_state {
-            State::Ready | State::Done => "success",
-            State::Drain => "error",
-        };
-        self.metrics
-            .command_durations
-            .with_label_values(&[name, status])
-            .observe(timer.elapsed().as_secs_f64());
 
         Ok(next_state)
     }
@@ -408,7 +402,6 @@ where
             }
         }
 
-        self.metrics.query_count.inc();
         let result = match self.coord_client.execute(EMPTY_PORTAL.to_string()).await {
             Ok(response) => {
                 self.send_execute_response(
@@ -1085,8 +1078,8 @@ where
                 self.complete_portal(&portal_name);
                 command_complete!("CLOSE CURSOR")
             }
-            ExecuteResponse::CreatedConnector { existed } => {
-                created!(existed, SqlState::DUPLICATE_OBJECT, "connector")
+            ExecuteResponse::CreatedConnection { existed } => {
+                created!(existed, SqlState::DUPLICATE_OBJECT, "connection")
             }
             ExecuteResponse::CreatedDatabase { existed } => {
                 created!(existed, SqlState::DUPLICATE_DATABASE, "database")
@@ -1145,7 +1138,7 @@ where
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
             ExecuteResponse::DroppedType => command_complete!("DROP TYPE"),
             ExecuteResponse::DroppedSecret => command_complete!("DROP SECRET"),
-            ExecuteResponse::DroppedConnector => command_complete!("DROP CONNECTOR"),
+            ExecuteResponse::DroppedConnection => command_complete!("DROP CONNECTION"),
             ExecuteResponse::EmptyQuery => {
                 self.send(BackendMessage::EmptyQueryResponse).await?;
                 Ok(State::Ready)
@@ -1174,9 +1167,12 @@ where
                 // have OIDs.
                 command_complete!("INSERT 0 {}", n)
             }
-            ExecuteResponse::SendingRows(rx) => {
+            ExecuteResponse::SendingRows { future: rx, span } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
+
+                let span = tracing::debug_span!(parent: &span, "send_execute_response");
+
                 self.send_rows(
                     row_desc,
                     portal_name,
@@ -1186,9 +1182,10 @@ where
                     fetch_portal_name,
                     timeout,
                 )
+                .instrument(span)
                 .await
             }
-            ExecuteResponse::SetVariable { name } => {
+            ExecuteResponse::SetVariable { name, tag } => {
                 // This code is somewhat awkwardly structured because we
                 // can't hold `var` across an await point.
                 let qn = name.to_string();
@@ -1206,7 +1203,7 @@ where
                 if let Some(msg) = msg {
                     self.send(msg).await?;
                 }
-                command_complete!("SET")
+                command_complete!("{}", tag)
             }
             ExecuteResponse::StartedTransaction { duplicated } => {
                 if duplicated {
@@ -1262,8 +1259,13 @@ where
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
                     ExecuteResponse::Tailing { rx } => rx,
-                    ExecuteResponse::SendingRows(rows_rx) => {
-                        self.row_future_to_stream(rows_rx).await?
+                    ExecuteResponse::SendingRows {
+                        future: rows_rx,
+                        span,
+                    } => {
+                        let span = tracing::debug_span!(parent: &span, "send_execute_response");
+
+                        self.row_future_to_stream(rows_rx).instrument(span).await?
                     }
                     _ => {
                         return self
@@ -1317,6 +1319,8 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
+    // TODO(guswynn): figure out how to get it to compile without skip_all
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send_rows(
         &mut self,
         row_desc: RelationDesc,
@@ -1469,10 +1473,6 @@ where
             }
         }
 
-        self.metrics
-            .rows_returned
-            .inc_by(u64::cast_from(total_sent_rows));
-
         let portal = self
             .coord_client
             .session()
@@ -1494,6 +1494,7 @@ where
         Ok(State::Ready)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn copy_rows(
         &mut self,
         format: CopyFormat,

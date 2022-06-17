@@ -22,8 +22,8 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
   FROM POSTGRES CONNECTION 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
-> SELECT COUNT(*) = 0 FROM mz_source;
-true
+> SELECT COUNT(*) FROM mz_source;
+0
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE t1 (f1 INTEGER);

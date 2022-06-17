@@ -41,6 +41,8 @@ pub struct IngestAction {
     start_iteration: isize,
     repeat: isize,
     headers: Option<Vec<(String, Option<String>)>>,
+    omit_key: bool,
+    omit_value: bool,
 }
 
 #[derive(Clone)]
@@ -174,6 +176,8 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
     let start_iteration = cmd.args.opt_parse::<isize>("start-iteration")?.unwrap_or(0);
     let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
     let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
+    let omit_key = cmd.args.opt_bool("omit-key")?.unwrap_or(false);
+    let omit_value = cmd.args.opt_bool("omit-value")?.unwrap_or(false);
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
@@ -282,6 +286,8 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, anyhow::Err
         start_iteration,
         repeat,
         headers,
+        omit_key,
+        omit_value,
     })
 }
 
@@ -402,13 +408,18 @@ impl Action for IngestAction {
                     false,
                 )?;
                 let mut row = row.as_bytes();
-                let key = match &key_transcoder {
-                    None => None,
-                    Some(kt) => kt.transcode(&mut row)?,
+                let key = match (self.omit_key, &key_transcoder) {
+                    (true, _) => None,
+                    (false, None) => None,
+                    (false, Some(kt)) => kt.transcode(&mut row)?,
                 };
-                let value = value_transcoder
-                    .transcode(&mut row)
-                    .with_context(|| format!("parsing row: {}", String::from_utf8_lossy(row)))?;
+                let value = if self.omit_value {
+                    None
+                } else {
+                    value_transcoder
+                        .transcode(&mut row)
+                        .with_context(|| format!("parsing row: {}", String::from_utf8_lossy(row)))?
+                };
                 let producer = &state.kafka_producer;
                 let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
                 let headers = self.headers.clone();

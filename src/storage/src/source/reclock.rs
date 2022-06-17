@@ -25,7 +25,7 @@ use mz_ore::now::NowFn;
 use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
-use mz_repr::{Diff, Timestamp};
+use mz_repr::Timestamp;
 use tracing::{error, info};
 
 pub struct ReclockOperator {
@@ -38,9 +38,9 @@ pub struct ReclockOperator {
     persisted_timestamp_bindings: HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>,
     // Max offset we've returned (or have committed to returning at the end of the current invocation).
     read_cursors: HashMap<PartitionId, MzOffset>,
-    write_handle: WriteHandle<(), PartitionId, Timestamp, Diff>,
+    write_handle: WriteHandle<(), PartitionId, Timestamp, MzOffset>,
     timestamp_bindings_listener:
-        Pin<Box<dyn Stream<Item = ListenEvent<(), PartitionId, Timestamp, Diff>>>>,
+        Pin<Box<dyn Stream<Item = ListenEvent<(), PartitionId, Timestamp, MzOffset>>>>,
     now: NowFn,
     update_interval: Duration,
     last_timestamp: Timestamp,
@@ -52,6 +52,7 @@ impl ReclockOperator {
         CollectionMetadata {
             persist_location,
             timestamp_shard_id,
+            persist_shard: _,
         }: CollectionMetadata,
         now: NowFn,
         update_interval: Duration,
@@ -63,7 +64,7 @@ impl ReclockOperator {
             .with_context(|| "error creating persist client")?;
 
         let (write_handle, read_handle) = persist_client
-            .open(timestamp_shard_id)
+            .open::<_, _, _, MzOffset>(timestamp_shard_id)
             .await
             .expect("persist handles open err");
 
@@ -111,6 +112,7 @@ impl ReclockOperator {
                     let (current_ts, current_offset) = snapshot_map
                         .entry(partition)
                         .or_insert((0, MzOffset::default()));
+
                     *current_offset += diff;
                     *current_ts = timestamp;
                 }
@@ -278,12 +280,9 @@ impl ReclockOperator {
                         .map(|v| v.back().map(|(_ts, offset)| *offset))
                         .flatten()
                         .unwrap_or_default();
-                    let diff = *new_max_offset - current_offset;
-                    assert!(
-                        diff > 0,
-                        "Diff previously validated to be positive: {:?}",
-                        diff
-                    );
+                    let diff = new_max_offset
+                        .checked_sub(current_offset)
+                        .expect("Diff previously validated to be positive");
                     (partition, diff)
                 })
                 .collect();
@@ -409,7 +408,7 @@ impl ReclockOperator {
                             self.persisted_timestamp_bindings
                                 .entry(partition)
                                 .or_insert_with(VecDeque::new)
-                                .push_back((timestamp, MzOffset { offset: diff }));
+                                .push_back((timestamp, diff));
                         }
                     }
                 }

@@ -29,6 +29,11 @@ def run_sqllogictest(c: Composition, command: str) -> None:
     c.wait_for_postgres(dbname="postgres")
     try:
         junit_report = ci_util.junit_report_filename(c.name)
-        c.run("sqllogictest-svc", command, f"--junit-report={junit_report}")
+        c.run(
+            "sqllogictest-svc",
+            command,
+            f"--junit-report={junit_report}",
+            "--postgres-url=postgres://postgres:postgres@postgres",
+        )
     finally:
         ci_util.upload_junit_report(c.name, ROOT / junit_report)

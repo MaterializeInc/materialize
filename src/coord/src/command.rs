@@ -61,6 +61,7 @@ pub enum Command {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
+        span: tracing::Span,
     },
 
     StartTransaction {
@@ -78,6 +79,10 @@ pub enum Command {
     CancelRequest {
         conn_id: u32,
         secret_key: u32,
+    },
+
+    RemovePendingPeeks {
+        conn_id: u32,
     },
 
     DumpCatalog {
@@ -177,8 +182,8 @@ pub enum ExecuteResponse {
         columns: Vec<usize>,
         params: mz_sql::plan::CopyParams,
     },
-    /// The requested connector was created.
-    CreatedConnector {
+    /// The requested connection was created.
+    CreatedConnection {
         existed: bool,
     },
     /// The requested database was created.
@@ -239,8 +244,8 @@ pub enum ExecuteResponse {
     DiscardedTemp,
     /// All state associated with the session has been discarded.
     DiscardedAll,
-    /// The requested connector was dropped
-    DroppedConnector,
+    /// The requested connection was dropped
+    DroppedConnection,
     /// The requested compute instance was dropped.
     DroppedComputeInstance,
     /// The requested compute instance replicas were dropped.
@@ -281,10 +286,16 @@ pub enum ExecuteResponse {
     /// The specified prepared statement was created.
     Prepare,
     /// Rows will be delivered via the specified future.
-    SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
+    SendingRows {
+        #[derivative(Debug = "ignore")]
+        future: RowsFuture,
+        #[derivative(Debug = "ignore")]
+        span: tracing::Span,
+    },
     /// The specified variable was set to a new value.
     SetVariable {
         name: String,
+        tag: &'static str,
     },
     /// A new transaction was started.
     StartedTransaction {

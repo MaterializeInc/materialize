@@ -645,6 +645,7 @@ impl HirRelationExpr {
                         .map(|column_order| ColumnOrder {
                             column: column_order.column + get_outer.arity(),
                             desc: column_order.desc,
+                            nulls_last: column_order.nulls_last,
                         })
                         .collect();
                     input.top_k(applied_group_key, applied_order_key, limit, offset)

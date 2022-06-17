@@ -16,7 +16,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::proto::newapi::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -113,8 +113,12 @@ pub enum Datum<'a> {
     // TODO(benesch): get rid of this variant. With a more capable optimizer, I
     // don't think there would be any need for dummy datums.
     Dummy,
-    // Keep `Null` last so that it sorts last, to match the default sort order
-    // in PostgreSQL.
+    // Keep `Null` last so that calling `<` on Datums sorts nulls last, to
+    // match the default in PostgreSQL. Note that this doesn't have an effect
+    // on ORDER BY, because that is handled by compare_columns. The only
+    // situation it has an effect is array comparisons, e.g.,
+    // `SELECT ARRAY[1] < ARRAY[NULL]::int[]`. In such a situation, we end up
+    // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
 }
@@ -2031,20 +2035,18 @@ impl Arbitrary for ScalarType {
     }
 }
 
-lazy_static! {
-    static ref EMPTY_ARRAY_ROW: Row = {
-        let mut row = Row::default();
-        row.packer()
-            .push_array(&[], iter::empty::<Datum>())
-            .expect("array known to be valid");
-        row
-    };
-    static ref EMPTY_LIST_ROW: Row = {
-        let mut row = Row::default();
-        row.packer().push_list(iter::empty::<Datum>());
-        row
-    };
-}
+static EMPTY_ARRAY_ROW: Lazy<Row> = Lazy::new(|| {
+    let mut row = Row::default();
+    row.packer()
+        .push_array(&[], iter::empty::<Datum>())
+        .expect("array known to be valid");
+    row
+});
+static EMPTY_LIST_ROW: Lazy<Row> = Lazy::new(|| {
+    let mut row = Row::default();
+    row.packer().push_list(iter::empty::<Datum>());
+    row
+});
 
 impl Datum<'_> {
     pub fn empty_array() -> Datum<'static> {
@@ -2223,10 +2225,10 @@ fn arb_numeric() -> BoxedStrategy<Numeric> {
         .boxed()
 }
 
-impl<'a> Into<Datum<'a>> for &'a PropDatum {
-    fn into(self) -> Datum<'a> {
+impl<'a> From<&'a PropDatum> for Datum<'a> {
+    fn from(pd: &'a PropDatum) -> Self {
         use PropDatum::*;
-        match self {
+        match pd {
             Null => Datum::Null,
             Bool(b) => Datum::from(*b),
             Int16(i) => Datum::from(*i),
@@ -2294,7 +2296,7 @@ fn verify_base_eq_record_nullability() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::newapi::protobuf_roundtrip;
+    use crate::proto::protobuf_roundtrip;
 
     proptest! {
        #[test]

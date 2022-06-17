@@ -12,12 +12,13 @@
 import argparse
 import getpass
 import os
+import shutil
 import sys
 
 from materialize import ROOT, spawn, ui
 from materialize.ui import UIError
 
-KNOWN_PROGRAMS = ["materialized", "sqllogictest"]
+KNOWN_PROGRAMS = ["environmentd", "sqllogictest"]
 REQUIRED_SERVICES = ["storaged", "computed"]
 
 if sys.platform == "darwin":
@@ -35,7 +36,7 @@ def main() -> int:
     parser.add_argument(
         "program",
         help="the name of the program to run",
-        choices=["materialized", "sqllogictest", "test"],
+        choices=[*KNOWN_PROGRAMS, "test"],
     )
     parser.add_argument(
         "args",
@@ -43,9 +44,14 @@ def main() -> int:
         nargs="*",
     )
     parser.add_argument(
+        "--reset",
+        help="Delete data from prior runs of the program",
+        action="store_true",
+    )
+    parser.add_argument(
         "--postgres",
         help="PostgreSQL connection string",
-        default=DEFAULT_POSTGRES,
+        default=os.getenv("MZDEV_POSTGRES", DEFAULT_POSTGRES),
     )
     parser.add_argument(
         "--release",
@@ -63,11 +69,29 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "-p",
+        "--package",
+        help="Package to run tests for",
+        action="append",
+        default=[],
+    )
+    parser.add_argument(
+        "--test",
+        help="Test only the specified test target",
+        action="append",
+        default=[],
+    )
+    parser.add_argument(
         "--tokio-console",
         help="Activate the Tokio console",
         action="store_true",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--build-only",
+        help="Only build, don't run",
+        action="store_true",
+    )
+    args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
     args.channel = None
@@ -76,25 +100,45 @@ def main() -> int:
         del args.args[0]
 
     if args.program in KNOWN_PROGRAMS:
-        _build(args, extra_programs=[args.program])
+        build_retcode = _build(args, extra_programs=[args.program])
+        if args.build_only:
+            return build_retcode
+
         if args.release:
             path = ROOT / "target" / "release" / args.program
         else:
             path = ROOT / "target" / "debug" / args.program
         command = [str(path), *args.args]
         if args.tokio_console:
-            command += ["--tokio-console"]
-        if args.program == "materialized":
-            _run_sql(args.postgres, "CREATE SCHEMA IF NOT EXISTS consensus")
-            _run_sql(args.postgres, "CREATE SCHEMA IF NOT EXISTS catalog")
+            command += ["--tokio-console-listen-addr=127.0.0.1:6669"]
+        if args.program == "environmentd":
+            if args.reset:
+                print("Removing mzdata directory...")
+                shutil.rmtree("mzdata", ignore_errors=True)
+            for schema in ["consensus", "catalog", "storage"]:
+                if args.reset:
+                    _run_sql(args.postgres, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                _run_sql(args.postgres, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             command += [
                 f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
                 f"--catalog-postgres-stash={args.postgres}?options=--search_path=catalog",
+                f"--storage-postgres-stash={args.postgres}?options=--search_path=storage",
             ]
+        elif args.program == "sqllogictest":
+            command += [f"--postgres-url={args.postgres}"]
     elif args.program == "test":
-        _build(args)
+        build_retcode = _build(args)
+        if args.build_only:
+            return build_retcode
+
         command = _cargo_command(args, "test")
+        for package in args.package:
+            command += ["--package", package]
+        for test in args.test:
+            command += ["--test", test]
         command += args.args
+        command += ["--", "--nocapture"]
+        os.environ["POSTGRES_URL"] = args.postgres
     else:
         raise UIError(f"unknown program {args.program}")
 
@@ -102,7 +146,7 @@ def main() -> int:
     os.execvp(command[0], command)
 
 
-def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> None:
+def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:
     env = dict(os.environ)
     command = _cargo_command(args, "build")
     if args.tokio_console:
@@ -110,7 +154,8 @@ def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> None:
         env["RUSTFLAGS"] = env.get("RUSTFLAGS", "") + " --cfg=tokio_unstable"
     for program in [*REQUIRED_SERVICES, *extra_programs]:
         command += ["--bin", program]
-    spawn.runv(command, env=env)
+    completed_proc = spawn.runv(command, env=env)
+    return completed_proc.returncode
 
 
 def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
@@ -132,7 +177,7 @@ def _run_sql(url: str, sql: str) -> None:
         spawn.runv(["psql", "-At", url, "-c", sql])
     except Exception as e:
         raise UIError(
-            f"unable to connect to postgres:{e}",
+            f"unable to execute postgres statement: {e}",
             hint="Have you installed and configured PostgreSQL for passwordless authentication?",
         )
 

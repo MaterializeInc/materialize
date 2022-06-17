@@ -22,15 +22,15 @@ use mz_ore::str::StrExt;
 use mz_repr::GlobalId;
 
 use crate::ast::display::{AstDisplay, AstFormatter};
-use crate::ast::fold::Fold;
+use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    self, AstInfo, Cte, Expr, Ident, Query, Raw, RawIdent, RawObjectName, Statement,
-    UnresolvedDataType, UnresolvedObjectName,
+    self, AstInfo, Cte, Ident, Query, Raw, RawClusterName, RawDataType, RawObjectName, Statement,
+    UnresolvedObjectName,
 };
 use crate::catalog::{CatalogItemType, CatalogTypeDetails, SessionCatalog};
 use crate::normalize;
-use crate::plan::{PlanError, QueryContext, StatementContext};
+use crate::plan::PlanError;
 
 /// A fully-qualified human readable name of an item in the catalog.
 ///
@@ -257,8 +257,8 @@ impl AstDisplay for ResolvedDatabaseSpecifier {
     }
 }
 
-impl From<i64> for ResolvedDatabaseSpecifier {
-    fn from(id: i64) -> Self {
+impl From<u64> for ResolvedDatabaseSpecifier {
+    fn from(id: u64) -> Self {
         Self::Id(DatabaseId(id))
     }
 }
@@ -279,7 +279,7 @@ pub enum SchemaSpecifier {
 }
 
 impl SchemaSpecifier {
-    const TEMPORARY_SCHEMA_ID: i64 = -1;
+    const TEMPORARY_SCHEMA_ID: u64 = 0;
 }
 
 impl fmt::Display for SchemaSpecifier {
@@ -297,8 +297,8 @@ impl AstDisplay for SchemaSpecifier {
     }
 }
 
-impl From<i64> for SchemaSpecifier {
-    fn from(id: i64) -> Self {
+impl From<u64> for SchemaSpecifier {
+    fn from(id: u64) -> Self {
         if id == Self::TEMPORARY_SCHEMA_ID {
             Self::Temporary
         } else {
@@ -325,13 +325,13 @@ impl From<SchemaSpecifier> for SchemaId {
     }
 }
 
-impl From<&SchemaSpecifier> for i64 {
+impl From<&SchemaSpecifier> for u64 {
     fn from(schema_spec: &SchemaSpecifier) -> Self {
         SchemaId::from(schema_spec).0
     }
 }
 
-impl From<SchemaSpecifier> for i64 {
+impl From<SchemaSpecifier> for u64 {
     fn from(schema_spec: SchemaSpecifier) -> Self {
         SchemaId::from(schema_spec).0
     }
@@ -588,6 +588,7 @@ impl ResolvedDataType {
 }
 
 impl AstInfo for Aug {
+    type NestedStatement = Statement<Raw>;
     type ObjectName = ResolvedObjectName;
     type SchemaName = ResolvedSchemaName;
     type DatabaseName = ResolvedDatabaseName;
@@ -598,12 +599,12 @@ impl AstInfo for Aug {
 
 /// The identifier for a schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct SchemaId(pub i64);
+pub struct SchemaId(pub u64);
 
 impl SchemaId {
     /// Constructs a new schema identifier. It is the caller's responsibility
     /// to provide a unique `id`.
-    pub fn new(id: i64) -> Self {
+    pub fn new(id: u64) -> Self {
         SchemaId(id)
     }
 }
@@ -618,19 +619,19 @@ impl FromStr for SchemaId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: i64 = s.parse()?;
+        let val: u64 = s.parse()?;
         Ok(SchemaId(val))
     }
 }
 
 /// The identifier for a database.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub struct DatabaseId(pub i64);
+pub struct DatabaseId(pub u64);
 
 impl DatabaseId {
     /// Constructs a new database identifier. It is the caller's responsibility
     /// to provide a unique `id`.
-    pub fn new(id: i64) -> Self {
+    pub fn new(id: u64) -> Self {
         DatabaseId(id)
     }
 }
@@ -645,7 +646,7 @@ impl FromStr for DatabaseId {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let val: i64 = s.parse()?;
+        let val: u64 = s.parse()?;
         Ok(DatabaseId(val))
     }
 }
@@ -659,7 +660,7 @@ pub struct NameResolver<'a> {
 }
 
 impl<'a> NameResolver<'a> {
-    pub fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
+    fn new(catalog: &'a dyn SessionCatalog) -> NameResolver {
         NameResolver {
             catalog,
             ctes: HashMap::new(),
@@ -673,7 +674,7 @@ impl<'a> NameResolver<'a> {
         data_type: <Raw as AstInfo>::DataType,
     ) -> Result<<Aug as AstInfo>::DataType, PlanError> {
         match data_type {
-            UnresolvedDataType::Array(elem_type) => {
+            RawDataType::Array(elem_type) => {
                 let name = elem_type.to_string();
                 match self.fold_data_type_internal(*elem_type)? {
                     ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => {
@@ -706,11 +707,11 @@ impl<'a> NameResolver<'a> {
                     ResolvedDataType::Error => sql_bail!("type \"{}[]\" does not exist", name),
                 }
             }
-            UnresolvedDataType::List(elem_type) => {
+            RawDataType::List(elem_type) => {
                 let elem_type = self.fold_data_type_internal(*elem_type)?;
                 Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
             }
-            UnresolvedDataType::Map {
+            RawDataType::Map {
                 key_type,
                 value_type,
             } => {
@@ -721,7 +722,7 @@ impl<'a> NameResolver<'a> {
                     value_type: Box::new(value_type),
                 })
             }
-            UnresolvedDataType::Other { name, typ_mod } => {
+            RawDataType::Other { name, typ_mod } => {
                 let (full_name, item) = match name {
                     RawObjectName::Name(name) => {
                         let name = normalize::unresolved_object_name(name)?;
@@ -750,6 +751,13 @@ impl<'a> NameResolver<'a> {
 }
 
 impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
+    fn fold_nested_statement(
+        &mut self,
+        stmt: <Raw as AstInfo>::NestedStatement,
+    ) -> <Aug as AstInfo>::NestedStatement {
+        stmt
+    }
+
     fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {
         // Retain the old values of various CTE names so that we can restore them after we're done
         // planning this SELECT.
@@ -978,7 +986,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         cluster_name: <Raw as AstInfo>::ClusterName,
     ) -> <Aug as AstInfo>::ClusterName {
         match cluster_name {
-            RawIdent::Unresolved(ident) => {
+            RawClusterName::Unresolved(ident) => {
                 match self.catalog.resolve_compute_instance(Some(ident.as_str())) {
                     Ok(cluster) => ResolvedClusterName(cluster.id()),
                     Err(e) => {
@@ -987,7 +995,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     }
                 }
             }
-            RawIdent::Resolved(ident) => match ident.parse() {
+            RawClusterName::Resolved(ident) => match ident.parse() {
                 Ok(id) => ResolvedClusterName(id),
                 Err(e) => {
                     self.status = Err(e.into());
@@ -998,87 +1006,18 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     }
 }
 
-pub fn resolve_names_stmt(
-    scx: &mut StatementContext,
-    stmt: Statement<Raw>,
-) -> Result<(Statement<Aug>, HashSet<GlobalId>), PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_statement(stmt);
-    n.status?;
-    Ok((result, n.ids))
-}
-
-pub fn resolve_names_stmt_show(
-    scx: &StatementContext,
-    stmt: Statement<Raw>,
-) -> Result<Statement<Aug>, PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_statement(stmt);
-    n.status?;
-    Ok(result)
-}
-
-// Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
-// resolving names and (aspirationally) performing semantic analysis such as
-// type-checking.
-pub fn resolve_names(qcx: &mut QueryContext, query: Query<Raw>) -> Result<Query<Aug>, PlanError> {
-    let mut n = NameResolver::new(qcx.scx.catalog);
-    let result = n.fold_query(query);
-    n.status?;
-    Ok(result)
-}
-
-pub fn resolve_names_expr(qcx: &mut QueryContext, expr: Expr<Raw>) -> Result<Expr<Aug>, PlanError> {
-    let mut n = NameResolver::new(qcx.scx.catalog);
-    let result = n.fold_expr(expr);
-    n.status?;
-    Ok(result)
-}
-
-pub fn resolve_names_data_type(
-    scx: &StatementContext,
-    data_type: UnresolvedDataType,
-) -> Result<(ResolvedDataType, HashSet<GlobalId>), PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_data_type(data_type);
-    n.status?;
-    Ok((result, n.ids))
-}
-
-pub fn resolve_names_cluster(
-    scx: &StatementContext,
-    cluster_name: RawIdent,
-) -> Result<ResolvedClusterName, PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_cluster_name(cluster_name);
-    n.status?;
-    Ok(result)
-}
-
-pub fn resolve_object_name(
-    scx: &StatementContext,
-    object_name: <Raw as AstInfo>::ObjectName,
-) -> Result<<Aug as AstInfo>::ObjectName, PlanError> {
-    let mut n = NameResolver::new(scx.catalog);
-    let result = n.fold_object_name(object_name);
-    n.status?;
-    Ok(result)
-}
-
-/// A general implementation for name resolution on AST elements.
-///
-/// This implementation is appropriate Whenever:
-/// - You don't need to export the name resolution outside the `sql` crate and
-///   the extra typing isn't too onerous.
-/// - Discovered dependencies should extend `qcx.ids`.
-pub fn resolve_names_extend_qcx_ids<F, T>(qcx: &mut QueryContext, f: F) -> Result<T, PlanError>
+/// Resolves names in an AST node using the provided catalog.
+pub fn resolve<N>(
+    catalog: &dyn SessionCatalog,
+    node: N,
+) -> Result<(N::Folded, HashSet<GlobalId>), PlanError>
 where
-    F: FnOnce(&mut NameResolver) -> T,
+    N: FoldNode<Raw, Aug>,
 {
-    let mut n = NameResolver::new(qcx.scx.catalog);
-    let result = f(&mut n);
-    n.status?;
-    Ok(result)
+    let mut resolver = NameResolver::new(catalog);
+    let result = node.fold(&mut resolver);
+    resolver.status?;
+    Ok((result, resolver.ids))
 }
 
 // Used when displaying a view's source for human creation. If the name

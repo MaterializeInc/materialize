@@ -26,30 +26,18 @@ _schema&lowbar;name_ | The schema to show sources from. Defaults to `public` in 
 `SHOW FULL SOURCES`'s output is a table, with this structure:
 
 ```nofmt
- name  | type | materialized | volatility | connector_type
--------+------+--------------+------------+---------------
+ name  | type | materialized | volatility | type
+-------+------+--------------+------------+-----
  ...   | ...  | ...          | ...        | ...
 ```
 
 Field | Meaning
 ------|--------
 **name** | The name of the source
-**type** | Whether the source was created by the `user` or the `system`
-**materialized** | Does the source have an in-memory index? For more details, see [`CREATE INDEX`](../create-index)
+**type** | Whether the source was created by the `user` or the `system`.
+**materialized** | Does the source have an in-memory index? For more details, see [`CREATE INDEX`](../create-index).
 **volatility** | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
-**connector_type** | The type of the source: `file`, `kafka`, `kinesis`, `s3`, `postgres`, or `pubnub`.
-
-{{< version-changed v0.5.0 >}}
-The output column is renamed from `SOURCES` to `name`.
-{{< /version-changed >}}
-
-{{< version-added v0.7.2 >}}
-The `volatile` column.
-{{< /version-added >}}
-
-{{< version-added v0.9.1 >}}
-The `connector_type` column.
-{{< /version-added >}}
+**type** | The type of the source:  `kafka`, `postgres`, or `pubnub`.
 
 ### Internal statistic sources
 

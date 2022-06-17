@@ -13,7 +13,7 @@ from typing import List
 
 from parameterized import parameterized_class  # type: ignore
 
-from materialize.feature_benchmark.action import Action, Kgen, LambdaAction, TdAction
+from materialize.feature_benchmark.action import Action, Kgen, TdAction
 from materialize.feature_benchmark.measurement_source import (
     Lambda,
     MeasurementSource,
@@ -729,7 +729,9 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
         )
 
 
-class KafkaRestart(Kafka):
+# The scenario is currently not compatible with Platform, as restarting Mz alone causes the computeds to exit and
+# there is no code to restart them as well.
+class KafkaRestart(ScenarioDisabled):
     def shared(self) -> Action:
         return TdAction(
             self.keyschema()
@@ -1099,7 +1101,7 @@ class ConnectionLatency(Coordinator):
     def benchmark(self) -> MeasurementSource:
         connections = "\n".join(
             f"""
-$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialized-addr}}
+$ postgres-execute connection=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
 SELECT 1;
 """
             for i in range(0, self.n())

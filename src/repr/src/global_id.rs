@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
-use crate::proto::newapi::{ProtoType, RustType, TryFromProtoError};
+use crate::proto::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
 

@@ -12,23 +12,24 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::SystemTime;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::indexed::columnar::ColumnarRecordsVecBuilder;
-use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, ExternalError};
+use mz_persist::location::{BlobMulti, Indeterminate};
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
-use tracing::trace;
-use uuid::Uuid;
+use tracing::{debug, info, instrument, trace};
 
+use crate::batch::{Batch, BatchBuilder};
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::{retry_external, Machine, FOREVER};
+use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
+use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::Upper;
+use crate::PersistConfig;
 
 /// A "capability" granting the ability to apply updates to some shard at times
 /// greater or equal to `self.upper()`.
@@ -50,6 +51,8 @@ pub struct WriteHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
 {
+    pub(crate) cfg: PersistConfig,
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
 
@@ -75,13 +78,14 @@ where
     ///
     /// This requires fetching the latest state from consensus and is therefore a potentially
     /// expensive operation.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn fetch_recent_upper(&mut self) -> Antichain<T> {
         trace!("WriteHandle::fetch_recent_upper");
         self.machine.fetch_upper().await
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
-    /// `new_upper`.
+    /// `upper`.
     ///
     /// The innermost `Result` is `Ok` if the updates were successfully written.
     /// If not, an `Upper` err containing the current writer upper is returned.
@@ -94,15 +98,14 @@ where
     /// data being written must be identical (in the sense of "definite"-ness).
     /// It's intended for replicated use by source ingestion, sinks, etc.
     ///
-    /// All times in `updates` must be greater or equal to `self.upper()` and
-    /// not greater or equal to `new_upper`. A `new_upper` of the empty
-    /// antichain "finishes" this shard, promising that no more data is ever
-    /// incoming.
+    /// All times in `updates` must be greater or equal to `lower` and not
+    /// greater or equal to `upper`. A `upper` of the empty antichain "finishes"
+    /// this shard, promising that no more data is ever incoming.
     ///
     /// `updates` may be empty, which allows for downgrading `upper` to
     /// communicate progress. It is possible to heartbeat a writer lease by
-    /// calling this with `new_upper` equal to `self.upper()` and an empty
-    /// `updates` (making the call a no-op).
+    /// calling this with `upper` equal to `self.upper()` and an empty `updates`
+    /// (making the call a no-op).
     ///
     /// This uses a bounded amount of memory, even when `updates` is very large.
     /// Individual records, however, should be small enough that we can
@@ -111,17 +114,13 @@ where
     ///
     /// The clunky multi-level Result is to enable more obvious error handling
     /// in the caller. See <http://sled.rs/errors.html> for details.
-    ///
-    /// TODO: Introduce an AsyncIterator (futures::Stream) variant of this. Or,
-    /// given that the AsyncIterator version would be strictly more general,
-    /// alter this one if it turns out that the compiler can optimize out the
-    /// overhead.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
         lower: Antichain<T>,
         upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -131,80 +130,8 @@ where
         I: IntoIterator<Item = SB>,
     {
         trace!("WriteHandle::append lower={:?} upper={:?}", lower, upper);
-
-        let upper = upper;
-        let since = Antichain::from_elem(T::minimum());
-        let mut desc = Description::new(lower.clone(), upper, since);
-
-        // TODO: Instead construct a Vec of batches here so it can be bounded
-        // memory usage (if updates is large).
-        let value = match Self::encode_batch(&desc, updates) {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
-        let keys = if let Some(value) = value {
-            let key = Uuid::new_v4().to_string();
-            let () = retry_external("append::set", || async {
-                // If MultiBlob::set took value as a ref, then we wouldn't have
-                // to clone here.
-                self.blob
-                    .set(
-                        Instant::now() + FOREVER,
-                        &key,
-                        value.clone(),
-                        Atomicity::RequireAtomic,
-                    )
-                    .await
-            })
-            .await;
-            vec![key]
-        } else {
-            vec![]
-        };
-
-        loop {
-            let res = self.machine.compare_and_append(&keys, &desc).await?;
-            match res {
-                Ok(Ok(_seqno)) => {
-                    self.upper = desc.upper().clone();
-                    return Ok(Ok(Ok(())));
-                }
-                // TODO(aljoscha): This seems useless now because we have to read from consensus to
-                // get an up-to-date version of the upper.
-                Ok(Err(_current_upper)) => {
-                    // If the state machine thinks that the shard upper is not far enough along, it
-                    // could be because the caller of this method has found out that it advanced
-                    // via some some side-channel that didn't update our local cache of the machine
-                    // state. So, fetch the latest state and try again if we indeed get something
-                    // different.
-                    self.machine.fetch_and_update_state().await;
-                    let current_upper = self.machine.upper();
-
-                    // We tried to to a non-contiguous append, that won't work.
-                    if PartialOrder::less_than(&current_upper, &lower) {
-                        self.upper = current_upper.clone();
-                        return Ok(Ok(Err(Upper(current_upper))));
-                    } else if PartialOrder::less_than(&current_upper, desc.upper()) {
-                        // Cut down the Description by advancing its lower to the current shard
-                        // upper and try again. IMPORTANT: We can only advance the lower, meaning
-                        // we cut updates away, we must not "extend" the batch by changing to a
-                        // lower that is not beyond the current lower. This invariant is checked by
-                        // the first if branch: if `!(current_upper < lower)` then it holds that
-                        // `lower <= current_upper`.
-                        desc = Description::new(
-                            current_upper,
-                            desc.upper().clone(),
-                            desc.since().clone(),
-                        );
-                    } else {
-                        // We already have updates past this batch's upper, the append is a no-op.
-                        self.upper = current_upper;
-                        return Ok(Ok(Ok(())));
-                    }
-                }
-                Err(err) => return Ok(Err(err)),
-            }
-        }
+        let batch = self.batch(updates, lower.clone(), upper.clone()).await?;
+        self.append_batch(batch, lower, upper).await
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -237,21 +164,18 @@ where
     /// in the caller. See <http://sled.rs/errors.html> for details.
     ///
     /// SUBTLE! Unlike the other methods on WriteHandle, it is not always safe
-    /// to retry [ExternalError]s in compare_and_append (depends on the usage
+    /// to retry [Indeterminate]s in compare_and_append (depends on the usage
     /// pattern). We should be able to structure timestamp binding, source, and
-    /// sink code so it is always safe to retry [ExternalError]s, but SQL txns
+    /// sink code so it is always safe to retry [Indeterminate]s, but SQL txns
     /// will have to pass the error back to the user (or risk double committing
     /// the txn).
-    ///
-    /// TODO: This already retries [mz_persist::location::Determinate] errors,
-    /// so the signature could be changed to only return Indeterminate, but
-    /// leaving it as ExternalError for now to save churn on storage PR rebases.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn compare_and_append<SB, KB, VB, TB, DB, I>(
         &mut self,
         updates: I,
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, ExternalError>
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -266,73 +190,265 @@ where
             new_upper
         );
 
+        let mut batch = match self
+            .batch(updates, expected_upper.clone(), new_upper.clone())
+            .await
+        {
+            Ok(batch) => batch,
+            Err(invalid_usage) => return Ok(Err(invalid_usage)),
+        };
+
+        match self
+            .compare_and_append_batch(&mut batch, expected_upper, new_upper)
+            .await
+        {
+            ok @ Ok(Ok(Ok(()))) => ok,
+            err @ _ => {
+                // We cannot delete the batch in compare_and_append_batch()
+                // because the caller owns the batch and might want to retry
+                // with a different `expected_upper`. In this function, we
+                // control the batch, so we have to delete it.
+                batch.delete().await;
+                err
+            }
+        }
+    }
+
+    /// Appends the batch of updates to the shard and downgrades this handle's
+    /// upper to `upper`.
+    ///
+    /// The innermost `Result` is `Ok` if the updates were successfully written.
+    /// If not, an `Upper` err containing the current writer upper is returned.
+    /// If that happens, we also update our local `upper` to match the current
+    /// upper. This is useful in cases where a timeout happens in between a
+    /// successful write and returning that to the client.
+    ///
+    /// In contrast to [Self::compare_and_append_batch], multiple [WriteHandle]s
+    /// may be used concurrently to write to the same shard, but in this case,
+    /// the data being written must be identical (in the sense of
+    /// "definite"-ness). It's intended for replicated use by source ingestion,
+    /// sinks, etc.
+    ///
+    /// A `upper` of the empty antichain "finishes" this shard, promising that
+    /// no more data is ever incoming.
+    ///
+    /// The batch may be empty, which allows for downgrading `upper` to
+    /// communicate progress. It is possible to heartbeat a writer lease by
+    /// calling this with `upper` equal to `self.upper()` and an empty `updates`
+    /// (making the call a no-op).
+    ///
+    /// The clunky multi-level Result is to enable more obvious error handling
+    /// in the caller. See <http://sled.rs/errors.html> for details.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn append_batch(
+        &mut self,
+        mut batch: Batch<K, V, T, D>,
+        mut lower: Antichain<T>,
+        upper: Antichain<T>,
+    ) -> Result<Result<(), Upper<T>>, InvalidUsage<T>> {
+        trace!("Batch::append lower={:?} upper={:?}", lower, upper);
+
+        let mut retry = self
+            .metrics
+            .retries
+            .append_batch
+            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+        loop {
+            let res = self
+                .compare_and_append_batch(&mut batch, lower.clone(), upper.clone())
+                .await;
+            // Unlike compare_and_append, the contract of append is constructed
+            // such that it's correct to retry Indeterminate errors.
+            // Specifically, compare_and_append can hit an Indeterminate error
+            // (but actually succeed). If we retried, then it would get a upper
+            // mismatch, which could lead to e.g. a txn double apply. Append, on
+            // the other hand, simply guarantees that the requested frontier
+            // bounds have been written.
+            let res = match res {
+                Ok(x) => x,
+                Err(err) => {
+                    if retry.attempt() >= INFO_MIN_ATTEMPTS {
+                        info!(
+                            "external operation append::caa failed, retrying in {:?}: {}",
+                            retry.next_sleep(),
+                            err
+                        );
+                    } else {
+                        debug!(
+                            "external operation append::caa failed, retrying in {:?}: {}",
+                            retry.next_sleep(),
+                            err
+                        );
+                    }
+                    retry = retry.sleep().await;
+                    continue;
+                }
+            };
+            match res {
+                Ok(Ok(())) => {
+                    self.upper = upper;
+                    return Ok(Ok(()));
+                }
+                Ok(Err(current_upper)) => {
+                    let Upper(current_upper) = current_upper;
+
+                    // We tried to to a non-contiguous append, that won't work.
+                    if PartialOrder::less_than(&current_upper, &lower) {
+                        self.upper = current_upper.clone();
+
+                        batch.delete().await;
+
+                        return Ok(Err(Upper(current_upper)));
+                    } else if PartialOrder::less_than(&current_upper, &upper) {
+                        // Cut down the Description by advancing its lower to the current shard
+                        // upper and try again. IMPORTANT: We can only advance the lower, meaning
+                        // we cut updates away, we must not "extend" the batch by changing to a
+                        // lower that is not beyond the current lower. This invariant is checked by
+                        // the first if branch: if `!(current_upper < lower)` then it holds that
+                        // `lower <= current_upper`.
+                        lower = current_upper;
+                    } else {
+                        // We already have updates past this batch's upper, the append is a no-op.
+                        self.upper = current_upper;
+
+                        // Because we return a success result, the caller will
+                        // think that the batch was consumed or otherwise used,
+                        // so we have to delete it here.
+                        batch.delete().await;
+
+                        return Ok(Ok(()));
+                    }
+                }
+                Err(err) => {
+                    batch.delete().await;
+
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    /// Appends the batch of updates to the shard and downgrades this handle's
+    /// upper to `new_upper` iff the current global upper of this shard is
+    /// `expected_upper`.
+    ///
+    /// The innermost `Result` is `Ok` if the batch was successfully written. If
+    /// not, an `Upper` err containing the current global upper is returned.
+    ///
+    /// In contrast to [Self::append_batch], this linearizes mutations from all
+    /// writers. It's intended for use as an atomic primitive for timestamp
+    /// bindings, SQL tables, etc.
+    ///
+    /// A `new_upper` of the empty antichain "finishes" this shard, promising
+    /// that no more data is ever incoming.
+    ///
+    /// The batch may be empty, which allows for downgrading `upper` to
+    /// communicate progress. It is possible to heartbeat a writer lease by
+    /// calling this with `new_upper` equal to `self.upper()` and an empty
+    /// `updates` (making the call a no-op).
+    ///
+    /// IMPORTANT: In case of an erroneous result the caller is responsible for
+    /// the lifecycle of the `batch`. It can be deleted or it can be used to
+    /// retry with adjusted frontiers.
+    ///
+    /// The clunky multi-level Result is to enable more obvious error handling
+    /// in the caller. See <http://sled.rs/errors.html> for details.
+    ///
+    /// SUBTLE! Unlike the other methods, it is not always safe to retry
+    /// [Indeterminate]s in compare_and_append (depends on the usage pattern).
+    /// We should be able to structure timestamp binding, source, and sink code
+    /// so it is always safe to retry [Indeterminate]s, but SQL txns will have
+    /// to pass the error back to the user (or risk double committing the txn).
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn compare_and_append_batch(
+        &mut self,
+        batch: &mut Batch<K, V, T, D>,
+        expected_upper: Antichain<T>,
+        new_upper: Antichain<T>,
+    ) -> Result<Result<Result<(), Upper<T>>, InvalidUsage<T>>, Indeterminate> {
+        trace!(
+            "Batch::compare_and_append expected_upper={:?} new_upper={:?}",
+            expected_upper,
+            new_upper
+        );
+
+        if self.machine.shard_id() != batch.shard_id() {
+            return Ok(Err(InvalidUsage::BatchNotFromThisShard {
+                batch_shard: batch.shard_id(),
+                handle_shard: self.machine.shard_id(),
+            }));
+        }
+
         let lower = expected_upper.clone();
         let upper = new_upper;
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        // TODO: Instead construct a Vec of batches here so it can be bounded
-        // memory usage (if updates is large).
-        let value = match Self::encode_batch(&desc, updates) {
-            Ok(x) => x,
-            Err(err) => return Ok(Err(err)),
-        };
-        let keys = if let Some(value) = value {
-            let key = Uuid::new_v4().to_string();
-            let () = retry_external("compare_and_append::set", || async {
-                // If MultiBlob::set took value as a ref, then we wouldn't have
-                // to clone here.
-                self.blob
-                    .set(
-                        Instant::now() + FOREVER,
-                        &key,
-                        value.clone(),
-                        Atomicity::RequireAtomic,
-                    )
-                    .await
-            })
-            .await;
-            vec![key]
-        } else {
-            vec![]
-        };
+        if !PartialOrder::less_equal(batch.lower(), desc.lower())
+            || PartialOrder::less_than(batch.upper(), desc.upper())
+        {
+            return Ok(Err(InvalidUsage::InvalidBatchBounds {
+                batch_lower: batch.lower().clone(),
+                batch_upper: batch.upper().clone(),
+                append_lower: desc.lower().clone(),
+                append_upper: desc.upper().clone(),
+            }));
+        }
 
-        loop {
-            let res = self.machine.compare_and_append(&keys, &desc).await?;
-            match res {
-                Ok(Ok(_seqno)) => {
-                    self.upper = desc.upper().clone();
-                    return Ok(Ok(Ok(())));
-                }
-                // TODO(aljoscha): This seems useless now because we have to read from consensus to
-                // get an up-to-date version of the upper.
-                Ok(Err(_current_upper)) => {
-                    // If the state machine thinks that the shard upper is not far enough along, it
-                    // could be because the caller of this method has found out that it advanced
-                    // via some some side-channel that didn't update our local cache of the machine
-                    // state. So, fetch the latest state and try again if we indeed get something
-                    // different.
-                    self.machine.fetch_and_update_state().await;
-                    let current_upper = self.machine.upper();
+        let res = self
+            .machine
+            .compare_and_append(&batch.blob_keys, &desc)
+            .await?;
 
-                    // We tried to to a compare_and_append with the wrong expected upper, that
-                    // won't work.
-                    if current_upper != expected_upper {
-                        self.upper = current_upper.clone();
-                        return Ok(Ok(Err(Upper(current_upper))));
-                    } else {
-                        // The upper stored in state was outdated. Retry after updating.
-                    }
-                }
-                Err(err) => return Ok(Err(err)),
+        match res {
+            Ok(Ok(_seqno)) => {
+                self.upper = desc.upper().clone();
+                batch.mark_consumed();
+                Ok(Ok(Ok(())))
             }
+            Ok(Err(current_upper)) => {
+                // We tried to to a compare_and_append with the wrong expected upper, that
+                // won't work. Update the cached upper to the current upper.
+                self.upper = current_upper.0.clone();
+                Ok(Ok(Err(current_upper)))
+            }
+            Err(err) => Ok(Err(err)),
         }
     }
 
-    fn encode_batch<SB, KB, VB, TB, DB, I>(
-        desc: &Description<T>,
+    /// Returns a [BatchBuilder] that can be used to write a batch of updates to
+    /// blob storage which can then be appended to this shard using
+    /// [Self::compare_and_append_batch] or [Self::append_batch].
+    ///
+    /// It is correct to create an empty batch, which allows for downgrading
+    /// `upper` to communicate progress. (see [Self::compare_and_append_batch]
+    /// or [Self::append_batch])
+    ///
+    /// The builder uses a bounded amount of memory, even when the number of
+    /// updates is very large. Individual records, however, should be small
+    /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
+    /// O(MB) come talk to us.
+    pub fn builder(&mut self, size_hint: usize, lower: Antichain<T>) -> BatchBuilder<K, V, T, D> {
+        trace!("WriteHandle::builder lower={:?}", lower);
+        BatchBuilder::new(
+            self.cfg.clone(),
+            Arc::clone(&self.metrics),
+            size_hint,
+            lower,
+            Arc::clone(&self.blob),
+            self.machine.shard_id().clone(),
+        )
+    }
+
+    /// Uploads the given `updates` as one `Batch` to the blob store and returns
+    /// a handle to the batch.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn batch<SB, KB, VB, TB, DB, I>(
+        &mut self,
         updates: I,
-    ) -> Result<Option<Vec<u8>>, InvalidUsage<T>>
+        lower: Antichain<T>,
+        upper: Antichain<T>,
+    ) -> Result<Batch<K, V, T, D>, InvalidUsage<T>>
     where
         SB: Borrow<((KB, VB), TB, DB)>,
         KB: Borrow<K>,
@@ -341,79 +457,26 @@ where
         DB: Borrow<D>,
         I: IntoIterator<Item = SB>,
     {
+        // WIP: Should we have logging for these helpers?
+        trace!("WriteHandle::batch lower={:?} upper={:?}", lower, upper);
+
         let iter = updates.into_iter();
-        let size_hint = iter.size_hint();
 
-        let (mut key_buf, mut val_buf) = (Vec::new(), Vec::new());
-        let mut builder = ColumnarRecordsVecBuilder::default();
-        for tuple in iter {
-            let ((k, v), t, d) = tuple.borrow();
+        // This uses the iter's size_hint's lower+1 to match the logic in Vec.
+        let (size_hint_lower, _) = iter.size_hint();
+
+        let mut builder = self.builder(size_hint_lower, lower.clone());
+
+        for update in iter {
+            let ((k, v), t, d) = update.borrow();
             let (k, v, t, d) = (k.borrow(), v.borrow(), t.borrow(), d.borrow());
-            if !desc.lower().less_equal(t) || desc.upper().less_equal(t) {
-                return Err(InvalidUsage::UpdateNotWithinBounds {
-                    ts: t.clone(),
-                    lower: desc.lower().clone(),
-                    upper: desc.upper().clone(),
-                });
+            match builder.add(k, v, t, d).await {
+                Ok(_) => (),
+                Err(invalid_usage) => return Err(invalid_usage),
             }
-
-            trace!("writing update {:?}", ((k, v), t, d));
-            key_buf.clear();
-            val_buf.clear();
-            K::encode(k, &mut key_buf);
-            V::encode(v, &mut val_buf);
-            // TODO: Get rid of the from_le_bytes.
-            let t = u64::from_le_bytes(T::encode(t));
-            let d = i64::from_le_bytes(D::encode(d));
-
-            if builder.len() == 0 {
-                // Use the first record to attempt to pre-size the builder
-                // allocations. This uses the iter's size_hint's lower+1 to
-                // match the logic in Vec.
-                let (lower, _) = size_hint;
-                let additional = usize::saturating_add(lower, 1);
-                builder.reserve(additional, key_buf.len(), val_buf.len());
-            }
-            builder.push(((&key_buf, &val_buf), t, d))
         }
 
-        // TODO: Get rid of the from_le_bytes.
-        let desc = Description::new(
-            Antichain::from(
-                desc.lower()
-                    .elements()
-                    .iter()
-                    .map(|x| u64::from_le_bytes(T::encode(x)))
-                    .collect::<Vec<_>>(),
-            ),
-            Antichain::from(
-                desc.upper()
-                    .elements()
-                    .iter()
-                    .map(|x| u64::from_le_bytes(T::encode(x)))
-                    .collect::<Vec<_>>(),
-            ),
-            Antichain::from(
-                desc.since()
-                    .elements()
-                    .iter()
-                    .map(|x| u64::from_le_bytes(T::encode(x)))
-                    .collect::<Vec<_>>(),
-            ),
-        );
-
-        let batch = BlobTraceBatchPart {
-            desc,
-            updates: builder.finish(),
-            index: 0,
-        };
-        if batch.updates.len() == 0 {
-            return Ok(None);
-        }
-
-        let mut buf = Vec::new();
-        batch.encode(&mut buf);
-        Ok(Some(buf))
+        builder.finish(upper.clone()).await
     }
 
     /// Test helper for an [Self::append] call that is expected to succeed.
@@ -424,15 +487,10 @@ where
         L: Into<Antichain<T>>,
         U: Into<Antichain<T>>,
     {
-        self.append(
-            updates.iter().map(|((k, v), t, d)| ((k, v), t, d)),
-            lower.into(),
-            new_upper.into(),
-        )
-        .await
-        .expect("external durability failed")
-        .expect("invalid usage")
-        .expect("unexpected upper");
+        self.append(updates.iter(), lower.into(), new_upper.into())
+            .await
+            .expect("invalid usage")
+            .expect("unexpected upper");
     }
 
     /// Test helper for a [Self::compare_and_append] call that is expected to
@@ -459,6 +517,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
+    use crate::r#impl::machine::FOREVER;
     use crate::tests::new_test_client;
     use crate::ShardId;
 

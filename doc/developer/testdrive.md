@@ -187,7 +187,7 @@ Specifies the backoff factor that will be applied to increase the backoff interv
 
 ## Interfacing with services
 
-#### `--materialized-url <materialized-url>`
+#### `--materialize-url <materialize-url>`
 
 materialized connection string [default: postgres://materialize@localhost:6875]
 
@@ -474,9 +474,11 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `"stdrive.aws-endpoint`
 
-#### `testdrive.materialized-addr`
+#### `testdrive.materialize-http-addr`
 
-#### `testdrive.materialized-user`
+#### `testdrive.materialize-sql-addr`
+
+#### `testdrive.materialize-user`
 
 ## Accessing the environment variables
 
@@ -527,7 +529,7 @@ In addition to the default connection that is used for the `>` and `!` statement
 Executes a list of statements over the specified connection. The `connection` can be specified as either an URL or as a named connection created by `$ postgres-connect`:
 
 ```
-$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 CREATE TABLE postgres_execute (f1 INTEGER);
 ```
 
@@ -538,7 +540,7 @@ If any of the statements fail, the entire test will fail. Any result sets return
 Creates a named psql connection that can be used by multiple `$ postgres-execute` statements
 
 ```
-$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
 $ postgres-execute connection=conn1
 BEGIN;
@@ -557,7 +559,10 @@ single-threaded context, so will be serialized in the order they appear in the
 
 #### `$ postgres-verify-slot connection=... slot=... active=(true|false)`
 
-Pauses the test until the desired Postgres replication slot has become active or inactive on the Postgres side of the direct Postgres replication. This is used to prevent flakiness in Postgres-related tests.
+Pauses the test until the desired Postgres replication slot (identified by
+`LIKE` pattern) has become active or inactive on the Postgres side of the direct
+Postgres replication. This is used to prevent flakiness in Postgres-related
+tests.
 
 
 ## Connecting to MySQL

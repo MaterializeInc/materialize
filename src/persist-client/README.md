@@ -76,11 +76,7 @@ The horizontal axis:
 | file_pg | 5.5ms | 5.6ms | 6.4ms | 6.5ms |
 | s3_pg | 45ms | 47ms | 79ms | 82ms |
 
-These numbers are from our micro-benchmarks. (Note that if you update these
-numbers or look at raw benchmark numbers in commit messages, you need to divide
-the output by however many batches are used because each repeats the operation
-for each batch to shake out issues that don't otherwise surface. The default
-number of batches is 8.)
+These numbers are from our micro-benchmarks.
 
 ```sh
 cargo bench -p mz-persist-client --bench=benches
@@ -89,3 +85,86 @@ cargo bench -p mz-persist-client --bench=benches
 Larger writes are expected to take the above latency floor plus however long it
 takes to write the extra data to e.g s3. TODO: Get real numbers for larger
 batches.
+
+
+## Memory Usage
+
+_Note: This is provisional and based on mental modeling, it is yet to be
+empirically tested._
+
+A persist writer uses at most `B * (2N+1)` memory per [BatchBuilder] (available
+for direct use and also used internally in the `batch`, `compare_and_append`,
+and `append` sugar methods). This is true even when writing data that is far
+bigger than this cap.
+
+- `B` is [blob_target_size]
+- `N` is [batch_builder_max_outstanding_parts]
+- `2N` because there is a moment that we have both a ColumnarRecords and its
+  encoded representation in memory.
+- `+1` because we're building the next part while we have `N` of them
+  outstanding.
+
+[BatchBuilder]: crate::batch::BatchBuilder
+[blob_target_size]: crate::PersistConfig::blob_target_size
+[batch_builder_max_outstanding_parts]: crate::PersistConfig::batch_builder_max_outstanding_parts
+
+A persist reader uses as most `3B` memory per [Listen] and per [SnapshotIter].
+
+- `B` is [blob_target_size]
+- We have one part fetched that is being iterated
+- In the future, we'll pipeline the fetch of a second part. Like writing there
+  is a moment where both a ColumnarRecords and its encoded representation are in
+  memory.
+
+[Listen]: crate::read::Listen
+[SnapshotIter]: crate::read::SnapshotIter
+
+Both of these might have _small_ additive and multiplicative constants. This is
+true even when reading data that is far bigger than this cap.
+
+
+## OpenTelemetry Tracing Spans
+
+Persist offers introspection into performance and behavior through integration
+with the [tracing] crate.
+
+[tracing]: https://docs.rs/tracing
+
+Materialize defaults to logs (tracing events) at "info" and above and
+opentelemetry (tracing spans) at "debug" and above. This is because our stderr
+log formatter includes any spans that are active at the time of the log event
+AND that match the log (not opentelemetry) filter. Example of what this looks
+like:
+
+```text
+2022-06-02T21:18:48.220658Z  INFO my_span{my_field=foo}: my_crate::my_module: Hello, world!
+```
+
+So in practice, with the default flag settings, spans at:
+
+- _info_: Exported to opentelemetry AND included in any event logs that happen
+  while the span is active as described above. Nothing in persist meets this
+  bar.
+- _debug_: Exported to opentelemetry (but not included in logs).
+- _trace_: Completely disabled.
+
+There are many policies we could adopt for what is instrumented and at what
+level. At the same time, it's early enough that there are lots of unknowns
+around what will be most useful for debugging real problems and what knobs are
+wanted to opt into additional detail. As a result, we adopt a common idiom of
+spans at the API boundary between persist and the rest of mz (as well as
+persist's API boundary with external systems such as s3 and aurora, which we
+wouldn't do if they themselves offered tracing integration). In detail:
+
+- All persist spans have a `shard` field and no other fields.
+- Every method in the persist public API is traced at debug level. However, this
+  excludes "sugar" methods (e.g. append and snapshot) that are implemented
+  entirely in terms of other public persist API methods, which are traced at
+  trace level.
+- All writes to external systems are traced at debug level. Reads from S3 are
+  also traced at debug level. Reads from Aurora are traced at trace level (too
+  spammy).
+- Additional debugging information is traced at trace level.
+
+We'll tune this policy over time as we gain experience debugging persist in
+production.

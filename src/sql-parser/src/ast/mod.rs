@@ -27,5 +27,7 @@ pub mod visit;
 pub mod visit_mut;
 
 mod defs;
+mod metadata;
 
 pub use defs::*;
+pub use metadata::*;

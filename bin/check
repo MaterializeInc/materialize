@@ -165,6 +165,11 @@ extra_lints=(
     # See `clippy.toml` for more info
     # TODO(guswynn): renamed this to `disallowed_methods` when we upgrade
     clippy::disallowed_methods
+
+    # Implementing `From`
+    # gets you `Into` for free.
+    # See <https://doc.rust-lang.org/std/convert/trait.Into.html>.
+    clippy::from_over_into
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

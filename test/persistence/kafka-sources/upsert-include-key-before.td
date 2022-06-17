@@ -40,5 +40,5 @@ $ kafka-ingest format=avro topic=include-key key-format=avro key-schema=${keysch
   INCLUDE KEY AS named
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) = 10000 FROM include_key;
-true
+> SELECT COUNT(*) FROM include_key;
+10000

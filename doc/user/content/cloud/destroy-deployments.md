@@ -1,5 +1,5 @@
 ---
-title: "Destroy Deployments"
+title: "Destroy deployments"
 description: "Destroy Materialize Cloud deployments."
 aliases:
   - delete-deployments

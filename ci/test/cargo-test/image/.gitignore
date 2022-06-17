@@ -1,9 +1,8 @@
 /computed
-/materialized
 /storaged
+/environmentd
 /protobuf-install
 /protoc
 /shlib
 /test-binaries.json
-/testdrive
 /tests

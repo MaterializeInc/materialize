@@ -84,7 +84,7 @@ async fn run_line_reader(
     let actions = action::build(cmds, &state).await?;
 
     if config.reset {
-        state.reset_materialized().await?;
+        state.reset_materialize().await?;
 
         for a in actions.iter().rev() {
             let undo = a.action.undo(&mut state);

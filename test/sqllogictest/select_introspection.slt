@@ -1,0 +1,134 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement ok
+CREATE TABLE test (a TEXT, b TEXT)
+
+statement ok
+INSERT INTO test VALUES('a', 'b')
+
+statement ok
+CREATE CLUSTER test
+  REPLICAS (
+    replica_a (SIZE '1'),
+    replica_b (SIZE '2')
+  ),
+  INTROSPECTION GRANULARITY '50 milliseconds'
+
+statement ok
+SET cluster = test
+
+statement ok
+SET cluster_replica = replica_a
+
+# Verify that simple SELECTs work.
+
+query TT
+SELECT * FROM test
+----
+a b
+
+# Verify that SELECTs on introspection tables work.
+
+statement ok
+SELECT * FROM mz_materializations
+
+# Verify that we are always hitting the same replica.
+# We check that the number of peeks in mz_peek_durations (which is a
+# replica-specific introspection source) increases by one with every query.
+# We sleep between checks to give dataflow logging time to catch up.
+
+statement ok
+SELECT mz_internal.mz_sleep(0.1)
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+2
+
+statement ok
+SELECT mz_internal.mz_sleep(0.1)
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+3
+
+statement ok
+SELECT mz_internal.mz_sleep(0.1)
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+4
+
+# Verify that we see no prior peeks when targeting another replica.
+
+statement ok
+SET cluster_replica = replica_b
+
+query I
+SELECT sum(count) FROM mz_peek_durations
+----
+NULL
+
+# Verify that targeting an unknown replica fails.
+
+statement ok
+SET cluster_replica = unknown
+
+query error cluster replica 'test.unknown' does not exist
+SELECT * FROM test
+
+# Verify that untargeted introspection queries are disallowd.
+
+statement ok
+RESET cluster_replica
+
+query error log source reads must target a replica
+SELECT * FROM mz_materializations
+
+statement ok
+CREATE MATERIALIZED VIEW introspection_view AS SELECT * FROM mz_materializations
+
+query error log source reads must target a replica
+SELECT * FROM introspection_view
+
+# Verify that untargeted introspection queries on unreplicated clusters are
+# allowed.
+
+statement ok
+DROP CLUSTER REPLICA test.replica_b;
+
+statement ok
+SELECT * FROM mz_materializations
+
+statement ok
+SELECT * FROM introspection_view
+
+# Verify that querying introspection data is disallowed on clusters with
+# introspection disabled.
+
+statement ok
+DROP CLUSTER test CASCADE
+
+statement ok
+CREATE CLUSTER test
+  REPLICAS (replica_a (SIZE '1')),
+  INTROSPECTION GRANULARITY 0
+
+query error cannot read log sources on cluster with disabled introspection
+SELECT * FROM mz_materializations
+
+# Clean up.
+
+statement ok
+DROP CLUSTER test

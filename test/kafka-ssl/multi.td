@@ -33,22 +33,27 @@ $ kafka-create-topic topic=data
 $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 1}}}
 
+> CREATE SECRET ssl_key_kafka AS '${arg.materialized-kafka-key}'
+> CREATE SECRET ssl_key_password_kafka AS 'mzmzmz'
+> CREATE SECRET ssl_key_csr AS '${arg.materialized-schema-registry-key}'
+> CREATE SECRET password_csr AS 'sekurity'
+
 > CREATE MATERIALIZED SOURCE data
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password = 'mzmzmz'
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
+      ssl_key_password = SECRET ssl_key_password_kafka
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_key_location = '/share/secrets/materialized-schema-registry.key',
-      ssl_certificate_location = '/share/secrets/materialized-schema-registry.crt',
-      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_pem = SECRET ssl_key_csr,
+      ssl_certificate_pem = '${arg.materialized-schema-registry-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
       username = "materialize",
-      password = "sekurity"
+      password = SECRET password_csr
   )
   ENVELOPE DEBEZIUM
 
@@ -72,18 +77,18 @@ a
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password = 'mzmzmz',
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
+      ssl_key_password = SECRET ssl_key_password_kafka,
       username = "materialize",
-      password = "sekurity"
+      password = SECRET password_csr
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt'
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   ENVELOPE DEBEZIUM
 contains:sslv3 alert certificate unknown
@@ -94,18 +99,18 @@ contains:sslv3 alert certificate unknown
   FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password = 'mzmzmz',
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
+      ssl_key_password = SECRET ssl_key_password_kafka,
       username = "materialize",
-      password = "sekurity"
+      password = SECRET password_csr
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt'
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}'
   )
   ENVELOPE DEBEZIUM
 contains:sslv3 alert certificate unknown
@@ -116,18 +121,18 @@ contains:sslv3 alert certificate unknown
   INTO KAFKA BROKER 'kafka' TOPIC 'snk'
   WITH (
       security_protocol = 'SSL',
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password = 'mzmzmz'
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
+      ssl_key_password = SECRET ssl_key_password_kafka
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_key_location = '/share/secrets/materialized-schema-registry.key',
-      ssl_certificate_location = '/share/secrets/materialized-schema-registry.crt',
-      ssl_ca_location = '/share/secrets/ca.crt',
+      ssl_key_pem = SECRET ssl_key_csr,
+      ssl_certificate_pem = '${arg.materialized-schema-registry-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
       username = "materialize",
-      password = "sekurity"
+      password = SECRET password_csr
   )
 
 $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
@@ -139,15 +144,15 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
   INTO KAFKA BROKER 'kafka' TOPIC 'snk'
   WITH (
       security_protocol = 'SSL',
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt',
-      ssl_key_password = 'mzmzmz'
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}',
+      ssl_key_password = SECRET ssl_key_password_kafka
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   WITH (
-      ssl_key_location = '/share/secrets/materialized-kafka.key',
-      ssl_certificate_location = '/share/secrets/materialized-kafka.crt',
-      ssl_ca_location = '/share/secrets/ca.crt'
+      ssl_key_pem = SECRET ssl_key_kafka,
+      ssl_certificate_pem = '${arg.materialized-kafka-crt}',
+      ssl_ca_pem = '${arg.ca-crt}'
   )
 contains:sslv3 alert certificate unknown

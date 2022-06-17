@@ -11,7 +11,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List, Optional, Type
+from typing import List, Type
 
 # mzcompose may start this script from the root of the Mz repository,
 # so we need to explicitly add this directory to the Python module search path
@@ -97,10 +97,10 @@ SERVICES = [
 def start_services(
     c: Composition, args: argparse.Namespace, instance: str
 ) -> List[Service]:
-    tag, options, nodes = (
-        (args.this_tag, args.this_options, args.this_nodes)
+    tag, options, nodes, workers = (
+        (args.this_tag, args.this_options, args.this_nodes, args.this_workers)
         if instance == "this"
-        else (args.other_tag, args.other_options, args.other_nodes)
+        else (args.other_tag, args.other_options, args.other_nodes, args.other_workers)
     )
 
     cluster_services: List[Service] = []
@@ -117,6 +117,7 @@ def start_services(
             cluster_services.append(
                 Computed(
                     name=node_names[node_id],
+                    workers=workers,
                     options=options,
                     peers=node_names,
                     image=f"materialize/computed:{tag}" if tag else None,
@@ -126,6 +127,7 @@ def start_services(
         cluster_services.append(
             Materialized(
                 image=f"materialize/materialized:{tag}" if tag else None,
+                workers=workers,
                 options=options,
             )
         )
@@ -134,19 +136,22 @@ def start_services(
         print(f"The version of the '{instance.upper()}' Mz instance is:")
         c.run("materialized", "--version")
 
-        c.start_and_wait_for_tcp(services=["materialized"])
-        c.wait_for_materialized()
+        # Single-binary legacy Mz instances only have port 6875 open
+        # so only check that port before proceeding
+        c.up("materialized")
+        c.wait_for_materialized(port=6875)
 
         if nodes:
             print(f"Starting cluster for '{instance.upper()}' ...")
             c.up(*[f"computed_{n}" for n in range(0, nodes)])
 
-            c.sql("DROP CLUSTER default")
             c.sql(
-                "CREATE CLUSTER default REPLICA replica1 (REMOTE ("
+                "CREATE CLUSTER REPLICA default.feature_benchmark REMOTE ["
                 + ",".join([f"'computed_{n}:2100'" for n in range(0, nodes)])
-                + "));"
+                + "];"
             )
+
+            c.sql("DROP CLUSTER REPLICA default.default_replica")
 
     c.up("testdrive", persistent=True)
 
@@ -280,6 +285,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         default=None,
         help="Start a cluster with that many nodes for 'OTHER'",
+    )
+
+    parser.add_argument(
+        "--this-workers",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Number of workers to use for 'THIS'",
+    )
+
+    parser.add_argument(
+        "--other-workers",
+        metavar="N",
+        type=int,
+        default=None,
+        help="Number of workers to use for 'OTHER'",
     )
 
     args = parser.parse_args()

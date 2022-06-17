@@ -17,7 +17,9 @@ aliases:
 
 Field | Use
 ------|-----
-_on&lowbar;name_ | The name of the object whose indexes you want to show. This can be the name of a table, source, or view.
+_on&lowbar;name_ | The name of the object whose indexes you want to show. This can be the name of a table, source, or view. If omitted, all indexes in the cluster are shown.
+_cluster&lowbar;name_ | The cluster to show indexes from. If omitted, indexes from all clusters are shown.
+**EXTENDED** | Returns system indexes as well as user-created indexes. By default, only user-created indexes are returned.
 
 ## Details
 
@@ -40,16 +42,6 @@ Field | Meaning
 **column_name** | The indexed column.
 **expression** | An expression used to generate the column in the index.
 **null** | Is the column nullable?
-
-{{< version-changed v0.5.0 >}}
-The output columns are renamed from `On_name`, `Key_name`, `Column_name`,
-`Expression`, `Null`, and `Seq_in_index` to `on_name`, `key_name`,
-`column_name`, `expression`, `nullable`, and `seq_in_index`, respectively.
-{{< /version-changed >}}
-
-{{< version-added v0.23.0 >}}
-The `cluster` column.
-{{< /version-added >}}
 
 ### Determine which views have indexes
 

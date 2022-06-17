@@ -18,13 +18,13 @@ use crate::plan::{Plan, RaisePlan};
 
 pub fn describe_raise(
     _: &StatementContext,
-    _: &RaiseStatement,
+    _: RaiseStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_raise(scx: &StatementContext, r: RaiseStatement) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("RAISE statement")?;
+    scx.require_unsafe_mode("RAISE statement")?;
     Ok(Plan::Raise(RaisePlan {
         severity: r.severity,
     }))

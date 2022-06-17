@@ -2,9 +2,11 @@
 
 ## Limitations
 
-`EvalError`s are not yet supported and thus scalar subqueries are not
-supported.
-https://github.com/MaterializeInc/materialize/issues/7657
+Inherits whatever limitations are in [repr-test-util](../repr-test-util), namely
+that support for different types of Datums is incomplete. Follow the
+documentation for
+[test_spec_to_row](https://dev.materialize.com/api/rust/repr_test_util/fn.test_spec_to_row.html)
+to see which types of Datums are currently supported.
 
 ## Syntax
 
@@ -34,6 +36,9 @@ The following variants of `MirRelationExpr` have non-standard syntax:
     <RelationType>
     )
     ```
+
+The `TestCatalog` has following commands.
+* `(defsource <name> <RelationType>)` - defines source `<name>` with schema `<RelationType>`
 
 ## Unit testing
 

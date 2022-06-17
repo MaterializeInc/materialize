@@ -51,7 +51,7 @@ SERVICES = [
     Postgres(),
     Materialized(
         options=" ".join(mz_options.values()),
-        environment=[
+        environment_extra=[
             "SSL_KEY_PASSWORD=mzmzmz",
         ],
         volumes_extra=["secrets:/share/secrets"],
@@ -148,7 +148,7 @@ def test_upgrade_from_version(
                 for start_version, opt in mz_options.items()
                 if from_version[1:] >= start_version
             ),
-            environment=[
+            environment_extra=[
                 "SSL_KEY_PASSWORD=mzmzmz",
             ],
             volumes_extra=["secrets:/share/secrets"],
@@ -249,7 +249,7 @@ def ssl_services() -> Tuple[Kafka, SchemaRegistry, Testdrive]:
             "testdrive "
             "--kafka-addr=kafka:9092 "
             "--schema-registry-url=https://schema-registry:8081 "
-            "--materialized-url=postgres://materialize@materialized:6875 "
+            "--materialize-url=postgres://materialize@materialized:6875 "
             "--cert=/share/secrets/producer.p12 "
             "--cert-password=mzmzmz "
             "--ccsr-password=sekurity "

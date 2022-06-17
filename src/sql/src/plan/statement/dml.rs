@@ -14,23 +14,26 @@
 
 use std::collections::{HashMap, HashSet};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 
 use mz_expr::MirRelationExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::numeric::NumericMaxScale;
-use mz_repr::{GlobalId, RelationDesc, ScalarType};
+use mz_repr::{RelationDesc, ScalarType};
 use mz_sql_parser::ast::AstInfo;
 
+use crate::ast::display::AstDisplay;
 use crate::ast::{
-    CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
-    ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, SelectStatement,
-    Statement, TailRelation, TailStatement, UpdateStatement, ViewDefinition,
+    CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
+    CreateViewStatement, DeleteStatement, ExplainStage, ExplainStatement, Explainee, Ident,
+    InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
+    TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
-use crate::names::{resolve_names, Aug, ResolvedObjectName};
+use crate::names::{self, Aug, ResolvedObjectName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::with_options::TryFromValue;
 use crate::plan::{query, QueryContext};
 use crate::plan::{
     CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
@@ -220,8 +223,8 @@ pub fn plan_explain(
                 }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
-            let mut qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
-            resolve_names(&mut qcx, query)?
+            let qcx = QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
+            names::resolve(qcx.scx.catalog, query)?.0
         }
         Explainee::Query(query) => query,
     };
@@ -271,12 +274,7 @@ pub fn plan_query(
     })
 }
 
-with_options! {
-    struct TailOptions {
-        snapshot: bool,
-        progress: bool,
-     }
-}
+generate_extracted_config!(TailOption, (Snapshot, bool), (Progress, bool));
 
 pub fn describe_tail(
     scx: &StatementContext,
@@ -286,7 +284,7 @@ pub fn describe_tail(
         TailRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
             item.desc(&scx.catalog.resolve_full_name(item.name()))?
-                .clone()
+                .into_owned()
         }
         TailRelation::Query(query) => {
             let query::PlannedQuery { desc, .. } =
@@ -294,8 +292,8 @@ pub fn describe_tail(
             desc
         }
     };
-    let options = TailOptions::try_from(stmt.options)?;
-    let progress = options.progress.unwrap_or(false);
+    let TailOptionExtracted { progress, .. } = stmt.options.try_into()?;
+    let progress = progress.unwrap_or(false);
     let mut desc = RelationDesc::empty().with_column(
         "mz_timestamp",
         ScalarType::Numeric {
@@ -324,7 +322,6 @@ pub fn plan_tail(
         as_of,
     }: TailStatement<Aug>,
     copy_to: Option<CopyFormat>,
-    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
     let from = match relation {
         TailRelation::Name(name) => {
@@ -338,7 +335,7 @@ pub fn plan_tail(
                 | CatalogItemType::Sink
                 | CatalogItemType::Type
                 | CatalogItemType::Secret
-                | CatalogItemType::Connector => bail!(
+                | CatalogItemType::Connection => bail!(
                     "'{}' cannot be tailed because it is a {}",
                     name.full_name_str(),
                     entry.item_type(),
@@ -358,23 +355,21 @@ pub fn plan_tail(
                 QueryLifetime::OneShot(scx.pcx()?),
             )?;
             assert!(query.finishing.is_trivial(query.desc.arity()));
-            let depends_on = depends_on.into_iter().collect();
             TailFrom::Query {
                 expr: query.expr,
                 desc: query.desc,
-                depends_on,
             }
         }
     };
 
     let when = query::plan_as_of(scx, as_of)?;
-    let options = TailOptions::try_from(options)?;
+    let TailOptionExtracted { progress, snapshot } = options.try_into()?;
     Ok(Plan::Tail(TailPlan {
         from,
         when,
-        with_snapshot: options.snapshot.unwrap_or(true),
+        with_snapshot: snapshot.unwrap_or(true),
         copy_to,
-        emit_progress: options.progress.unwrap_or(false),
+        emit_progress: progress.unwrap_or(false),
     }))
 }
 
@@ -385,17 +380,6 @@ pub fn describe_table(
 ) -> Result<StatementDesc, anyhow::Error> {
     let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(StatementDesc::new(Some(desc)))
-}
-
-with_options! {
-    struct CopyOptions {
-        format: String,
-        delimiter: String,
-        null: String,
-        escape: String,
-        quote: String,
-        header: bool,
-    }
 }
 
 pub fn describe_copy(
@@ -424,6 +408,16 @@ fn plan_copy_from(
     }))
 }
 
+generate_extracted_config!(
+    CopyOption,
+    (Format, String, Default("text")),
+    (Delimiter, String),
+    (Null, String),
+    (Escape, String),
+    (Quote, String),
+    (Header, bool)
+);
+
 pub fn plan_copy(
     scx: &StatementContext,
     CopyStatement {
@@ -432,25 +426,30 @@ pub fn plan_copy(
         target,
         options,
     }: CopyStatement<Aug>,
-    depends_on: HashSet<GlobalId>,
 ) -> Result<Plan, anyhow::Error> {
-    let options = CopyOptions::try_from(options)?;
-    let mut copy_params = CopyParams {
-        format: CopyFormat::Text,
-        delimiter: options.delimiter,
-        null: options.null,
-        escape: options.escape,
-        quote: options.quote,
-        header: options.header,
-    };
-    if let Some(format) = options.format {
-        copy_params.format = match format.to_lowercase().as_str() {
+    let CopyOptionExtracted {
+        format,
+        delimiter,
+        null,
+        escape,
+        quote,
+        header,
+    } = CopyOptionExtracted::try_from(options)?;
+
+    let copy_params = CopyParams {
+        format: match format.to_lowercase().as_str() {
             "text" => CopyFormat::Text,
             "csv" => CopyFormat::Csv,
             "binary" => CopyFormat::Binary,
             _ => bail!("unknown FORMAT: {}", format),
-        };
-    }
+        },
+        delimiter,
+        null,
+        escape,
+        quote,
+        header,
+    };
+
     if let CopyDirection::To = direction {
         if copy_params.delimiter.is_some() {
             bail!("COPY TO does not support DELIMITER option yet");
@@ -468,9 +467,7 @@ pub fn plan_copy(
                 &Params::empty(),
                 Some(copy_params.format),
             )?),
-            CopyRelation::Tail(stmt) => {
-                Ok(plan_tail(scx, stmt, Some(copy_params.format), depends_on)?)
-            }
+            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(copy_params.format))?),
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
             CopyRelation::Table { name, columns } => {

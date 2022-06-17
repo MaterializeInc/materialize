@@ -26,23 +26,22 @@
 // `plan_root_query` and fanning out based on the contents of the `SELECT`
 // statement.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use enum_kinds::EnumKind;
 use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
-use mz_dataflow_types::sinks::{SinkConnectorBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::{ConnectorInner, SourceConnector};
+use mz_dataflow_types::sinks::{SinkConnectionBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::SourceConnection;
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ExplainOptions, ExplainStage, Expr, FetchDirection, NoticeSeverity, ObjectType, Raw, Statement,
-    TransactionAccessMode,
+    ExplainOptions, ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity,
+    ObjectType, Raw, SetVariableValue, Statement, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -61,6 +60,7 @@ pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
+pub(crate) mod with_options;
 
 pub use self::expr::{HirRelationExpr, HirScalarExpr};
 pub use error::PlanError;
@@ -72,7 +72,7 @@ pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementD
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
-    CreateConnector(CreateConnectorPlan),
+    CreateConnection(CreateConnectionPlan),
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
     CreateRole(CreateRolePlan),
@@ -98,6 +98,7 @@ pub enum Plan {
     ShowAllVariables,
     ShowVariable(ShowVariablePlan),
     SetVariable(SetVariablePlan),
+    ResetVariable(ResetVariablePlan),
     StartTransaction(StartTransactionPlan),
     CommitTransaction,
     AbortTransaction,
@@ -189,10 +190,10 @@ pub struct CreateSourcePlan {
 }
 
 #[derive(Debug)]
-pub struct CreateConnectorPlan {
+pub struct CreateConnectionPlan {
     pub name: QualifiedObjectName,
     pub if_not_exists: bool,
-    pub connector: Connector,
+    pub connection: Connection,
 }
 
 #[derive(Debug)]
@@ -289,8 +290,13 @@ pub struct ShowVariablePlan {
 #[derive(Debug)]
 pub struct SetVariablePlan {
     pub name: String,
-    pub value: String,
+    pub value: SetVariableValue,
     pub local: bool,
+}
+
+#[derive(Debug)]
+pub struct ResetVariablePlan {
+    pub name: String,
 }
 
 #[derive(Debug)]
@@ -316,7 +322,6 @@ pub enum TailFrom {
     Query {
         expr: MirRelationExpr,
         desc: RelationDesc,
-        depends_on: Vec<GlobalId>,
     },
 }
 
@@ -377,7 +382,7 @@ pub struct AlterIndexSetOptionsPlan {
 #[derive(Debug)]
 pub struct AlterIndexResetOptionsPlan {
     pub id: GlobalId,
-    pub options: Vec<IndexOptionName>,
+    pub options: HashSet<IndexOptionName>,
 }
 
 #[derive(Debug)]
@@ -441,21 +446,19 @@ pub struct Table {
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Aug>>,
     pub temporary: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
-    pub connector: SourceConnector,
+    pub connection: SourceConnection,
     pub desc: RelationDesc,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Connector {
+pub struct Connection {
     pub create_sql: String,
-    pub connector: ConnectorInner,
+    pub connection: mz_dataflow_types::connections::Connection,
 }
 
 #[derive(Clone, Debug)]
@@ -468,9 +471,8 @@ pub struct Secret {
 pub struct Sink {
     pub create_sql: String,
     pub from: GlobalId,
-    pub connector_builder: SinkConnectorBuilder,
+    pub connection_builder: SinkConnectionBuilder,
     pub envelope: SinkEnvelope,
-    pub depends_on: Vec<GlobalId>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -480,7 +482,6 @@ pub struct View {
     pub expr: mz_expr::MirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
-    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Clone, Debug)]
@@ -488,7 +489,6 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<mz_expr::MirScalarExpr>,
-    pub depends_on: Vec<GlobalId>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -496,7 +496,6 @@ pub struct Index {
 pub struct Type {
     pub create_sql: String,
     pub inner: CatalogType<IdReference>,
-    pub depends_on: Vec<GlobalId>,
 }
 
 /// Specifies when a `Peek` or `Tail` should occur.
@@ -577,8 +576,7 @@ pub enum ExecuteTimeout {
     WaitOnce,
 }
 
-#[derive(Clone, Debug, EnumKind)]
-#[enum_kind(IndexOptionName)]
+#[derive(Clone, Debug)]
 pub enum IndexOption {
     /// Configures the logical compaction window for an index. `None` disables
     /// logical compaction entirely.

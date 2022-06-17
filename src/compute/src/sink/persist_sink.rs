@@ -19,14 +19,14 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 
-use mz_dataflow_types::sinks::{PersistSinkConnector, SinkDesc};
+use mz_dataflow_types::sinks::{PersistSinkConnection, SinkDesc};
 use mz_persist_client::PersistLocation;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::render::sinks::SinkRender;
 
-impl<G> SinkRender<G> for PersistSinkConnector
+impl<G> SinkRender<G> for PersistSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -152,7 +152,6 @@ where
                     write
                         .append(updates, write.upper().clone(), frontier.clone())
                         .await
-                        .expect("cannot append updates")
                         .expect("cannot append updates")
                         .expect("invalid/outdated upper");
 

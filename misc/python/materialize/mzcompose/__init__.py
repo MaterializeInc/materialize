@@ -221,6 +221,7 @@ class Composition:
             {
                 "mzdata": None,
                 "pgdata": None,
+                "mydata": None,
                 "tmp": None,
                 "secrets": None,
             }
@@ -257,14 +258,20 @@ class Composition:
 
             ports = config.setdefault("ports", [])
             for i, port in enumerate(ports):
-                if ":" in str(port):
-                    raise UIError(
-                        "programming error: disallowed host port in service {name!r}"
-                    )
-                if self.preserve_ports:
+                if self.preserve_ports and not ":" in str(port):
                     # If preserving ports, bind the container port to the same
-                    # host port.
+                    # host port, assuming the host port is available.
                     ports[i] = f"{port}:{port}"
+                elif ":" in str(port) and not config.get("allow_host_ports", False):
+                    # Raise an error for host-bound ports, unless
+                    # `allow_host_ports` is `True`
+                    raise UIError(
+                        "programming error: disallowed host port in service {name!r}",
+                        hint=f'Add `"allow_host_ports": True` to the service config to disable this check.',
+                    )
+
+            if "allow_host_ports" in config:
+                config.pop("allow_host_ports")
 
             if self.repo.rd.coverage:
                 # Emit coverage information to a file in a directory that is
@@ -506,6 +513,12 @@ class Composition:
                 print(f"> {statement}")
                 cursor.execute(statement)
 
+    def sql_query(self, sql: str) -> Any:
+        """Execute and return results of a SQL query."""
+        with self.sql_cursor() as cursor:
+            cursor.execute(sql)
+            return cursor.fetchall()
+
     def create_cluster(
         self,
         cluster: List,
@@ -520,9 +533,9 @@ class Composition:
             replica_name: The replica name to use
         """
         self.sql(
-            f"CREATE CLUSTER {cluster_name} REMOTE {replica_name} ("
+            f"CREATE CLUSTER {cluster_name} REPLICAS ( {replica_name} ( REMOTE ["
             + ", ".join(f'"{p.name}:2100"' for p in cluster)
-            + ")"
+            + "]))"
         )
 
     def start_and_wait_for_tcp(self, services: List[str]) -> None:
@@ -793,7 +806,7 @@ class Composition:
         _wait_for_pg(
             dbname=dbname,
             host=host,
-            port=port or self.default_port(service),
+            port=self.port(service, port) if port else self.default_port(service),
             timeout_secs=timeout_secs,
             query=query,
             user=user,
@@ -877,6 +890,19 @@ class ServiceConfig(TypedDict, total=False):
 
     This is an mzcompose extension to Docker Compose. It is equivalent to
     passing `--user $(id -u):$(id -g)` to `docker run`. The defualt is `False`.
+    """
+
+    allow_host_ports: bool
+    """Allow the service to map host ports in its `ports` configuration.
+
+    This option is intended only for compositions that are meant to be run as
+    background services in developer environments. Compositions that are
+    isolated tests of Materialize should *not* enable this option, as it leads
+    to unnecessary conflicts between compositions. Compositions that publish the
+    same host port cannot be run concurrently. Instead, users should use the
+    `mzcompose port` command to discover the ephemeral host port mapped to the
+    desired container port, or to use `mzcompose up --preserve-ports`, which
+    publishes all container ports as host ports on a per-invocation basis.
     """
 
     image: str

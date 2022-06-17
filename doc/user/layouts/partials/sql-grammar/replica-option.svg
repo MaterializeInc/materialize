@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="349" height="81">
+   <polygon points="9 17 1 13 1 21"/>
+   <polygon points="17 17 9 13 9 21"/>
+   <rect x="51" y="3" width="50" height="32" rx="10"/>
+   <rect x="49"
+         y="1"
+         width="50"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="21">SIZE</text>
+   <rect x="121" y="3" width="46" height="32"/>
+   <rect x="119" y="1" width="46" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="129" y="21">size</text>
+   <rect x="51" y="47" width="118" height="32" rx="10"/>
+   <rect x="49"
+         y="45"
+         width="118"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="59" y="65">AVAILABILITY</text>
+   <rect x="189" y="47" width="58" height="32" rx="10"/>
+   <rect x="187"
+         y="45"
+         width="58"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="197" y="65">ZONE</text>
+   <rect x="267" y="47" width="34" height="32"/>
+   <rect x="265" y="45" width="34" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="275" y="65">az</text>
+   <path class="line"
+         d="m17 17 h2 m20 0 h10 m50 0 h10 m0 0 h10 m46 0 h10 m0 0 h134 m-290 0 h20 m270 0 h20 m-310 0 q10 0 10 10 m290 0 q0 -10 10 -10 m-300 10 v24 m290 0 v-24 m-290 24 q0 10 10 10 m270 0 q10 0 10 -10 m-280 10 h10 m118 0 h10 m0 0 h10 m58 0 h10 m0 0 h10 m34 0 h10 m23 -44 h-3"/>
+   <polygon points="339 17 347 13 347 21"/>
+   <polygon points="339 17 331 13 331 21"/>
+</svg>

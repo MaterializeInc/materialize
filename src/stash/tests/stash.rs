@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use futures::Future;
 use postgres_openssl::MakeTlsConnector;
 use tempfile::NamedTempFile;
 use timely::progress::Antichain;
@@ -23,15 +24,11 @@ use mz_stash::{
 async fn test_stash_memory() -> Result<(), anyhow::Error> {
     {
         let file = NamedTempFile::new()?;
-        let conn = Sqlite::open(file.path())?;
-        let mut memory = Memory::new(conn);
-        test_stash(&mut memory).await?;
+        test_stash(|| async { Memory::new(Sqlite::open(Some(file.path())).unwrap()) }).await?;
     }
     {
         let file = NamedTempFile::new()?;
-        let conn = Sqlite::open(file.path())?;
-        let mut memory = Memory::new(conn);
-        test_append(&mut memory).await?;
+        test_append(|| async { Memory::new(Sqlite::open(Some(file.path())).unwrap()) }).await?;
     }
     Ok(())
 }
@@ -40,13 +37,11 @@ async fn test_stash_memory() -> Result<(), anyhow::Error> {
 async fn test_stash_sqlite() -> Result<(), anyhow::Error> {
     {
         let file = NamedTempFile::new()?;
-        let mut conn = Sqlite::open(file.path())?;
-        test_stash(&mut conn).await?;
+        test_stash(|| async { Sqlite::open(Some(file.path())).unwrap() }).await?;
     }
     {
         let file = NamedTempFile::new()?;
-        let mut conn = Sqlite::open(file.path())?;
-        test_append(&mut conn).await?;
+        test_append(|| async { Sqlite::open(Some(file.path())).unwrap() }).await?;
     }
     Ok(())
 }
@@ -97,12 +92,12 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
         Postgres::new(connstr.to_string(), None, tls).await.unwrap()
     }
     {
-        let mut conn = connect(&connstr, tls.clone(), true).await;
-        test_stash(&mut conn).await?;
+        connect(&connstr, tls.clone(), true).await;
+        test_stash(|| async { connect(&connstr, tls.clone(), false).await }).await?;
     }
     {
-        let mut conn = connect(&connstr, tls.clone(), true).await;
-        test_append(&mut conn).await?;
+        connect(&connstr, tls.clone(), true).await;
+        test_append(|| async { connect(&connstr, tls.clone(), false).await }).await?;
     }
     // Test the fence.
     {
@@ -119,39 +114,54 @@ async fn test_stash_postgres() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
+async fn test_append<F, S, O>(f: F) -> Result<(), anyhow::Error>
+where
+    S: Append,
+    O: Future<Output = S>,
+    F: Fn() -> O,
+{
     const TYPED: TypedCollection<String, String> = TypedCollection::new("typed");
 
+    let mut stash = f().await;
+
     // Can't peek if since == upper.
-    assert_eq!(
-        TYPED.peek_one(stash).await.unwrap_err().to_string(),
-        "stash error: collection 1 since {-9223372036854775808} is not less than upper {-9223372036854775808}",
-    );
+    assert!(TYPED
+        .peek_one(&mut stash)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("since {-9223372036854775808} is not less than upper {-9223372036854775808}"));
     TYPED
-        .upsert_key(stash, &"k1".to_string(), &"v1".to_string())
+        .upsert_key(&mut stash, &"k1".to_string(), &"v1".to_string())
         .await?;
     assert_eq!(
-        TYPED.peek_one(stash).await.unwrap(),
+        TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v1".to_string())])
     );
     TYPED
-        .upsert_key(stash, &"k1".to_string(), &"v2".to_string())
+        .upsert_key(&mut stash, &"k1".to_string(), &"v2".to_string())
         .await?;
     assert_eq!(
-        TYPED.peek_one(stash).await.unwrap(),
+        TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([("k1".to_string(), "v2".to_string())])
     );
     assert_eq!(
-        TYPED.peek_key_one(stash, &"k1".to_string()).await.unwrap(),
+        TYPED
+            .peek_key_one(&mut stash, &"k1".to_string())
+            .await
+            .unwrap(),
         Some("v2".to_string()),
     );
     assert_eq!(
-        TYPED.peek_key_one(stash, &"k2".to_string()).await.unwrap(),
+        TYPED
+            .peek_key_one(&mut stash, &"k2".to_string())
+            .await
+            .unwrap(),
         None
     );
     TYPED
         .upsert(
-            stash,
+            &mut stash,
             vec![
                 ("k1".to_string(), "v3".to_string()),
                 ("k2".to_string(), "v4".to_string()),
@@ -159,7 +169,7 @@ async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
         )
         .await?;
     assert_eq!(
-        TYPED.peek_one(stash).await.unwrap(),
+        TYPED.peek_one(&mut stash).await.unwrap(),
         BTreeMap::from([
             ("k1".to_string(), "v3".to_string()),
             ("k2".to_string(), "v4".to_string())
@@ -171,16 +181,16 @@ async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     let other = stash.collection::<String, String>("other").await?;
     // Seal so we can invalidate the upper below.
     stash.seal(other, Antichain::from_elem(1).borrow()).await?;
-    let mut orders_batch = orders.make_batch(stash).await?;
+    let mut orders_batch = orders.make_batch(&mut stash).await?;
     orders.append_to_batch(&mut orders_batch, &"k1".to_string(), &"v1".to_string(), 1);
-    let mut other_batch = other.make_batch(stash).await?;
+    let mut other_batch = other.make_batch(&mut stash).await?;
     other.append_to_batch(&mut other_batch, &"k2".to_string(), &"v2".to_string(), 1);
 
     // Invalidate one upper and ensure append doesn't commit partial batches.
     let other_upper = other_batch.upper;
     other_batch.upper = Antichain::from_elem(Timestamp::MIN);
     assert_eq!(
-        stash
+          stash
             .append(vec![orders_batch.clone(), other_batch.clone()]).await
             .unwrap_err()
             .to_string(),
@@ -223,7 +233,7 @@ async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     // Multiple empty batches should bump the upper and the since because append
     // must also compact and consolidate.
     for _ in 0..5 {
-        let orders_batch = orders.make_batch(stash).await?;
+        let orders_batch = orders.make_batch(&mut stash).await?;
         stash.append(vec![orders_batch]).await?;
         assert_eq!(
             stash.since(orders).await?.into_option().unwrap(),
@@ -231,12 +241,68 @@ async fn test_append(stash: &mut impl Append) -> Result<(), anyhow::Error> {
         );
     }
 
-    test_stash_table(stash).await?;
+    // Remake the stash and ensure data remains.
+    let mut stash = f().await;
+    assert_eq!(
+        stash.peek_one(orders).await?,
+        BTreeMap::from([("k1".to_string(), "v1".to_string())])
+    );
+    assert_eq!(
+        stash.peek_one(other).await?,
+        BTreeMap::from([("k2".to_string(), "v2".to_string())])
+    );
+    // Remake again, mutate before reading, then read.
+    let mut stash = f().await;
+    stash
+        .update_many(orders, [(("k3".into(), "v3".into()), 1, 1)])
+        .await?;
+    stash.seal(orders, Antichain::from_elem(2).borrow()).await?;
+
+    assert_eq!(
+        stash.peek_one(orders).await?,
+        BTreeMap::from([
+            ("k1".to_string(), "v1".to_string()),
+            ("k3".to_string(), "v3".to_string())
+        ])
+    );
+
+    // Remake the stash, mutate, then read.
+    let mut stash = f().await;
+    let mut orders_batch = orders.make_batch(&mut stash).await?;
+    orders.append_to_batch(&mut orders_batch, &"k4".to_string(), &"v4".to_string(), 1);
+    stash.append(vec![orders_batch]).await?;
+    assert_eq!(
+        stash.peek_one(orders).await?,
+        BTreeMap::from([
+            ("k1".to_string(), "v1".to_string()),
+            ("k3".to_string(), "v3".to_string()),
+            ("k4".to_string(), "v4".to_string())
+        ])
+    );
+
+    // Remake and read again.
+    let mut stash = f().await;
+    assert_eq!(
+        stash.peek_one(orders).await?,
+        BTreeMap::from([
+            ("k1".to_string(), "v1".to_string()),
+            ("k3".to_string(), "v3".to_string()),
+            ("k4".to_string(), "v4".to_string())
+        ])
+    );
+
+    test_stash_table(&mut stash).await?;
 
     Ok(())
 }
 
-async fn test_stash(stash: &mut impl Stash) -> Result<(), anyhow::Error> {
+async fn test_stash<F, S, O>(f: F) -> Result<(), anyhow::Error>
+where
+    S: Stash,
+    O: Future<Output = S>,
+    F: Fn() -> O,
+{
+    let mut stash = f().await;
     // Create an arrangement, write some data into it, then read it back.
     let orders = stash.collection::<String, String>("orders").await?;
     stash
@@ -425,9 +491,6 @@ async fn test_stash(stash: &mut impl Stash) -> Result<(), anyhow::Error> {
 
 async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     const TABLE: TypedCollection<Vec<u8>, String> = TypedCollection::new("table");
-    fn numeric_identity(k: &Vec<u8>) -> i64 {
-        i64::from_le_bytes(k.clone().try_into().unwrap())
-    }
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
     }
@@ -452,11 +515,7 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     TABLE
         .upsert(stash, vec![(2i64.to_le_bytes().to_vec(), "v2".to_string())])
         .await?;
-    let mut table = TableTransaction::new(
-        TABLE.peek_one(stash).await?,
-        Some(numeric_identity),
-        uniqueness_violation,
-    );
+    let mut table = TableTransaction::new(TABLE.peek_one(stash).await?, uniqueness_violation);
     assert_eq!(
         table.items(),
         BTreeMap::from([
@@ -474,15 +533,12 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
 
     // Uniqueness violation.
     table
-        .insert(|id| id.unwrap().to_le_bytes().to_vec(), "v3".to_string())
+        .insert(3i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap_err();
 
-    assert_eq!(
-        table
-            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "v4".to_string())
-            .unwrap(),
-        Some(3)
-    );
+    table
+        .insert(3i64.to_le_bytes().to_vec(), "v4".to_string())
+        .unwrap();
     assert_eq!(
         table.items(),
         BTreeMap::from([
@@ -517,27 +573,27 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         ])
     );
 
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     // Deleting then creating an item that has a uniqueness violation should work.
     assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
     // Uniqueness violation in value.
     table
-        .insert(|_| 5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap_err();
     // Key already exists, expect error.
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap_err();
     assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
     // Both the inserts work now because the key and uniqueness violation are gone.
     table
-        .insert(|_| 5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();
     let pending = table.pending();
     assert_eq!(
@@ -559,10 +615,10 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         ])
     );
 
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     assert_eq!(table.delete(|_k, _v| true).len(), 3);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v1".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v1".to_string())
         .unwrap();
 
     commit(stash, collection, table.pending()).await?;
@@ -572,10 +628,10 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
     );
 
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v2".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v2".to_string())
         .unwrap();
     commit(stash, collection, table.pending()).await?;
     let items = TABLE.peek_one(stash).await?;
@@ -585,17 +641,17 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     );
 
     // Verify we don't try to delete v3 or v4 during commit.
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v4".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v4".to_string())
         .unwrap_err();
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();
     commit(stash, collection, table.pending()).await?;
     let items = stash.peek(collection).await?;
@@ -609,28 +665,18 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
 
 #[test]
 fn test_table() {
-    fn numeric_identity(k: &Vec<u8>) -> i64 {
-        i64::from_le_bytes(k.clone().try_into().unwrap())
-    }
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
     }
     let mut table = TableTransaction::new(
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
-        Some(numeric_identity),
         uniqueness_violation,
     );
-    // Test the auto-increment id.
-    assert_eq!(
-        table
-            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "b".to_string())
-            .unwrap(),
-        Some(2)
-    );
-    assert_eq!(
-        table
-            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "c".to_string())
-            .unwrap(),
-        Some(3)
-    );
+
+    table
+        .insert(2i64.to_le_bytes().to_vec(), "b".to_string())
+        .unwrap();
+    table
+        .insert(3i64.to_le_bytes().to_vec(), "c".to_string())
+        .unwrap();
 }

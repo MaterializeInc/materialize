@@ -18,33 +18,43 @@
 //! Eventually, the source is dropped with either `drop_sources()` or by allowing compaction to the
 //! empty frontier.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
-use std::path::PathBuf;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
+use std::sync::Arc;
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
+use futures::future;
+use futures::stream::TryStreamExt as _;
+use futures::stream::{FuturesUnordered, StreamExt};
 use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
 use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio_stream::StreamMap;
 use uuid::Uuid;
 
-use mz_persist_client::{read::ReadHandle, PersistLocation, ShardId};
+use mz_orchestrator::{NamespacedOrchestrator, ServiceConfig, ServicePort};
+use mz_ore::collections::CollectionExt;
+use mz_persist_client::{
+    read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
+};
 use mz_persist_types::Codec64;
-use mz_repr::proto::TryFromProtoError;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::proto::{RustType, TryFromProtoError};
+use mz_repr::{Diff, GlobalId};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
-use crate::client::{CreateSourceCommand, StorageClient, StorageCommand, StorageResponse};
-use crate::sources::SourceDesc;
+use crate::client::{
+    GenericClient, StorageClient, StorageCommand, StorageResponse, StoragedRemoteClient,
+};
+use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
 use crate::Update;
 
 include!(concat!(
@@ -79,7 +89,7 @@ pub trait StorageController: Debug + Send {
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
     async fn create_sources(
         &mut self,
-        mut bindings: Vec<(GlobalId, (SourceDesc, Antichain<Self::Timestamp>))>,
+        ingestions: Vec<IngestionDescription<(), Self::Timestamp>>,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -132,27 +142,33 @@ pub trait StorageController: Debug + Send {
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
     pub timestamp_shard_id: ShardId,
+    pub persist_shard: ShardId,
 }
 
-impl From<&CollectionMetadata> for ProtoCollectionMetadata {
-    // TODO: This is just a stub.
-    fn from(_: &CollectionMetadata) -> Self {
-        ProtoCollectionMetadata {}
+impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
+    fn into_proto(&self) -> ProtoCollectionMetadata {
+        ProtoCollectionMetadata {
+            blob_uri: self.persist_location.blob_uri.clone(),
+            consensus_uri: self.persist_location.consensus_uri.clone(),
+            shard_id: self.persist_shard.to_string(),
+            timestamp_shard_id: self.timestamp_shard_id.to_string(),
+        }
     }
-}
 
-impl TryFrom<ProtoCollectionMetadata> for CollectionMetadata {
-    // TODO: This is just a stub.
-    type Error = TryFromProtoError;
-
-    fn try_from(_value: ProtoCollectionMetadata) -> Result<Self, Self::Error> {
-        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
+    fn from_proto(value: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
         Ok(CollectionMetadata {
             persist_location: PersistLocation {
-                blob_uri: "".to_string(),
-                consensus_uri: "".to_string(),
+                blob_uri: value.blob_uri,
+                consensus_uri: value.consensus_uri,
             },
-            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
+            timestamp_shard_id: value
+                .timestamp_shard_id
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
+            persist_shard: value
+                .shard_id
+                .parse()
+                .map_err(TryFromProtoError::InvalidShardId)?,
         })
     }
 }
@@ -171,6 +187,7 @@ impl Arbitrary for CollectionMetadata {
                 consensus_uri: "".to_string(),
             },
             timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
+            persist_shard: ShardId::new(),
         })
         .boxed()
     }
@@ -178,22 +195,32 @@ impl Arbitrary for CollectionMetadata {
 
 /// Controller state maintained for each storage instance.
 #[derive(Debug)]
-pub struct StorageControllerState<T, S = mz_stash::Sqlite> {
-    pub(super) client: Box<dyn StorageClient<T>>,
+pub struct StorageControllerState<
+    T: Timestamp + Lattice + Codec64,
+    S = mz_stash::Memory<mz_stash::Postgres>,
+> {
+    pub(super) clients: BTreeMap<GlobalId, Box<dyn StorageClient<T>>>,
     /// Collections maintained by the storage controller.
     ///
     /// This collection only grows, although individual collections may be rendered unusable.
     /// This is to prevent the re-binding of identifiers to other descriptions.
     pub(super) collections: BTreeMap<GlobalId, CollectionState<T>>,
     pub(super) stash: S,
+    pub(super) persist_handles: BTreeMap<GlobalId, PersistHandles<T>>,
 }
 
 /// A storage controller for a storage instance.
 #[derive(Debug)]
-pub struct Controller<T> {
+pub struct Controller<T: Timestamp + Lattice + Codec64 + Unpin> {
     state: StorageControllerState<T>,
     /// The persist location where all storage collections are being written to
     persist_location: PersistLocation,
+    /// A persist client used to write to storage collections
+    persist_client: PersistClient,
+    /// An orchestrator to start and stop storage processes.
+    orchestrator: Arc<dyn NamespacedOrchestrator>,
+    /// The storaged image to use when starting new storage processes.
+    storaged_image: String,
 }
 
 #[derive(Debug)]
@@ -205,6 +232,8 @@ pub enum StorageError {
     IdentifierMissing(GlobalId),
     /// The update contained in the appended batch was at a timestamp equal or beyond the batch's upper
     UpdateBeyondUpper(GlobalId),
+    /// The expected upper of an append was different than the actual append of the collection
+    InvalidUpper(GlobalId),
     /// An error from the underlying client.
     ClientError(anyhow::Error),
     /// An operation failed to read or write state
@@ -217,6 +246,7 @@ impl Error for StorageError {
             Self::SourceIdReused(_) => None,
             Self::IdentifierMissing(_) => None,
             Self::UpdateBeyondUpper(_) => None,
+            Self::InvalidUpper(_) => None,
             Self::ClientError(_) => None,
             Self::IOError(err) => Some(err),
         }
@@ -238,6 +268,12 @@ impl fmt::Display for StorageError {
                     "append batch for {id} contained update at or beyond its upper"
                 )
             }
+            Self::InvalidUpper(id) => {
+                write!(
+                    f,
+                    "expected upper for {id} was different than its actual upper"
+                )
+            }
             Self::ClientError(err) => write!(f, "underlying client error: {err}"),
             Self::IOError(err) => write!(f, "failed to read or write state: {err}"),
         }
@@ -256,14 +292,22 @@ impl From<StashError> for StorageError {
     }
 }
 
-impl<T> StorageControllerState<T> {
-    pub(super) fn new(client: Box<dyn StorageClient<T>>, state_dir: PathBuf) -> Self {
-        let stash = mz_stash::Sqlite::open(&state_dir.join("storage"))
-            .expect("unable to create storage stash");
+impl<T: Timestamp + Lattice + Codec64> StorageControllerState<T> {
+    pub(super) async fn new(postgres_url: String) -> Self {
+        let tls = mz_postgres_util::make_tls(
+            &tokio_postgres::config::Config::from_str(&postgres_url)
+                .expect("invalid postgres url for storage stash"),
+        )
+        .expect("could not make storage TLS connection");
+        let stash = mz_stash::Postgres::new(postgres_url, None, tls)
+            .await
+            .expect("could not connect to postgres storage stash");
+        let stash = mz_stash::Memory::new(stash);
         Self {
-            client,
+            clients: BTreeMap::default(),
             collections: BTreeMap::default(),
             stash,
+            persist_handles: BTreeMap::default(),
         }
     }
 }
@@ -271,7 +315,7 @@ impl<T> StorageControllerState<T> {
 #[async_trait]
 impl<T> StorageController for Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
@@ -294,80 +338,147 @@ where
     fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError> {
         let collection = self.collection(id)?;
         Ok(CollectionMetadata {
-            timestamp_shard_id: collection.timestamp_shard_id,
             persist_location: self.persist_location.clone(),
+            timestamp_shard_id: collection.timestamp_shard_id,
+            persist_shard: collection.persist_shard,
         })
     }
 
     async fn create_sources(
         &mut self,
-        mut bindings: Vec<(GlobalId, (SourceDesc, Antichain<T>))>,
+        mut ingestions: Vec<IngestionDescription<(), T>>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         // 1. create a dropped source identifier, or
         // 2. create an existing source identifier with a new description.
-        // Make sure to check for errors within `bindings` as well.
-        bindings.sort_by_key(|(id, _)| *id);
-        bindings.dedup();
-        for pos in 1..bindings.len() {
-            if bindings[pos - 1].0 == bindings[pos].0 {
-                return Err(StorageError::SourceIdReused(bindings[pos].0));
+        // Make sure to check for errors within `ingestions` as well.
+        ingestions.sort_by_key(|ingestion| ingestion.id);
+        ingestions.dedup();
+        for pos in 1..ingestions.len() {
+            if ingestions[pos - 1].id == ingestions[pos].id {
+                return Err(StorageError::SourceIdReused(ingestions[pos].id));
             }
         }
-        for (id, description_since) in bindings.iter() {
-            if let Ok(collection) = self.collection(*id) {
-                if &collection.description != description_since {
-                    return Err(StorageError::SourceIdReused(*id));
+        for ingestion in ingestions.iter() {
+            if let Ok(collection) = self.collection(ingestion.id) {
+                let (desc, since) = &collection.description;
+                if (desc, since) != (&ingestion.desc, &ingestion.since) {
+                    return Err(StorageError::SourceIdReused(ingestion.id));
                 }
             }
         }
 
-        let mut dataflow_commands = vec![];
+        let mut external_ingestions = vec![];
 
         // Install collection state for each bound source.
-        for (id, (desc, since)) in bindings {
-            let read_handle = desc.connector.get_read_handle::<T>().await.map_err(|e| {
-                StorageError::ClientError(anyhow!("external persist error: {:?}", e))
-            })?;
-
-            // If we got a persist read handle the since we get from coord is meaningless. It's
-            // most likely `T::minimum()`, which is just the coordinator telling us that it _hopes_
-            // that this is the since. We can go to the source (ha!) of the information.
-            let since = read_handle
-                .as_ref()
-                .map(|read| read.since().clone())
-                .unwrap_or(since);
-
-            let read_handle = read_handle.map(|read| {
-                Box::new(ReadHandleWrapper { read_handle: read })
-                    as Box<dyn CollectionReadHandle<T>>
-            });
+        for ingestion in ingestions {
+            // TODO(petrosagg): durably record the persist shard we mint here
+            let persist_shard = ShardId::new();
+            let (write, read) = self
+                .persist_client
+                .open(persist_shard)
+                .await
+                .expect("invalid persist usage");
+            self.state
+                .persist_handles
+                .insert(ingestion.id, PersistHandles { read, write });
 
             let timestamp_shard_id = TypedCollection::new("timestamp-shard-id")
-                .insert_without_overwrite(&mut self.state.stash, &id, ShardId::new())
+                .insert_without_overwrite(&mut self.state.stash, &ingestion.id, ShardId::new())
                 .await?;
 
-            let collection_state =
-                CollectionState::new(desc.clone(), since.clone(), read_handle, timestamp_shard_id);
-            self.state.collections.insert(id, collection_state);
+            let collection_state = CollectionState::new(
+                ingestion.desc.clone(),
+                ingestion.since.clone(),
+                persist_shard,
+                timestamp_shard_id,
+            );
 
-            let storage_metadata = self.collection_metadata(id)?;
+            self.state
+                .collections
+                .insert(ingestion.id, collection_state);
 
-            let command = CreateSourceCommand {
-                id,
-                desc,
-                since,
-                storage_metadata,
-            };
-
-            dataflow_commands.push(command);
+            // TODO(petrosagg): it's weird that tables go through this path and we filter them
+            // manually. Think how to make better types to reflect their differences
+            if matches!(ingestion.desc.connection, SourceConnection::External { .. }) {
+                external_ingestions.push(ingestion);
+            }
         }
 
-        self.state
-            .client
-            .send(StorageCommand::CreateSources(dataflow_commands))
-            .await
-            .expect("Storage command failed; unrecoverable");
+        // Here we create a new storaged process to handle each new source. Each
+        // ingestion is augmented with the collection metadata.
+        for ingestion in external_ingestions {
+            let mut source_imports = BTreeMap::new();
+            for (id, _) in ingestion.source_imports {
+                let metadata = self.collection_metadata(id)?;
+                source_imports.insert(id, metadata);
+            }
+
+            let augmented_ingestion = IngestionDescription {
+                source_imports,
+                // The rest of the fields are identical
+                id: ingestion.id,
+                desc: ingestion.desc,
+                since: ingestion.since,
+                storage_metadata: self.collection_metadata(ingestion.id)?,
+            };
+
+            let storage_service = self
+                .orchestrator
+                .ensure_service(
+                    &ingestion.id.to_string(),
+                    ServiceConfig {
+                        image: self.storaged_image.clone(),
+                        args: &|assigned| {
+                            vec![
+                                format!("--workers=1"),
+                                format!(
+                                    "--listen-addr={}:{}",
+                                    assigned.listen_host, assigned.ports["controller"]
+                                ),
+                                format!(
+                                    "--internal-http-listen-addr={}:{}",
+                                    assigned.listen_host, assigned.ports["internal-http"]
+                                ),
+                                format!("--opentelemetry-resource=storage_id={}", ingestion.id),
+                            ]
+                        },
+                        ports: vec![
+                            ServicePort {
+                                name: "controller".into(),
+                                port_hint: 2100,
+                            },
+                            ServicePort {
+                                name: "internal-http".into(),
+                                port_hint: 6877,
+                            },
+                        ],
+                        // TODO: limits?
+                        cpu_limit: None,
+                        memory_limit: None,
+                        scale: NonZeroUsize::new(1).unwrap(),
+                        labels: HashMap::new(),
+                        availability_zone: None,
+                    },
+                )
+                .await?;
+
+            // TODO: don't block waiting for a connection. Put a queue in the
+            // middle instead.
+            let mut client = Box::new({
+                let addr = storage_service.addresses("controller").into_element();
+                let mut client = StoragedRemoteClient::new(&[addr]);
+                client.connect().await;
+                client
+            });
+
+            client
+                .send(StorageCommand::CreateSources(vec![augmented_ingestion]))
+                .await
+                .expect("Storage command failed; unrecoverable");
+
+            self.state.clients.insert(ingestion.id, client);
+        }
 
         Ok(())
     }
@@ -382,22 +493,77 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn append(
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
-        for (id, updates, upper) in commands.iter() {
-            for update in updates {
-                if !update.timestamp.less_than(upper) {
-                    return Err(StorageError::UpdateBeyondUpper(*id));
+        let mut updates_by_id = HashMap::new();
+
+        for (id, updates, batch_upper) in commands {
+            for update in &updates {
+                if !update.timestamp.less_than(&batch_upper) {
+                    return Err(StorageError::UpdateBeyondUpper(id));
                 }
             }
+
+            let (total_updates, new_upper) = updates_by_id
+                .entry(id)
+                .or_insert_with(|| (Vec::new(), T::minimum()));
+            total_updates.push(updates);
+            new_upper.join_assign(&batch_upper);
         }
-        self.state
-            .client
-            .send(StorageCommand::Append(commands))
-            .await
-            .map_err(StorageError::from)
+
+        let mut appends_by_id = HashMap::new();
+        for (id, (updates, upper)) in updates_by_id {
+            let current_upper = self.collection(id)?.write_frontier.frontier().to_owned();
+            appends_by_id.insert(id, (updates.into_iter().flatten(), current_upper, upper));
+        }
+
+        let futs = FuturesUnordered::new();
+
+        // We cannot iterate through the updates and then set off a persist call
+        // on the write handle because we cannot mutably borrow the write handle
+        // multiple times.
+        //
+        // Instead, we first group the update by ID above and then iterate
+        // through all available write handles and see if there are any updates
+        // for it. If yes, we send them all in one go.
+        for (id, persist_handle) in self.state.persist_handles.iter_mut() {
+            let (updates, upper, new_upper) = match appends_by_id.remove(id) {
+                Some(updates) => updates,
+                None => continue,
+            };
+
+            let new_upper = Antichain::from_elem(new_upper);
+
+            let updates = updates
+                .into_iter()
+                .map(|u| ((SourceData(Ok(u.row)), ()), u.timestamp, u.diff));
+
+            let write = &mut persist_handle.write;
+
+            futs.push(async move {
+                write
+                    .compare_and_append(updates, upper.clone(), new_upper.clone())
+                    .await
+                    .expect("cannot append updates")
+                    .expect("cannot append updates")
+                    .or(Err(StorageError::InvalidUpper(*id)))?;
+
+                let mut change_batch = ChangeBatch::new();
+                change_batch.extend(new_upper.iter().cloned().map(|t| (t, 1)));
+                change_batch.extend(upper.iter().cloned().map(|t| (t, -1)));
+
+                Ok::<_, StorageError>((*id, change_batch))
+            })
+        }
+
+        let change_batches = futs.try_collect::<Vec<_>>().await?;
+
+        self.update_write_frontiers(&change_batches).await?;
+
+        Ok(())
     }
 
     async fn set_read_policy(
@@ -431,6 +597,7 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn update_write_frontiers(
         &mut self,
         updates: &[(GlobalId, ChangeBatch<T>)],
@@ -466,59 +633,97 @@ where
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn update_read_capabilities(
         &mut self,
         updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
     ) -> Result<(), StorageError> {
         // Location to record consequences that we need to act on.
-        let mut storage_net = Vec::default();
+        let mut storage_net = HashMap::new();
         // Repeatedly extract the maximum id, and updates for it.
         while let Some(key) = updates.keys().rev().next().cloned() {
             let mut update = updates.remove(&key).unwrap();
             if let Ok(collection) = self.collection_mut(key) {
                 let changes = collection.read_capabilities.update_iter(update.drain());
                 update.extend(changes);
-                storage_net.push((key, update));
+
+                let (changes, frontier) = storage_net
+                    .entry(key)
+                    .or_insert_with(|| (ChangeBatch::new(), Antichain::new()));
+
+                changes.extend(update.drain());
+                *frontier = collection.read_capabilities.frontier().to_owned();
             } else {
                 // This is confusing and we should probably error.
                 panic!("Unknown collection identifier {}", key);
             }
         }
 
-        // Translate our net compute actions into `AllowCompaction` commands.
-        let mut compaction_commands = Vec::new();
-        for (id, change) in storage_net.iter_mut() {
-            if !change.is_empty() {
-                let frontier = self
-                    .collection(*id)
-                    .unwrap()
-                    .read_capabilities
-                    .frontier()
-                    .to_owned();
+        // Translate our net compute actions into `AllowCompaction` commands and
+        // downgrade persist sinces.
 
-                compaction_commands.push((*id, frontier.clone()));
+        let futs = FuturesUnordered::new();
 
-                let collection = self.collection_mut(*id).unwrap();
-                if let Some(read) = collection.read_handle.as_mut() {
-                    read.downgrade_since(frontier).await?;
+        // We cannot iterate through the changes and then set off a persist call
+        // on the read handle because we cannot mutably borrow the read handle
+        // multiple times.
+        //
+        // Instead, we iterate through all available read handles and see if
+        // there are any changes for it. If yes, we downgrade.
+        for (id, persist_handle) in self.state.persist_handles.iter_mut() {
+            let (mut changes, frontier) = match storage_net.remove(id) {
+                Some(changes) => changes,
+                None => continue,
+            };
+            if changes.is_empty() {
+                continue;
+            }
+
+            let fut = async move {
+                persist_handle.read.downgrade_since(frontier.clone()).await;
+                (*id, frontier)
+            };
+
+            futs.push(fut);
+        }
+
+        let compaction_commands = futs.collect::<Vec<_>>().await;
+
+        for (id, frontier) in compaction_commands {
+            if let Some(client) = self.state.clients.get_mut(&id) {
+                client
+                    .send(StorageCommand::AllowCompaction(vec![(
+                        id,
+                        frontier.clone(),
+                    )]))
+                    .await?;
+
+                if frontier.is_empty() {
+                    self.state.clients.remove(&id);
+                    self.orchestrator.drop_service(&id.to_string()).await?;
                 }
             }
         }
 
-        if !compaction_commands.is_empty() {
-            self.state
-                .client
-                .send(StorageCommand::AllowCompaction(compaction_commands))
-                .await
-                .expect(
-                    "Failed to send storage command; aborting as compute instance state corrupted",
-                );
-        }
         Ok(())
     }
 
     async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
-        self.state.client.recv().await
+        if self.state.clients.is_empty() {
+            // If there are no clients, block forever. This signals that there
+            // may be more work to do (e.g., if this future is dropped and
+            // `create_sources` is called). Awaiting the stream map would
+            // return `None`, which would incorrectly indicate the completion
+            // of the stream.
+            return future::pending().await;
+        }
+        let mut clients = self
+            .state
+            .clients
+            .iter_mut()
+            .map(|(id, client)| (id, client.as_stream()))
+            .collect::<StreamMap<_, _>>();
+        clients.next().await.map(|(_id, res)| res).transpose()
     }
 
     /// "Linearize" the listed sources.
@@ -541,19 +746,25 @@ where
 
 impl<T> Controller<T>
 where
-    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64,
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
 {
     /// Create a new storage controller from a client it should wrap.
-    pub fn new(
-        client: Box<dyn StorageClient<T>>,
-        state_dir: PathBuf,
+    pub async fn new(
+        postgres_url: String,
         persist_location: PersistLocation,
+        orchestrator: Arc<dyn NamespacedOrchestrator>,
+        storaged_image: String,
     ) -> Self {
+        let persist_client = persist_location.open().await.unwrap();
+
         Self {
-            state: StorageControllerState::new(client, state_dir),
+            state: StorageControllerState::new(postgres_url).await,
             persist_location,
+            persist_client,
+            orchestrator,
+            storaged_image,
         }
     }
 
@@ -589,14 +800,20 @@ pub struct CollectionState<T> {
     /// equal to `write_frontier.frontier()`.
     pub write_frontier: MutableAntichain<T>,
 
-    /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
-    /// since frontier and we need to downgrade that when the read capabilities change.
-    // TODO(aljoscha): Once all sources are wired up to go through persist/STORAGE, this will stop
-    // being optional
-    pub read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
     // TODO: only makes sense for collections that are ingested so maybe should live elsewhere?
     /// The persist shard id of the remap collection used to reclock this collection
     pub timestamp_shard_id: ShardId,
+
+    /// The persist shard containing the contents of this storage collection
+    pub persist_shard: ShardId,
+}
+
+#[derive(Debug)]
+pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
+    /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
+    /// since frontier and we need to downgrade that when the read capabilities change.
+    read: ReadHandle<SourceData, (), T, Diff>,
+    write: WriteHandle<SourceData, (), T, Diff>,
 }
 
 impl<T: Timestamp> CollectionState<T> {
@@ -604,7 +821,7 @@ impl<T: Timestamp> CollectionState<T> {
     pub fn new(
         description: SourceDesc,
         since: Antichain<T>,
-        read_handle: Option<Box<dyn CollectionReadHandle<T>>>,
+        persist_shard: ShardId,
         timestamp_shard_id: ShardId,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -615,30 +832,8 @@ impl<T: Timestamp> CollectionState<T> {
             implied_capability: since.clone(),
             read_policy: ReadPolicy::ValidFrom(since),
             write_frontier: MutableAntichain::new_bottom(Timestamp::minimum()),
-            read_handle,
             timestamp_shard_id,
+            persist_shard,
         }
-    }
-}
-
-/// A type that hides the details of a real persist read handle and only exposes the methods that
-/// the controller needs to know about.
-#[async_trait]
-pub trait CollectionReadHandle<T>: Send + Sync + Debug {
-    /// Forwards the since frontier of this handle, giving up the ability to
-    /// read at times not greater or equal to `new_since`.
-    async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError>;
-}
-
-#[derive(Debug)]
-struct ReadHandleWrapper<T: Timestamp + Lattice + Codec64> {
-    read_handle: ReadHandle<Row, Row, T, Diff>,
-}
-
-#[async_trait]
-impl<T: Timestamp + Lattice + Codec64> CollectionReadHandle<T> for ReadHandleWrapper<T> {
-    async fn downgrade_since(&mut self, since: Antichain<T>) -> Result<(), StorageError> {
-        self.read_handle.downgrade_since(since).await;
-        Ok(())
     }
 }

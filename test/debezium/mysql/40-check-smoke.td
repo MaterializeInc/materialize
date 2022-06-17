@@ -25,9 +25,10 @@ $ schema-registry-wait-schema schema=mysql.transaction-value
 
 > CREATE MATERIALIZED SOURCE t1
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'mysql.test.t1'
-  WITH (tx_metadata = mysql_tx_metadata, tx_metadata_collection_name='test.t1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM;
+  ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (SOURCE mysql_tx_metadata, COLLECTION 'test.t1')
+  );
 
 > SELECT * FROM t1;
 123 123

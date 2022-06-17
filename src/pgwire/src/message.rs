@@ -366,7 +366,6 @@ impl ErrorResponse {
             CoordError::Catalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::ChangedPlan => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::ConstrainedParameter { .. } => SqlState::INVALID_PARAMETER_VALUE,
-            CoordError::AutomaticTimestampFailure { .. } => SqlState::INTERNAL_ERROR,
             CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
                 SqlState::PROGRAM_LIMIT_EXCEEDED
@@ -381,6 +380,7 @@ impl ErrorResponse {
             CoordError::FixedValueParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::Internal(_) => SqlState::INTERNAL_ERROR,
+            CoordError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::InvalidRematerialization { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
@@ -391,10 +391,12 @@ impl ErrorResponse {
             CoordError::NoClusterReplicasAvailable(_) => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
+            CoordError::PlanError(_) => SqlState::INTERNAL_ERROR,
             CoordError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             CoordError::QGM(_) => SqlState::INTERNAL_ERROR,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            CoordError::StatementTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
             CoordError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
             CoordError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
@@ -417,7 +419,6 @@ impl ErrorResponse {
             // code, so it's probably the best choice.
             CoordError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::MultiTableWriteTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            CoordError::SecretsOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
         };
         ErrorResponse {
             severity,

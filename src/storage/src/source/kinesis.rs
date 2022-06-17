@@ -21,16 +21,19 @@ use prometheus::core::AtomicI64;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
-use mz_dataflow_types::aws::AwsExternalId;
+use mz_dataflow_types::connections::aws::AwsExternalIdPrefix;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{ExternalSourceConnector, KinesisSourceConnector, MzOffset};
-use mz_dataflow_types::{ConnectorContext, SourceErrorDetails};
+use mz_dataflow_types::sources::{ExternalSourceConnection, KinesisSourceConnection, MzOffset};
+use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
 use mz_repr::GlobalId;
 
 use crate::source::metrics::KinesisMetrics;
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{
+    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
+};
 
 /// To read all data from a Kinesis stream, we need to continually update
 /// our knowledge of the stream's shards by calling the ListShards API.
@@ -54,9 +57,9 @@ pub struct KinesisSourceReader {
     /// TODO(natacha): this should be moved to timestamper
     last_checked_shards: Instant,
     /// Storage for messages that have not yet been timestamped
-    buffered_messages: VecDeque<SourceMessage<(), Option<Vec<u8>>>>,
+    buffered_messages: VecDeque<SourceMessage<(), Option<Vec<u8>>, ()>>,
     /// Count of processed message
-    processed_message_count: i64,
+    processed_message_count: u64,
     /// Metrics from which per-shard metrics get created.
     base_metrics: KinesisMetrics,
 }
@@ -119,28 +122,30 @@ impl KinesisSourceReader {
 impl SourceReader for KinesisSourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     fn new(
         _source_name: String,
-        _source_id: GlobalId,
+        source_id: GlobalId,
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
+        connection: ExternalSourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
-        connector_context: ConnectorContext,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let kc = match connector {
-            ExternalSourceConnector::Kinesis(kc) => kc,
+        let kc = match connection {
+            ExternalSourceConnection::Kinesis(kc) => kc,
             _ => unreachable!(),
         };
 
         let state = block_on(create_state(
             &metrics.kinesis,
             kc,
-            connector_context.aws_external_id.as_ref(),
+            connection_context.aws_external_id_prefix.as_ref(),
+            source_id,
         ));
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceReader {
@@ -158,7 +163,7 @@ impl SourceReader for KinesisSourceReader {
     }
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
@@ -171,7 +176,7 @@ impl SourceReader for KinesisSourceReader {
         }
 
         if let Some(message) = self.buffered_messages.pop_front() {
-            Ok(NextMessage::Ready(message))
+            Ok(NextMessage::Ready(SourceMessageType::Finalized(message)))
         } else {
             // Rotate through all of a stream's shards, start with a new shard on each activation.
             if let Some((shard_id, mut shard_iterator)) = self.shard_queue.pop_front() {
@@ -247,6 +252,7 @@ impl SourceReader for KinesisSourceReader {
                             key: (),
                             value: Some(data),
                             headers: None,
+                            specific_diff: (),
                         };
                         self.buffered_messages.push_back(source_message);
                     }
@@ -254,7 +260,7 @@ impl SourceReader for KinesisSourceReader {
                 }
             }
             Ok(match self.buffered_messages.pop_front() {
-                Some(message) => NextMessage::Ready(message),
+                Some(message) => NextMessage::Ready(SourceMessageType::Finalized(message)),
                 None => NextMessage::Pending,
             })
         }
@@ -265,8 +271,9 @@ impl SourceReader for KinesisSourceReader {
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 async fn create_state(
     base_metrics: &KinesisMetrics,
-    c: KinesisSourceConnector,
-    aws_external_id: Option<&AwsExternalId>,
+    c: KinesisSourceConnection,
+    aws_external_id_prefix: Option<&AwsExternalIdPrefix>,
+    source_id: GlobalId,
 ) -> Result<
     (
         KinesisClient,
@@ -276,7 +283,7 @@ async fn create_state(
     ),
     anyhow::Error,
 > {
-    let config = c.aws.load(aws_external_id).await;
+    let config = c.aws.load(aws_external_id_prefix, Some(&source_id)).await;
     let kinesis_client = aws_sdk_kinesis::Client::new(&config);
 
     let shard_set = mz_kinesis_util::get_shard_ids(&kinesis_client, &c.stream_name).await?;
