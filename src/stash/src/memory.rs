@@ -167,9 +167,11 @@ impl<S: Stash> Stash for Memory<S> {
             })
             .collect();
         self.stash.update_many(collection, entries).await?;
-        let entry = self.entries.entry(collection.id).or_insert_with(Vec::new);
-        entry.extend(local_entries);
-        self.consolidate_collection(collection).await?;
+        // Only update the memory cache if it's already present.
+        if let Some(entry) = self.entries.get_mut(&collection.id) {
+            entry.extend(local_entries);
+            self.consolidate_collection(collection).await?;
+        }
         Ok(())
     }
 
@@ -302,15 +304,14 @@ impl<S: Append> Append for Memory<S> {
         let batches: Vec<_> = batches.into_iter().collect();
         self.stash.append(batches.clone()).await?;
         for batch in batches {
-            let entry = self
-                .entries
-                .entry(batch.collection_id)
-                .or_insert_with(Vec::new);
-            entry.extend(batch.entries);
             self.uppers.insert(batch.collection_id, batch.upper);
             self.sinces
                 .insert(batch.collection_id, batch.compact.clone());
-            self.consolidate_id(&batch.collection_id, batch.compact);
+            // Only update the memory cache if it's already present.
+            if let Some(entry) = self.entries.get_mut(&batch.collection_id) {
+                entry.extend(batch.entries);
+                self.consolidate_id(&batch.collection_id, batch.compact);
+            }
         }
         Ok(())
     }
