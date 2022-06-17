@@ -123,8 +123,10 @@ After a restart the Coordinator must reestablish the global timestamp to some va
 of the previous global timestamp before the restart. This ensures that a read or write after the restart is assigned a
 timestamp greater than or equal to all reads and writes before the restart.
 
-Everytime the global timestamp is increased, the global write timestamp will be saved in the catalog. When Materialize
-restarts, it will read this timestamp and use it as the global read timestamp.
+Proposal: Use a [Percolator](https://storage.googleapis.com/pub-tools-public-publication-data/pdf/36726.pdf) inspired
+timestamp recovery protocol (See section 2.3 Timestamps). Periodically we durably store some value greater than the
+current global timestamp. We never allocate a timestamp larger than the one durably stored, without first updating the
+durably stored timestamp. When Materialize restarts, it uses a value one larger than the value durably stored.
 
 The properties described in this section and the [Global Timestamp](#Global Timestamp) section are sufficient to ensure
 Strict Serializability across restarts.
