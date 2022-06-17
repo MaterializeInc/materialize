@@ -28,7 +28,7 @@ service ProtoCompute {
 
 message ProtoInstanceConfig {
     mz_dataflow_types.logging.ProtoLoggingConfig logging = 1;
-    int64 replica_id = 2;
+    uint64 replica_id = 2;
 }
 
 message ProtoPeek {
@@ -38,7 +38,7 @@ message ProtoPeek {
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
-    optional int64 target_replica = 7;
+    optional uint64 target_replica = 7;
     map<string, string> otel_ctx = 8;
 }
 

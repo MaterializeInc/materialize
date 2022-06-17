@@ -100,10 +100,10 @@ name
 ----
 materialize
 
-> SELECT id, name FROM mz_databases
-id          name
------------------------
-1           materialize
+> SELECT name FROM mz_databases
+name
+-----------
+materialize
 
 # Creating a database should be reflected in the output of SHOW DATABASES.
 > CREATE DATABASE d
@@ -122,11 +122,11 @@ $ psql-execute command="\l"
  materialize |       | UTF8     | C       | C     |
 
 
-> SELECT id, name FROM mz_databases
-id          name
------------------------
-1           materialize
-2           d
+> SELECT name FROM mz_databases
+name
+-----------
+materialize
+d
 
 # The same catalog information should be accessible with any amount of
 # database or schema qualification.
@@ -266,10 +266,10 @@ name
 ----
 materialize
 
-> SELECT id, name FROM mz_databases
-id          name
------------------------
-1           materialize
+> SELECT name FROM mz_databases
+name
+-----------
+materialize
 
 # The session database should remain set to the dropped database, but future
 # queries that depend on the session database should fail with sensible error
@@ -338,12 +338,12 @@ name
 d
 d2
 materialize
-> SELECT id, name FROM mz_databases
-id          name
------------------------
-1           materialize
-2           d
-4           d2
+> SELECT name FROM mz_databases
+name
+-----------
+materialize
+d
+d2
 
 > SHOW VIEWS FROM d2.public;
  name

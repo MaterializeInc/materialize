@@ -20,7 +20,6 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.21"
 mz-ore = { path = "../ore" }
 mz-persist-types = { path = "../persist-types" }
-num = "0.4.0"
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 rand = "0.8.5"
 rusqlite = { version = "0.27.0", features = ["bundled"] }

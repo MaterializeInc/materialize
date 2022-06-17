@@ -491,9 +491,6 @@ where
 
 async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> {
     const TABLE: TypedCollection<Vec<u8>, String> = TypedCollection::new("table");
-    fn numeric_identity(k: &Vec<u8>) -> i64 {
-        i64::from_le_bytes(k.clone().try_into().unwrap())
-    }
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
     }
@@ -518,11 +515,7 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     TABLE
         .upsert(stash, vec![(2i64.to_le_bytes().to_vec(), "v2".to_string())])
         .await?;
-    let mut table = TableTransaction::new(
-        TABLE.peek_one(stash).await?,
-        Some(numeric_identity),
-        uniqueness_violation,
-    );
+    let mut table = TableTransaction::new(TABLE.peek_one(stash).await?, uniqueness_violation);
     assert_eq!(
         table.items(),
         BTreeMap::from([
@@ -540,15 +533,12 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
 
     // Uniqueness violation.
     table
-        .insert(|id| id.unwrap().to_le_bytes().to_vec(), "v3".to_string())
+        .insert(3i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap_err();
 
-    assert_eq!(
-        table
-            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "v4".to_string())
-            .unwrap(),
-        Some(3)
-    );
+    table
+        .insert(3i64.to_le_bytes().to_vec(), "v4".to_string())
+        .unwrap();
     assert_eq!(
         table.items(),
         BTreeMap::from([
@@ -583,27 +573,27 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         ])
     );
 
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     // Deleting then creating an item that has a uniqueness violation should work.
     assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
     // Uniqueness violation in value.
     table
-        .insert(|_| 5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap_err();
     // Key already exists, expect error.
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap_err();
     assert_eq!(table.delete(|k, _v| k == &1i64.to_le_bytes()).len(), 1);
     // Both the inserts work now because the key and uniqueness violation are gone.
     table
-        .insert(|_| 5i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(5i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();
     let pending = table.pending();
     assert_eq!(
@@ -625,10 +615,10 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         ])
     );
 
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     assert_eq!(table.delete(|_k, _v| true).len(), 3);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v1".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v1".to_string())
         .unwrap();
 
     commit(stash, collection, table.pending()).await?;
@@ -638,10 +628,10 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "v1".to_string()),])
     );
 
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v2".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v2".to_string())
         .unwrap();
     commit(stash, collection, table.pending()).await?;
     let items = TABLE.peek_one(stash).await?;
@@ -651,17 +641,17 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
     );
 
     // Verify we don't try to delete v3 or v4 during commit.
-    let mut table = TableTransaction::new(items, Some(numeric_identity), uniqueness_violation);
+    let mut table = TableTransaction::new(items, uniqueness_violation);
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v3".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v3".to_string())
         .unwrap();
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v4".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v4".to_string())
         .unwrap_err();
     assert_eq!(table.delete(|_k, _v| true).len(), 1);
     table
-        .insert(|_| 1i64.to_le_bytes().to_vec(), "v5".to_string())
+        .insert(1i64.to_le_bytes().to_vec(), "v5".to_string())
         .unwrap();
     commit(stash, collection, table.pending()).await?;
     let items = stash.peek(collection).await?;
@@ -675,28 +665,18 @@ async fn test_stash_table(stash: &mut impl Append) -> Result<(), anyhow::Error> 
 
 #[test]
 fn test_table() {
-    fn numeric_identity(k: &Vec<u8>) -> i64 {
-        i64::from_le_bytes(k.clone().try_into().unwrap())
-    }
     fn uniqueness_violation(a: &String, b: &String) -> bool {
         a == b
     }
     let mut table = TableTransaction::new(
         BTreeMap::from([(1i64.to_le_bytes().to_vec(), "a".to_string())]),
-        Some(numeric_identity),
         uniqueness_violation,
     );
-    // Test the auto-increment id.
-    assert_eq!(
-        table
-            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "b".to_string())
-            .unwrap(),
-        Some(2)
-    );
-    assert_eq!(
-        table
-            .insert(|id| id.unwrap().to_le_bytes().to_vec(), "c".to_string())
-            .unwrap(),
-        Some(3)
-    );
+
+    table
+        .insert(2i64.to_le_bytes().to_vec(), "b".to_string())
+        .unwrap();
+    table
+        .insert(3i64.to_le_bytes().to_vec(), "c".to_string())
+        .unwrap();
 }

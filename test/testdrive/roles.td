@@ -11,8 +11,8 @@ $ set-sql-timeout duration=1s
 
 # Verify initial roles.
 > SELECT id, name FROM mz_roles
--1 mz_system
- 1 materialize
+0 mz_system
+1 materialize
 
 # Verify that invalid options are rejected.
 ! CREATE ROLE foo
@@ -28,37 +28,37 @@ contains:conflicting or redundant options
 > CREATE ROLE rj LOGIN SUPERUSER
 > CREATE USER fms SUPERUSER
 > SELECT id, name FROM mz_roles
--1 mz_system
- 1 materialize
- 2 rj
- 3 fms
+0 mz_system
+1 materialize
+2 rj
+3 fms
 
 # Dropping multiple roles should not have any effect if one of the role names
 # is bad...
 ! DROP ROLE rj, fms, bad
 contains:unknown role 'bad'
 > SELECT id, name FROM mz_roles
--1 mz_system
- 1 materialize
- 2 rj
- 3 fms
+0 mz_system
+1 materialize
+2 rj
+3 fms
 
 # ...unless IF EXISTS is specified.
 > DROP ROLE IF EXISTS rj, fms, bad
 > SELECT id, name FROM mz_roles
--1 mz_system
- 1 materialize
+0 mz_system
+1 materialize
 
 # Verify that the single name version of DROP ROLE works too.
 > CREATE ROLE nlb LOGIN SUPERUSER
 > SELECT id, name FROM mz_roles
--1 mz_system
- 1 materialize
- 2 nlb
+0 mz_system
+1 materialize
+4 nlb
 > DROP ROLE nlb
 > SELECT id, name FROM mz_roles
--1 mz_system
- 1 materialize
+0 mz_system
+1 materialize
 > DROP ROLE IF EXISTS nlb
 
 # No dropping the current role.

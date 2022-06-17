@@ -14,11 +14,10 @@ use anyhow::bail;
 use axum::routing;
 use mz_compute::server::CommunicationConfig;
 use once_cell::sync::Lazy;
-use tokio::select;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::{ComputeClient, ComputeCommand, ComputeResponse, GenericClient};
+use mz_dataflow_types::client::ComputeClient;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::reconciliation::command::ComputeCommandReconcile;
 use mz_orchestrator_tracing::TracingCliArgs;
@@ -175,7 +174,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
 
-    let serve_config = ServeConfig {
+    let serve_config = mz_dataflow_types::client::tcp::ServeConfig {
         listen_addr: args.listen_addr,
         linger: args.linger,
     };
@@ -186,55 +185,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         client = Box::new(ComputeCommandReconcile::new(client))
     }
 
-    serve(serve_config, client).await
-}
-
-struct ServeConfig {
-    listen_addr: String,
-    linger: bool,
-}
-
-async fn serve<G>(config: ServeConfig, mut client: G) -> Result<(), anyhow::Error>
-where
-    G: GenericClient<ComputeCommand, ComputeResponse>,
-{
-    let mut grpc_serve = mz_dataflow_types::client::tcp::grpc_computed_server(config.listen_addr);
-
-    loop {
-        // This select implies that the .recv functions of the clients must be cancellation safe.
-        loop {
-            select! {
-                res = grpc_serve.recv() => {
-                    match res {
-                        Ok(cmd) => client.send(cmd).await.unwrap(),
-                        Err(err) => {
-                            tracing::warn!("Lost connection: {}", err);
-                            break;
-                        }
-                    }
-                },
-                res = client.recv() => {
-                    match res.unwrap() {
-                        None => { },
-                        Some(response) => {
-                            match grpc_serve.send(response).await {
-                                Ok(_) =>  { } ,
-                                Err(err) => {
-                                    tracing::warn!("Lost connection: {}", err);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                },
-            }
-        }
-        if !config.linger {
-            tracing::info!("coordinator connection gone; terminating");
-            break;
-        }
-        tracing::info!("coordinator connection gone; waiting for reconnect");
-    }
-
-    Ok(())
+    mz_dataflow_types::client::tcp::serve(
+        serve_config,
+        client,
+        mz_dataflow_types::client::tcp::ProtoComputeServer::new,
+    )
+    .await
 }

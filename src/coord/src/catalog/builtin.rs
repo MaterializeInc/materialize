@@ -104,7 +104,7 @@ pub struct BuiltinFunc {
 
 pub struct BuiltinRole {
     pub name: &'static str,
-    pub id: i64,
+    pub id: u64,
 }
 
 pub trait Fingerprint {
@@ -1971,7 +1971,7 @@ WHERE false",
 
 pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
     name: "mz_system",
-    id: -1,
+    id: 0,
 };
 
 pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
