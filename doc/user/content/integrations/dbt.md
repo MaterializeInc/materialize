@@ -17,7 +17,7 @@ The `dbt-materialize` adapter can only be used with dbt Core. We are working wit
 
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for data transformation ("the T in ELT"). It combines the accessibility of SQL with software engineering best practices, allowing you to not only build reliable data pipelines, but also document, test and version-control them.
 
-Materialize integrates with dbt through the `dbt-materialize` adapter. The adapter implements custom materializations and macros to **build**, **run** and **version-control** models that transform streaming data in real time. In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
+In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time — from model building to continuous testing.
 
 ## Setup
 
