@@ -53,7 +53,7 @@ protobuf-src = "1.0.4"
 rand = "0.8.5"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.5.6"
-reqwest = { version = "0.11.10", features = ["native-tls-vendored"] }
+reqwest = { version = "0.11.11", features = ["native-tls-vendored"] }
 serde = "1.0.137"
 serde_json = { version = "1.0.81", features = ["raw_value"] }
 similar = "2.1.0"
