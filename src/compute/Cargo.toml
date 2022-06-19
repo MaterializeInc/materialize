@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.57"
 axum = "0.5.7"
 clap = { version = "3.1.18", features = ["derive", "env"] }
-crossbeam-channel = "0.5.4"
+crossbeam-channel = "0.5.5"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }

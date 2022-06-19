@@ -16,7 +16,7 @@ aws-sdk-s3 = { version = "0.13.0", default-features = false, features = ["native
 aws-sdk-sqs = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
 bincode = { version = "1.3.3", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
-crossbeam-channel = { version = "0.5.4", optional = true }
+crossbeam-channel = { version = "0.5.5", optional = true }
 csv-core = { version = "0.1.10", optional = true }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
