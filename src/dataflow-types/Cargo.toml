@@ -50,7 +50,7 @@ tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-stream = "0.1.9"
 tokio-util = { version = "0.7.3", features = ["codec"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tower = "0.4.12"
+tower = "0.4.13"
 tracing = "0.1.35"
 tracing-subscriber = "0.3.11"
 url = { version = "2.2.2", features = ["serde"] }
