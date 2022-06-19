@@ -11,7 +11,7 @@ anyhow = "1.0.57"
 flate2 = "1.0.24"
 hex = "0.4.3"
 hex-literal = "0.3.4"
-reqwest = { version = "0.11.10", features = ["blocking", "native-tls-vendored"] }
+reqwest = { version = "0.11.11", features = ["blocking", "native-tls-vendored"] }
 sha2 = "0.10.2"
 tar = "0.4.38"
 walkdir = "2.3.2"
