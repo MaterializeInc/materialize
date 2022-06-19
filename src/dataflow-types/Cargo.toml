@@ -15,7 +15,7 @@ aws-smithy-http = "0.43.0"
 aws-types = { version = "0.13.0", features = ["hardcoded-credentials"] }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.4"
+crossbeam-channel = "0.5.5"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
