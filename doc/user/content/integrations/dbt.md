@@ -17,7 +17,7 @@ The `dbt-materialize` adapter can only be used with dbt Core. We are working wit
 
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for data transformation ("the T in ELT"). It combines the accessibility of SQL with software engineering best practices, allowing you to not only build reliable data pipelines, but also document, test and version-control them.
 
-While dbt is a great fit for **batch** transformations, it can only **approximate** transforming streaming data (officially through [incremental models](https://docs.getdbt.com/docs/building-a-dbt-project/building-models/configuring-incremental-models), and unofficially through [lambda views](https://discourse.getdbt.com/t/how-to-create-near-real-time-models-with-just-dbt-sql/1457)). In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
+Materialize integrates with dbt through the `dbt-materialize` adapter. The adapter implements custom materializations and macros to **build**, **run** and **version-control** models that transform streaming data in real time. In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
 
 ## Setup
 
@@ -217,7 +217,77 @@ Because Materialize is optimized for real-time transformations of streaming data
 
 {{% dbt-materializations %}}
 
-## Document and test a dbt project
+## Test and document a dbt project
+
+### Continuous testing
+
+Using dbt in a streaming context means that you're able to run data quality and integrity [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) non-stop, and monitor failures as soon as they happen. This is useful for unit testing during the development of your dbt models, and later in production to trigger **real-time alerts** downstream.
+
+1. To configure your project for continuous testing, add a `tests` property to `dbt_project.yml` with the `store_failures` configuration:
+
+    ```yaml
+    tests:
+      mz_get_started:
+        marts:
+          +store_failures: true
+          +schema: 'etl_failure'
+    ```
+
+    This will instruct dbt to create a materialized view for each configured test that can keep track of failures over time. By default, test views are created in a schema suffixed with `dbt_test__audit`. To specify a custom suffix, use the `schema` config.
+
+    **Note:** As an alternative, you can specify the `--store-failures` flag when running `dbt test`.
+
+1. Add tests to your models using the `tests` property in the model configuration `.yml` files:
+
+    ```yaml
+    models:
+      - name: avg_bid
+        description: 'Computes the average bid price'
+        columns:
+          - name: symbol
+            description: 'The stock ticker'
+            tests:
+              - not_null
+              - unique
+    ```
+
+    The type of test and the columns being tested are used as a base for naming the test materialized views. For example, the configuration above would create views named `not_null_avg_bid_symbol` and `unique_avg_bid_symbol`.
+
+1. Run the tests:
+
+    ```bash
+    dbt test
+    ```
+
+    When configured to `store_failures`, this command will create a materialized view for each test using the respective `SELECT` statements, instead of doing a one-off check for failures as part of its execution.
+
+    This guarantees that your tests keep running in the background as views that are automatically updated as soon as an assertion fails.
+
+1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that the schema storing the tests has been created, as well as the test materialized views:
+
+    ```bash
+    psql -U materialize -h localhost -p 6875 materialize
+    ```
+
+    ```sql
+    materialize=> SHOW SCHEMAS;
+
+           name
+    -------------------
+     public
+     public_etl_failure
+
+     materialize=> SHOW VIEWS FROM public_etl_failure;;
+
+           name
+    -------------------
+     not_null_avg_bid_symbol
+     unique_avg_bid_symbol
+    ```
+
+With continuous testing in place, you can then build alerts off of the test materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms) and [`TAIL`](/sql/tail/) (see the [Python cheatsheet](/integrations/python/#stream) for a reference implementation).
+
+### Documentation
 
 dbt can automatically generate [documentation](https://docs.getdbt.com/docs/building-a-dbt-project/documentation) for your project as a shareable website. This brings **data governance** to your streaming pipelines, speeding up life-saving processes like data discovery (_where_ to find _what_ data) and lineage (the path data takes from source(s) to sink(s), as well as the transformations that happen along the way).
 
@@ -266,11 +336,3 @@ dbt can automatically generate [documentation](https://docs.getdbt.com/docs/buil
     If you click **View Lineage Graph** in the lower right corner, you can even inspect the lineage of your streaming pipelines!
 
     ![dbt lineage graph](https://user-images.githubusercontent.com/23521087/138125450-cf33284f-2a33-4c1e-8bce-35f22685213d.png)
-
-1. Finally, run some [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) on your models:
-
-    ```bash
-    dbt test
-    ```
-
-    Under the hood, dbt creates a `SELECT` query for each test that returns the rows where this assertion is _not_ true; if the test returns zero rows, the assertion passes.
