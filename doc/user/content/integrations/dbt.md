@@ -17,7 +17,7 @@ The `dbt-materialize` adapter can only be used with dbt Core. We are working wit
 
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for data transformation ("the T in ELT"). It combines the accessibility of SQL with software engineering best practices, allowing you to not only build reliable data pipelines, but also document, test and version-control them.
 
-In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
+Materialize integrates with dbt through the `dbt-materialize` adapter. The adapter implements custom materializations and macros to **build**, **run** and **version-control** models that transform streaming data in real time. In this guide, we’ll cover how to use dbt and Materialize to transform streaming data in real time.
 
 ## Setup
 
@@ -217,19 +217,77 @@ Because Materialize is optimized for real-time transformations of streaming data
 
 {{% dbt-materializations %}}
 
-## Test a dbt project
+## Test and document a dbt project
 
-Run [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) on your models to ensure your code is working correctly.
+### Continuous testing
 
-```bash
-dbt test
-```
-Under the hood, dbt creates a `SELECT` query for each test that returns the rows where this assertion is _not_ true; if the test returns zero rows, the assertion passes.
+Using dbt in a streaming context means that you're able to run data quality and integrity [tests](https://docs.getdbt.com/docs/building-a-dbt-project/tests) non-stop, and monitor failures as soon as they happen. This is useful for unit testing during the development of your dbt models, and later in production to trigger **real-time alerts** downstream.
 
-If you set the optional `--store-failures` flag or create a [`store_failures` config](https://docs.getdbt.com/reference/resource-configs/store_failures), dbt will create a materialized view using the test query.
-This view is a continuously updating representation of failures. It allows you to examine failing records *both* as they happen while you are developing your data model, and later in production if an upstream change causes an assertion to fail.
+1. To configure your project for continuous testing, add a `tests` property to `dbt_project.yml` with the `store_failures` configuration:
 
-## Document a dbt project
+    ```yaml
+    tests:
+      mz_get_started:
+        marts:
+          +store_failures: true
+          +schema: 'etl_failure'
+    ```
+
+    This will instruct dbt to create a materialized view for each configured test that can keep track of failures over time. By default, test views are created in a schema suffixed with `dbt_test__audit`. To specify a custom suffix, use the `schema` config.
+
+    **Note:** As an alternative, you can specify the `--store-failures` flag when running `dbt test`.
+
+1. Add tests to your models using the `tests` property in the model configuration `.yml` files:
+
+    ```yaml
+    models:
+      - name: avg_bid
+        description: 'Computes the average bid price'
+        columns:
+          - name: symbol
+            description: 'The stock ticker'
+            tests:
+              - not_null
+              - unique
+    ```
+
+    The type of test and the columns being tested are used as a base for naming the test materialized views. For example, the configuration above would create views named `not_null_avg_bid_symbol` and `unique_avg_bid_symbol`.
+
+1. Run the tests:
+
+    ```bash
+    dbt test
+    ```
+
+    When configured to `store_failures`, this command will create a materialized view for each test using the respective `SELECT` statements, instead of doing a one-off check for failures as part of its execution.
+
+    This guarantees that your tests keep running in the background as views that are automatically updated as soon as an assertion fails.
+
+1. Using a new terminal window, [connect](/integrations/psql/) to Materialize to double-check that the schema storing the tests has been created, as well as the test materialized views:
+
+    ```bash
+    psql -U materialize -h localhost -p 6875 materialize
+    ```
+
+    ```sql
+    materialize=> SHOW SCHEMAS;
+
+           name
+    -------------------
+     public
+     public_etl_failure
+
+     materialize=> SHOW VIEWS FROM public_etl_failure;;
+
+           name
+    -------------------
+     not_null_avg_bid_symbol
+     unique_avg_bid_symbol
+    ```
+
+With continuous testing in place, you can then build alerts off of the test materialized views using any common PostgreSQL-compatible [client library](/integrations/#client-libraries-and-orms) and [`TAIL`](/sql/tail/) (see the [Python cheatsheet](/integrations/python/#stream) for a reference implementation).
+
+### Documentation
 
 dbt can automatically generate [documentation](https://docs.getdbt.com/docs/building-a-dbt-project/documentation) for your project as a shareable website. This brings **data governance** to your streaming pipelines, speeding up life-saving processes like data discovery (_where_ to find _what_ data) and lineage (the path data takes from source(s) to sink(s), as well as the transformations that happen along the way).
 
@@ -259,7 +317,7 @@ dbt can automatically generate [documentation](https://docs.getdbt.com/docs/buil
             description: "The average bid price"
     ```
 
-2. To generate documentation for your project, run:
+1. To generate documentation for your project, run:
 
     ```bash
     dbt docs generate
@@ -267,13 +325,13 @@ dbt can automatically generate [documentation](https://docs.getdbt.com/docs/buil
 
     dbt will grab any additional project information and Materialize catalog metadata, then compile it into `.json` files (`manifest.json` and `catalog.json`, respectively) that can be used to feed the documentation website. You can find the compiled files under `/target`, in the dbt project folder.
 
-3. Launch the documentation website. By default, this command starts a web server on port 8000:
+1. Launch the documentation website. By default, this command starts a web server on port 8000:
 
     ```bash
     dbt docs serve #--port <port>
     ```
 
-4. In a browser, navigate to `localhost:8000`. There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on.
+1. In a browser, navigate to `localhost:8000`. There, you can find an overview of your dbt project, browse existing models and metadata, and in general keep track of what's going on.
 
     If you click **View Lineage Graph** in the lower right corner, you can even inspect the lineage of your streaming pipelines!
 
