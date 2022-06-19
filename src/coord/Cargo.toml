@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.57"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-const_format = "0.2.24"
+const_format = "0.2.25"
 dec = "0.4.8"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
