@@ -34,13 +34,16 @@ use maplit::hashmap;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use timely::order::TotalOrder;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{
-    CpuLimit, MemoryLimit, Orchestrator, ServiceConfig, ServiceEvent, ServicePort,
+    CpuLimit, MemoryLimit, NamespacedOrchestrator, Orchestrator, ServiceConfig, ServiceEvent,
+    ServicePort,
 };
+use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
 use mz_repr::proto::RustType;
 
@@ -53,21 +56,30 @@ use crate::client::{ComputedRemoteClient, GenericClient};
 use crate::logging::LoggingConfig;
 use crate::{TailBatch, TailResponse};
 
-pub use self::compute::{ComputeController, ComputeControllerMut};
-pub use self::storage::{StorageController, StorageControllerState};
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
+
+pub use crate::client::controller::compute::{ComputeController, ComputeControllerMut};
+pub use crate::client::controller::storage::{StorageController, StorageControllerState};
 
 mod compute;
 pub mod storage;
 
-/// Configures an orchestrator for the controller.
-pub struct OrchestratorConfig {
+/// Configures a controller.
+#[derive(Debug, Clone)]
+pub struct ControllerConfig {
     /// The orchestrator implementation to use.
-    pub orchestrator: Box<dyn Orchestrator>,
-    /// The computed image to use when starting new compute instances.
-    pub computed_image: String,
-    /// Whether or not process should die when connection with ADAPTER is lost.
+    pub orchestrator: Arc<dyn Orchestrator>,
+    /// Whether or not storage and compute processes should die when connection
+    /// with their controller is lost.
     pub linger: bool,
+    /// The persist location where all storage collections will be written to.
+    pub persist_location: PersistLocation,
+    /// The stash URL for the storage controller.
+    pub storage_stash_url: String,
+    /// The storaged image to use when starting new storage processes.
+    pub storaged_image: String,
+    /// The computed image to use when starting new compute processes.
+    pub computed_image: String,
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -183,8 +195,10 @@ enum UnderlyingControllerResponse<T> {
 /// referred to as the `dataflow_client` in the coordinator to be very
 /// confusing. We should find the one correct name, and use it everywhere!
 pub struct Controller<T = mz_repr::Timestamp> {
-    orchestrator: OrchestratorConfig,
+    linger: bool,
     storage_controller: Box<dyn StorageController<Timestamp = T>>,
+    compute_orchestrator: Arc<dyn NamespacedOrchestrator>,
+    computed_image: String,
     compute: BTreeMap<ComputeInstanceId, compute::ComputeControllerState<T>>,
     stashed_response: Option<UnderlyingControllerResponse<T>>,
 }
@@ -238,21 +252,14 @@ where
                 size_name: _,
                 availability_zone,
             } => {
-                let OrchestratorConfig {
-                    orchestrator,
-                    computed_image,
-                    linger,
-                    ..
-                } = &self.orchestrator;
-
                 let service_name = generate_replica_service_name(instance_id, replica_id);
 
-                let service = orchestrator
-                    .namespace("compute")
+                let service = self
+                    .compute_orchestrator
                     .ensure_service(
                         &service_name,
                         ServiceConfig {
-                            image: computed_image.clone(),
+                            image: self.computed_image.clone(),
                             args: &|assigned| {
                                 let mut compute_opts = vec![
                                     format!(
@@ -279,7 +286,7 @@ where
                                         index
                                     ));
                                 }
-                                if *linger {
+                                if self.linger {
                                     compute_opts.push(format!("--linger"));
                                 }
                                 compute_opts
@@ -334,10 +341,8 @@ where
             availability_zone: _,
         } = config
         {
-            let OrchestratorConfig { orchestrator, .. } = &self.orchestrator;
             let service_name = generate_replica_service_name(instance_id, replica_id);
-            orchestrator
-                .namespace("compute")
+            self.compute_orchestrator
                 .drop_service(&service_name)
                 .await?;
         }
@@ -359,9 +364,7 @@ where
                 compute.client.get_replica_ids().next().is_none(),
                 "cannot drop instances with provisioned replicas; call `drop_replica` first"
             );
-            self.orchestrator
-                .orchestrator
-                .namespace("compute")
+            self.compute_orchestrator
                 .drop_service(&format!("cluster-{instance}"))
                 .await?;
             compute.client.send(ComputeCommand::DropInstance).await?;
@@ -383,9 +386,7 @@ where
         }
 
         let stream = self
-            .orchestrator
-            .orchestrator
-            .namespace("compute")
+            .compute_orchestrator
             .watch_services()
             .map(|event| event.and_then(translate_event))
             .filter_map(|event| async {
@@ -548,15 +549,26 @@ where
     }
 }
 
-impl<T> Controller<T> {
-    /// Create a new controller from a client it should wrap.
-    pub fn new<S: StorageController<Timestamp = T> + 'static>(
-        orchestrator: OrchestratorConfig,
-        storage_controller: S,
-    ) -> Self {
+impl<T> Controller<T>
+where
+    T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
+    <T as TryInto<i64>>::Error: std::fmt::Debug,
+    <T as TryFrom<i64>>::Error: std::fmt::Debug,
+{
+    /// Creates a new controller.
+    pub async fn new(config: ControllerConfig) -> Self {
+        let storage_controller = crate::client::controller::storage::Controller::new(
+            config.storage_stash_url,
+            config.persist_location,
+            config.orchestrator.namespace("storage"),
+            config.storaged_image,
+        )
+        .await;
         Self {
-            orchestrator,
+            linger: config.linger,
             storage_controller: Box::new(storage_controller),
+            compute_orchestrator: config.orchestrator.namespace("compute"),
+            computed_image: config.computed_image,
             compute: BTreeMap::default(),
             stashed_response: None,
         }

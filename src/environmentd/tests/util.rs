@@ -24,10 +24,10 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use tower_http::cors::AllowOrigin;
 
-use mz_environmentd::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsMode};
+use mz_dataflow_types::client::controller::ControllerConfig;
+use mz_environmentd::{SecretsControllerConfig, TlsMode};
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator_process::ProcessOrchestratorConfig;
-use mz_orchestrator_tracing::TracingCliArgs;
+use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -153,34 +153,34 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         )
     };
     let metrics_registry = MetricsRegistry::new();
+    let orchestrator = runtime.block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
+        image_dir: env::current_exe()?
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf(),
+        port_allocator: PORT_ALLOCATOR.clone(),
+        // NOTE(benesch): would be nice to not have to do this, but
+        // the subprocess output wreaks havoc on cargo2junit.
+        suppress_output: true,
+        data_dir: data_directory.clone(),
+        command_wrapper: vec![],
+    }))?;
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         timestamp_frequency: Duration::from_secs(1),
         logical_compaction_window: config.logical_compaction_window,
-        persist_location: PersistLocation {
-            blob_uri: format!("file://{}/persist/blob", data_directory.display()),
-            consensus_uri,
-        },
         catalog_postgres_stash,
-        storage_postgres_stash,
-        orchestrator: OrchestratorConfig {
-            backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
-                image_dir: env::current_exe()?
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .to_path_buf(),
-                port_allocator: PORT_ALLOCATOR.clone(),
-                // NOTE(benesch): would be nice to not have to do this, but
-                // the subprocess output wreaks havoc on cargo2junit.
-                suppress_output: true,
-                data_dir: data_directory.clone(),
-                command_wrapper: vec![],
-            }),
+        controller: ControllerConfig {
+            orchestrator: Arc::new(orchestrator),
             storaged_image: "storaged".into(),
             computed_image: "computed".into(),
             linger: false,
-            tracing: TracingCliArgs::default(),
+            persist_location: PersistLocation {
+                blob_uri: format!("file://{}/persist/blob", data_directory.display()),
+                consensus_uri,
+            },
+            storage_stash_url: storage_postgres_stash,
         },
         secrets_controller: SecretsControllerConfig::LocalFileSystem(
             data_directory.join("secrets"),
