@@ -18,6 +18,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
+use timely::PartialOrder;
 
 use mz_dataflow_types::sinks::{PersistSinkConnection, SinkDesc};
 use mz_persist_client::PersistLocation;
@@ -80,7 +81,7 @@ where
         let token_weak = Rc::downgrade(&token);
 
         // Only the active_write_worker will ever produce data so all other workers have
-        // an empty frontier.  It's necessary to insert all of these into `storage_state.
+        // an empty frontier. It's necessary to insert all of these into `compute_state.
         // sink_write_frontier` below so we properly clear out default frontiers of
         // non-active workers.
         let shared_frontier = Rc::new(RefCell::new(if active_write_worker {
@@ -101,65 +102,60 @@ where
             scope,
             move |_capabilities, frontiers, scheduler| async move {
                 let mut buffer = Vec::new();
-                let mut stash: HashMap<Timestamp, Vec<((Row, Row), Timestamp, Diff)>> =
-                    HashMap::new();
-
-                // Keep an empty Row that we can re-use when we are replacing an Option with an empty
-                // Row. Our output type is `(Row, Row)` instead of `(Option<Row>, Option<Row>)`.
-                let empty_row = Row::default();
+                let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
                 // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-                let persist_client = persist_location
+                let mut write = persist_location
                     .open()
                     .await
-                    .expect("cannot open persist client");
-
-                let mut write = persist_client
+                    .expect("could not open persist client")
                     .open_writer::<Row, Row, Timestamp, Diff>(shard_id)
                     .await
                     .expect("could not open persist shard");
 
                 while scheduler.notified().await {
-                    let frontier = frontiers.borrow()[0].clone();
+                    let input_frontier = frontiers.borrow()[0].clone();
 
-                    if !active_write_worker || token_weak.upgrade().is_none() {
+                    if !active_write_worker
+                        || token_weak.upgrade().is_none()
+                        || shared_frontier.borrow().is_empty()
+                    {
                         return;
                     }
 
                     input.for_each(|_cap, data| {
                         data.swap(&mut buffer);
 
-                        let mapped_updates = buffer.drain(..).map(|((key, value), ts, diff)| {
-                            let key = key.unwrap_or_else(|| empty_row.clone());
-                            let value = value.unwrap_or_else(|| empty_row.clone());
-                            ((key, value), ts, diff)
-                        });
-
-                        for update in mapped_updates {
-                            stash.entry(update.1).or_default().push(update);
+                        for ((key, value), ts, diff) in buffer.drain(..) {
+                            let key = key.unwrap_or_default();
+                            let value = value.unwrap_or_default();
+                            stash.entry(ts).or_default().push(((key, value), ts, diff));
                         }
                     });
 
-                    let updates = stash
+                    let mut updates = stash
                         .iter()
-                        .filter(|(ts, _updates)| !frontier.less_equal(ts))
-                        .flat_map(|(_ts, updates)| updates.iter())
-                        .map(|((key, value), ts, diff)| ((key, value), ts, diff));
+                        .filter(|(ts, _updates)| !input_frontier.less_equal(ts))
+                        .flat_map(|(_ts, updates)| updates.iter());
 
-                    // We always append, even in case we don't have any updates, because appending
-                    // also advances the frontier.
-                    // TODO(aljoscha): Figure out how errors from this should be reported.
-                    write
-                        .append(updates, write.upper().clone(), frontier.clone())
-                        .await
-                        .expect("cannot append updates")
-                        .expect("invalid/outdated upper");
+                    if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
+                        // We always append, even in case we don't have any updates, because appending
+                        // also advances the frontier.
+                        // TODO(aljoscha): Figure out how errors from this should be reported.
+                        let lower = write.upper().clone();
+                        write
+                            .append(updates, lower, input_frontier.clone())
+                            .await
+                            .expect("cannot append updates")
+                            .expect("invalid/outdated upper");
 
-                    stash.retain(|ts, _updates| frontier.less_equal(ts));
+                        *shared_frontier.borrow_mut() = input_frontier.clone();
+                    } else {
+                        // We cannot have updates without the frontier advancing.
+                        assert!(updates.next().is_none());
+                    }
 
-                    let mut shared_frontier = shared_frontier.borrow_mut();
-                    shared_frontier.clear();
-                    shared_frontier.extend(frontier.iter().cloned());
+                    stash.retain(|ts, _updates| input_frontier.less_equal(ts));
                 }
             },
         );
