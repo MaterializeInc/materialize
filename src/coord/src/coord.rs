@@ -67,6 +67,7 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::num::{NonZeroI64, NonZeroUsize};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -201,6 +202,7 @@ pub struct SendDiffs {
     pub id: GlobalId,
     pub diffs: Result<Vec<(Row, Diff)>, CoordError>,
     pub kind: MutationKind,
+    pub returning: Vec<(Row, NonZeroUsize)>,
 }
 
 #[derive(Derivative)]
@@ -1453,6 +1455,7 @@ impl<S: Append + 'static> Coordinator<S> {
             id,
             diffs,
             kind,
+            returning,
         }: SendDiffs,
     ) {
         match diffs {
@@ -1464,6 +1467,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             id,
                             updates: diffs,
                             kind,
+                            returning,
                         },
                     ),
                     session,
@@ -4557,6 +4561,15 @@ impl<S: Append + 'static> Coordinator<S> {
             id: plan.id,
             rows: plan.updates,
         }]))?;
+        if !plan.returning.is_empty() {
+            let finishing = RowSetFinishing {
+                order_by: Vec::new(),
+                limit: None,
+                offset: 0,
+                project: (0..plan.returning[0].0.iter().count()).collect(),
+            };
+            return Ok(send_immediate_rows(finishing.finish(plan.returning)));
+        }
         Ok(match plan.kind {
             MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
             MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
@@ -4585,7 +4598,7 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         match optimized_mir.into_inner() {
-            constants @ MirRelationExpr::Constant { .. } => tx.send(
+            constants @ MirRelationExpr::Constant { .. } if plan.returning.is_empty() => tx.send(
                 self.sequence_insert_constant(&mut session, plan.id, constants),
                 session,
             ),
@@ -4634,6 +4647,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     finishing,
                     assignments: HashMap::new(),
                     kind: MutationKind::Insert,
+                    returning: plan.returning,
                 };
 
                 self.sequence_read_then_write(tx, session, read_then_write_plan)
@@ -4674,6 +4688,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     id,
                     updates: rows,
                     kind: MutationKind::Insert,
+                    returning: Vec::new(),
                 };
                 self.sequence_send_diffs(session, diffs_plan)
             }
@@ -4716,6 +4731,7 @@ impl<S: Append + 'static> Coordinator<S> {
             selection,
             assignments,
             finishing,
+            returning,
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
@@ -4892,6 +4908,47 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
             };
+            let mut returning_rows = Vec::new();
+            let mut diff_err: Option<CoordError> = None;
+            if !returning.is_empty() && diffs.is_ok() {
+                let arena = RowArena::new();
+                for (row, diff) in diffs.as_ref().unwrap() {
+                    if diff < &1 {
+                        continue;
+                    }
+                    let mut returning_row = Row::with_capacity(returning.len());
+                    let mut packer = returning_row.packer();
+                    for expr in &returning {
+                        let datums: Vec<_> = row.iter().collect();
+                        match expr.eval(&datums, &arena) {
+                            Ok(datum) => {
+                                packer.push(datum);
+                            }
+                            Err(err) => {
+                                diff_err = Some(err.into());
+                                break;
+                            }
+                        }
+                    }
+                    let diff = NonZeroI64::try_from(*diff).expect("known to be >= 1");
+                    let diff = match NonZeroUsize::try_from(diff) {
+                        Ok(diff) => diff,
+                        Err(err) => {
+                            diff_err = Some(err.into());
+                            break;
+                        }
+                    };
+                    returning_rows.push((returning_row, diff));
+                    if diff_err.is_some() {
+                        break;
+                    }
+                }
+            }
+            let diffs = if let Some(err) = diff_err {
+                Err(err)
+            } else {
+                diffs
+            };
             internal_cmd_tx
                 .send(Message::SendDiffs(SendDiffs {
                     session,
@@ -4899,6 +4956,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     id,
                     diffs,
                     kind,
+                    returning: returning_rows,
                 }))
                 .expect("sending to internal_cmd_tx cannot fail");
         });

@@ -23,9 +23,9 @@ use std::fmt;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
     AstInfo, ColumnDef, CreateConnection, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SourceIncludeMetadata,
-    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    CreateSourceFormat, Envelope, Expr, Format, Ident, KeyConstraint, Query, SelectItem,
+    SourceIncludeMetadata, TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -185,6 +185,8 @@ pub struct InsertStatement<T: AstInfo> {
     pub columns: Vec<Ident>,
     /// A SQL query that specifies what to insert.
     pub source: InsertSource<T>,
+    /// RETURNING
+    pub returning: Vec<SelectItem<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for InsertStatement<T> {
@@ -198,6 +200,10 @@ impl<T: AstInfo> AstDisplay for InsertStatement<T> {
         }
         f.write_str(" ");
         f.write_node(&self.source);
+        if !self.returning.is_empty() {
+            f.write_str(" RETURNING ");
+            f.write_node(&display::comma_separated(&self.returning));
+        }
     }
 }
 impl_display_t!(InsertStatement);

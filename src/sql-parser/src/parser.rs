@@ -4680,11 +4680,21 @@ impl<'a> Parser<'a> {
         } else {
             InsertSource::Query(self.parse_query()?)
         };
+        let returning = self.parse_returning()?;
         Ok(Statement::Insert(InsertStatement {
             table_name,
             columns,
             source,
+            returning,
         }))
+    }
+
+    fn parse_returning(&mut self) -> Result<Vec<SelectItem<Raw>>, ParserError> {
+        Ok(if self.parse_keyword(RETURNING) {
+            self.parse_comma_separated(Parser::parse_select_item)?
+        } else {
+            Vec::new()
+        })
     }
 
     fn parse_update(&mut self) -> Result<Statement<Raw>, ParserError> {
