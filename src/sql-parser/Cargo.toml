@@ -8,7 +8,7 @@ rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 # TODO(aljoscha): persist/storage sinks should have a human-readable
@@ -24,7 +24,7 @@ datadriven = "0.6.0"
 unicode-width = "0.1.9"
 
 [build-dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 mz-ore = { path = "../ore", default-features = false }
 mz-walkabout = { path = "../walkabout" }
 phf = { version = "0.10.1", features = ["uncased"] }
