@@ -58,9 +58,9 @@ use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use tower_http::cors::AllowOrigin;
 use uuid::Uuid;
 
-use mz_environmentd::{OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig};
-use mz_orchestrator_process::ProcessOrchestratorConfig;
-use mz_orchestrator_tracing::TracingCliArgs;
+use mz_dataflow_types::client::controller::ControllerConfig;
+use mz_environmentd::SecretsControllerConfig;
+use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_ore::id_gen::PortAllocator;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -587,27 +587,28 @@ impl Runner {
                 format!("{postgres_url}?options=--search_path=sqllogictest_storage"),
             )
         };
+        let orchestrator = ProcessOrchestrator::new(ProcessOrchestratorConfig {
+            image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+            port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
+            suppress_output: false,
+            data_dir: temp_dir.path().to_path_buf(),
+            command_wrapper: vec![],
+        })
+        .await?;
         let server_config = mz_environmentd::Config {
             timestamp_frequency: Duration::from_secs(1),
             logical_compaction_window: None,
-            persist_location: PersistLocation {
-                blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
-                consensus_uri,
-            },
             catalog_postgres_stash,
-            storage_postgres_stash,
-            orchestrator: OrchestratorConfig {
-                backend: OrchestratorBackend::Process(ProcessOrchestratorConfig {
-                    image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                    port_allocator: Arc::new(PortAllocator::new(2100, 2200)),
-                    suppress_output: false,
-                    data_dir: temp_dir.path().to_path_buf(),
-                    command_wrapper: vec![],
-                }),
+            controller: ControllerConfig {
+                orchestrator: Arc::new(orchestrator),
                 storaged_image: "storaged".into(),
                 computed_image: "computed".into(),
                 linger: false,
-                tracing: TracingCliArgs::default(),
+                persist_location: PersistLocation {
+                    blob_uri: format!("file://{}/persist/blob", temp_dir.path().display()),
+                    consensus_uri,
+                },
+                storage_stash_url: storage_postgres_stash,
             },
             secrets_controller: SecretsControllerConfig::LocalFileSystem(
                 temp_dir.path().to_path_buf().join("secrets"),
