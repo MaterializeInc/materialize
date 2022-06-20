@@ -141,8 +141,8 @@ where
                     if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
                         // We always append, even in case we don't have any updates, because appending
                         // also advances the frontier.
+                        let lower = shared_frontier.borrow().clone();
                         // TODO(aljoscha): Figure out how errors from this should be reported.
-                        let lower = write.upper().clone();
                         write
                             .append(updates, lower, input_frontier.clone())
                             .await
