@@ -116,6 +116,7 @@ steps:
 
   - id: redpanda-testdrive
     label: ":panda_face: :racing_car: testdrive"
+    timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
     plugins:
@@ -126,6 +127,7 @@ steps:
 
   - id: redpanda-testdrive-aarch64
     label: ":panda_face: :racing_car: testdrive aarch64"
+    timeout_in_minutes: 120
     agents:
       queue: linux-aarch64
     plugins:
@@ -174,17 +176,17 @@ steps:
 
   - id: cluster-testdrive
     label: "Full testdrive against Cluster"
+    timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
           run: nightly
-    timeout_in_minutes: 30
 
   - id: testdrive-workers-1
     label: ":racing_car: testdrive with --workers 1"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
     plugins:
@@ -198,7 +200,7 @@ steps:
   # - id: testdrive-workers-32
   #   label: ":racing_car: testdrive with --workers 32"
   #   depends_on: build-x86_64
-  #   timeout_in_minutes: 30
+  #   timeout_in_minutes: 120
   #   plugins:
   #     - ./ci/plugins/scratch-aws-access: ~
   #     - ./ci/plugins/mzcompose:
@@ -209,7 +211,7 @@ steps:
 
   - id: testdrive-partitions-5
     label: ":racing_car: testdrive with --kafka-default-partitions 5"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
     plugins:
