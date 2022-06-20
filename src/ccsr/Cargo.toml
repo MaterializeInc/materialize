@@ -7,7 +7,7 @@ rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 native-tls = "0.2.10"
 openssl = { version = "0.10.40", features = ["vendored"] }
 reqwest = { version = "0.11.11", features = ["blocking", "json", "native-tls-vendored"] }
