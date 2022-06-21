@@ -162,6 +162,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         );
     }
 
+    {
+        let metrics_registry = metrics_registry.clone();
+        mz_ore::task::spawn(|| "periodic_metrics_log", async move {
+            mz_http_util::print_prometheus(&metrics_registry).await;
+        });
+    }
+
     let config = mz_compute::server::Config {
         workers: args.workers,
         comm_config,

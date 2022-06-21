@@ -252,6 +252,11 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize dataflow controller.
     let dataflow_controller = mz_dataflow_types::client::Controller::new(config.controller).await;
 
+    let _: mz_ore::metrics::IntCounter = config.metrics_registry.register(mz_ore::metric!(
+        name: "foo",
+        help: "FOO",
+    ));
+
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: dataflow_controller,
@@ -268,6 +273,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         connection_context: config.connection_context,
     })
     .await?;
+
+    {
+        let metrics_registry = config.metrics_registry.clone();
+        mz_ore::task::spawn(|| "periodic_metrics_log", async move {
+            mz_http_util::print_prometheus(&metrics_registry).await;
+        });
+    }
 
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
