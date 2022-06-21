@@ -52,7 +52,8 @@ use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{
-    GenericClient, StorageClient, StorageCommand, StorageResponse, StoragedRemoteClient,
+    GenericClient, ProtoStorageCommand, ProtoStorageResponse, StorageClient, StorageCommand,
+    StorageResponse, StoragedRemoteClient,
 };
 use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
 use crate::Update;
@@ -318,6 +319,10 @@ where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     type Timestamp = T;
 
@@ -749,6 +754,10 @@ where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     /// Create a new storage controller from a client it should wrap.
     pub async fn new(
