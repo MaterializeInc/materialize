@@ -1364,3 +1364,20 @@ WITH a(x) AS (SELECT 'a') SELECT generate_series(1, 2), * FROM a ORDER BY genera
 ----
 1 a
 2 a
+
+# Test optimization for single table function in scalar position
+# Plan should be just a simple FlatMap + Project
+# Regression test for #10801
+query T multiline
+EXPLAIN PLAN FOR SELECT jsonb_object_keys(a) FROM y;
+----
+Source materialize.public.y (u1):
+| Project (#0)
+
+Query:
+%0 =
+| Get materialize.public.y (u1)
+| FlatMap jsonb_object_keys(#0)
+| Project (#1)
+
+EOF
