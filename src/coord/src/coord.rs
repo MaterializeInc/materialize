@@ -160,8 +160,7 @@ use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprP
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
-    TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::sink_connection;
 use crate::tail::PendingTail;
@@ -213,6 +212,12 @@ pub struct CreateSourceStatementReady {
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
+}
+
+/// An operation that is deferred while waiting for a lock.
+enum Deferred {
+    Plan(DeferredPlan),
+    GroupCommit,
 }
 
 /// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
@@ -473,7 +478,7 @@ pub struct Coordinator<S> {
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
-    write_lock_wait_group: VecDeque<DeferredPlan>,
+    write_lock_wait_group: VecDeque<Deferred>,
     /// Pending writes waiting for a group commit
     pending_writes: Vec<PendingWriteTxn>,
 
@@ -535,7 +540,11 @@ macro_rules! guard_write_critical_section {
     ($coord:expr, $tx:expr, $session:expr, $plan_to_defer: expr) => {
         if !$session.has_write_lock() {
             if $coord.try_grant_session_write_lock(&mut $session).is_err() {
-                $coord.defer_write($tx, $session, $plan_to_defer);
+                $coord.defer_write(Deferred::Plan(DeferredPlan {
+                    tx: $tx,
+                    session: $session,
+                    plan: $plan_to_defer,
+                }));
                 return;
             }
         }
@@ -968,13 +977,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::WriteLockGrant(write_lock_guard) => {
                     // It's possible to have more incoming write lock grants
                     // than pending writes because of cancellations.
-                    if let Some(mut ready) = self.write_lock_wait_group.pop_front() {
-                        ready.session.grant_write_lock(write_lock_guard);
-                        // Write statements never need to track catalog
-                        // dependencies.
-                        let depends_on = vec![];
-                        self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
-                            .await;
+                    if let Some(ready) = self.write_lock_wait_group.pop_front() {
+                        match ready {
+                            Deferred::Plan(mut ready) => {
+                                ready.session.grant_write_lock(write_lock_guard);
+                                // Write statements never need to track catalog
+                                // dependencies.
+                                let depends_on = vec![];
+                                self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
+                                    .await;
+                            }
+                            Deferred::GroupCommit => self.group_commit().await,
+                        }
                     }
                     // N.B. if no deferred plans, write lock is released by drop
                     // here.
@@ -1129,7 +1143,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     .expect("sending to internal_cmd_tx cannot fail");
             });
         } else {
-            self.group_commit().await;
+            match Arc::clone(&self.write_lock).try_lock_owned() {
+                Ok(_guard) => self.group_commit().await,
+                Err(_) => self.defer_write(Deferred::GroupCommit),
+            };
         }
     }
 
@@ -1178,6 +1195,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
+
         for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
             let _ = tx.send(None);
         }
@@ -1929,10 +1947,12 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
-                .position(|ready| ready.session.conn_id() == conn_id)
+                .position(|ready| matches!(ready, Deferred::Plan(ready) if ready.session.conn_id() == conn_id))
             {
                 let ready = self.write_lock_wait_group.remove(idx).unwrap();
-                ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
+                if let Deferred::Plan(ready) = ready {
+                    ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
+                }
             }
 
             // Inform the target session (if it asks) about the cancellation.
@@ -3393,20 +3413,6 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         mut action: EndTransactionAction,
     ) {
-        if EndTransactionAction::Commit == action {
-            let txn = session
-                .transaction()
-                .inner()
-                .expect("must be in a transaction");
-            if let Transaction {
-                ops: TransactionOps::Writes(_),
-                ..
-            } = txn
-            {
-                guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
-            }
-        }
-
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
             (&action, session.transaction())
@@ -5341,23 +5347,20 @@ impl<S: Append + 'static> Coordinator<S> {
         })
     }
 
-    /// Defers executing `plan` until the write lock becomes available; waiting
-    /// occurs in a greenthread, so callers of this function likely want to
+    /// Defers executing `deferred` until the write lock becomes available; waiting
+    /// occurs in a green-thread, so callers of this function likely want to
     /// return after calling it.
-    fn defer_write(
-        &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        plan: Plan,
-    ) {
-        let conn_id = session.conn_id();
-        let plan = DeferredPlan { tx, session, plan };
-        self.write_lock_wait_group.push_back(plan);
+    fn defer_write(&mut self, deferred: Deferred) {
+        let id = match &deferred {
+            Deferred::Plan(plan) => plan.session.conn_id().to_string(),
+            Deferred::GroupCommit => "group_commit".to_string(),
+        };
+        self.write_lock_wait_group.push_back(deferred);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let write_lock = Arc::clone(&self.write_lock);
         // TODO(guswynn): see if there is more relevant info to add to this name
-        task::spawn(|| format!("defer_write:{conn_id}"), async move {
+        task::spawn(|| format!("defer_write:{id}"), async move {
             let guard = write_lock.lock_owned().await;
             internal_cmd_tx
                 .send(Message::WriteLockGrant(guard))
