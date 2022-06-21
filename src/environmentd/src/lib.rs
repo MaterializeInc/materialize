@@ -268,6 +268,13 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     })
     .await?;
 
+    {
+        let metrics_registry = config.metrics_registry.clone();
+        mz_ore::task::spawn(|| "periodic_metrics_log", async move {
+            mz_http_util::print_prometheus(&metrics_registry).await;
+        });
+    }
+
     // Listen on the internal HTTP API port.
     let internal_http_local_addr = {
         let metrics_registry = config.metrics_registry.clone();

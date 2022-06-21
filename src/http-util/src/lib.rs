@@ -9,6 +9,8 @@
 
 //! HTTP utilities.
 
+use std::time::Duration;
+
 use askama::Template;
 use axum::http::status::StatusCode;
 use axum::response::{Html, IntoResponse};
@@ -104,4 +106,22 @@ pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse 
         .encode(&registry.gather(), &mut buffer)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
+}
+
+/// WIP
+pub async fn print_prometheus(registry: &MetricsRegistry) -> impl IntoResponse {
+    loop {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        tracing::info!("print_prometheus {:?}", registry);
+        let encoder = prometheus::TextEncoder::new();
+        let s = encoder
+            .encode_to_string(&registry.gather())
+            .expect("failed to encode metrics");
+        for line in s.lines() {
+            if !line.starts_with("mz_persist") {
+                continue;
+            }
+            tracing::info!("{}", line);
+        }
+    }
 }

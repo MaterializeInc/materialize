@@ -3335,6 +3335,8 @@ dependencies = [
  "include_dir",
  "mz-ore",
  "prometheus",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -191,6 +191,7 @@ pub mod raw {
 impl MetricsRegistry {
     /// Creates a new metrics registry.
     pub fn new() -> Self {
+        eprintln!("\n\n\nMetricsRegistry::new\n\n\n");
         MetricsRegistry {
             inner: Registry::new(),
         }
