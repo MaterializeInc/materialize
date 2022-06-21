@@ -86,7 +86,7 @@ other objects in the system catalog.
 
 Field           | Type                         | Meaning
 ----------------|------------------------------|--------
-`uuid`          | [`uuid`]                     | A unique identifier for the event.
+`id  `          | [`bigint`]                   | The ordered id of the event.
 `event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, or `rename`.
 `object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `index`, `sink`, `source`, or `view`.
 `event_details` | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.

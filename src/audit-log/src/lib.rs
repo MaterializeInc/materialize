@@ -22,7 +22,8 @@
 //! data structures unknown to the reader.
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+
+use mz_ore::now::EpochMillis;
 
 /// New version variants should be added if fields need to be added, changed, or removed.
 #[derive(Serialize, Deserialize)]
@@ -31,42 +32,26 @@ pub enum VersionedEvent {
 }
 
 impl VersionedEvent {
-    /// Create a new event, with a generated UUID. This function must always
-    /// require and produce the most recent variant of VersionedEvent.
-    pub fn new(
-        event_type: EventType,
-        object_type: ObjectType,
-        event_details: EventDetails,
-        user: String,
-        occurred_at_unix_epoch_nanos: u64,
-    ) -> Self {
-        Self::new_uuid(
-            Uuid::new_v4(),
-            event_type,
-            object_type,
-            event_details,
-            user,
-            occurred_at_unix_epoch_nanos,
-        )
-    }
-
     /// Create a new event. This function must always require and produce the most
-    /// recent variant of VersionedEvent.
-    pub fn new_uuid(
-        uuid: Uuid,
+    /// recent variant of VersionedEvent. `id` must be a globally increasing,
+    /// ordered number such that sorting by it on all events yields the order
+    /// of events by users. It is insufficient to use `occurred_at` (even at
+    /// nanosecond precision) due to clock unpredictability.
+    pub fn new(
+        id: u64,
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
         user: String,
-        occurred_at_unix_epoch_nanos: u64,
+        occurred_at: EpochMillis,
     ) -> Self {
         Self::V1(EventV1::new(
-            uuid,
+            id,
             event_type,
             object_type,
             event_details,
             user,
-            occurred_at_unix_epoch_nanos,
+            occurred_at,
         ))
     }
 
@@ -78,6 +63,14 @@ impl VersionedEvent {
 
     pub fn serialize(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("must serialize")
+    }
+
+    /// Returns a globally sortable event order. All event versions must have this
+    /// field.
+    pub fn sortable_id(&self) -> u64 {
+        match self {
+            VersionedEvent::V1(ev) => ev.id,
+        }
     }
 }
 
@@ -162,25 +155,25 @@ impl EventDetails {
 
 #[derive(Serialize, Deserialize)]
 pub struct EventV1 {
-    pub uuid: Uuid,
+    pub id: u64,
     pub event_type: EventType,
     pub object_type: ObjectType,
     pub event_details: EventDetails,
     pub user: String,
-    pub occurred_at: u64,
+    pub occurred_at: EpochMillis,
 }
 
 impl EventV1 {
     fn new(
-        uuid: Uuid,
+        id: u64,
         event_type: EventType,
         object_type: ObjectType,
         event_details: EventDetails,
         user: String,
-        occurred_at: u64,
+        occurred_at: EpochMillis,
     ) -> EventV1 {
         EventV1 {
-            uuid,
+            id,
             event_type,
             object_type,
             event_details,
@@ -197,7 +190,7 @@ impl EventV1 {
 fn test_audit_log() -> Result<(), anyhow::Error> {
     let cases: Vec<(VersionedEvent, &'static str)> = vec![(
         VersionedEvent::V1(EventV1::new(
-            Uuid::from_u128(1),
+            1,
             EventType::Create,
             ObjectType::View,
             EventDetails::NameV1(NameV1 {
@@ -206,7 +199,7 @@ fn test_audit_log() -> Result<(), anyhow::Error> {
             "user".into(),
             1,
         )),
-        r#"{"V1":{"uuid":"00000000-0000-0000-0000-000000000001","event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
+        r#"{"V1":{"id":1,"event_type":"create","object_type":"view","event_details":{"NameV1":{"name":"name"}},"user":"user","occurred_at":1}}"#,
     )];
 
     for (event, expected_bytes) in cases {
