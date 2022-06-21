@@ -595,6 +595,48 @@ pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
     pub peek_id: Uuid,
 }
 
+impl RustType<ProtoTrace> for (GlobalId, ChangeBatch<mz_repr::Timestamp>) {
+    fn into_proto(&self) -> ProtoTrace {
+        ProtoTrace {
+            id: Some(self.0.into_proto()),
+            updates: self
+                .1
+                // Clone because the `iter()` expects
+                // `trace` to be mutable.
+                .clone()
+                .iter()
+                .map(|(t, d)| ProtoUpdate {
+                    timestamp: *t,
+                    diff: *d,
+                })
+                .collect(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        let mut batch = ChangeBatch::new();
+        batch.extend(
+            proto
+                .updates
+                .into_iter()
+                .map(|update| (update.timestamp, update.diff)),
+        );
+        Ok((proto.id.into_rust_if_some("ProtoTrace::id")?, batch))
+    }
+}
+
+impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, ChangeBatch<mz_repr::Timestamp>)> {
+    fn into_proto(&self) -> ProtoFrontierUppersKind {
+        ProtoFrontierUppersKind {
+            traces: self.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoFrontierUppersKind) -> Result<Self, TryFromProtoError> {
+        proto.traces.into_rust()
+    }
+}
+
 /// Responses that the controller can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ControllerResponse<T = mz_repr::Timestamp> {
@@ -629,26 +671,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
         use proto_compute_response::*;
         ProtoComputeResponse {
             kind: Some(match self {
-                ComputeResponse::FrontierUppers(traces) => {
-                    FrontierUppers(ProtoFrontierUppersKind {
-                        traces: traces
-                            .iter()
-                            .map(|(id, trace)| ProtoTrace {
-                                id: Some(id.into_proto()),
-                                updates: trace
-                                    // Clone because the `iter()` expects
-                                    // `trace` to be mutable.
-                                    .clone()
-                                    .iter()
-                                    .map(|(t, d)| ProtoUpdate {
-                                        timestamp: *t,
-                                        diff: *d,
-                                    })
-                                    .collect(),
-                            })
-                            .collect(),
-                    })
-                }
+                ComputeResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
                 ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
                     PeekResponse(ProtoPeekResponseKind {
                         id: Some(id.into_proto()),
@@ -667,22 +690,9 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
         match proto.kind {
-            Some(FrontierUppers(traces)) => Ok(ComputeResponse::FrontierUppers(
-                traces
-                    .traces
-                    .into_iter()
-                    .map(|trace| {
-                        let mut batch = ChangeBatch::new();
-                        batch.extend(
-                            trace
-                                .updates
-                                .into_iter()
-                                .map(|update| (update.timestamp, update.diff)),
-                        );
-                        Ok((trace.id.into_rust_if_some("ProtoTrace::id")?, batch))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
+            Some(FrontierUppers(traces)) => {
+                Ok(ComputeResponse::FrontierUppers(traces.into_rust()?))
+            }
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
@@ -745,26 +755,7 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
         ProtoStorageResponse {
             kind: Some(match self {
                 // TODO: share this impl with `ComputeResponse`
-                StorageResponse::FrontierUppers(traces) => {
-                    FrontierUppers(ProtoFrontierUppersKind {
-                        traces: traces
-                            .iter()
-                            .map(|(id, trace)| ProtoTrace {
-                                id: Some(id.into_proto()),
-                                updates: trace
-                                    // Clone because the `iter()` expects
-                                    // `trace` to be mutable.
-                                    .clone()
-                                    .iter()
-                                    .map(|(t, d)| ProtoUpdate {
-                                        timestamp: *t,
-                                        diff: *d,
-                                    })
-                                    .collect(),
-                            })
-                            .collect(),
-                    })
-                }
+                StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
                 StorageResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
                     timestamp,
                     peek_id,
@@ -780,22 +771,9 @@ impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
         use proto_storage_response::Kind::*;
         match proto.kind {
             // TODO: share this impl with `ComputeResponse`
-            Some(FrontierUppers(traces)) => Ok(StorageResponse::FrontierUppers(
-                traces
-                    .traces
-                    .into_iter()
-                    .map(|trace| {
-                        let mut batch = ChangeBatch::new();
-                        batch.extend(
-                            trace
-                                .updates
-                                .into_iter()
-                                .map(|update| (update.timestamp, update.diff)),
-                        );
-                        Ok((trace.id.into_rust_if_some("ProtoTrace::id")?, batch))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
+            Some(FrontierUppers(traces)) => {
+                Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
+            }
             Some(LinearizedTimestamps(resp)) => Ok(StorageResponse::LinearizedTimestamps(
                 LinearizedTimestampBindingFeedback {
                     timestamp: resp.timestamp,
