@@ -160,8 +160,7 @@ use crate::coord::dataflow_builder::{prep_relation_expr, prep_scalar_expr, ExprP
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::error::CoordError;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
-    TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::sink_connection;
 use crate::tail::PendingTail;
@@ -182,7 +181,8 @@ pub enum Message<T = mz_repr::Timestamp> {
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
     AdvanceLocalInput(AdvanceLocalInput<T>),
-    GroupCommit,
+    TryGroupCommit,
+    GroupCommit(tokio::sync::OwnedMutexGuard<()>),
     ComputeInstanceStatus(ComputeInstanceEvent),
 }
 
@@ -998,8 +998,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::AdvanceLocalInput(inputs) => {
                     self.advance_local_input(inputs).await;
                 }
-                Message::GroupCommit => {
+                Message::TryGroupCommit => {
                     self.try_group_commit().await;
+                }
+                Message::GroupCommit(guard) => {
+                    self.group_commit(guard).await;
                 }
                 Message::ComputeInstanceStatus(status) => {
                     self.message_compute_instance_status(status).await
@@ -1115,21 +1118,27 @@ impl<S: Append + 'static> Coordinator<S> {
         // `self.get_and_step_local_write_ts()` and safely use that value once we wake up.
         let timestamp = self.peek_local_ts();
         let now = (self.catalog.config().now)();
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
             // what it was.
             let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000);
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            task::spawn(|| "group_commit", async move {
+            task::spawn(|| "try_group_commit", async move {
                 tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
                 internal_cmd_tx
-                    .send(Message::GroupCommit)
+                    .send(Message::TryGroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
         } else {
-            self.group_commit().await;
+            let write_lock = Arc::clone(&self.write_lock);
+            task::spawn(|| format!("group_commit"), async move {
+                let guard = write_lock.lock_owned().await;
+                internal_cmd_tx
+                    .send(Message::GroupCommit(guard))
+                    .expect("sending to internal_cmd_tx cannot fail");
+            });
         }
     }
 
@@ -1137,7 +1146,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
-    async fn group_commit(&mut self) {
+    async fn group_commit(&mut self, _guard: tokio::sync::OwnedMutexGuard<()>) {
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method. We will still commit the write without waiting for `now()`
         // to advance. This is ok because the next batch of writes will trigger the wait loop in
@@ -1178,6 +1187,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
+
         for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
             let _ = tx.send(None);
         }
@@ -3393,20 +3403,6 @@ impl<S: Append + 'static> Coordinator<S> {
         mut session: Session,
         mut action: EndTransactionAction,
     ) {
-        if EndTransactionAction::Commit == action {
-            let txn = session
-                .transaction()
-                .inner()
-                .expect("must be in a transaction");
-            if let Transaction {
-                ops: TransactionOps::Writes(_),
-                ..
-            } = txn
-            {
-                guard_write_critical_section!(self, tx, session, Plan::CommitTransaction);
-            }
-        }
-
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
             (&action, session.transaction())
@@ -3475,7 +3471,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         write_rx = Some(rx);
                         if self.pending_writes.is_empty() {
                             self.internal_cmd_tx
-                                .send(Message::GroupCommit)
+                                .send(Message::TryGroupCommit)
                                 .expect("sending to internal_cmd_tx cannot fail");
                         }
                         self.pending_writes.push(PendingWriteTxn {
