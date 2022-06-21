@@ -35,6 +35,7 @@ use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType}
 
 pub mod encoding;
 
+use crate::client::controller::storage::CollectionMetadata;
 use crate::connections::aws::AwsConfig;
 use crate::connections::KafkaConnection;
 use crate::DataflowError;
@@ -57,6 +58,102 @@ pub struct IngestionDescription<S = (), T = mz_repr::Timestamp> {
     pub since: Antichain<T>,
     /// Additional storage controller metadata needed to ingest this source
     pub storage_metadata: S,
+}
+
+impl Arbitrary
+    for IngestionDescription<
+        crate::client::controller::storage::CollectionMetadata,
+        mz_repr::Timestamp,
+    >
+{
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<BTreeMap<GlobalId, CollectionMetadata>>(),
+            any::<GlobalId>(),
+            any::<SourceDesc>(),
+            // TODO(guswynn): make a helper function for generating Antichains
+            proptest::collection::vec(any::<u64>(), 1..4).prop_map(Antichain::from),
+            any::<CollectionMetadata>(),
+        )
+            .prop_map(
+                |(source_imports, id, desc, since, storage_metadata)| IngestionDescription {
+                    source_imports,
+                    id,
+                    desc,
+                    since,
+                    storage_metadata,
+                },
+            )
+            .boxed()
+    }
+}
+
+impl RustType<ProtoIngestionDescription>
+    for IngestionDescription<
+        crate::client::controller::storage::CollectionMetadata,
+        mz_repr::Timestamp,
+    >
+{
+    fn into_proto(self: &Self) -> ProtoIngestionDescription {
+        // we have to turn a BTreeMap into a vec here
+        let source_imports: Vec<_> = self
+            .source_imports
+            .iter()
+            .map(
+                |(id, meta)| proto_ingestion_description::ProtoSourceMetadataImport {
+                    id: Some(id.into_proto()),
+                    storage_metadata: Some(meta.into_proto()),
+                },
+            )
+            .collect();
+        ProtoIngestionDescription {
+            source_imports,
+            id: Some(self.id.into_proto()),
+            desc: Some(self.desc.into_proto()),
+            since: Some((&self.since).into()),
+            storage_metadata: Some(self.storage_metadata.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoIngestionDescription) -> Result<Self, TryFromProtoError> {
+        Ok(IngestionDescription {
+            // we have to turn a vec into a BTreeMap here
+            source_imports: proto
+                .source_imports
+                .into_iter()
+                .map(
+                    |psmi| -> Result<
+                        (
+                            GlobalId,
+                            crate::client::controller::storage::CollectionMetadata,
+                        ),
+                        TryFromProtoError,
+                    > {
+                        let id = psmi.id.into_rust_if_some("ProtoSourceMetadataImport::id")?;
+                        let meta = psmi
+                            .storage_metadata
+                            .into_rust_if_some("ProtoSourceMetadataImport::storage_metadata")?;
+                        Ok((id, meta))
+                    },
+                )
+                .collect::<Result<_, TryFromProtoError>>()?,
+            id: proto
+                .id
+                .into_rust_if_some("ProtoIngestionDescription::id")?,
+            desc: proto
+                .desc
+                .into_rust_if_some("ProtoIngestionDescription::desc")?,
+            since: proto.since.map(Into::into).ok_or_else(|| {
+                TryFromProtoError::missing_field("ProtoIngestionDescription::since")
+            })?,
+            storage_metadata: proto
+                .storage_metadata
+                .into_rust_if_some("ProtoIngestionDescription::storage_metadata")?,
+        })
+    }
 }
 
 /// Universal language for describing message positions in Materialize, in a source independent

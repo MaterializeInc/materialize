@@ -262,17 +262,15 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-impl RustType<proto_compute_command::ProtoCompaction> for (GlobalId, Antichain<u64>) {
-    fn into_proto(self: &Self) -> proto_compute_command::ProtoCompaction {
-        proto_compute_command::ProtoCompaction {
+impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
+    fn into_proto(self: &Self) -> ProtoCompaction {
+        ProtoCompaction {
             id: Some(self.0.into_proto()),
             frontier: Some((&self.1).into()),
         }
     }
 
-    fn from_proto(
-        proto: proto_compute_command::ProtoCompaction,
-    ) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoCompaction) -> Result<Self, TryFromProtoError> {
         Ok((
             proto.id.into_rust_if_some("ProtoCompaction::id")?,
             proto
@@ -320,18 +318,6 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-/// Commands related to the ingress and egress of collections.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum StorageCommand<T = mz_repr::Timestamp> {
-    /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
-    /// Enable compaction in storage-managed collections.
-    ///
-    /// Each entry in the vector names a collection and provides a frontier after which
-    /// accumulations must be correct.
-    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-}
-
 impl<T> ComputeCommand<T> {
     /// Indicates which global ids should start and cease frontier tracking.
     ///
@@ -365,6 +351,86 @@ impl<T> ComputeCommand<T> {
                 // Other commands have no known impact on frontier tracking.
             }
         }
+    }
+}
+
+/// Commands related to the ingress and egress of collections.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Create the enumerated sources, each associated with its identifier.
+    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
+    /// Enable compaction in storage-managed collections.
+    ///
+    /// Each entry in the vector names a collection and provides a frontier after which
+    /// accumulations must be correct.
+    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+}
+
+impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoStorageCommand {
+        use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
+        ProtoStorageCommand {
+            kind: Some(match self {
+                StorageCommand::CreateSources(ingestion_descriptions) => {
+                    CreateSources(ProtoCreateSources {
+                        ingestion_descriptions: ingestion_descriptions.into_proto(),
+                    })
+                }
+                StorageCommand::AllowCompaction(collections) => {
+                    AllowCompaction(ProtoAllowCompaction {
+                        collections: collections.into_proto(),
+                    })
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
+        use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
+        match proto.kind {
+            Some(CreateSources(ProtoCreateSources {
+                ingestion_descriptions,
+            })) => Ok(StorageCommand::CreateSources(
+                ingestion_descriptions.into_rust()?,
+            )),
+            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
+                Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
+            }
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoStorageCommand::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec(
+                any::<IngestionDescription<CollectionMetadata, mz_repr::Timestamp>>(),
+                1..4
+            )
+            .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(
+                (
+                    any::<GlobalId>(),
+                    proptest::collection::vec(any::<u64>(), 1..4)
+                ),
+                1..4
+            )
+            .prop_map(|collections| StorageCommand::AllowCompaction(
+                collections
+                    .into_iter()
+                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
+                    .collect()
+            )),
+        ]
+        .boxed()
     }
 }
 
@@ -521,12 +587,54 @@ impl<T> Default for ComputeCommandHistory<T> {
 
 /// Data about timestamp bindings, sent to the coordinator, in service
 /// of a specific "linearized" read request
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
     /// The _minimum_ viable timestamp that will produce a "linearized" read...
     pub timestamp: T,
     /// ... for this peek
     pub peek_id: Uuid,
+}
+
+impl RustType<ProtoTrace> for (GlobalId, ChangeBatch<mz_repr::Timestamp>) {
+    fn into_proto(&self) -> ProtoTrace {
+        ProtoTrace {
+            id: Some(self.0.into_proto()),
+            updates: self
+                .1
+                // Clone because the `iter()` expects
+                // `trace` to be mutable.
+                .clone()
+                .iter()
+                .map(|(t, d)| ProtoUpdate {
+                    timestamp: *t,
+                    diff: *d,
+                })
+                .collect(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        let mut batch = ChangeBatch::new();
+        batch.extend(
+            proto
+                .updates
+                .into_iter()
+                .map(|update| (update.timestamp, update.diff)),
+        );
+        Ok((proto.id.into_rust_if_some("ProtoTrace::id")?, batch))
+    }
+}
+
+impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, ChangeBatch<mz_repr::Timestamp>)> {
+    fn into_proto(&self) -> ProtoFrontierUppersKind {
+        ProtoFrontierUppersKind {
+            traces: self.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoFrontierUppersKind) -> Result<Self, TryFromProtoError> {
+        proto.traces.into_rust()
+    }
 }
 
 /// Responses that the controller can provide back to the coordinator.
@@ -563,26 +671,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
         use proto_compute_response::*;
         ProtoComputeResponse {
             kind: Some(match self {
-                ComputeResponse::FrontierUppers(traces) => {
-                    FrontierUppers(ProtoFrontierUppersKind {
-                        traces: traces
-                            .iter()
-                            .map(|(id, trace)| ProtoTrace {
-                                id: Some(id.into_proto()),
-                                updates: trace
-                                    // Clone because the `iter()` expects
-                                    // `trace` to be mutable.
-                                    .clone()
-                                    .iter()
-                                    .map(|(t, d)| ProtoUpdate {
-                                        timestamp: *t,
-                                        diff: *d,
-                                    })
-                                    .collect(),
-                            })
-                            .collect(),
-                    })
-                }
+                ComputeResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
                 ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
                     PeekResponse(ProtoPeekResponseKind {
                         id: Some(id.into_proto()),
@@ -601,22 +690,9 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
         match proto.kind {
-            Some(FrontierUppers(traces)) => Ok(ComputeResponse::FrontierUppers(
-                traces
-                    .traces
-                    .into_iter()
-                    .map(|trace| {
-                        let mut batch = ChangeBatch::new();
-                        batch.extend(
-                            trace
-                                .updates
-                                .into_iter()
-                                .map(|update| (update.timestamp, update.diff)),
-                        );
-                        Ok((trace.id.into_rust_if_some("ProtoTrace::id")?, batch))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
+            Some(FrontierUppers(traces)) => {
+                Ok(ComputeResponse::FrontierUppers(traces.into_rust()?))
+            }
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
@@ -662,7 +738,7 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 }
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
@@ -670,6 +746,66 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// Data about timestamp bindings, sent to the coordinator, in service
     /// of a specific "linearized" read request
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
+}
+
+impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoStorageResponse {
+        use proto_storage_response::Kind::*;
+        use proto_storage_response::*;
+        ProtoStorageResponse {
+            kind: Some(match self {
+                // TODO: share this impl with `ComputeResponse`
+                StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
+                StorageResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
+                    timestamp,
+                    peek_id,
+                }) => LinearizedTimestamps(ProtoLinearizedTimestampBindingFeedback {
+                    timestamp: *timestamp,
+                    peek_id: Some(peek_id.into_proto()),
+                }),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
+        use proto_storage_response::Kind::*;
+        match proto.kind {
+            // TODO: share this impl with `ComputeResponse`
+            Some(FrontierUppers(traces)) => {
+                Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
+            }
+            Some(LinearizedTimestamps(resp)) => Ok(StorageResponse::LinearizedTimestamps(
+                LinearizedTimestampBindingFeedback {
+                    timestamp: resp.timestamp,
+                    peek_id: resp
+                        .peek_id
+                        .into_rust_if_some("ProtoLinearizedTimestampBindingFeedback::peek_id")?,
+                },
+            )),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoStorageResponse::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
+                .prop_map(StorageResponse::FrontierUppers),
+            (any::<u64>(), any_uuid()).prop_map(|(timestamp, peek_id)| {
+                StorageResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
+                    timestamp,
+                    peek_id,
+                })
+            }),
+        ]
+        .boxed()
+    }
 }
 
 /// A client to a running dataflow server.
@@ -1725,6 +1861,38 @@ mod tests {
                     }
                 } else {
                     assert_eq!(actual, ComputeResponse::FrontierUppers(expected_traces));
+                }
+            } else {
+                assert_eq!(actual, expect);
+            }
+        }
+
+        #[test]
+        fn storage_command_protobuf_roundtrip(expect in any::<StorageCommand<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoStorageCommand>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn storage_response_protobuf_roundtrip(expect in any::<StorageResponse<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoStorageResponse>(&expect);
+            assert!(actual.is_ok());
+            let actual = actual.unwrap();
+            if let StorageResponse::FrontierUppers(expected_traces) = expect {
+                if let StorageResponse::FrontierUppers(actual_traces) = actual {
+                    assert_eq!(actual_traces.len(), expected_traces.len());
+                    for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
+                        assert_eq!(actual_id, expected_id);
+                        // `ChangeBatch`es representing equivalent sets of
+                        // changes could have different internal
+                        // representations, so they need to be compacted before comparing.
+                        actual_changes.compact();
+                        expected_changes.compact();
+                        assert_eq!(actual_changes, expected_changes);
+                    }
+                } else {
+                    assert_eq!(actual, StorageResponse::FrontierUppers(expected_traces));
                 }
             } else {
                 assert_eq!(actual, expect);
