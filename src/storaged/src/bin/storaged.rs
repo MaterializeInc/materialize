@@ -8,30 +8,22 @@
 // by the Apache License, Version 2.0.
 
 use std::env;
-use std::fmt;
 use std::path::PathBuf;
 use std::process;
 
 use anyhow::bail;
 use axum::routing;
-use futures::sink::SinkExt;
-use futures::stream::TryStreamExt;
 use once_cell::sync::Lazy;
-use serde::de::DeserializeOwned;
-use serde::ser::Serialize;
-use tokio::net::TcpListener;
-use tokio::select;
 use tracing::info;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::{GenericClient, StorageClient};
+use mz_dataflow_types::client::StorageClient;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_pid_file::PidFile;
-use mz_storage::Server;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
 // The issues present as runaway latency on load test workloads that are
@@ -139,12 +131,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let timely_config = create_timely_config(&args)?;
 
     info!("about to bind to {:?}", args.listen_addr);
-    let listener = TcpListener::bind(args.listen_addr).await?;
-
-    info!(
-        "listening for coordinator connection on {}...",
-        listener.local_addr()?
-    );
 
     let metrics_registry = MetricsRegistry::new();
     {
@@ -184,8 +170,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
 
-    let serve_config = ServeConfig {
-        listener,
+    let serve_config = mz_dataflow_types::client::tcp::ServeConfig {
+        listen_addr: args.listen_addr,
         linger: args.linger,
     };
 
@@ -193,53 +179,13 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         !args.reconcile,
         "Storage runtime does not support command reconciliation."
     );
-    let (server, client) = mz_storage::serve(config)?;
+    let (_server, client) = mz_storage::serve(config)?;
     let client: Box<dyn StorageClient> = Box::new(client);
 
-    serve(serve_config, server, client).await
-}
-
-struct ServeConfig {
-    listener: TcpListener,
-    linger: bool,
-}
-
-async fn serve<G, C, R>(
-    config: ServeConfig,
-    _server: Server,
-    mut client: G,
-) -> Result<(), anyhow::Error>
-where
-    G: GenericClient<C, R>,
-    C: DeserializeOwned + fmt::Debug + Send + Unpin,
-    R: Serialize + fmt::Debug + Send + Unpin,
-{
-    loop {
-        let (conn, _addr) = config.listener.accept().await?;
-        info!("coordinator connection accepted");
-
-        let mut conn = mz_dataflow_types::client::tcp::framed_server(conn);
-        loop {
-            select! {
-                cmd = conn.try_next() => match cmd? {
-                    None => break,
-                    Some(cmd) => { client.send(cmd).await.unwrap(); },
-                },
-                res = client.recv() => {
-                    match res.unwrap() {
-                        None => break,
-                        Some(response) => { conn.send(response).await?; }
-                    }
-                }
-            }
-        }
-        if !config.linger {
-            break;
-        } else {
-            info!("coordinator connection gone; lingering");
-        }
-    }
-
-    info!("coordinator connection gone; terminating");
-    Ok(())
+    mz_dataflow_types::client::tcp::serve(
+        serve_config,
+        client,
+        mz_dataflow_types::client::tcp::ProtoStorageServer::new,
+    )
+    .await
 }

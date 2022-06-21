@@ -27,6 +27,10 @@ service ProtoCompute {
     rpc CommandResponseStream (stream ProtoComputeCommand) returns (stream ProtoComputeResponse);
 }
 
+service ProtoStorage {
+    rpc CommandResponseStream (stream ProtoStorageCommand) returns (stream ProtoStorageResponse);
+}
+
 message ProtoCompaction {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_persist.gen.persist.ProtoU64Antichain frontier = 2;
