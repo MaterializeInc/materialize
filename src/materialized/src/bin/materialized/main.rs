@@ -391,7 +391,10 @@ pub struct Args {
     /// specified origin.
     ///
     /// The special origin `*` enables CORS for all origins.
-    #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN")]
+    ///
+    /// To specify multiple origins, pass the option multiple times, or, if
+    /// using the environment variable, separate each origin with commas.
+    #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN", use_value_delimiter = true)]
     cors_allowed_origin: Vec<HeaderValue>,
 
     // === Storage options. ===
