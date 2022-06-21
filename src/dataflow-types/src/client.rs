@@ -981,7 +981,7 @@ where
 pub type ComputedRemoteClient<T> = RemoteClient<
     ComputeCommand<T>,
     ComputeResponse<T>,
-    tcp::GrpcClient<
+    grpc::GrpcClient<
         proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
         ProtoComputeCommand,
         ProtoComputeResponse,
@@ -991,7 +991,7 @@ pub type ComputedRemoteClient<T> = RemoteClient<
 pub type StoragedRemoteClient<T> = RemoteClient<
     StorageCommand<T>,
     StorageResponse<T>,
-    tcp::GrpcClient<
+    grpc::GrpcClient<
         proto_storage_client::ProtoStorageClient<tonic::transport::Channel>,
         ProtoStorageCommand,
         ProtoStorageResponse,
@@ -1115,7 +1115,7 @@ pub mod process_local {
 }
 
 /// A client to a remote dataflow server.
-pub mod tcp {
+pub mod grpc {
     use mz_repr::proto::ProtoType;
     use mz_repr::proto::RustType;
     use std::cmp;
