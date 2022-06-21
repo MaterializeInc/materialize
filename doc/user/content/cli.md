@@ -15,6 +15,7 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
+[`--cors-allowed-origin`](#cross-origin-resource-sharing-cors) | http(s)?://(localhost\|127.0.0.1) | Allowed origins for cross-origin HTTP requests
 [`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
@@ -115,6 +116,30 @@ also use this to change the port that Materialize listens on from the default
 
 The `materialized` [Docker image](/install/#docker) instead uses a listen
 address of `0.0.0.0:6875` by default, in accordance with Docker conventions.
+
+### Cross-origin resource sharing (CORS)
+
+{{< version-added v0.26.0 />}}
+
+By default, Materialize uses a restrictive [cross-origin resource sharing
+(CORS)][cors] policy that restricts browser-based HTTP requests to only the
+following origins:
+
+  * http://localhost:6875
+  * http://127.0.0.1:6875
+  * http://[::1]:6875
+  * https://localhost:6875
+  * https://127.0.0.1:6875
+  * https://[::1]:6875
+
+You can override the allowed CORS origins by passing the `--cors-allowed-origin`
+flag. You can specify multiple origins by passing the flag multiple times. If
+you are using the `MZ_CORS_ALLOWED_ORIGIN` environment variable, you can specify
+multiple origins by separating each origin with a comma.
+
+{{< version-added v0.26.3 >}}
+The special origin value `*` allows all origins.
+{{< /version-added >}}
 
 ### Compaction window
 
@@ -410,6 +435,7 @@ For precise details of Materialize's behavior, consult the documentation of
 the [`mz_http_proxy`](https://docs.rs/mz_http_proxy) crate.
 
 [api-indexes]: /overview/key-concepts/#indexes
+[cors]: https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
 [gh-feature]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [scv]: /sql/show-create-view
 [scs]: /sql/show-create-source

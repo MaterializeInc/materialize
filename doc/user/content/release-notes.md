@@ -1,5 +1,5 @@
 ---
-title: "Release Notes"
+title: "Release notes"
 description: "What's new in this version of Materialize"
 menu:
   main:
@@ -27,6 +27,20 @@ the v0.26.x series through at least August 31 2022, issuing **patch releases** a
 necessary to address severe bugs and security vulnerabilities.
 {{</ note >}}
 
+{{% version-header v0.26.3 %}}
+
+- Accept the special CORS origin `*` to allow cross-origin requests from any
+  origin. See the
+  [`--allow-cors-origin`](/cli/#cross-origin-resource-sharing-cors) flag for
+  details.
+
+- Add the `dense_rank`, `lag`, `lead`, `first_value`, and `last_value`
+  [window functions](/sql/functions/#window-func).
+
+- Fix a crash when using the [`DEBEZIUM
+  UPSERT`](/sql/create-source/#debezium-envelope) envelope with composite keys
+  whose order differs between the key and value {{% gh 12790 %}}.
+
 {{% version-header v0.26.2 %}}
 
 - Restore CPU and memory Prometheus metrics in the [monitoring dashboard](/ops/monitoring/#quick-monitoring-dashboard).
@@ -48,6 +62,10 @@ necessary to address severe bugs and security vulnerabilities.
 - Avoid leaking memory when an index is dropped {{% gh 11949 %}}.
 
 {{% version-header v0.26.0 %}}
+
+- **Breaking change.** Use a restrictive CORS policy by default. The
+  [`--allow-cors-origin`](/cli/#cross-origin-resource-sharing-cors) flag can
+  be used to override the default policy.
 
 - **Breaking change.** Change the return type of the
   [`list_length`](/sql/functions/#list-func) function from [`bigint`] to
