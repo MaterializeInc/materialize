@@ -196,7 +196,7 @@ pub struct Args {
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
-    #[clap(long, env = "LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
+    #[clap(long, env = "LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "0ms")]
     logical_compaction_window: OptionalDuration,
     /// Default frequency with which to advance timestamps
     #[clap(long, env = "TIMESTAMP_FREQUENCY", hide = true, parse(try_from_str = mz_repr::util::parse_duration), value_name = "DURATION", default_value = "1s")]
