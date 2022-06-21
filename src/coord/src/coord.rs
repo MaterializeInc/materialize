@@ -181,8 +181,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
     AdvanceLocalInput(AdvanceLocalInput<T>),
-    TryGroupCommit,
-    GroupCommit(tokio::sync::OwnedMutexGuard<()>),
+    GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
 }
 
@@ -213,6 +212,12 @@ pub struct CreateSourceStatementReady {
     pub params: Params,
     pub depends_on: Vec<GlobalId>,
     pub original_stmt: Statement<Raw>,
+}
+
+/// An operation that is deferred while waiting for a lock.
+enum Deferred {
+    Plan(DeferredPlan),
+    GroupCommit,
 }
 
 /// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
@@ -473,7 +478,7 @@ pub struct Coordinator<S> {
     /// Serializes accesses to write critical sections.
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
-    write_lock_wait_group: VecDeque<DeferredPlan>,
+    write_lock_wait_group: VecDeque<Deferred>,
     /// Pending writes waiting for a group commit
     pending_writes: Vec<PendingWriteTxn>,
 
@@ -535,7 +540,11 @@ macro_rules! guard_write_critical_section {
     ($coord:expr, $tx:expr, $session:expr, $plan_to_defer: expr) => {
         if !$session.has_write_lock() {
             if $coord.try_grant_session_write_lock(&mut $session).is_err() {
-                $coord.defer_write($tx, $session, $plan_to_defer);
+                $coord.defer_write(Deferred::Plan(DeferredPlan {
+                    tx: $tx,
+                    session: $session,
+                    plan: $plan_to_defer,
+                }));
                 return;
             }
         }
@@ -968,13 +977,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::WriteLockGrant(write_lock_guard) => {
                     // It's possible to have more incoming write lock grants
                     // than pending writes because of cancellations.
-                    if let Some(mut ready) = self.write_lock_wait_group.pop_front() {
-                        ready.session.grant_write_lock(write_lock_guard);
-                        // Write statements never need to track catalog
-                        // dependencies.
-                        let depends_on = vec![];
-                        self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
-                            .await;
+                    if let Some(ready) = self.write_lock_wait_group.pop_front() {
+                        match ready {
+                            Deferred::Plan(mut ready) => {
+                                ready.session.grant_write_lock(write_lock_guard);
+                                // Write statements never need to track catalog
+                                // dependencies.
+                                let depends_on = vec![];
+                                self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
+                                    .await;
+                            }
+                            Deferred::GroupCommit => self.group_commit().await,
+                        }
                     }
                     // N.B. if no deferred plans, write lock is released by drop
                     // here.
@@ -998,11 +1012,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::AdvanceLocalInput(inputs) => {
                     self.advance_local_input(inputs).await;
                 }
-                Message::TryGroupCommit => {
+                Message::GroupCommit => {
                     self.try_group_commit().await;
-                }
-                Message::GroupCommit(guard) => {
-                    self.group_commit(guard).await;
                 }
                 Message::ComputeInstanceStatus(status) => {
                     self.message_compute_instance_status(status).await
@@ -1118,27 +1129,24 @@ impl<S: Append + 'static> Coordinator<S> {
         // `self.get_and_step_local_write_ts()` and safely use that value once we wake up.
         let timestamp = self.peek_local_ts();
         let now = (self.catalog.config().now)();
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
             // some large amount of time, this prevents against then waiting for that
             // large amount of time in case the system clock then advances back to near
             // what it was.
             let remaining_ms = std::cmp::min(timestamp.saturating_sub(now), 1_000);
-            task::spawn(|| "try_group_commit", async move {
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "group_commit", async move {
                 tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
                 internal_cmd_tx
-                    .send(Message::TryGroupCommit)
+                    .send(Message::GroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
         } else {
-            let write_lock = Arc::clone(&self.write_lock);
-            task::spawn(|| format!("group_commit"), async move {
-                let guard = write_lock.lock_owned().await;
-                internal_cmd_tx
-                    .send(Message::GroupCommit(guard))
-                    .expect("sending to internal_cmd_tx cannot fail");
-            });
+            match Arc::clone(&self.write_lock).try_lock_owned() {
+                Ok(_guard) => self.group_commit().await,
+                Err(_) => self.defer_write(Deferred::GroupCommit),
+            };
         }
     }
 
@@ -1146,7 +1154,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
-    async fn group_commit(&mut self, _guard: tokio::sync::OwnedMutexGuard<()>) {
+    async fn group_commit(&mut self) {
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method. We will still commit the write without waiting for `now()`
         // to advance. This is ok because the next batch of writes will trigger the wait loop in
@@ -1939,10 +1947,12 @@ impl<S: Append + 'static> Coordinator<S> {
             if let Some(idx) = self
                 .write_lock_wait_group
                 .iter()
-                .position(|ready| ready.session.conn_id() == conn_id)
+                .position(|ready| matches!(ready, Deferred::Plan(ready) if ready.session.conn_id() == conn_id))
             {
                 let ready = self.write_lock_wait_group.remove(idx).unwrap();
-                ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
+                if let Deferred::Plan(ready) = ready {
+                    ready.tx.send(Ok(ExecuteResponse::Canceled), ready.session);
+                }
             }
 
             // Inform the target session (if it asks) about the cancellation.
@@ -3471,7 +3481,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         write_rx = Some(rx);
                         if self.pending_writes.is_empty() {
                             self.internal_cmd_tx
-                                .send(Message::TryGroupCommit)
+                                .send(Message::GroupCommit)
                                 .expect("sending to internal_cmd_tx cannot fail");
                         }
                         self.pending_writes.push(PendingWriteTxn {
@@ -5337,23 +5347,20 @@ impl<S: Append + 'static> Coordinator<S> {
         })
     }
 
-    /// Defers executing `plan` until the write lock becomes available; waiting
-    /// occurs in a greenthread, so callers of this function likely want to
+    /// Defers executing `deferred` until the write lock becomes available; waiting
+    /// occurs in a green-thread, so callers of this function likely want to
     /// return after calling it.
-    fn defer_write(
-        &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        plan: Plan,
-    ) {
-        let conn_id = session.conn_id();
-        let plan = DeferredPlan { tx, session, plan };
-        self.write_lock_wait_group.push_back(plan);
+    fn defer_write(&mut self, deferred: Deferred) {
+        let id = match &deferred {
+            Deferred::Plan(plan) => plan.session.conn_id().to_string(),
+            Deferred::GroupCommit => "group_commit".to_string(),
+        };
+        self.write_lock_wait_group.push_back(deferred);
 
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let write_lock = Arc::clone(&self.write_lock);
         // TODO(guswynn): see if there is more relevant info to add to this name
-        task::spawn(|| format!("defer_write:{conn_id}"), async move {
+        task::spawn(|| format!("defer_write:{id}"), async move {
             let guard = write_lock.lock_owned().await;
             internal_cmd_tx
                 .send(Message::WriteLockGrant(guard))
