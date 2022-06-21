@@ -389,7 +389,9 @@ pub struct Args {
     frontegg_password_prefix: Option<String>,
     /// Enable cross-origin resource sharing (CORS) for HTTP requests from the
     /// specified origin.
-    #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN", hide = true)]
+    ///
+    /// The special origin `*` enables CORS for all origins.
+    #[structopt(long, env = "MZ_CORS_ALLOWED_ORIGIN")]
     cors_allowed_origin: Vec<HeaderValue>,
 
     // === Storage options. ===
