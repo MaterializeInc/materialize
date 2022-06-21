@@ -610,8 +610,10 @@ impl ReadPolicy<mz_repr::Timestamp> {
             } else {
                 // Subtract the lag from the time, and then round down to a multiple thereof to cut chatter.
                 let mut time = upper[0];
-                time = time.saturating_sub(lag);
-                time = time.saturating_sub(time % lag);
+                if lag != 0 {
+                    time = time.saturating_sub(lag);
+                    time = time.saturating_sub(time % lag);
+                }
                 Antichain::from_elem(time)
             }
         }))
@@ -633,5 +635,17 @@ impl<T: Timestamp> ReadPolicy<T> {
                 frontier
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lag_writes_by_zero() {
+        let policy = ReadPolicy::lag_writes_by(0);
+        let write_frontier = Antichain::from_elem(5);
+        assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
     }
 }
