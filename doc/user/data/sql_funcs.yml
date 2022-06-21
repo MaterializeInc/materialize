@@ -641,6 +641,10 @@
   functions:
   - signature: 'dense_rank() -> int'
     description: Returns the rank of the current row within its partition without gaps, counting from 1.
+  - signature: 'first_value(value anycompatible) -> anyelement'
+    description: >-
+      Returns `value` evaluated at the first row of the window frame. The default window frame is
+      `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
   - signature: 'lag(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
     description: >-
       Returns `value` evaluated at the row that is `offset` rows before the current row within the partition;
@@ -648,6 +652,10 @@
       If `offset` is `NULL`, `NULL` is returned instead.
       Both `offset` and `default` are evaluated with respect to the current row.
       If omitted, `offset` defaults to 1 and `default` to `NULL`.
+  - signature: 'last_value(value anycompatible) -> anyelement'
+    description: >-
+      Returns `value` evaluated at the last row of the window frame. The default window frame is
+      `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
   - signature: 'lead(value anycompatible [, offset integer [, default anycompatible ]]) -> int'
     description: >-
       Returns `value` evaluated at the row that is `offset` rows after the current row within the partition;
