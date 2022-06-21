@@ -49,7 +49,7 @@ use mz_repr::proto::RustType;
 
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,
-    ConcreteComputeInstanceReplicaConfig, ControllerResponse, ProcessId, ReplicaId,
+    ConcreteComputeInstanceReplicaConfig, ControllerResponse, ProcessId, ReplicaId, StorageCommand,
     StorageResponse,
 };
 use crate::client::{ComputedRemoteClient, GenericClient};
@@ -554,6 +554,8 @@ where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
+    StorageCommand<T>: RustType<super::ProtoStorageCommand>,
+    StorageResponse<T>: RustType<super::ProtoStorageResponse>,
 {
     /// Creates a new controller.
     pub async fn new(config: ControllerConfig) -> Self {
