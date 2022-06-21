@@ -656,7 +656,7 @@ fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
 where
     F: FormatBuffer,
 {
-    if nanos > 0 {
+    if nanos >= 500 {
         let mut micros = nanos / 1000;
         let rem = nanos % 1000;
         if rem >= 500 {
@@ -1606,6 +1606,26 @@ mod tests {
             let actual = protobuf_roundtrip::<_, ProtoParseHexError>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    #[test]
+    fn test_format_nanos_to_micros() {
+        let cases: Vec<(u32, &str)> = vec![
+            (0, ""),
+            (1, ""),
+            (499, ""),
+            (500, ".000001"),
+            (500_000, ".0005"),
+            (5_000_000, ".005"),
+            // Leap second. This is possibly wrong and should maybe be reduced (nanosecond
+            // % 1_000_000_000), but we are at least now aware it does this.
+            (1_999_999_999, ".2"),
+        ];
+        for (nanos, expect) in cases {
+            let mut buf = String::new();
+            format_nanos_to_micros(&mut buf, nanos);
+            assert_eq!(&buf, expect);
         }
     }
 }
