@@ -968,7 +968,7 @@ pub trait FromAddr {
 
 /// A convenience type for compatibility.
 #[derive(Debug)]
-pub struct RemoteClient<C, R, G = tcp::TcpClient<C, R>>
+pub struct RemoteClient<C, R, G>
 where
     (C, R): partitioned::Partitionable<C, R>,
     C: fmt::Debug + Send,
@@ -981,7 +981,7 @@ where
 pub type ComputedRemoteClient<T> = RemoteClient<
     ComputeCommand<T>,
     ComputeResponse<T>,
-    tcp::GrpcClient<
+    grpc::GrpcClient<
         proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
         ProtoComputeCommand,
         ProtoComputeResponse,
@@ -991,7 +991,7 @@ pub type ComputedRemoteClient<T> = RemoteClient<
 pub type StoragedRemoteClient<T> = RemoteClient<
     StorageCommand<T>,
     StorageResponse<T>,
-    tcp::GrpcClient<
+    grpc::GrpcClient<
         proto_storage_client::ProtoStorageClient<tonic::transport::Channel>,
         ProtoStorageCommand,
         ProtoStorageResponse,
@@ -1115,12 +1115,11 @@ pub mod process_local {
 }
 
 /// A client to a remote dataflow server.
-pub mod tcp {
+pub mod grpc {
     use mz_repr::proto::ProtoType;
     use mz_repr::proto::RustType;
     use std::cmp;
     use std::fmt;
-    use std::future::Future;
     use std::net::ToSocketAddrs;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -1128,20 +1127,13 @@ pub mod tcp {
     use tracing::{debug, error, info, warn};
 
     use async_trait::async_trait;
-    use futures::sink::SinkExt;
     use futures::stream::StreamExt;
     use futures::Stream;
-    use serde::de::DeserializeOwned;
-    use serde::ser::Serialize;
-    use tokio::io::{self, AsyncRead, AsyncWrite};
-    use tokio::net::TcpStream;
     use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
     use tokio::sync::Mutex;
     use tokio::sync::Notify;
     use tokio::time::{self, Instant};
-    use tokio_serde::formats::Bincode;
     use tokio_stream::wrappers::UnboundedReceiverStream;
-    use tokio_util::codec::LengthDelimitedCodec;
     use tonic::transport::Server;
     use tonic::Request;
     use tonic::Response;
@@ -1321,170 +1313,6 @@ pub mod tcp {
             debug!("GrpcClient {}: reconnect called", &self.addr);
             self.connect().await
         }
-    }
-
-    enum TcpConn<C, R> {
-        Disconnected,
-        Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
-        Backoff(Instant),
-        Connected(FramedClient<TcpStream, C, R>),
-    }
-
-    impl<C, R> fmt::Debug for TcpConn<C, R> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("TcpConn")
-        }
-    }
-
-    /// A client to a remote dataflow server.
-    ///
-    /// If the client experiences errors, it will return an error from the `recv` method, allowing a
-    /// bearer to re-issue commands. The reconnection happens in `reconnect()`.
-    #[derive(Debug)]
-    pub struct TcpClient<C, R> {
-        connection: TcpConn<C, R>,
-        backoff: Duration,
-        addr: String,
-    }
-
-    impl<C, R> FromAddr for TcpClient<C, R> {
-        /// Creates a new `TcpClient` initially in a disconnected state.
-        ///
-        /// Use the `reconnect()` of the Reconnect trait method to put the client into a connected state.
-        fn from_addr(addr: String) -> TcpClient<C, R> {
-            Self {
-                connection: TcpConn::Disconnected,
-                backoff: Duration::from_millis(10),
-                addr,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl<C: Send, R: Send> Reconnect for TcpClient<C, R> {
-        fn disconnect(&mut self) {
-            self.connection = TcpConn::Disconnected;
-        }
-        async fn reconnect(&mut self) {
-            // This is written in state-machine style to be cancellation safe.
-            loop {
-                match &mut self.connection {
-                    TcpConn::Disconnected => {
-                        let connecting = Box::pin(TcpStream::connect(self.addr.clone()));
-                        self.connection = TcpConn::Connecting(connecting);
-                    }
-                    TcpConn::Connecting(connecting) => match connecting.await {
-                        Ok(connection) => {
-                            tracing::info!("Reconnected to {}", self.addr);
-                            self.connection = TcpConn::Connected(framed_client(connection));
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Error connecting to {}: {e}; reconnecting in {:?}",
-                                self.addr,
-                                self.backoff,
-                            );
-                            let deadline = Instant::now() + self.backoff;
-                            self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
-                            self.connection = TcpConn::Backoff(deadline);
-                        }
-                    },
-                    TcpConn::Backoff(deadline) => {
-                        time::sleep_until(*deadline).await;
-                        self.connection = TcpConn::Disconnected;
-                    }
-                    TcpConn::Connected(_) => {
-                        self.backoff = Duration::from_millis(10);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    #[async_trait]
-    impl<C, R> GenericClient<C, R> for TcpClient<C, R>
-    where
-        C: Serialize + fmt::Debug + Send + Unpin,
-        R: DeserializeOwned + fmt::Debug + Send + Unpin,
-    {
-        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-            if let TcpConn::Connected(connection) = &mut self.connection {
-                let result = connection.send(cmd).await;
-                if result.is_err() {
-                    self.connection = TcpConn::Disconnected;
-                }
-                Ok(result?)
-            } else {
-                Err(anyhow::anyhow!("Sent into disconnected channel"))
-            }
-        }
-
-        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-            if let TcpConn::Connected(connection) = &mut self.connection {
-                match connection.next().await {
-                    Some(Ok(response)) => Ok(Some(response)),
-                    other => {
-                        match other {
-                            Some(Ok(_)) => unreachable!("handled above"),
-                            None => error!("connection unexpectedly terminated cleanly"),
-                            Some(Err(e)) => error!("connection unexpectedly errored: {e}"),
-                        }
-                        self.connection = TcpConn::Disconnected;
-                        Err(anyhow::anyhow!("Connection severed"))
-                    }
-                }
-            } else {
-                Err(anyhow::anyhow!("Connection severed"))
-            }
-        }
-    }
-
-    /// A framed connection to a dataflowd server.
-    pub type Framed<C, T, U> = tokio_serde::Framed<
-        tokio_util::codec::Framed<C, LengthDelimitedCodec>,
-        T,
-        U,
-        Bincode<T, U>,
-    >;
-
-    /// A framed connection from the server's perspective.
-    pub type FramedServer<A, C, R> = Framed<A, C, R>;
-
-    /// A framed connection from the client's perspective.
-    pub type FramedClient<A, C, R> = Framed<A, R, C>;
-
-    fn length_delimited_codec() -> LengthDelimitedCodec {
-        // NOTE(benesch): using an unlimited maximum frame length is problematic
-        // because Tokio never shrinks its buffer. Sending or receiving one large
-        // message of size N means the client will hold on to a buffer of size
-        // N forever. We should investigate alternative transport protocols that
-        // do not have this limitation.
-        let mut codec = LengthDelimitedCodec::new();
-        codec.set_max_frame_length(usize::MAX);
-        codec
-    }
-
-    /// Constructs a framed connection for the server.
-    pub fn framed_server<A, C, R>(conn: A) -> FramedServer<A, C, R>
-    where
-        A: AsyncRead + AsyncWrite,
-    {
-        tokio_serde::Framed::new(
-            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
-            Bincode::default(),
-        )
-    }
-
-    /// Constructs a framed connection for the client.
-    pub fn framed_client<A, C, R>(conn: A) -> FramedClient<A, C, R>
-    where
-        A: AsyncRead + AsyncWrite,
-    {
-        tokio_serde::Framed::new(
-            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
-            Bincode::default(),
-        )
     }
 
     /// The server side gRPC implementation that will run in computed or storaged.

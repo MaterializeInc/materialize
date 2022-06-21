@@ -170,7 +170,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
 
-    let serve_config = mz_dataflow_types::client::tcp::ServeConfig {
+    let serve_config = mz_dataflow_types::client::grpc::ServeConfig {
         listen_addr: args.listen_addr,
         linger: args.linger,
     };
@@ -182,10 +182,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let (_server, client) = mz_storage::serve(config)?;
     let client: Box<dyn StorageClient> = Box::new(client);
 
-    mz_dataflow_types::client::tcp::serve(
+    mz_dataflow_types::client::grpc::serve(
         serve_config,
         client,
-        mz_dataflow_types::client::tcp::ProtoStorageServer::new,
+        mz_dataflow_types::client::grpc::ProtoStorageServer::new,
     )
     .await
 }

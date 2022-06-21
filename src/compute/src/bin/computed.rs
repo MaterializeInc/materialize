@@ -174,7 +174,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         ),
     };
 
-    let serve_config = mz_dataflow_types::client::tcp::ServeConfig {
+    let serve_config = mz_dataflow_types::client::grpc::ServeConfig {
         listen_addr: args.listen_addr,
         linger: args.linger,
     };
@@ -185,10 +185,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         client = Box::new(ComputeCommandReconcile::new(client))
     }
 
-    mz_dataflow_types::client::tcp::serve(
+    mz_dataflow_types::client::grpc::serve(
         serve_config,
         client,
-        mz_dataflow_types::client::tcp::ProtoComputeServer::new,
+        mz_dataflow_types::client::grpc::ProtoComputeServer::new,
     )
     .await
 }
