@@ -23,7 +23,6 @@ use std::sync::Arc;
 use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
@@ -33,7 +32,6 @@ use timely::progress::Timestamp;
 use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
-use crate::cache::PersistClientCache;
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
@@ -73,18 +71,10 @@ pub struct PersistLocation {
 }
 
 impl PersistLocation {
-    /// TODO: Plumb [PersistClientCache] to the necessary places and remove
-    /// this.
-    pub async fn open(&self) -> Result<PersistClient, ExternalError> {
-        PersistClientCache::new(&MetricsRegistry::new())
-            .open(self.clone())
-            .await
-    }
-
     /// Opens the associated implementations of [BlobMulti] and [Consensus].
     ///
     /// This is exposed mostly for testing. Persist users likely want
-    /// [Self::open].
+    /// [crate::cache::PersistClientCache::open].
     pub async fn open_locations(
         &self,
         metrics: &Metrics,
@@ -251,7 +241,7 @@ impl PersistClient {
     /// the given [BlobMulti] and [Consensus].
     ///
     /// This is exposed mostly for testing. Persist users likely want
-    /// [PersistClientCache::open].
+    /// [crate::cache::PersistClientCache::open].
     pub async fn new(
         cfg: PersistConfig,
         blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -408,6 +398,7 @@ mod tests {
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
 
+    use crate::cache::PersistClientCache;
     use crate::r#impl::state::Upper;
     use crate::read::ListenEvent;
 

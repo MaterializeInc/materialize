@@ -31,12 +31,14 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
+use mz_persist_client::cache::PersistClientCache;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::order::TotalOrder;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::progress::Timestamp;
+use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 
 use mz_orchestrator::{
@@ -74,6 +76,10 @@ pub struct ControllerConfig {
     pub linger: bool,
     /// The persist location where all storage collections will be written to.
     pub persist_location: PersistLocation,
+    /// A process-global cache of (blob_uri, consensus_uri) ->
+    /// PersistClient.
+    /// This is intentionally shared between workers.
+    pub persist_clients: Arc<Mutex<PersistClientCache>>,
     /// The stash URL for the storage controller.
     pub storage_stash_url: String,
     /// The storaged image to use when starting new storage processes.
@@ -562,6 +568,7 @@ where
         let storage_controller = crate::client::controller::storage::Controller::new(
             config.storage_stash_url,
             config.persist_location,
+            config.persist_clients,
             config.orchestrator.namespace("storage"),
             config.storaged_image,
         )
