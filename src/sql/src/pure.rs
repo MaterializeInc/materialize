@@ -87,7 +87,7 @@ pub async fn purify_create_source(
                 }
                 KafkaConnection::Inline { broker } => (
                     broker.to_string(),
-                    kafka_util::extract_config(&*catalog, &mut with_options_map)?,
+                    kafka_util::extract_config(&mut with_options_map)?,
                 ),
             };
             let consumer = kafka_util::create_consumer(
@@ -325,7 +325,6 @@ async fn purify_csr_connection_proto(
         None => {
             let ccsr_connection = match connection {
                 CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                    catalog,
                     url.parse()?,
                     &mut normalize::options(&ccsr_options)?,
                 )?,
@@ -388,7 +387,6 @@ async fn purify_csr_connection_avro(
     if seed.is_none() {
         let ccsr_connection = match connection {
             CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
-                catalog,
                 url.parse()?,
                 &mut normalize::options(&ccsr_options)?,
             )?,
