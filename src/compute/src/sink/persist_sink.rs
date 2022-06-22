@@ -11,6 +11,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::channels::pact::Exchange;
@@ -71,6 +72,7 @@ where
         let mut input =
             persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
 
+        let persist_clients = Arc::clone(&compute_state.persist_clients);
         let persist_location = PersistLocation {
             consensus_uri: self.consensus_uri.clone(),
             blob_uri: self.blob_uri.clone(),
@@ -105,8 +107,10 @@ where
                 let mut stash: HashMap<_, Vec<_>> = HashMap::new();
 
                 // TODO(aljoscha): We need to figure out what to do with error results from these calls.
-                let mut write = persist_location
-                    .open()
+                let mut write = persist_clients
+                    .lock()
+                    .await
+                    .open(persist_location)
                     .await
                     .expect("could not open persist client")
                     .open_writer::<Row, Row, Timestamp, Diff>(shard_id)

@@ -251,7 +251,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
 
     // Initialize dataflow controller.
     let dataflow_controller = mz_dataflow_types::client::Controller::new(config.controller).await;
-
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {
         dataflow_client: dataflow_controller,
