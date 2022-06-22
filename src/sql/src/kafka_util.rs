@@ -29,7 +29,6 @@ use tokio::time::Duration;
 
 use mz_sql_parser::ast::Value;
 
-use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::normalize::SqlValueOrSecret;
 
 enum ValType {
@@ -96,7 +95,6 @@ impl Config {
 }
 
 fn extract(
-    catalog: &dyn SessionCatalog,
     input: &mut BTreeMap<String, SqlValueOrSecret>,
     configs: &[Config],
 ) -> Result<BTreeMap<String, StringOrSecret>, anyhow::Error> {
@@ -144,15 +142,6 @@ fn extract(
                 );
             }
         };
-        if let StringOrSecret::Secret(id) = value {
-            let item = catalog.get_item(&id);
-            if item.item_type() != CatalogItemType::Secret {
-                bail!(
-                    "{} is not a SECRET",
-                    catalog.resolve_full_name(&item.name())
-                );
-            }
-        }
         out.insert(config.get_kafka_config_key(), value);
     }
     Ok(out)
@@ -169,11 +158,9 @@ fn extract(
 /// - If any of the values in `with_options` are not
 ///   `sql_parser::ast::Value::String`.
 pub fn extract_config(
-    catalog: &dyn SessionCatalog,
     with_options: &mut BTreeMap<String, SqlValueOrSecret>,
 ) -> anyhow::Result<BTreeMap<String, StringOrSecret>> {
     extract(
-        catalog,
         with_options,
         &[
             Config::string("acks"),
@@ -411,12 +398,10 @@ impl ClientContext for KafkaErrCheckContext {
 // Generates a `CsrConnection` based on the configuration extracted from
 // `extract_security_config()`.
 pub fn generate_ccsr_connection(
-    catalog: &dyn SessionCatalog,
     url: Url,
     ccsr_options: &mut BTreeMap<String, SqlValueOrSecret>,
 ) -> Result<CsrConnection, anyhow::Error> {
     let mut ccsr_options = extract(
-        catalog,
         ccsr_options,
         &[
             Config::string_or_secret("ssl_ca_pem"),

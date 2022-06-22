@@ -1004,6 +1004,34 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             },
         }
     }
+
+    fn fold_with_option_value(
+        &mut self,
+        node: mz_sql_parser::ast::WithOptionValue<Raw>,
+    ) -> mz_sql_parser::ast::WithOptionValue<Aug> {
+        use mz_sql_parser::ast::WithOptionValue::*;
+        match node {
+            Value(v) => Value(self.fold_value(v)),
+            Ident(i) => Ident(self.fold_ident(i)),
+            DataType(dt) => DataType(self.fold_data_type(dt)),
+            Secret(secret) => {
+                let object_name = self.fold_object_name(secret);
+                match &object_name {
+                    ResolvedObjectName::Object { id, .. } => {
+                        let item = self.catalog.get_item(&id);
+                        if item.item_type() != CatalogItemType::Secret {
+                            self.status = Err(PlanError::InvalidSecret(object_name.clone()));
+                        }
+                    }
+                    ResolvedObjectName::Cte { .. } => {
+                        self.status = Err(PlanError::InvalidSecret(object_name.clone()));
+                    }
+                    ResolvedObjectName::Error => {}
+                }
+                Secret(object_name)
+            }
+        }
+    }
 }
 
 /// Resolves names in an AST node using the provided catalog.
