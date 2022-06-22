@@ -31,8 +31,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::TryStreamExt as _;
 use futures::stream::{FuturesUnordered, StreamExt};
-use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
-use proptest::strategy::Strategy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -139,7 +138,7 @@ pub trait StorageController: Debug + Send {
 }
 
 /// Metadata required by a storage instance to read a storage collection
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
     pub timestamp_shard_id: ShardId,
@@ -171,26 +170,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
         })
-    }
-}
-
-impl Arbitrary for CollectionMetadata {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // TODO (#12359): derive Arbitrary after CollectionMetadata
-        // gains proper protobuf support.
-        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
-        Just(CollectionMetadata {
-            persist_location: PersistLocation {
-                blob_uri: "".to_string(),
-                consensus_uri: "".to_string(),
-            },
-            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
-            persist_shard: ShardId::new(),
-        })
-        .boxed()
     }
 }
 
