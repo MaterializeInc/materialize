@@ -1,6 +1,6 @@
 ---
-title: "SQL Functions + Operators"
-description: "Find all of the great SQL functions you know and love..."
+title: "SQL functions & operators"
+description: "Learn more about the SQL functions and operators supported in Materialize"
 menu:
   main:
     identifier: sql-functions

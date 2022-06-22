@@ -20,40 +20,50 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use bytes::BufMut;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::metrics::MetricsRegistry;
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
-use tracing::{debug, trace};
+use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
+use crate::cache::PersistClientCache;
 use crate::error::InvalidUsage;
-use crate::r#impl::machine::Machine;
+use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
 
+pub mod batch;
+pub mod cache;
 pub mod error;
-mod examples;
 pub mod read;
 pub mod write;
 
+pub use crate::r#impl::state::{Since, Upper};
+
 /// An implementation of the public crate interface.
-///
-/// TODO: Move this to another crate.
 pub(crate) mod r#impl {
     pub mod machine;
+    pub mod metrics;
     pub mod state;
 }
+
+// TODO: Remove this in favor of making it possible for all PersistClients to be
+// created by the PersistCache.
+pub use crate::r#impl::metrics::Metrics;
 
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
 ///
 /// This structure can be durably written down or transmitted for use by other
 /// processes. This location can contain any number of persist shards.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct PersistLocation {
     /// Uri string that identifies the blob store.
     pub blob_uri: String,
@@ -63,15 +73,12 @@ pub struct PersistLocation {
 }
 
 impl PersistLocation {
-    /// Returns a new client for interfacing with persist shards made durable to
-    /// the given `location`.
-    ///
-    /// The same `location` may be used concurrently from multiple processes.
-    /// Concurrent usage is subject to the constraints documented on individual
-    /// methods (mostly [WriteHandle::append]).
+    /// TODO: Plumb [PersistClientCache] to the necessary places and remove
+    /// this.
     pub async fn open(&self) -> Result<PersistClient, ExternalError> {
-        let (blob, consensus) = self.open_locations().await?;
-        PersistClient::new(blob, consensus).await
+        PersistClientCache::new(&MetricsRegistry::new())
+            .open(self.clone())
+            .await
     }
 
     /// Opens the associated implementations of [BlobMulti] and [Consensus].
@@ -80,6 +87,7 @@ impl PersistLocation {
     /// [Self::open].
     pub async fn open_locations(
         &self,
+        metrics: &Metrics,
     ) -> Result<
         (
             Arc<dyn BlobMulti + Send + Sync>,
@@ -91,14 +99,14 @@ impl PersistLocation {
             "Location::open blob={} consensus={}",
             self.blob_uri, self.consensus_uri,
         );
-        let blob = BlobMultiConfig::try_from(&self.blob_uri)
-            .await?
-            .open()
-            .await?;
-        let consensus = ConsensusConfig::try_from(&self.consensus_uri)
-            .await?
-            .open()
-            .await?;
+        let blob = BlobMultiConfig::try_from(&self.blob_uri).await?;
+        let blob =
+            retry_external(&metrics.retries.external.blob_open, || blob.clone().open()).await;
+        let consensus = ConsensusConfig::try_from(&self.consensus_uri).await?;
+        let consensus = retry_external(&metrics.retries.external.consensus_open, || {
+            consensus.clone().open()
+        })
+        .await;
         Ok((blob, consensus))
     }
 }
@@ -108,7 +116,7 @@ impl PersistLocation {
 /// The [std::string::ToString::to_string] format of this may be stored durably
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ShardId([u8; 16]);
 
 impl std::fmt::Display for ShardId {
@@ -136,11 +144,81 @@ impl std::str::FromStr for ShardId {
     }
 }
 
+impl Codec for ShardId {
+    fn codec_name() -> String {
+        "ShardId".to_owned()
+    }
+
+    fn encode<B>(&self, buf: &mut B)
+    where
+        B: BufMut,
+    {
+        let s = self.to_string();
+        <String as Codec>::encode(&s, buf)
+    }
+
+    fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
+        let s = <String as Codec>::decode(buf)?;
+        s.parse()
+    }
+}
+
 impl ShardId {
     /// Returns a random [ShardId] that is reasonably likely to have never been
     /// generated before.
     pub fn new() -> Self {
         ShardId(Uuid::new_v4().as_bytes().to_owned())
+    }
+}
+
+/// The tunable knobs for persist.
+#[derive(Debug, Clone)]
+pub struct PersistConfig {
+    /// A target maximum size of blob payloads in bytes. If a logical "batch" is
+    /// bigger than this, it will be broken up into smaller, independent pieces.
+    /// This is best-effort, not a guarantee (though as of 2022-06-09, we happen
+    /// to always respect it). This target size doesn't apply for an individual
+    /// update that exceeds it in size, but that scenario is almost certainly a
+    /// mis-use of the system.
+    pub blob_target_size: usize,
+    /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
+    /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
+    /// calls on previous ones finishing.
+    pub batch_builder_max_outstanding_parts: usize,
+}
+
+// Tuning inputs:
+// - A larger blob_target_size (capped at KEY_VAL_DATA_MAX_LEN) results in fewer
+//   entries in consensus state. Before we have compaction and/or incremental
+//   state, it is already growing without bound, so this is a concern. OTOH, for
+//   any "reasonable" size (> 100MiB?) of blob_target_size, it seems we'd end up
+//   with a pretty tremendous amount of data in the shard before this became a
+//   real issue.
+// - A larger blob_target_size will results in fewer s3 operations, which are
+//   charged per operation. (Hmm, maybe not if we're charged per call in a
+//   multipart op. The S3BlobMulti impl already chunks things at 8MiB.)
+// - A smaller blob_target_size will result in more even memory usage in
+//   readers.
+// - A larger batch_builder_max_outstanding_parts increases throughput (to a
+//   point).
+// - A smaller batch_builder_max_outstanding_parts provides a bound on the
+//   amount of memory used by a writer.
+//
+// Tuning logic:
+// - blob_target_size was initially selected to be an exact multiple of 8MiB
+//   (the s3 multipart size) that was in the same neighborhood as our initial
+//   max throughput (~250MiB).
+// - batch_builder_max_outstanding_parts was initially selected to be as small
+//   as possible without harming pipelining. 0 means no pipelining, 1 is full
+//   pipelining as long as generating data takes less time than writing to s3
+//   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
+impl Default for PersistConfig {
+    fn default() -> Self {
+        const MB: usize = 1024 * 1024;
+        Self {
+            blob_target_size: 128 * MB,
+            batch_builder_max_outstanding_parts: 2,
+        }
     }
 }
 
@@ -162,8 +240,10 @@ impl ShardId {
 /// ```
 #[derive(Debug, Clone)]
 pub struct PersistClient {
+    cfg: PersistConfig,
     blob: Arc<dyn BlobMulti + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
+    metrics: Arc<Metrics>,
 }
 
 impl PersistClient {
@@ -171,15 +251,22 @@ impl PersistClient {
     /// the given [BlobMulti] and [Consensus].
     ///
     /// This is exposed mostly for testing. Persist users likely want
-    /// [PersistLocation::open].
+    /// [PersistClientCache::open].
     pub async fn new(
+        cfg: PersistConfig,
         blob: Arc<dyn BlobMulti + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
+        metrics: Arc<Metrics>,
     ) -> Result<Self, ExternalError> {
         trace!("Client::new blob={:?} consensus={:?}", blob, consensus);
         // TODO: Verify somehow that blob matches consensus to prevent
         // accidental misuse.
-        Ok(PersistClient { blob, consensus })
+        Ok(PersistClient {
+            cfg,
+            blob,
+            consensus,
+            metrics,
+        })
     }
 
     /// Provides capabilities for the durable TVC identified by `shard_id` at
@@ -195,6 +282,7 @@ impl PersistClient {
     /// If `shard_id` has never been used before, initializes a new shard and
     /// returns handles with `since` and `upper` frontiers set to initial values
     /// of `Antichain::from_elem(T::minimum())`.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
     pub async fn open<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -206,15 +294,23 @@ impl PersistClient {
         D: Semigroup + Codec64,
     {
         trace!("Client::open shard_id={:?}", shard_id);
-        let mut machine = Machine::new(shard_id, Arc::clone(&self.consensus)).await?;
+        let mut machine = Machine::new(
+            shard_id,
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.metrics),
+        )
+        .await?;
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
             machine: machine.clone(),
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
         };
         let reader = ReadHandle {
+            metrics: Arc::clone(&self.metrics),
             reader_id,
             machine,
             blob: Arc::clone(&self.blob),
@@ -223,6 +319,62 @@ impl PersistClient {
         };
 
         Ok((writer, reader))
+    }
+
+    /// [Self::open], but returning only a [ReadHandle].
+    ///
+    /// Use this to save latency and a bit of persist traffic if you're just
+    /// going to immediately drop or expire the [WriteHandle].
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn open_reader<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<ReadHandle<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        trace!("Client::open_reader shard_id={:?}", shard_id);
+        // At the moment, writers aren't registered, so there's nothing special
+        // to do here. Introduce the method, though, so that code using persist
+        // doesn't have to change if we bring writer registration back.
+        let (_, reader) = self.open(shard_id).await?;
+        Ok(reader)
+    }
+
+    /// [Self::open], but returning only a [WriteHandle].
+    ///
+    /// Use this to save latency and a bit of persist traffic if you're just
+    /// going to immediately drop or expire the [ReadHandle].
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn open_writer<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        trace!("Client::open_writer shard_id={:?}", shard_id);
+        let mut machine = Machine::new(
+            shard_id,
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.metrics),
+        )
+        .await?;
+        let shard_upper = machine.fetch_upper().await;
+        let writer = WriteHandle {
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
+            machine,
+            blob: Arc::clone(&self.blob),
+            upper: shard_upper,
+        };
+        Ok(writer)
     }
 
     /// Test helper for a [Self::open] call that is expected to succeed.
@@ -245,12 +397,12 @@ impl PersistClient {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
+    use std::num::NonZeroUsize;
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
 
     use futures_task::noop_waker;
-    use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
     use mz_persist::workload::DataGenerator;
     use timely::progress::Antichain;
     use timely::PartialOrder;
@@ -262,9 +414,17 @@ mod tests {
     use super::*;
 
     pub async fn new_test_client() -> PersistClient {
-        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
-        let consensus = Arc::new(MemConsensus::default());
-        PersistClient::new(blob, consensus)
+        // Configure an aggressively small blob_target_size so we get some
+        // amount of coverage of that in tests. Similarly, for max_outstanding.
+        let mut cache = PersistClientCache::new_no_metrics();
+        cache.cfg.blob_target_size = 10;
+        cache.cfg.batch_builder_max_outstanding_parts = 1;
+
+        cache
+            .open(PersistLocation {
+                blob_uri: "mem://".to_owned(),
+                consensus_uri: "mem://".to_owned(),
+            })
             .await
             .expect("client construction failed")
     }
@@ -338,6 +498,264 @@ mod tests {
         // Downgrading the since is tracked locally (but otherwise is a no-op).
         read.downgrade_since(Antichain::from_elem(2)).await;
         assert_eq!(read.since(), &Antichain::from_elem(2));
+    }
+
+    // Sanity check that the open_reader and open_writer calls work.
+    #[tokio::test]
+    async fn open_reader_writer() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let shard_id = ShardId::new();
+        let client = new_test_client().await;
+        let mut write1 = client
+            .open_writer::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+        let read1 = client
+            .open_reader::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+        let read2 = client
+            .open_reader::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+        let mut write2 = client
+            .open_writer::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("codec mismatch");
+
+        write2.expect_compare_and_append(&data[..1], 0, 2).await;
+        assert_eq!(
+            read2.expect_snapshot(1).await.read_all().await,
+            all_ok(&data[..1], 1)
+        );
+        write1.expect_compare_and_append(&data[1..], 2, 4).await;
+        assert_eq!(
+            read1.expect_snapshot(3).await.read_all().await,
+            all_ok(&data, 3)
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_usage() {
+        mz_ore::test::init_logging();
+
+        let data = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+            (("3".to_owned(), "three".to_owned()), 3, 1),
+        ];
+
+        let shard_id0 = "s00000000-0000-0000-0000-000000000000"
+            .parse::<ShardId>()
+            .expect("invalid shard id");
+        let client = new_test_client().await;
+
+        let (mut write0, read0) = client
+            .expect_open::<String, String, u64, i64>(shard_id0)
+            .await;
+
+        write0.expect_compare_and_append(&data, 0, 4).await;
+
+        // InvalidUsage from PersistClient methods.
+        {
+            fn codecs(k: &str, v: &str, t: &str, d: &str) -> (String, String, String, String) {
+                (k.to_owned(), v.to_owned(), t.to_owned(), d.to_owned())
+            }
+
+            assert_eq!(
+                client
+                    .open::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("Vec<u8>", "String", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open::<String, Vec<u8>, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("String", "Vec<u8>", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open::<String, String, i64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("String", "String", "i64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open::<String, String, u64, u64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("String", "String", "u64", "u64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+
+            // open_reader and open_writer end up using the same checks, so just
+            // verify one type each to verify the plumbing instead of the full
+            // set.
+            assert_eq!(
+                client
+                    .open_reader::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("Vec<u8>", "String", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+            assert_eq!(
+                client
+                    .open_writer::<Vec<u8>, String, u64, i64>(shard_id0)
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::CodecMismatch {
+                    requested: codecs("Vec<u8>", "String", "u64", "i64"),
+                    actual: codecs("String", "String", "u64", "i64"),
+                }
+            );
+        }
+
+        // InvalidUsage from ReadHandle methods.
+        {
+            let mut splits = read0
+                .snapshot_splits(Antichain::from_elem(3), NonZeroUsize::new(1).unwrap())
+                .await
+                .expect("cannot serve requested as_of");
+            let split = splits.pop().unwrap();
+
+            let shard_id1 = "s11111111-1111-1111-1111-111111111111"
+                .parse::<ShardId>()
+                .expect("invalid shard id");
+            let (_, read1) = client
+                .expect_open::<String, String, u64, i64>(shard_id1)
+                .await;
+            assert_eq!(
+                read1.snapshot_iter(split).await.unwrap_err(),
+                InvalidUsage::SnapshotNotFromThisShard {
+                    snapshot_shard: shard_id0,
+                    handle_shard: shard_id1,
+                }
+            );
+        }
+
+        // InvalidUsage from WriteHandle methods.
+        {
+            let ts3 = &data[2];
+            assert_eq!(ts3.1, 3);
+            let ts3 = vec![ts3.clone()];
+
+            // WriteHandle::append also covers append_batch,
+            // compare_and_append_batch, compare_and_append.
+            assert_eq!(
+                write0
+                    .append(&ts3, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::UpdateNotBeyondLower {
+                    ts: 3,
+                    lower: Antichain::from_elem(4),
+                },
+            );
+            assert_eq!(
+                write0
+                    .append(&ts3, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::UpdateBeyondUpper {
+                    max_ts: 3,
+                    expected_upper: Antichain::from_elem(3),
+                },
+            );
+            // NB unlike the previous tests, this one has empty updates.
+            assert_eq!(
+                write0
+                    .append(&data[..0], Antichain::from_elem(3), Antichain::from_elem(2))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBounds {
+                    lower: Antichain::from_elem(3),
+                    upper: Antichain::from_elem(2),
+                },
+            );
+
+            // Tests for the BatchBuilder.
+            assert_eq!(
+                write0
+                    .builder(0, Antichain::from_elem(3))
+                    .finish(Antichain::from_elem(2))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBounds {
+                    lower: Antichain::from_elem(3),
+                    upper: Antichain::from_elem(2)
+                },
+            );
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            assert_eq!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(4), Antichain::from_elem(5))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBatchBounds {
+                    batch_lower: Antichain::from_elem(3),
+                    batch_upper: Antichain::from_elem(4),
+                    append_lower: Antichain::from_elem(4),
+                    append_upper: Antichain::from_elem(5),
+                },
+            );
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            assert_eq!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(2), Antichain::from_elem(3))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidBatchBounds {
+                    batch_lower: Antichain::from_elem(3),
+                    batch_upper: Antichain::from_elem(4),
+                    append_lower: Antichain::from_elem(2),
+                    append_upper: Antichain::from_elem(3),
+                },
+            );
+            let batch = write0
+                .batch(&ts3, Antichain::from_elem(3), Antichain::from_elem(4))
+                .await
+                .expect("invalid usage");
+            // NB unlike the others, this one uses matches! because it's
+            // non-deterministic (the key)
+            assert!(matches!(
+                write0
+                    .append_batch(batch, Antichain::from_elem(3), Antichain::from_elem(3))
+                    .await
+                    .unwrap_err(),
+                InvalidUsage::InvalidEmptyTimeInterval { .. }
+            ));
+        }
     }
 
     #[tokio::test]
@@ -442,7 +860,7 @@ mod tests {
                 Antichain::from_elem(7),
             )
             .await;
-        assert_eq!(res, Ok(Ok(Err(Upper(Antichain::from_elem(3))))));
+        assert_eq!(res, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Writing with an outdated upper updates the write handle's upper to the correct upper.
         assert_eq!(write.upper(), &Antichain::from_elem(3));
@@ -607,8 +1025,7 @@ mod tests {
                 Antichain::from_elem(5),
                 Antichain::from_elem(6),
             )
-            .await
-            .expect("external error");
+            .await;
         assert_eq!(result, Ok(Err(Upper(Antichain::from_elem(3)))));
 
         // Fixing the lower to make the write contiguous should make the append succeed.
@@ -778,13 +1195,13 @@ mod tests {
         assert_eq!(
             ShardId::from_str("s0"),
             Err(format!(
-                "invalid ShardId s0: invalid length: expected one of [36, 32], found 1"
+                "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
             ))
         );
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
             Err(format!(
-                "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid length: expected one of [36, 32], found 39"
+                "invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-zA-Z], found `O` at 38"
             ))
         );
     }
@@ -801,11 +1218,16 @@ mod tests {
         let mut handles = Vec::<JoinHandle<()>>::new();
         for idx in 0..NUM_WRITERS {
             let (data, client) = (data.clone(), client.clone());
+
+            let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(1);
+
+            let client1 = client.clone();
             let handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-                let (mut write, _) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let (mut write, _) = client1.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+                let mut current_upper = 0;
                 for batch in data.batches() {
                     let new_upper = match batch.get(batch.len() - 1) {
-                        Some((_, max_ts, _)) => max_ts + 1,
+                        Some((_, max_ts, _)) => u64::decode(max_ts) + 1,
                         None => continue,
                     };
                     // Because we (intentionally) call open inside the task,
@@ -825,13 +1247,43 @@ mod tests {
                     if PartialOrder::less_equal(&Antichain::from_elem(new_upper), write.upper()) {
                         continue;
                     }
-                    let updates = batch
-                        .iter()
-                        .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-                        .collect::<Vec<_>>();
+
+                    let current_upper_chain = Antichain::from_elem(current_upper);
+                    current_upper = new_upper;
+                    let new_upper_chain = Antichain::from_elem(new_upper);
+                    let mut builder = write.builder(batch.len(), current_upper_chain);
+
+                    for ((k, v), t, d) in batch.iter() {
+                        builder
+                            .add(&k.to_vec(), &v.to_vec(), &u64::decode(t), &i64::decode(d))
+                            .await
+                            .expect("invalid usage");
+                    }
+
+                    let batch = builder
+                        .finish(new_upper_chain)
+                        .await
+                        .expect("invalid usage");
+
+                    match batch_tx.send(batch).await {
+                        Ok(_) => (),
+                        Err(e) => panic!("send error: {}", e),
+                    }
+                }
+            });
+            handles.push(handle);
+
+            let handle = mz_ore::task::spawn(|| format!("appender-{}", idx), async move {
+                let (mut write, _) = client.expect_open::<Vec<u8>, Vec<u8>, u64, i64>(id).await;
+
+                while let Some(batch) = batch_rx.recv().await {
+                    let lower = batch.lower().clone();
+                    let upper = batch.upper().clone();
                     write
-                        .expect_append(&updates, write.upper().clone(), vec![new_upper])
-                        .await;
+                        .append_batch(batch, lower, upper)
+                        .await
+                        .expect("invalid usage")
+                        .expect("unexpected upper");
                 }
             });
             handles.push(handle);
@@ -920,10 +1372,6 @@ mod tests {
         write.expect_compare_and_append(&data[2..], 3, 4).await;
 
         // Read the snapshot and check that it got all the appropriate data.
-        //
-        // TODO: If we made the SeqNo of the snap and the writes available, we
-        // could assert on the ordering of them to provide additional confidence
-        // that the test hasn't rotted as things change.
         let mut snap = snap.await;
         assert_eq!(snap.read_all().await, all_ok(&data[..], 3));
     }

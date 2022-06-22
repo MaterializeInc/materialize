@@ -14,6 +14,7 @@ use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry, UIntGauge};
 
 /// Persistence related monitoring metrics for blob storage.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct BlobMetricsByType {
     pub(crate) blob_write_count: IntCounter,
     pub(crate) blob_write_bytes: IntCounter,
@@ -60,6 +61,7 @@ impl BlobMetricsByType {
 /// Intentionally not Clone because we expect this to be passed around in an
 /// Arc.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Metrics {
     pub(crate) stream_count: UIntGauge,
     // TODO: pub(crate) stream_updated: UIntGauge,

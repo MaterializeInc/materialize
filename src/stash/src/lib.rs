@@ -26,9 +26,11 @@ use timely::PartialOrder;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::Codec;
 
+mod memory;
 mod postgres;
 mod sqlite;
 
+pub use crate::memory::Memory;
 pub use crate::postgres::Postgres;
 pub use crate::sqlite::Sqlite;
 
@@ -521,10 +523,11 @@ impl From<&str> for StashError {
 /// Additional methods for Stash implementations that are able to provide atomic operations over multiple collections.
 #[async_trait]
 pub trait Append: Stash {
-    /// Atomically adds entries and seals multiple collections.
+    /// Atomically adds entries, seals, and compacts multiple collections.
     ///
     /// The `lower` of each `AppendBatch` is checked to be the existing `upper` of the collection.
     /// The `upper` of the `AppendBatch` will be the new `upper` of the collection.
+    /// The `compact` of each `AppendBatch` will be the new `since` of the collection.
     ///
     /// If this method returns `Ok`, the entries have been made durable and uppers advanced, otherwise no changes were committed.
     async fn append<I>(&mut self, batches: I) -> Result<(), StashError>
@@ -538,6 +541,7 @@ pub struct AppendBatch {
     pub collection_id: Id,
     pub lower: Antichain<Timestamp>,
     pub upper: Antichain<Timestamp>,
+    pub compact: Antichain<Timestamp>,
     pub timestamp: Timestamp,
     pub entries: Vec<((Vec<u8>, Vec<u8>), Timestamp, Diff)>,
 }
@@ -558,10 +562,12 @@ where
             Some(ts) => Antichain::from_elem(ts),
             None => return Err("cannot determine new upper".into()),
         };
+        let compact = Antichain::from_elem(timestamp);
         Ok(AppendBatch {
             collection_id: self.id,
             lower,
             upper,
+            compact,
             timestamp,
             entries: Vec::new(),
         })
@@ -635,6 +641,41 @@ where
         stash.peek_key_one(collection, key).await
     }
 
+    /// Sets the given k,v pair if not already set
+    pub async fn insert_without_overwrite<S>(
+        &self,
+        stash: &mut S,
+        key: &K,
+        value: V,
+    ) -> Result<V, StashError>
+    where
+        S: Append,
+    {
+        let collection = self.get(stash).await?;
+        let mut batch = collection.make_batch(stash).await?;
+        let prev = match stash.peek_key_one(collection, key).await {
+            Ok(prev) => prev,
+            Err(err) => match err.inner {
+                InternalStashError::PeekSinceUpper(_) => {
+                    // If the upper isn't > since, bump the upper and try again to find a sealed
+                    // entry. Do this by appending the empty batch which will advance the upper.
+                    stash.append(once(batch)).await?;
+                    batch = collection.make_batch(stash).await?;
+                    stash.peek_key_one(collection, key).await?
+                }
+                _ => return Err(err),
+            },
+        };
+        match prev {
+            Some(prev) => Ok(prev),
+            None => {
+                collection.append_to_batch(&mut batch, &key, &value, 1);
+                stash.append(once(batch)).await?;
+                Ok(value)
+            }
+        }
+    }
+
     /// Sets the given k,v pair.
     pub async fn upsert_key<S>(&self, stash: &mut S, key: &K, value: &V) -> Result<(), StashError>
     where
@@ -700,53 +741,34 @@ where
 /// table for a [`StashCollection`].
 ///
 /// It supports:
-/// - auto increment primary keys
 /// - uniqueness constraints
 /// - transactional reads and writes (including read-your-writes before commit)
 ///
 /// `K` is the primary key type. Multiple entries with the same key are disallowed.
 /// `V` is the an arbitrary value type.
-/// `I` is the type of an autoincrementing number (like `i64`).
 ///
 /// To finalize, add the results of [`TableTransaction::pending()`] to an
 /// [`AppendBatch`].
-pub struct TableTransaction<K, V, I> {
+pub struct TableTransaction<K, V> {
     initial: BTreeMap<K, V>,
     // The desired state of keys after commit. `None` means the value will be
     // deleted.
     pending: BTreeMap<K, Option<V>>,
-    next_id: Option<I>,
     uniqueness_violation: fn(a: &V, b: &V) -> bool,
 }
 
-impl<K, V, I> TableTransaction<K, V, I>
+impl<K, V> TableTransaction<K, V>
 where
     K: Ord + Eq + Hash + Clone,
     V: Ord + Clone,
-    I: Copy + Ord + Default + num::Num + num::CheckedAdd,
 {
-    /// Create a new TableTransaction with initial data. `numeric_identity` is a
-    /// function to extract an ID from the initial keys (or `None` to disable auto
-    /// incrementing). `uniqueness_violation` is a function whether there is a
+    /// Create a new TableTransaction with initial data.
+    /// `uniqueness_violation` is a function whether there is a
     /// uniqueness violation among two values.
-    pub fn new(
-        initial: BTreeMap<K, V>,
-        numeric_identity: Option<fn(k: &K) -> I>,
-        uniqueness_violation: fn(a: &V, b: &V) -> bool,
-    ) -> Self {
-        let next_id = numeric_identity.map(|f| {
-            initial
-                .keys()
-                .map(f)
-                .max()
-                .unwrap_or_default()
-                .checked_add(&I::one())
-                .expect("ids exhausted")
-        });
+    pub fn new(initial: BTreeMap<K, V>, uniqueness_violation: fn(a: &V, b: &V) -> bool) -> Self {
         Self {
             initial,
             pending: BTreeMap::new(),
-            next_id,
             uniqueness_violation,
         }
     }
@@ -830,23 +852,10 @@ where
         self.pending.extend(pending);
     }
 
-    /// Inserts a new k,v pair. `key_from_id` is a function that returns a new `K`
-    /// provided a new autoincremented `I` (`key_from_id` will be passed `None`
-    /// if auto increment was disabled above, but it must still return the new
-    /// key). The new id is guaranteed to be different from all current and pending
-    /// ids (but not all ids ever).
+    /// Inserts a new k,v pair.
     ///
     /// Returns an error if the uniqueness check failed or the key already exists.
-    pub fn insert<F: FnOnce(Option<I>) -> K>(
-        &mut self,
-        key_from_id: F,
-        v: V,
-    ) -> Result<Option<I>, ()> {
-        let id = self.next_id;
-        let next_id = self
-            .next_id
-            .map(|id| id.checked_add(&I::one()).expect("ids exhausted"));
-        let k = key_from_id(id);
+    pub fn insert(&mut self, k: K, v: V) -> Result<(), ()> {
         let mut violation = false;
         self.for_values(|for_k, for_v| {
             if &k == for_k || (self.uniqueness_violation)(for_v, &v) {
@@ -858,8 +867,7 @@ where
         }
         self.pending.insert(k, Some(v));
         soft_assert!(self.verify().is_ok());
-        self.next_id = next_id;
-        Ok(id)
+        Ok(())
     }
 
     /// Updates k, v pairs. `f` is a function that can return `Some(V)` if the

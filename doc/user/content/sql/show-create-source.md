@@ -1,12 +1,12 @@
 ---
 title: "SHOW CREATE SOURCE"
-description: "`SHOW CREATE SOURCE` returns the URL used to create the source."
+description: "`SHOW CREATE SOURCE` returns the statement used to create the source."
 menu:
   main:
     parent: commands
 ---
 
-`SHOW CREATE SOURCE` returns the URL used to create the source.
+`SHOW CREATE SOURCE` returns the DDL statement used to create the source.
 
 ## Syntax
 
@@ -16,24 +16,16 @@ Field | Use
 ------|-----
 _source&lowbar;name_ | The source you want use. You can find available source names through [`SHOW SOURCES`](../show-sources).
 
-## Details
-
-You can determine a source's type by the **Source URL** address prefix.
-
-Prefix | Type
--------|------
-`kafka://` | Streaming
-`file://` | File
-
 ## Examples
 
 ```sql
 SHOW CREATE SOURCE my_source;
 ```
+
 ```nofmt
-    Source   |        Source URL
+    Source   |        Create Source
 -------------+--------------------------
- my_source   | file:///file-source.csv
+ my_source   | CREATE SOURCE "materialize"."public"."market_orders_raw" FROM PUBNUB SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe' CHANNEL 'pubnub-market-orders'
 ```
 
 ## Related pages

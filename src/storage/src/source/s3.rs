@@ -47,16 +47,18 @@ use tokio::time::{self, Duration};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tracing::{debug, error, trace, warn};
 
-use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsConfig, AwsExternalId, Compression, ExternalSourceConnector,
-    MzOffset, S3KeySource,
-};
+use mz_dataflow_types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_dataflow_types::connections::ConnectionContext;
+use mz_dataflow_types::sources::encoding::SourceDataEncoding;
+use mz_dataflow_types::sources::{Compression, ExternalSourceConnection, MzOffset, S3KeySource};
 use mz_expr::PartitionId;
 use mz_ore::retry::{Retry, RetryReader};
 use mz_ore::task;
 use mz_repr::GlobalId;
 
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{
+    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
+};
 
 use self::metrics::{BucketMetrics, ScanBucketMetrics};
 use self::notifications::{Event, EventType, TestEvent};
@@ -101,10 +103,10 @@ enum DataflowStatus {
 /// Possibly this should be per-bucket or per-object, depending on the needs
 /// for deterministic timestamping on restarts: issue #5715
 #[derive(Clone, Copy, Debug)]
-struct S3Offset(i64);
+struct S3Offset(u64);
 
-impl AddAssign<i64> for S3Offset {
-    fn add_assign(&mut self, other: i64) {
+impl AddAssign<u64> for S3Offset {
+    fn add_assign(&mut self, other: u64) {
         self.0 += other;
     }
 }
@@ -121,18 +123,22 @@ struct KeyInfo {
 }
 
 async fn download_objects_task(
-    source_id: String,
+    source_id: GlobalId,
     mut rx: Receiver<S3Result<KeyInfo>>,
     tx: Sender<S3Result<InternalMessage>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     aws_config: AwsConfig,
-    aws_external_id: AwsExternalId,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     activator: SyncActivator,
     compression: Compression,
     metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .await;
     let client = aws_sdk_s3::Client::new(&config);
+
+    let source_id = source_id.to_string();
 
     struct BucketInfo {
         keys: HashSet<String>,
@@ -236,15 +242,19 @@ async fn download_objects_task(
 
 async fn scan_bucket_task(
     bucket: String,
-    source_id: String,
+    source_id: GlobalId,
     glob: Option<GlobMatcher>,
     aws_config: AwsConfig,
-    aws_external_id: AwsExternalId,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     tx: Sender<S3Result<KeyInfo>>,
     base_metrics: SourceBaseMetrics,
 ) {
-    let config = aws_config.load(aws_external_id).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .await;
     let client = aws_sdk_s3::Client::new(&config);
+
+    let source_id = source_id.to_string();
 
     let glob = glob.as_ref();
     let prefix = glob.map(|g| find_prefix(g.glob().glob()));
@@ -348,11 +358,11 @@ async fn scan_bucket_task(
 }
 
 async fn read_sqs_task(
-    source_id: String,
+    source_id: GlobalId,
     glob: Option<GlobMatcher>,
     queue: String,
     aws_config: AwsConfig,
-    aws_external_id: AwsExternalId,
+    aws_external_id_prefix: Option<AwsExternalIdPrefix>,
     tx: Sender<S3Result<KeyInfo>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<DataflowStatus>,
     base_metrics: SourceBaseMetrics,
@@ -362,8 +372,12 @@ async fn read_sqs_task(
         source_id, queue,
     );
 
-    let config = aws_config.load(aws_external_id).await;
+    let config = aws_config
+        .load(aws_external_id_prefix.as_ref(), Some(&source_id))
+        .await;
     let client = aws_sdk_sqs::Client::new(&config);
+
+    let source_id = source_id.to_string();
 
     let glob = glob.as_ref();
 
@@ -770,6 +784,7 @@ where
 impl SourceReader for S3SourceReader {
     type Key = ();
     type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     fn new(
         source_name: String,
@@ -777,16 +792,16 @@ impl SourceReader for S3SourceReader {
         worker_id: usize,
         _worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        aws_external_id: AwsExternalId,
+        connection: ExternalSourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        metrics: SourceBaseMetrics,
+        metrics: crate::source::metrics::SourceBaseMetrics,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let s3_conn = match connector {
-            ExternalSourceConnector::S3(s3_conn) => s3_conn,
+        let s3_conn = match connection {
+            ExternalSourceConnection::S3(s3_conn) => s3_conn,
             _ => {
-                panic!("S3 is the only legitimate ExternalSourceConnector for S3SourceReader")
+                panic!("S3 is the only legitimate ExternalSourceConnection for S3SourceReader")
             }
         };
 
@@ -800,12 +815,12 @@ impl SourceReader for S3SourceReader {
             task::spawn(
                 || format!("s3_download:{}", source_id),
                 download_objects_task(
-                    source_id.to_string(),
+                    source_id,
                     keys_rx,
                     dataflow_tx,
                     shutdown_rx.clone(),
                     s3_conn.aws.clone(),
-                    aws_external_id.clone(),
+                    connection_context.aws_external_id_prefix.clone(),
                     consumer_activator,
                     s3_conn.compression,
                     metrics.clone(),
@@ -824,10 +839,10 @@ impl SourceReader for S3SourceReader {
                             || task_name,
                             scan_bucket_task(
                                 bucket,
-                                source_id.to_string(),
+                                source_id,
                                 glob.clone(),
                                 s3_conn.aws.clone(),
-                                aws_external_id.clone(),
+                                connection_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 metrics.clone(),
                             ),
@@ -841,11 +856,11 @@ impl SourceReader for S3SourceReader {
                         task::spawn(
                             || format!("s3_read_sqs:{}", source_id),
                             read_sqs_task(
-                                source_id.to_string(),
+                                source_id,
                                 glob.clone(),
                                 queue,
                                 s3_conn.aws.clone(),
-                                aws_external_id.clone(),
+                                connection_context.aws_external_id_prefix.clone(),
                                 keys_tx.clone(),
                                 shutdown_rx.clone(),
                                 metrics.clone(),
@@ -868,18 +883,21 @@ impl SourceReader for S3SourceReader {
 
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         match self.receiver_stream.recv().now_or_never() {
             Some(Some(Ok(InternalMessage { record }))) => {
                 self.offset += 1;
-                Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::None,
-                    offset: self.offset.into(),
-                    upstream_time_millis: None,
-                    key: (),
-                    value: record,
-                    headers: None,
-                }))
+                Ok(NextMessage::Ready(SourceMessageType::Finalized(
+                    SourceMessage {
+                        partition: PartitionId::None,
+                        offset: self.offset.into(),
+                        upstream_time_millis: None,
+                        key: (),
+                        value: record,
+                        headers: None,
+                        specific_diff: (),
+                    },
+                )))
             }
             Some(Some(Err(e))) => match e {
                 S3Error::GetObjectError { .. } => {

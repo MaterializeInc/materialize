@@ -24,10 +24,6 @@ _schema&lowbar;name_ | The schema to show tables from. Defaults to `public` in t
 
 `SHOW TABLES`'s output is a table with one column, `name`.
 
-{{< version-changed v0.5.0 >}}
-The output column is renamed from `TABLES` to `name`.
-{{< /version-changed >}}
-
 ## Examples
 
 ### Show user-created tables

@@ -131,7 +131,7 @@ Rochester      NY        14618   2
     token = '${testdrive.aws-token}'
   )
   FORMAT CSV WITH HEADER
-exact:Expected a list of columns in parentheses, found EOF
+contains:Expected a list of columns in parentheses, found EOF
 
 # The timestamp chosen when reading from a static CSV should be the end of time,
 # since the definition of "static" means "will never change again".

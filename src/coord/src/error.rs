@@ -12,12 +12,14 @@ use std::fmt;
 use std::num::TryFromIntError;
 
 use dec::TryFromDecimalError;
+use tokio::sync::oneshot;
 
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
+use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection};
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_repr::NotNullViolation;
+use mz_sql::plan::PlanError;
 use mz_sql::query_model::QGMError;
 use mz_transform::TransformError;
 
@@ -27,11 +29,6 @@ use crate::session::Var;
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum CoordError {
-    /// Query needs AS OF <time> or indexes to succeed.
-    AutomaticTimestampFailure {
-        /// The names of any unmaterialized sources.
-        unmaterialized: Vec<String>,
-    },
     /// An error occurred in a catalog operation.
     Catalog(catalog::Error),
     /// The cached plan or descriptor changed.
@@ -52,6 +49,10 @@ pub enum CoordError {
     IdExhaustionError,
     /// Unexpected internal state was encountered.
     Internal(String),
+    /// Attempted to read from log sources on a cluster with disabled introspection.
+    IntrospectionDisabled {
+        log_names: Vec<String>,
+    },
     /// Attempted to build a materialization on a source that does not allow multiple materializations
     InvalidRematerialization {
         base_source: String,
@@ -86,6 +87,8 @@ pub enum CoordError {
     OperationProhibitsTransaction(String),
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
+    /// An error occurred while planning the statement.
+    PlanError(PlanError),
     /// The named prepared statement already exists.
     PreparedStatementExists(String),
     /// An error occurred in the QGM stage of the optimizer.
@@ -104,6 +107,10 @@ pub enum CoordError {
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
+    /// Waiting on a query timed out.
+    ///
+    /// Note this differs slightly from PG's implementation/semantics.
+    StatementTimeout,
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(mz_sql::catalog::CatalogError),
     /// The transaction is in single-tail mode.
@@ -122,6 +129,11 @@ pub enum CoordError {
     /// The named parameter is unknown to the system.
     UnknownParameter(String),
     UnknownPreparedStatement(String),
+    /// The named cluster replica does not exist.
+    UnknownClusterReplica {
+        cluster_name: String,
+        replica_name: String,
+    },
     /// A generic error occurred.
     //
     // TODO(benesch): convert all those errors to structured errors.
@@ -130,6 +142,10 @@ pub enum CoordError {
     Unsupported(&'static str),
     /// The specified function cannot be materialized.
     UnmaterializableFunction(UnmaterializableFunc),
+    /// Attempted to read from log sources without selecting a target replica.
+    UntargetedLogRead {
+        log_names: Vec<String>,
+    },
     /// The transaction is in write-only mode.
     WriteOnlyTransaction,
     /// The transaction only supports single table writes
@@ -140,15 +156,6 @@ impl CoordError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
-            CoordError::AutomaticTimestampFailure {
-                unmaterialized,
-            } => {
-
-                Some(format!(
-                    "The query transitively depends on the following unmaterialized sources:\n\t{}",
-                        itertools::join(unmaterialized, "\n\t")
-                ))
-            }
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
             CoordError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -188,6 +195,11 @@ impl CoordError {
                     source_name,
                     existing_indexes.join("\n    ")))
             }
+            CoordError::IntrospectionDisabled { log_names }
+            | CoordError::UntargetedLogRead { log_names } => Some(format!(
+                "The query references the following log sources:\n    {}",
+                log_names.join("\n    "),
+            )),
             _ => None,
         }
     }
@@ -195,10 +207,6 @@ impl CoordError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
-            CoordError::AutomaticTimestampFailure {..} => {
-                Some("\n- Use `SELECT ... AS OF` to manually choose a timestamp for your query.
-                - Create indexes on the listed unmaterialized sources or on the views derived from those sources".into())
-            }
             CoordError::Catalog(c) => c.hint(),
             CoordError::ConstrainedParameter {
                 valid_values: Some(valid_values),
@@ -239,6 +247,13 @@ impl CoordError {
             CoordError::NoClusterReplicasAvailable(_) => {
                 Some("You can create cluster replicas using CREATE CLUSTER REPLICA".into())
             }
+            CoordError::UntargetedLogRead { .. } => Some(
+                "Use `SET cluster_replica = <replica-name>` to target a specific replica in the \
+                 active cluster. Note that subsequent `SELECT` queries will only be answered by \
+                 the selected replica, which might reduce availability. To undo the replica \
+                 selection, use `RESET cluster_replica`."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -247,9 +262,6 @@ impl CoordError {
 impl fmt::Display for CoordError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CoordError::AutomaticTimestampFailure { .. } => {
-                f.write_str("unable to automatically determine a query timestamp")
-            }
             CoordError::ChangedPlan => f.write_str("cached plan must not change result type"),
             CoordError::Catalog(e) => e.fmt(f),
             CoordError::ConstrainedParameter {
@@ -272,6 +284,10 @@ impl fmt::Display for CoordError {
             ),
             CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             CoordError::Internal(e) => write!(f, "internal error: {}", e),
+            CoordError::IntrospectionDisabled { .. } => write!(
+                f,
+                "cannot read log sources on cluster with disabled introspection"
+            ),
             CoordError::InvalidRematerialization {
                 base_source,
                 existing_indexes: _,
@@ -321,6 +337,7 @@ impl fmt::Display for CoordError {
             CoordError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
+            CoordError::PlanError(e) => e.fmt(f),
             CoordError::PreparedStatementExists(name) => {
                 write!(f, "prepared statement {} already exists", name.quoted())
             }
@@ -328,6 +345,9 @@ impl fmt::Display for CoordError {
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
+            }
+            CoordError::StatementTimeout => {
+                write!(f, "canceling statement due to statement timeout")
             }
             CoordError::RecursionLimit(e) => e.fmt(f),
             CoordError::RelationOutsideTimeDomain { .. } => {
@@ -365,6 +385,16 @@ impl fmt::Display for CoordError {
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),
             CoordError::UnknownPreparedStatement(name) => {
                 write!(f, "prepared statement {} does not exist", name.quoted())
+            }
+            CoordError::UnknownClusterReplica {
+                cluster_name,
+                replica_name,
+            } => write!(
+                f,
+                "cluster replica '{cluster_name}.{replica_name}' does not exist"
+            ),
+            CoordError::UntargetedLogRead { .. } => {
+                f.write_str("log source reads must target a replica")
             }
             CoordError::MultiTableWriteTransaction => {
                 f.write_str("write transactions only support writes to a single table")
@@ -409,6 +439,12 @@ impl From<mz_sql::catalog::CatalogError> for CoordError {
     }
 }
 
+impl From<PlanError> for CoordError {
+    fn from(e: PlanError) -> CoordError {
+        CoordError::PlanError(e)
+    }
+}
+
 impl From<QGMError> for CoordError {
     fn from(e: QGMError) -> CoordError {
         CoordError::QGM(e)
@@ -433,6 +469,12 @@ impl From<RecursionLimitError> for CoordError {
     }
 }
 
+impl From<oneshot::error::RecvError> for CoordError {
+    fn from(e: oneshot::error::RecvError) -> CoordError {
+        CoordError::Unstructured(e.into())
+    }
+}
+
 impl Error for CoordError {}
 
 /// Represent a source that is not allowed to be rematerialized
@@ -449,10 +491,10 @@ impl RematerializedSourceType {
     ///
     /// If the source is of a type that is allowed to be rematerialized
     pub fn for_source(source: &catalog::Source) -> RematerializedSourceType {
-        match &source.connector {
-            SourceConnector::External { connector, .. } => match connector {
-                ExternalSourceConnector::S3(_) => RematerializedSourceType::S3,
-                ExternalSourceConnector::Postgres(_) => RematerializedSourceType::Postgres,
+        match &source.connection {
+            SourceConnection::External { connection, .. } => match connection {
+                ExternalSourceConnection::S3(_) => RematerializedSourceType::S3,
+                ExternalSourceConnection::Postgres(_) => RematerializedSourceType::Postgres,
                 _ => unreachable!(),
             },
             _ => unreachable!(),

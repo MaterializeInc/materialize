@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
+use mz_ore::metrics::MetricsRegistry;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -24,17 +25,17 @@ use tracing::{debug, info, trace};
 
 use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
 use mz_persist::location::{BlobMulti, Consensus, ExternalError};
-use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus};
+use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, ShardId};
+use mz_persist_client::{Metrics, PersistClient, PersistConfig, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
 use crate::maelstrom::services::{CachingBlobMulti, MaelstromBlobMulti, MaelstromConsensus};
 use crate::maelstrom::Args;
 
-pub fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(args: Args) -> Result<(), anyhow::Error> {
     let read = std::io::stdin();
     let write = std::io::stdout();
 
@@ -126,10 +127,25 @@ impl Transactor {
         let ts_min = u64::minimum();
         let initial_upper = Antichain::from_elem(ts_min);
         let new_upper = Antichain::from_elem(ts_min + 1);
-        let cas_res = write
-            .compare_and_append(EMPTY_UPDATES, initial_upper.clone(), new_upper)
-            .await??;
-        let read_ts = match cas_res {
+        // Unreliable, if selected, is hooked up at this point so we need to
+        // retry ExternalError here. No point in having a backoff since it's
+        // also happy to use the frontier of an expected upper mismatch.
+        let cas_res = loop {
+            let res = write
+                .compare_and_append(EMPTY_UPDATES, initial_upper.clone(), new_upper.clone())
+                .await;
+            match res {
+                Ok(x) => break x,
+                Err(err) => {
+                    info!(
+                        "external operation maybe_init_shard::caa failed, retrying: {}",
+                        err
+                    );
+                    continue;
+                }
+            }
+        };
+        let read_ts = match cas_res? {
             Ok(()) => 0,
             Err(current) => Self::extract_ts(&current.0)? - 1,
         };
@@ -149,11 +165,11 @@ impl Transactor {
             // NB: We do the CaS even if writes is empty, so that read-only txns
             // are also linearizable.
             let write_ts = self.read_ts + 1;
-            let updates = writes.iter().map(|(k, v, diff)| ((k, v), &write_ts, diff));
+            let updates = writes
+                .into_iter()
+                .map(|(k, v, diff)| ((k, v), write_ts, diff));
             let expected_upper = Antichain::from_elem(write_ts);
             let new_upper = Antichain::from_elem(write_ts + 1);
-            // TODO: Wrap the compare_and_append in a retry_timeouts call, too.
-            // I tried but got tripped up trying to make an async FnMut work.
             let cas_res = self
                 .write
                 .compare_and_append(updates, expected_upper.clone(), new_upper)
@@ -391,20 +407,26 @@ impl Service for TransactorService {
             .unwrap_or_default()
             .subsec_nanos()
             .into();
+        // It doesn't particularly matter what we set should_happen to, so we do
+        // this to have a convenient single tunable param.
+        let should_happen = 1.0 - args.unreliability;
+        // For consensus, set should_timeout to `args.unreliability` so that once we split
+        // ExternalErrors into determinate vs indeterminate, then
+        // `args.unreliability` will also be the fraction of txns that it's
+        // not save for Maelstrom to retry (b/c indeterminate error in
+        // Consensus CaS).
+        let should_timeout = args.unreliability;
+        // It doesn't particularly matter what we set should_happen and
+        // should_timeout to for blobs, so use the same handle for both.
+        let unreliable = UnreliableHandle::new(seed, should_happen, should_timeout);
 
         // Construct requested Blob.
         let blob = match &args.blob_uri {
             Some(blob_uri) => BlobMultiConfig::try_from(blob_uri).await?.open().await?,
             None => MaelstromBlobMulti::new(handle.clone()),
         };
-        let blob = Arc::new(UnreliableBlobMulti::new_from_seed(
-            seed,
-            // It doesn't particularly matter what we set should_happen and
-            // should_timeout to for blobs, so set them to match Consensus.
-            1.0 - args.unreliability,
-            args.unreliability,
-            blob,
-        )) as Arc<dyn BlobMulti + Send + Sync>;
+        let blob = Arc::new(UnreliableBlobMulti::new(blob, unreliable.clone()))
+            as Arc<dyn BlobMulti + Send + Sync>;
         // Normal production persist usage (even including a real SQL txn impl)
         // isn't particularly benefitted by a cache, so we don't have one baked
         // into persist. In contrast, our Maelstrom transaction model
@@ -424,22 +446,12 @@ impl Service for TransactorService {
             }
             None => MaelstromConsensus::new(handle.clone()),
         };
-        let consensus = Arc::new(UnreliableConsensus::new_from_seed(
-            seed,
-            // It doesn't particularly matter what we set should_happen to, so
-            // we do this to have a convenient single tunable param.
-            1.0 - args.unreliability,
-            // Set should_timeout to `args.unreliability` so that once we split
-            // ExternalErrors into determinate vs indeterminate, then
-            // `args.unreliability` will also be the fraction of txns that it's
-            // not save for Maelstrom to retry (b/c indeterminate error in
-            // Consensus CaS).
-            args.unreliability,
-            consensus,
-        )) as Arc<dyn Consensus + Send + Sync>;
+        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable))
+            as Arc<dyn Consensus + Send + Sync>;
 
         // Wire up the TransactorService.
-        let client = PersistClient::new(blob, consensus).await?;
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
         let transactor = Transactor::new(&client, shard_id).await?;
         let service = TransactorService(Arc::new(Mutex::new(transactor)));
         Ok(service)

@@ -13,26 +13,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Wrappers around [`tokio::spawn`] and [`tokio::task::spawn_blocking`] that require
-//! names.
+//! Tokio task utilities.
 //!
-//! If `clippy` sent you here, replace:
+//! ## Named task spawning
+//!
+//! The [`spawn`] and [`spawn_blocking`] methods are wrappers around
+//! [`tokio::task::spawn`] and [`tokio::task::spawn_blocking`] that attach a
+//! name the spawned task.
+//!
+//! If Clippy sent you here, replace:
+//!
 //! ```ignore
-//!     tokio::spawn(my_future)
-//!     tokio::task::spawn_blocking(my_blocking_closure)
+//! tokio::task::spawn(my_future)
+//! tokio::task::spawn_blocking(my_blocking_closure)
 //! ```
-//! with
+//!
+//! with:
+//!
 //! ```ignore
-//!     mz_ore::task::spawn(|| format!("taskname:{}", info), my_future)
-//!     mz_ore::task::spawn_blocking(|| format!("name:{}", info), my_blocking_closure)
+//! mz_ore::task::spawn(|| format!("taskname:{}", info), my_future)
+//! mz_ore::task::spawn_blocking(|| format!("name:{}", info), my_blocking_closure)
 //! ```
 //!
-//! If you are using [`Runtime::spawn`][`tokio::runtime::Runtime::spawn`]
-//! or [`Runtime::spawn_blocking`][`tokio::runtime::Runtime::spawn_blocking`],
-//! or the similar methods on [`tokio::runtime::Handle`], import [`RuntimeExt`] instead
-//! and replace `spawn` with [`RuntimeExt::spawn_named`] and `spawn_blocking` with
-//! [`RuntimeExt::spawn_blocking_named`], adding naming closures like above.
-//!
+//! If you are using methods of the same names on a [`Runtime`] or [`Handle`],
+//! import [`RuntimeExt`] and replace `spawn` with [`RuntimeExt::spawn_named`]
+//! and `spawn_blocking` with [`RuntimeExt::spawn_blocking_named`], adding
+//! naming closures like above.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -40,13 +46,34 @@ use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime};
 use tokio::task::{self, JoinHandle};
 
-/// Spawns a task on the runtime, with name.
+/// Wraps a [`JoinHandle`] to abort the underlying task when dropped.
+#[derive(Debug)]
+pub struct AbortOnDropHandle<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDropHandle<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Extension methods for [`JoinHandle`].
+pub trait JoinHandleExt<T> {
+    /// Converts a [`JoinHandle`] into a [`AbortOnDropHandle`].
+    fn abort_on_drop(self) -> AbortOnDropHandle<T>;
+}
+
+impl<T> JoinHandleExt<T> for JoinHandle<T> {
+    fn abort_on_drop(self) -> AbortOnDropHandle<T> {
+        AbortOnDropHandle(self)
+    }
+}
+
+/// Spawns a new asynchronous task with a name.
 ///
-/// See [`spawn`](::tokio::spawn), and the
-/// [module][`self`] docs for more info.
+/// See [`tokio::task::spawn`] and the [module][`self`] docs for more
+/// information.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
-#[allow(clippy::disallowed_methods)]
 pub fn spawn<Fut, Name, NameClosure>(_nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
     Name: AsRef<str>,
@@ -54,16 +81,16 @@ where
     Fut: Future + Send + 'static,
     Fut::Output: Send + 'static,
 {
+    #[allow(clippy::disallowed_methods)]
     tokio::spawn(future)
 }
 
-/// Spawns a task on the runtime, with name.
+/// Spawns a new asynchronous task with a name.
 ///
-/// See [`spawn`](::tokio::spawn), and the
-/// [module][`self`] docs for more info.
+/// See [`tokio::task::spawn`] and the [module][`self`] docs for more
+/// information.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
-#[allow(clippy::disallowed_methods)]
 pub fn spawn<Fut, Name, NameClosure>(nc: NameClosure, future: Fut) -> JoinHandle<Fut::Output>
 where
     Name: AsRef<str>,
@@ -71,13 +98,15 @@ where
     Fut: Future + Send + 'static,
     Fut::Output: Send + 'static,
 {
+    #[allow(clippy::disallowed_methods)]
     task::Builder::new().name(nc().as_ref()).spawn(future)
 }
 
-/// Spawns blocking code on the blocking threadpool, with name.
+/// Runs the provided closure with a name on a thread where blocking is
+/// acceptable.
 ///
-/// See [`spawn_blocking`](::tokio::task::spawn_blocking), and the
-/// [module][`self`] docs for more info.
+/// See [`tokio::task::spawn_blocking`] and the [module][`self`] docs for more
+/// information.
 #[cfg(not(all(tokio_unstable, feature = "task")))]
 #[track_caller]
 #[allow(clippy::disallowed_methods)]
@@ -94,10 +123,11 @@ where
     task::spawn_blocking(function)
 }
 
-/// Spawns blocking code on the blocking threadpool, with name.
+/// Runs the provided closure with a name on a thread where blocking is
+/// acceptable.
 ///
-/// See [`spawn_blocking`](::tokio::task::spawn_blocking), and the
-/// [module][`self`] docs for more info.
+/// See [`tokio::task::spawn_blocking`] and the [module][`self`] docs for more
+/// information.
 #[cfg(all(tokio_unstable, feature = "task"))]
 #[track_caller]
 #[allow(clippy::disallowed_methods)]
@@ -116,14 +146,15 @@ where
         .spawn_blocking(function)
 }
 
-/// Provides extension methods to [`tokio`] runtime handles that
-/// allow you to call into [`spawn`] and [`spawn_blocking`].
+/// Extension methods for [`Runtime`] and [`Handle`].
 ///
-/// See the [module][`self`] docs for more info.
+/// See the [module][`self`] docs for more information.
 pub trait RuntimeExt {
-    /// Replaces [`tokio::runtime::Runtime::spawn_blocking`].
+    /// Runs the provided closure with a name on a thread where blocking is
+    /// acceptable.
     ///
-    /// See the [module][`self`] docs for more info.
+    /// See [`tokio::task::spawn_blocking`] and the [module][`self`] docs for more
+    /// information.
     #[track_caller]
     fn spawn_blocking_named<Function, Output, Name, NameClosure>(
         &self,
@@ -136,9 +167,10 @@ pub trait RuntimeExt {
         Function: FnOnce() -> Output + Send + 'static,
         Output: Send + 'static;
 
-    /// Replaces [`tokio::runtime::Runtime::spawn`].
+    /// Spawns a new asynchronous task with a name.
     ///
-    /// See the [module][`self`] docs for more info.
+    /// See [`tokio::task::spawn`] and the [module][`self`] docs for more
+    /// information.
     #[track_caller]
     fn spawn_named<Fut, Name, NameClosure>(
         &self,

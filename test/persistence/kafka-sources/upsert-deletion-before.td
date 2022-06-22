@@ -37,5 +37,5 @@ $ kafka-ingest format=avro topic=upsert-deletion key-format=avro key-schema=${ke
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
-> SELECT COUNT(*) = 10000 FROM upsert_deletion;
-true
+> SELECT COUNT(*) FROM upsert_deletion;
+10000

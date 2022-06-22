@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "src/audit-log",
     "src/avro-derive",
     "src/avro",
     "src/billing-demo",
@@ -9,22 +10,23 @@ members = [
     "src/coord",
     "src/dataflow-bin",
     "src/dataflow-types",
+    "src/frontegg-auth",
     "src/expr-test-util",
     "src/expr",
-    "src/frontegg-auth",
     "src/http-util",
     "src/interchange",
     "src/kafka-util",
     "src/kinesis-util",
     "src/lowertest-derive",
+    "src/environmentd",
     "src/lowertest",
-    "src/materialized",
     "src/metabase",
     "src/npm",
     "src/ore",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
     "src/orchestrator-process",
+    "src/orchestrator-tracing",
     "src/persist-client",
     "src/persist-types",
     "src/persist",
@@ -61,6 +63,10 @@ members = [
 # See: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#cargos-new-feature-resolver
 resolver = "2"
 
+[profile.dev]
+# TODO(gusywnn|benesch): remove this when incremental ice's are improved
+incremental = false
+
 [profile.dev.package]
 # Compile the backtrace crate and its dependencies with all optimizations, even
 # in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
@@ -90,3 +96,7 @@ debug = 1
 [patch.crates-io]
 opentelemetry = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
 opentelemetry-otlp = { git = "https://github.com/MaterializeInc/opentelemetry-rust.git" }
+prost = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+prost-build = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+prost-derive = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }
+prost-types = { git = "https://github.com/MaterializeInc/prost.git", branch = "v0.10" }

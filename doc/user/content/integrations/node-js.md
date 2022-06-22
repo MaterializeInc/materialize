@@ -147,17 +147,15 @@ For more details, see the  [`node-postgres` query](https://node-postgres.com/fea
 
 ## Push data to a source
 
-Materialize processes live streams of data and maintains views in memory, relying on other systems (traditional databases, S3, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system.** Materialize connects to the intermediary system as a "source" and reads streaming updates from that.
+Materialize processes live streams of data and maintains views in memory, relying on other systems (traditional databases, or Kafka) to serve as "systems of record" for the data. Instead of updating Materialize directly, **Node.js should send data to an intermediary system**. Materialize connects to the intermediary system as a "source" and reads streaming updates from that.
 
 The table below lists the intermediary systems a Node.js application can use to stream data for Materialize:
 
 Intermediary System | Notes
 -------------|-------------
 **Kafka** | Produce messages from [Node.js to Kafka](https://kafka.js.org/docs/getting-started), and create a [Materialize Kafka Source](/sql/create-source/json-kafka/) to consume them. Kafka is recommended for scenarios where low-latency and high-throughput are important.
-**Kinesis** | Send data from [Node.js to a Kinesis stream](https://docs.aws.amazon.com/streams/latest/dev/kinesis-record-processor-implementation-app-nodejs.html) and consume them with a [Materialize Kinesis source](/sql/create-source/json-kinesis/). Kinesis is easier to configure and maintain than Kafka but less fully-featured and configurable. For example, Kinesis is a [volatile source](/overview/volatility/) because it cannot do infinite retention.
 **PostgreSQL** | Node.js sends data to PostgreSQL, and the [Materialize PostgreSQL source](/sql/create-source/postgres/) receives events from the change feed (the write-ahead log) of the database. Ideal for Node.js apps that already use PostgreSQL and fast-changing relational data.
 **PubNub** | Streams as a service provider PubNub provides a [Node.js SDK](https://www.pubnub.com/docs/sdks/javascript/nodejs) to send data into a stream, [Materialize PubNub source](/sql/create-source/json-pubnub/) subscribes to the stream and consumes data.
-**S3** | [Write data from Node.js to S3](https://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/getting-started-nodejs.html) in an append-only fashion, use the Materialize [S3 Source](/sql/create-source/json-s3), to scan the S3 bucket for data and [listen for new data via SQS notifications](/sql/create-source/s3/#listening-to-sqs-notifications). If data is already sent to S3 and minute latency is not an issue, this is an economical and low-maintenance option.
 
 ## Insert data into tables
 

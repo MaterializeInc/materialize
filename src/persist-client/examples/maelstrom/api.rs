@@ -194,7 +194,7 @@ pub enum ErrorCode {
 mod from_impls {
     use std::fmt::Debug;
 
-    use mz_persist::location::ExternalError;
+    use mz_persist::location::{ExternalError, Indeterminate};
     use mz_persist_client::error::InvalidUsage;
     use serde_json::Value;
     use tracing::debug;
@@ -241,6 +241,15 @@ mod from_impls {
                 ResTxnOp::Append { key, val } => {
                     TxnOpHelper("append".into(), key, Value::from(val))
                 }
+            }
+        }
+    }
+
+    impl From<Indeterminate> for MaelstromError {
+        fn from(x: Indeterminate) -> Self {
+            MaelstromError {
+                code: ErrorCode::Crash,
+                text: x.to_string(),
             }
         }
     }

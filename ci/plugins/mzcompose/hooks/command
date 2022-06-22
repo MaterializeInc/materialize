@@ -66,9 +66,4 @@ fi
 
 echo "+++ :docker: Running \`mzcompose run ${run_args[*]}\`" >&2
 
-if ! mzcompose run "${run_args[@]}"; then
-    echo "Command failed! Uploading logs for debugging." >&2
-    mzcompose --mz-quiet logs --no-color > services.log
-    buildkite-agent artifact upload services.log
-    exit 1
-fi
+mzcompose run "${run_args[@]}"

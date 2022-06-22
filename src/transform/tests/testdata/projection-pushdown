@@ -338,7 +338,7 @@ build apply=ProjectionPushdown
 ----
 %0 =
 | Get x (u0)
-| TopK group=(#0) order=(#1 asc, #2 asc) offset=0
+| TopK group=(#0) order=(#1 asc nulls_first, #2 asc nulls_first) offset=0
 | Project (#2)
 | Project (#0, #0, #0)
 
@@ -354,7 +354,7 @@ build apply=ProjectionPushdown
 %0 =
 | Get x (u0)
 | Project (#1, #2)
-| TopK group=() order=(#0 asc) offset=0
+| TopK group=() order=(#0 asc nulls_first) offset=0
 | Project (#1)
 | Project (#0, #0)
 
@@ -370,7 +370,7 @@ build apply=ProjectionPushdown
 %0 =
 | Get x (u0)
 | Project (#2, #1)
-| TopK group=(#0) order=(#1 asc) offset=0
+| TopK group=(#0) order=(#1 asc nulls_first) offset=0
 
 # Project in a Let
 

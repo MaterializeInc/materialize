@@ -148,10 +148,10 @@ where
                 self.responses
                     .push_back(ComputeResponse::FrontierUppers(list));
             }
-            ComputeResponse::PeekResponse(uuid, response) => {
+            ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
                 if self.peeks.remove(&uuid) {
                     self.responses
-                        .push_back(ComputeResponse::PeekResponse(uuid, response));
+                        .push_back(ComputeResponse::PeekResponse(uuid, response, otel_ctx));
                 }
             }
             ComputeResponse::TailResponse(id, response) => {
@@ -165,10 +165,10 @@ where
         use ComputeCommand::*;
         match command {
             CreateInstance(config) => {
-                // TODO: Handle `logging` correctly when reconnecting. We currently assume that the
-                // logging config stays the same.
+                // TODO: Handle `config.logging` correctly when reconnecting. We currently assume
+                // that the logging config stays the same.
                 if !self.created {
-                    if let Some(logging) = &config {
+                    if let Some(logging) = &config.logging {
                         for id in logging.log_identifiers() {
                             if !self.uppers.contains_key(&id) {
                                 self.start_tracking(id);

@@ -17,9 +17,10 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-py_folders=(ci misc/python)
+mypy_folders=(ci misc/python)
+flake8_folders=(ci misc/python test)
 
-try bin/pyactivate -m mypy "${py_folders[@]}"
+try bin/pyactivate -m mypy "${mypy_folders[@]}"
 if ! try_last_failed; then
     # mzcompose.py files need to be passed to mypy individually to avoid
     # duplicate module warnings. We don't check these if the previous `mypy`
@@ -27,7 +28,14 @@ if ! try_last_failed; then
     for file in $(git_files "**/mzcompose.py"); do
         try bin/pyactivate -m mypy "$file"
     done
+
+    for file in $(git_files "test/**.py"); do
+        if [[ $file == *"mzcompose"* ]]; then
+            continue
+        fi
+        try bin/pyactivate -m mypy "$file"
+    done
 fi
-try bin/pyactivate -m flake8 --select F --ignore F541 --extend-exclude venv "${py_folders[@]}"
+try bin/pyactivate -m flake8 --select F --ignore F541 --extend-exclude venv "${flake8_folders[@]}"
 try bin/pyactivate -m pytest -qq --doctest-modules misc/python
 try_finish

@@ -60,15 +60,16 @@ Cluster
 Clusters
 Coalesce
 Collate
+Collection
 Columns
 Commit
 Committed
+Compaction
 Compiled
 Compression
 Confluent
 Connection
-Connector
-Connectors
+Connections
 Consensus
 Consistency
 Constraint
@@ -93,6 +94,7 @@ Decorrelated
 Default
 Delete
 Delimited
+Delimiter
 Desc
 Details
 Discard
@@ -161,6 +163,7 @@ Kafka
 Key
 Keys
 Kinesis
+Last
 Lateral
 Leading
 Least
@@ -171,12 +174,14 @@ Limit
 List
 Local
 Log
+Logical
 Login
 Map
 Matching
 Materialize
 Materialized
 Message
+Metadata
 Minute
 Minutes
 Month
@@ -193,6 +198,7 @@ Notice
 Notifications
 Null
 Nullif
+Nulls
 Objects
 Of
 Offset
@@ -217,10 +223,12 @@ Preceding
 Precision
 Prepare
 Primary
+Progress
 Protobuf
 Publication
 Pubnub
 Query
+Quote
 Raise
 Range
 Raw
@@ -262,7 +270,6 @@ Show
 Sink
 Sinks
 Size
-Slot
 Smallint
 Snapshot
 Some
@@ -285,6 +292,7 @@ Text
 Then
 Ties
 Time
+Timeout
 Timestamp
 Timing
 To
@@ -315,6 +323,8 @@ Views
 Warning
 When
 Where
+Window
+Wire
 With
 Without
 Work

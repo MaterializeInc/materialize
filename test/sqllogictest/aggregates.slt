@@ -368,7 +368,7 @@ FROM
 ----
 {d,c,b,a}  {c,a,b,d}  {c,a,b,d}  {c,a,d,b}
 
-query TTTT
+query TTTTT
 WITH
     v (a, b)
         AS (
@@ -376,17 +376,19 @@ WITH
                 ('a', 1),
                 ('b', 2),
                 ('c', 0),
-                ('d', 2)
+                ('d', 2),
+                ('e', NULL)
         )
 SELECT
     array_agg(a ORDER BY a DESC)::text AS a_desc,
     array_agg(a ORDER BY b)::text AS b,
     array_agg(a ORDER BY b, a ASC)::text AS b_a_asc,
-    array_agg(a ORDER BY b, a DESC)::text AS b_a_desc
+    array_agg(a ORDER BY b, a DESC)::text AS b_a_desc,
+    array_agg(a ORDER BY b NULLS FIRST, a DESC)::text AS b_a_desc_nulls_first
 FROM
     v
 ----
-{d,c,b,a}  {c,a,b,d}  {c,a,b,d}  {c,a,d,b}
+{e,d,c,b,a}  {c,a,b,d,e}  {c,a,b,d,e}  {c,a,d,b,e}  {e,c,a,d,b}
 
 query TTTT
 WITH

@@ -15,10 +15,10 @@ $ set no-self-match=foo[a]bar
 > CREATE TABLE example (a int)
 
 ! SELECT "${no-self-match}" FROM example
-exact: column "foo[a]bar" does not exist
+contains: column "foo[a]bar" does not exist
 
 ! SELECT "${no-self-match}" FROM example
-exact: column "${no-self-match}" does not exist
+contains: column "${no-self-match}" does not exist
 
 ! SELECT "${no-self-match}" FROM example
-regex: ^column "${no-self-match}".*not exist$
+regex: column "${no-self-match}".*not exist

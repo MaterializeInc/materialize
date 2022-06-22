@@ -19,21 +19,33 @@ use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::ipc::read::{read_file_metadata, FileMetadata, FileReader};
 use arrow2::io::ipc::write::{FileWriter, WriteOptions};
 use differential_dataflow::trace::Description;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::columnar::ColumnarRecords;
 use crate::indexed::encoding::{
-    decode_trace_inline_meta, decode_unsealed_inline_meta, encode_trace_inline_meta,
-    encode_unsealed_inline_meta, BlobTraceBatchPart, BlobUnsealedBatch,
+    decode_trace_inline_meta, encode_trace_inline_meta, BlobTraceBatchPart,
 };
-use crate::location::SeqNo;
 
-lazy_static! {
-    /// The Arrow schema we use to encode ((K, V), T, D) tuples.
-    pub static ref SCHEMA_ARROW_KVTD: Arc<Schema> = Arc::new(Schema::from(vec![
+/// The Arrow schema we use to encode ((K, V), T, D) tuples.
+///
+/// Both Time and Diff are presented externally to persist users as a type
+/// parameter that implements [mz_persist_types::Codec64]. Our columnar format
+/// intentionally stores them both as i64 columns (as opposed to something like
+/// a fixed width binary column) because this allows us additional compression
+/// options.
+///
+/// Also note that we intentionally use an i64 over a u64 for Time. Over the
+/// range `[0, i64::MAX]`, the bytes are the same and we've talked at various
+/// times about changing Time in mz to an i64. Both millis since unix epoch and
+/// nanos since unix epoch easily fit into this range (the latter until some
+/// time after year 2200). Using a i64 might be a pessimization for a
+/// non-realtime mz source with u64 timestamps in the range `(i64::MAX,
+/// u64::MAX]`, but realtime sources are overwhelmingly the common case.
+pub static SCHEMA_ARROW_KVTD: Lazy<Arc<Schema>> = Lazy::new(|| {
+    Arc::new(Schema::from(vec![
         Field {
             name: "k".into(),
             data_type: DataType::Binary,
@@ -48,7 +60,7 @@ lazy_static! {
         },
         Field {
             name: "t".into(),
-            data_type: DataType::UInt64,
+            data_type: DataType::Int64,
             is_nullable: false,
             metadata: BTreeMap::new(),
         },
@@ -58,30 +70,10 @@ lazy_static! {
             is_nullable: false,
             metadata: BTreeMap::new(),
         },
-    ]));
-}
+    ]))
+});
 
 const INLINE_METADATA_KEY: &'static str = "MZ:inline";
-
-/// Encodes an BlobUnsealedBatch into the Arrow file format.
-///
-/// NB: This is currently unused, but it's here because we may want to use it
-/// for the local cache and so we can easily compare arrow vs parquet.
-pub fn encode_unsealed_arrow<W: Write>(w: &mut W, batch: &BlobUnsealedBatch) -> Result<(), Error> {
-    let mut metadata = BTreeMap::new();
-    metadata.insert(
-        INLINE_METADATA_KEY.into(),
-        encode_unsealed_inline_meta(batch, ProtoBatchFormat::ArrowKvtd),
-    );
-    let schema = Schema::from(SCHEMA_ARROW_KVTD.fields.clone()).with_metadata(metadata);
-    let options = WriteOptions { compression: None };
-    let mut writer = FileWriter::try_new(w, &schema, None, options)?;
-    for records in batch.updates.iter() {
-        writer.write(&encode_arrow_batch_kvtd(records), None)?;
-    }
-    writer.finish()?;
-    Ok(())
-}
 
 /// Encodes an BlobTraceBatchPart into the Arrow file format.
 ///
@@ -101,31 +93,6 @@ pub fn encode_trace_arrow<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Re
     }
     writer.finish()?;
     Ok(())
-}
-
-/// Decodes a BlobUnsealedBatch from the Arrow file format.
-///
-/// NB: This is currently unused, but it's here because we may want to use it
-/// for the local cache and so we can easily compare arrow vs parquet.
-pub fn decode_unsealed_arrow<R: Read + Seek>(r: &mut R) -> Result<BlobUnsealedBatch, Error> {
-    let file_meta = read_file_metadata(r)?;
-    let (format, meta) =
-        decode_unsealed_inline_meta(file_meta.schema.metadata.get(INLINE_METADATA_KEY))?;
-
-    let updates = match format {
-        ProtoBatchFormat::Unknown => return Err("unknown format".into()),
-        ProtoBatchFormat::ArrowKvtd => decode_arrow_file_kvtd(r, file_meta)?,
-        ProtoBatchFormat::ParquetKvtd => {
-            return Err("ParquetKvtd format not supported in arrow".into())
-        }
-    };
-
-    let ret = BlobUnsealedBatch {
-        desc: SeqNo(meta.seqno_lower)..SeqNo(meta.seqno_upper),
-        updates,
-    };
-    ret.validate()?;
-    Ok(ret)
 }
 
 /// Decodes a BlobTraceBatchPart from the Arrow file format.
@@ -203,7 +170,7 @@ pub fn encode_arrow_batch_kvtd(x: &ColumnarRecords) -> Chunk<Arc<dyn Array>> {
             None,
         )),
         Arc::new(PrimitiveArray::from_data(
-            DataType::UInt64,
+            DataType::Int64,
             x.timestamps.clone(),
             None,
         )),
@@ -243,7 +210,7 @@ pub fn decode_arrow_batch_kvtd(x: &Chunk<Arc<dyn Array>>) -> Result<ColumnarReco
     let val_data = val_array.values().clone();
     let timestamps = ts_col
         .as_any()
-        .downcast_ref::<PrimitiveArray<u64>>()
+        .downcast_ref::<PrimitiveArray<i64>>()
         .ok_or(format!("column 2 doesn't match schema"))?
         .values()
         .clone();

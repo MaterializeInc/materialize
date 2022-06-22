@@ -23,7 +23,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::ColumnOrder;
-use mz_repr::proto::{ProtoRepr, TryFromProtoError};
+use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.top_k.rs"));
 
@@ -89,30 +89,26 @@ impl TopKPlan {
     }
 }
 
-impl From<&TopKPlan> for ProtoTopKPlan {
-    fn from(x: &TopKPlan) -> Self {
+impl RustType<ProtoTopKPlan> for TopKPlan {
+    fn into_proto(&self) -> ProtoTopKPlan {
         use crate::plan::top_k::proto_top_k_plan::Kind::*;
 
         ProtoTopKPlan {
-            kind: match x {
-                TopKPlan::Basic(plan) => Some(Basic(plan.into())),
-                TopKPlan::MonotonicTop1(plan) => Some(MonotonicTop1(plan.into())),
-                TopKPlan::MonotonicTopK(plan) => Some(MonotonicTopK(plan.into())),
+            kind: match self {
+                TopKPlan::Basic(plan) => Some(Basic(plan.into_proto())),
+                TopKPlan::MonotonicTop1(plan) => Some(MonotonicTop1(plan.into_proto())),
+                TopKPlan::MonotonicTopK(plan) => Some(MonotonicTopK(plan.into_proto())),
             },
         }
     }
-}
 
-impl TryFrom<ProtoTopKPlan> for TopKPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoTopKPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoTopKPlan) -> Result<Self, TryFromProtoError> {
         use crate::plan::top_k::proto_top_k_plan::Kind::*;
 
-        match x.kind {
-            Some(Basic(plan)) => Ok(TopKPlan::Basic(plan.try_into()?)),
-            Some(MonotonicTop1(plan)) => Ok(TopKPlan::MonotonicTop1(plan.try_into()?)),
-            Some(MonotonicTopK(plan)) => Ok(TopKPlan::MonotonicTopK(plan.try_into()?)),
+        match proto.kind {
+            Some(Basic(plan)) => Ok(TopKPlan::Basic(plan.into_rust()?)),
+            Some(MonotonicTop1(plan)) => Ok(TopKPlan::MonotonicTop1(plan.into_rust()?)),
+            Some(MonotonicTopK(plan)) => Ok(TopKPlan::MonotonicTopK(plan.into_rust()?)),
             None => Err(TryFromProtoError::missing_field("ProtoTopKPlan::kind")),
         }
     }
@@ -141,30 +137,18 @@ pub struct MonotonicTop1Plan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
 }
 
-impl From<&MonotonicTop1Plan> for ProtoMonotonicTop1Plan {
-    fn from(x: &MonotonicTop1Plan) -> Self {
+impl RustType<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
+    fn into_proto(&self) -> ProtoMonotonicTop1Plan {
         ProtoMonotonicTop1Plan {
-            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
-            order_key: x.order_key.iter().map(Into::into).collect(),
+            group_key: self.group_key.into_proto(),
+            order_key: self.order_key.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMonotonicTop1Plan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoMonotonicTop1Plan) -> Result<Self, TryFromProtoError> {
         Ok(MonotonicTop1Plan {
-            group_key: x
-                .group_key
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            order_key: x
-                .order_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
+            group_key: proto.group_key.into_rust()?,
+            order_key: proto.order_key.into_rust()?,
         })
     }
 }
@@ -183,34 +167,22 @@ pub struct MonotonicTopKPlan {
     pub arity: usize,
 }
 
-impl From<&MonotonicTopKPlan> for ProtoMonotonicTopKPlan {
-    fn from(x: &MonotonicTopKPlan) -> Self {
+impl RustType<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
+    fn into_proto(&self) -> ProtoMonotonicTopKPlan {
         ProtoMonotonicTopKPlan {
-            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
-            order_key: x.order_key.iter().map(Into::into).collect(),
-            limit: x.limit.into_proto(),
-            arity: x.arity.into_proto(),
+            group_key: self.group_key.into_proto(),
+            order_key: self.order_key.into_proto(),
+            limit: self.limit.into_proto(),
+            arity: self.arity.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoMonotonicTopKPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoMonotonicTopKPlan) -> Result<Self, TryFromProtoError> {
         Ok(MonotonicTopKPlan {
-            group_key: x
-                .group_key
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            order_key: x
-                .order_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            limit: Option::<usize>::from_proto(x.limit)?,
-            arity: usize::from_proto(x.arity)?,
+            group_key: proto.group_key.into_rust()?,
+            order_key: proto.order_key.into_rust()?,
+            limit: proto.limit.into_rust()?,
+            arity: proto.arity.into_rust()?,
         })
     }
 }
@@ -234,36 +206,24 @@ pub struct BasicTopKPlan {
     pub arity: usize,
 }
 
-impl From<&BasicTopKPlan> for ProtoBasicTopKPlan {
-    fn from(x: &BasicTopKPlan) -> Self {
+impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
+    fn into_proto(&self) -> ProtoBasicTopKPlan {
         ProtoBasicTopKPlan {
-            group_key: x.group_key.iter().map(|x| x.into_proto()).collect(),
-            order_key: x.order_key.iter().map(Into::into).collect(),
-            limit: x.limit.into_proto(),
-            offset: x.offset.into_proto(),
-            arity: x.arity.into_proto(),
+            group_key: self.group_key.into_proto(),
+            order_key: self.order_key.into_proto(),
+            limit: self.limit.into_proto(),
+            offset: self.offset.into_proto(),
+            arity: self.arity.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoBasicTopKPlan> for BasicTopKPlan {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoBasicTopKPlan) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoBasicTopKPlan) -> Result<Self, TryFromProtoError> {
         Ok(BasicTopKPlan {
-            group_key: x
-                .group_key
-                .into_iter()
-                .map(usize::from_proto)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            order_key: x
-                .order_key
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, Self::Error>>()?,
-            limit: Option::<usize>::from_proto(x.limit)?,
-            offset: usize::from_proto(x.offset)?,
-            arity: usize::from_proto(x.arity)?,
+            group_key: proto.group_key.into_rust()?,
+            order_key: proto.order_key.into_rust()?,
+            limit: proto.limit.into_rust()?,
+            offset: proto.offset.into_rust()?,
+            arity: proto.arity.into_rust()?,
         })
     }
 }

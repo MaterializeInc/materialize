@@ -14,17 +14,16 @@ use hyper::service;
 use hyper::Server;
 use hyper::StatusCode;
 use hyper::{Body, Response};
-use lazy_static::lazy_static;
 use mz_ccsr::SchemaReference;
+use once_cell::sync::Lazy;
 
 use mz_ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError, SchemaType};
 
-lazy_static! {
-    pub static ref SCHEMA_REGISTRY_URL: reqwest::Url = match env::var("SCHEMA_REGISTRY_URL") {
+pub static SCHEMA_REGISTRY_URL: Lazy<reqwest::Url> =
+    Lazy::new(|| match env::var("SCHEMA_REGISTRY_URL") {
         Ok(addr) => addr.parse().expect("unable to parse SCHEMA_REGISTRY_URL"),
         _ => "http://localhost:8081".parse().unwrap(),
-    };
-}
+    });
 
 #[tokio::test]
 async fn test_client() -> Result<(), anyhow::Error> {

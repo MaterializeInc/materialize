@@ -6,8 +6,6 @@ menu:
     parent: "commands"
 ---
 
-{{< version-added v0.5.3 />}}
-
 `DECLARE` creates a cursor, which can be used with
 [`FETCH`](/sql/fetch), to retrieve a limited number of rows at a time
 from a larger query. Large queries or queries that don't ever complete

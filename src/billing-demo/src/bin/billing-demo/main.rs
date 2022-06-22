@@ -27,6 +27,7 @@ use prost::Message;
 use tokio::time::{self, Duration};
 use tracing::{error, info, trace};
 
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::task;
 use mz_test_util::kafka::kafka_client;
 use mz_test_util::mz_client;
@@ -47,7 +48,7 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let config: Args = mz_ore::cli::parse_args();
+    let config: Args = cli::parse_args(CliConfig::default());
 
     let k_config = config.kafka_config();
     let mz_config = config.mz_config();

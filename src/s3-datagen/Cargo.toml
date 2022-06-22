@@ -3,18 +3,18 @@ name = "mz-s3-datagen"
 description = "Generate S3 test data."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
-aws-config = { version = "0.10.1", default-features = false, features = ["native-tls"] }
-aws-sdk-s3 = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"] }
+anyhow = "1.0.58"
+aws-config = { version = "0.13.0", default-features = false, features = ["native-tls"] }
+aws-sdk-s3 = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 bytefmt = "0.1.7"
-clap = { version = "3.1.15", features = ["derive"] }
+clap = { version = "3.2.5", features = ["derive"] }
 futures = "0.3.21"
 indicatif = "0.16.2"
 mz-ore = { path = "../ore" }
-tokio = { version = "1.17.0", features = ["macros", "net", "rt", "time"] }
-tracing = "0.1.34"
+tokio = { version = "1.19.2", features = ["macros", "net", "rt", "time"] }
+tracing = "0.1.35"
 tracing-subscriber = { version = "0.3.11", default-features = false, features = ["env-filter", "fmt"] }

@@ -44,6 +44,25 @@ We recommend that you do _not_ install Rust via your system's package manager.
 We closely track the most recent version of Rust. The version of Rust in your
 package manager is likely too old to build Materialize.
 
+### PostgreSQL
+
+Running Materialize locally requires a running PostgreSQL server.
+
+On macOS, when using Homebrew, Postgres can be installed and started via:
+
+```shell
+brew install postgresql
+brew services start postgresql
+```
+
+On Debian-based Linux variants:
+
+```shell
+apt install postgresql
+```
+
+If you can run `psql` without arguments and connect, you're all set.
+
 ### Confluent Platform
 
 The [Confluent Platform] bundles [Apache ZooKeeper] and [Apache Kafka] with
@@ -129,12 +148,12 @@ access token for use with HTTPS][github-https].
 
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
-individually via Cargo, but we recommend using the `bin/materialized` script to
+individually via Cargo, but we recommend using the `bin/environmentd` script to
 drive the process:
 
 ```shell
 cd materialize
-bin/materialized [--release] [<materialized arg>...]
+bin/environmentd [--release] [<environmentd arg>...]
 ```
 
 ## Running Confluent Platform
@@ -182,9 +201,9 @@ full rebuild of the binary.
 To speed up the development cycle, you can enable the `dev-web` feature like so:
 
 ```shell
-cd src/materialized
+cd src/environmentd
 cargo build --bin storaged --bin computed
-cargo run --bin materialized --features=dev-web
+cargo run --bin environmentd --features=dev-web
 ```
 
 In this mode, every request for a static file will reload the file from disk.
@@ -192,12 +211,12 @@ Changes to standalone CSS and JS files will be reflected immediately upon
 reload, without requiring a recompile!
 
 Note that `dev-web` can only hot-reload the the files in
-`src/materialized/src/static`. The HTML templates in
-`src/materialized/src/templates` use a compile-time templating library called
+`src/environmentd/src/static`. The HTML templates in
+`src/environmentd/src/templates` use a compile-time templating library called
 [`askama`], and so changes to those templates necessarily require a recompile.
 
 For details about adding a new JavaScript/CSS dependency, see the comment in
-[`src/materialized/build/npm.rs`](/src/materialized/build/npm.rs).
+[`src/environmentd/build/npm.rs`](/src/environmentd/build/npm.rs).
 
 ## Testing
 
@@ -235,7 +254,7 @@ This repository has the following basic structure:
     <https://materialize.com/docs>.
   * **`misc`** contains a variety of supporting tools and projects. Some
     highlights:
-    * **`misc/dbt-materialize` contains the Materialize [dbt] adapter.
+    * **`misc/dbt-materialize`** contains the Materialize [dbt] adapter.
     * **`misc/python`** contains Python developer tools, like
       [mzbuild](mzbuild.md).
     * **`misc/nix`** contains an experimental [Nix] configuration for

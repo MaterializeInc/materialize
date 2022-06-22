@@ -8,10 +8,8 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
-from materialize import spawn
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Computed,
@@ -22,7 +20,13 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-SERVICES = [Zookeeper(), Kafka(), SchemaRegistry(), Materialized(), Testdrive()]
+SERVICES = [
+    Zookeeper(),
+    Kafka(),
+    SchemaRegistry(),
+    Materialized(),
+    Testdrive(),
+]
 
 
 @dataclass
@@ -62,20 +66,19 @@ disruptions = [
 """,
         ),
     ),
-]
-
-# computed: adapter hangs if cluster has panicked during INSERT ... SELECT #12251
-disruptions_disabled = [
     Disruption(
         name="panic-in-insert-select",
         disruption=lambda c: c.testdrive(
             """
+> SET cluster=cluster1
+> SET statement_timeout='1s'
+
 > CREATE TABLE panic_table (f1 TEXT);
 
 > INSERT INTO panic_table VALUES ('panic!');
 
 ! INSERT INTO panic_table SELECT mz_internal.mz_panic(f1) FROM panic_table;
-contains: deadline has elapsed
+contains: statement timeout
 """,
         ),
     ),
@@ -98,6 +101,8 @@ def populate(c: Composition) -> None:
         """
 > SET cluster=cluster1
 
+> DROP TABLE IF EXISTS t1 CASCADE;
+
 > CREATE TABLE t1 (f1 TEXT);
 
 > INSERT INTO t1 VALUES (1), (2);
@@ -114,6 +119,8 @@ def validate(c: Composition) -> None:
     c.testdrive(
         """
 # Dataflows
+
+> SET cluster=cluster2
 
 > SELECT * FROM v1;
 2
@@ -191,31 +198,49 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
     c.up("testdrive", persistent=True)
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
+    c.wait_for_materialized()
 
     nodes = [
-        Computed(name="computed_1_1", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_1_2", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_2_1", peers=["computed_2_1", "computed_2_2"]),
-        Computed(name="computed_2_2", peers=["computed_2_1", "computed_2_2"]),
+        Computed(
+            name="computed_1_1",
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_1_2",
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_2_1",
+            peers=["computed_2_1", "computed_2_2"],
+        ),
+        Computed(
+            name="computed_2_2",
+            peers=["computed_2_1", "computed_2_2"],
+        ),
     ]
 
     with c.override(*nodes):
         c.up(*[n.name for n in nodes])
 
         c.sql(
-            "CREATE CLUSTER cluster1 REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100'));"
+            """
+            DROP CLUSTER IF EXISTS cluster1 CASCADE;
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (REMOTE ['computed_1_1:2100', 'computed_1_2:2100']));
+            """
         )
 
         c.sql(
-            "CREATE CLUSTER cluster2 REPLICA replica1 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'));"
+            """
+            DROP CLUSTER IF EXISTS cluster2 CASCADE;
+            CREATE CLUSTER cluster2 REPLICAS (replica1 (REMOTE ['computed_2_1:2100', 'computed_2_2:2100']));
+            """
         )
 
         with c.override(
             Testdrive(
                 validate_data_dir=False,
                 no_reset=True,
-                materialized_params={"cluster": "cluster2"},
+                materialize_params={"cluster": "cluster2"},
                 seed=id,
             )
         ):
@@ -226,8 +251,12 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
             validate(c)
 
-        cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]
+        cleanup_list = [
+            "materialized",
+            "testdrive",
+            *[n.name for n in nodes],
+        ]
         c.kill(*cleanup_list)
         c.rm(*cleanup_list, destroy_volumes=True)
 
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")

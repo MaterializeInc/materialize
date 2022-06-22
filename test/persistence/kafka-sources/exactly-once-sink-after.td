@@ -27,8 +27,8 @@ $ kafka-ingest format=avro topic=exactly-once key-format=avro key-schema=${keysc
 {"f1": ${kafka-ingest.iteration}} {"f2": ${kafka-ingest.iteration}}
 
 
-> SELECT COUNT(*) = 10 FROM exactly_once;
-true
+> SELECT COUNT(*) FROM exactly_once;
+10
 
 # We expect just the 6 new messages, having consumed the older ones in xactly-once-sink-before.td
 $ set-regex match=\d{13} replacement=<TIMESTAMP>

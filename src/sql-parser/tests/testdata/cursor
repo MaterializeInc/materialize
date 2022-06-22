@@ -65,9 +65,9 @@ Fetch(FetchStatement { name: Ident("c"), count: None, options: [] })
 parse-statement
 FETCH FROM c WITH (TIMEOUT = '5s')
 ----
-FETCH c WITH (timeout = '5s')
+FETCH c WITH (TIMEOUT = '5s')
 =>
-Fetch(FetchStatement { name: Ident("c"), count: None, options: [WithOption { key: Ident("timeout"), value: Some(Value(String("5s"))) }] })
+Fetch(FetchStatement { name: Ident("c"), count: None, options: [FetchOption { name: Timeout, value: Some(Value(String("5s"))) }] })
 
 
 parse-statement

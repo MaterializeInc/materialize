@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SELECT COUNT(*) = 500000 FROM t1;
-true
-> SELECT COUNT(*) = 500000 FROM t2;
-true
+> SELECT COUNT(*) FROM t1;
+500000
+> SELECT COUNT(*) FROM t2;
+500000
 
 ! SELECT * FROM to_be_altered;
 contains:altered

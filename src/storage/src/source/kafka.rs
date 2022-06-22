@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use futures::executor::block_on;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -20,22 +21,24 @@ use rdkafka::statistics::Statistics;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, KafkaOffset,
-    KafkaSourceConnector, MzOffset,
+    encoding::SourceDataEncoding, ExternalSourceConnection, KafkaOffset, KafkaSourceConnection,
+    MzOffset,
 };
 use mz_expr::PartitionId;
-use mz_kafka_util::{client::MzClientContext, KafkaAddrs};
+use mz_kafka_util::{client::create_new_client_config, client::MzClientContext, KafkaAddrs};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
-use crate::source::{NextMessage, SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{
+    NextMessage, SourceMessage, SourceMessageType, SourceReader, SourceReaderError,
+};
 
 use self::metrics::KafkaPartitionMetrics;
-use super::metrics::SourceBaseMetrics;
 
 mod metrics;
 
@@ -55,10 +58,11 @@ pub struct KafkaSourceReader {
     worker_id: usize,
     /// Total count of workers
     worker_count: usize,
-    /// Map from partition -> most recently read offset
-    last_offsets: HashMap<i32, i64>,
-    /// Map from partition -> offset to start reading at
-    start_offsets: HashMap<i32, i64>,
+    /// Map from partition -> most recently read offset. Can be -1,
+    /// if we are starting at the beginning.
+    last_offsets: HashMap<i32, KafkaOffset>,
+    /// Map from partition -> offset to start reading at. 0-indexed
+    start_offsets: HashMap<i32, u64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// The last partition we received
@@ -76,6 +80,7 @@ pub struct KafkaSourceReader {
 impl SourceReader for KafkaSourceReader {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
+    type Diff = ();
 
     /// Create a new instance of a Kafka reader.
     fn new(
@@ -84,31 +89,36 @@ impl SourceReader for KafkaSourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        _: AwsExternalId,
+        connection: ExternalSourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
-        base_metrics: SourceBaseMetrics,
+        metrics: crate::source::metrics::SourceBaseMetrics,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let kc = match connector {
-            ExternalSourceConnector::Kafka(kc) => kc,
+        let kc = match connection {
+            ExternalSourceConnection::Kafka(kc) => kc,
             _ => unreachable!(),
         };
-
-        let KafkaSourceConnector {
-            addrs,
-            config_options,
+        let KafkaSourceConnection {
+            connection,
             topic,
             group_id_prefix,
             cluster_id,
             ..
         } = kc;
+        let mut config_options = BTreeMap::new();
+        for (k, v) in connection.options {
+            let v = block_on(v.get_string(&connection_context.secrets_reader))
+                .expect("reading kafka secret unexpectedly failed");
+            config_options.insert(k, v);
+        }
         let kafka_config = create_kafka_config(
             &source_name,
-            &addrs,
+            &connection.broker,
             group_id_prefix,
             cluster_id,
             &config_options,
+            connection_context.librdkafka_log_level,
         );
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
@@ -121,7 +131,11 @@ impl SourceReader for KafkaSourceReader {
 
         // Start offsets is a map from pid -> next 0-indexed offset to read from,
         // which is equivalent to 1 + the last 0-indexed offset read.
-        let mut start_offsets: HashMap<_, _> = kc.start_offsets.into_iter().collect();
+        let mut start_offsets: HashMap<_, u64> = kc
+            .start_offsets
+            .into_iter()
+            .map(|(k, v)| (k, v.offset))
+            .collect();
 
         // Restored offsets are 1-indexed, so convert to 0-indexed offsets by
         // subtracting 1. The bindings in sqlite already encode 1 offset past the
@@ -184,12 +198,7 @@ impl SourceReader for KafkaSourceReader {
             partition_info,
             include_headers: kc.include_headers.is_some(),
             _metadata_thread_handle: metadata_thread_handle,
-            partition_metrics: KafkaPartitionMetrics::new(
-                base_metrics,
-                partition_ids,
-                topic,
-                source_id,
-            ),
+            partition_metrics: KafkaPartitionMetrics::new(metrics, partition_ids, topic, source_id),
         })
     }
 
@@ -201,7 +210,7 @@ impl SourceReader for KafkaSourceReader {
     /// (and this partition) we skip this message, and seek to the appropriate offset
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         let partition_info = self.partition_info.lock().unwrap().take();
         if let Some(partitions) = partition_info {
             for pid in partitions {
@@ -224,7 +233,7 @@ impl SourceReader for KafkaSourceReader {
                     self.source_name, self.topic_name, e
                 ),
                 Ok(message) => {
-                    let source_message = construct_source_message(&message, self.include_headers);
+                    let source_message = construct_source_message(&message, self.include_headers)?;
                     next_message = self.handle_message(source_message);
                 }
             }
@@ -242,7 +251,7 @@ impl SourceReader for KafkaSourceReader {
                 break;
             }
 
-            let message = self.poll_from_next_queue();
+            let message = self.poll_from_next_queue()?;
             attempts += 1;
 
             if let Some(message) = message {
@@ -275,11 +284,17 @@ impl KafkaSourceReader {
             None => 0,
         };
 
+        let start_offset: i64 = start_offset.try_into().expect("offset to be < i64::MAX");
         self.create_partition_queue(pid, Offset::Offset(start_offset));
 
         // Indicate a last offset of -1 if we have not been instructed to have a specific start
         // offset for this topic.
-        let prev = self.last_offsets.insert(pid, start_offset - 1);
+        let prev = self.last_offsets.insert(
+            pid,
+            KafkaOffset {
+                offset: start_offset - 1,
+            },
+        );
 
         assert!(prev.is_none());
     }
@@ -415,10 +430,12 @@ impl KafkaSourceReader {
     /// We maintain the list of partition queues in a queue, and add queues that we polled from to
     /// the end of the queue. We thus swing through all available partition queues in a somewhat
     /// fair manner.
-    fn poll_from_next_queue(&mut self) -> Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>> {
+    fn poll_from_next_queue(
+        &mut self,
+    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>>, anyhow::Error> {
         let mut partition_queue = self.partition_consumers.pop_front().unwrap();
 
-        let message = match partition_queue.get_next_message() {
+        let message = match partition_queue.get_next_message()? {
             Err(e) => {
                 let pid = partition_queue.pid();
                 let last_offset = self
@@ -431,7 +448,7 @@ impl KafkaSourceReader {
                         self.source_name,
                         self.topic_name,
                         pid,
-                        last_offset,
+                        last_offset.offset,
                         e
                     );
                 None
@@ -441,15 +458,15 @@ impl KafkaSourceReader {
 
         self.partition_consumers.push_back(partition_queue);
 
-        message
+        Ok(message)
     }
 
     /// Checks if the given message is viable for emission. This checks if the message offset is
     /// past the expected offset and seeks the consumer if it is not.
     fn handle_message(
         &mut self,
-        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>,
-    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+        message: SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>,
+    ) -> NextMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
         let partition = match message.partition {
             PartitionId::Kafka(pid) => pid,
             _ => unreachable!(),
@@ -476,7 +493,8 @@ impl KafkaSourceReader {
             .expect("partition known to be installed");
 
         let last_offset = *last_offset_ref;
-        if offset <= last_offset {
+        let offset_as_i64: i64 = offset.try_into().expect("offset to be < i64::MAX");
+        if offset_as_i64 <= last_offset.offset {
             info!(
                 "Kafka message before expected offset, skipping: \
                              source {} (reading topic {}, partition {}) \
@@ -485,17 +503,19 @@ impl KafkaSourceReader {
                 self.topic_name,
                 partition,
                 offset,
-                last_offset + 1,
+                last_offset.offset + 1,
             );
             // Seek to the *next* 0 indexed offset that we have not yet processed
-            self.fast_forward_consumer(partition, last_offset + 1);
+            self.fast_forward_consumer(partition, last_offset.offset + 1);
             // We explicitly should not consume the message as we have already processed it
             // However, we make sure to activate the source to make sure that we get a chance
             // to read from this consumer again (even if no new data arrives)
             NextMessage::TransientDelay
         } else {
-            *last_offset_ref = offset;
-            NextMessage::Ready(message)
+            *last_offset_ref = KafkaOffset {
+                offset: offset_as_i64,
+            };
+            NextMessage::Ready(SourceMessageType::Finalized(message))
         }
     }
 }
@@ -507,8 +527,9 @@ fn create_kafka_config(
     group_id_prefix: Option<String>,
     cluster_id: Uuid,
     config_options: &BTreeMap<String, String>,
+    librdkafka_log_level: tracing::Level,
 ) -> ClientConfig {
-    let mut kafka_config = ClientConfig::new();
+    let mut kafka_config = create_new_client_config(librdkafka_log_level);
 
     // Broker configuration.
     kafka_config.set("bootstrap.servers", &addrs.to_string());
@@ -555,16 +576,6 @@ fn create_kafka_config(
         ),
     );
 
-    // Patch the librdkafka debug log system into the Rust `log` ecosystem.
-    // This is a very simple integration at the moment; enabling `debug`-level
-    // logs for the `librdkafka` target enables the full firehouse of librdkafka
-    // debug logs. We may want to investigate finer-grained control.
-    // TODO(guswynn): replace this when https://github.com/tokio-rs/tracing/pull/1821 is merged
-    if log::log_enabled!(target: "librdkafka", log::Level::Debug) {
-        debug!("Enabling 'debug' for rdkafka");
-        kafka_config.set("debug", "all");
-    }
-
     // Set additional configuration operations from the user. While these look
     // arbitrary, other layers of the system tightly control which configuration
     // options are allowable.
@@ -578,7 +589,7 @@ fn create_kafka_config(
 fn construct_source_message(
     msg: &BorrowedMessage<'_>,
     include_headers: bool,
-) -> SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+) -> Result<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>, anyhow::Error> {
     let kafka_offset = KafkaOffset {
         offset: msg.offset(),
     };
@@ -591,14 +602,20 @@ fn construct_source_message(
         ),
         _ => None,
     };
-    SourceMessage {
+    Ok(SourceMessage {
         partition: PartitionId::Kafka(msg.partition()),
-        offset: kafka_offset.into(),
+        offset: kafka_offset.try_into().map_err(|_| {
+            anyhow::anyhow!(
+                "got negative offset ({}) from otherwise non-error'd kafka message",
+                kafka_offset.offset
+            )
+        })?,
         upstream_time_millis: msg.timestamp().to_millis(),
         key: msg.key().map(|k| k.to_vec()),
         value: msg.payload().map(|p| p.to_vec()),
         headers,
-    }
+        specific_diff: (),
+    })
 }
 
 /// Wrapper around a partition containing the underlying consumer
@@ -626,19 +643,25 @@ impl PartitionConsumer {
     }
 
     /// Returns the next message to process for this partition (if any).
+    ///
     /// The outer `Result` represents irrecoverable failures, the inner one can and will
-    /// be transformed into empty values
+    /// be transformed into empty values.
+    ///
+    /// The inner `Option` represents if there is a message to process.
     fn get_next_message(
         &mut self,
-    ) -> Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>>>, KafkaError> {
+    ) -> Result<
+        Result<Option<SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()>>, KafkaError>,
+        anyhow::Error,
+    > {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
-                let result = construct_source_message(&msg, self.include_headers);
+                let result = construct_source_message(&msg, self.include_headers)?;
                 assert_eq!(result.partition, PartitionId::Kafka(self.pid));
-                Ok(Some(result))
+                Ok(Ok(Some(result)))
             }
-            Some(Err(err)) => Err(err),
-            _ => Ok(None),
+            Some(Err(err)) => Ok(Err(err)),
+            _ => Ok(Ok(None)),
         }
     }
 
@@ -708,8 +731,10 @@ mod tests {
     use std::time::Duration;
 
     use rdkafka::consumer::{BaseConsumer, Consumer};
-    use rdkafka::{ClientConfig, Message, Offset, TopicPartitionList};
+    use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
+
+    use mz_kafka_util::client::create_new_client_config_simple;
 
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to
     // lead to a race condition where sometimes we receive messages from polling the main consumer
@@ -728,7 +753,7 @@ mod tests {
         let topic_name = "queue-test";
         let pid = 0;
 
-        let mut kafka_config = ClientConfig::new();
+        let mut kafka_config = create_new_client_config_simple();
         kafka_config.set("bootstrap.servers", "localhost:9092".to_string());
         kafka_config.set("enable.auto.commit", "false");
         kafka_config.set("group.id", Uuid::new_v4().to_string());

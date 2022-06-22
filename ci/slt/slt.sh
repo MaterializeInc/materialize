@@ -13,8 +13,6 @@
 
 set -euo pipefail
 
-export RUST_BACKTRACE=full
-
 mkdir -p target
 
 sqllogictest \

@@ -21,7 +21,7 @@ EXPLAIN PLAN FOR
 SELECT avg(d), sumc, sumd FROM (
 SELECT a + b + c as sumc, a + b + d as sumd, d
 FROM test1
-ORDER BY d LIMIT 4
+ORDER BY d NULLS FIRST LIMIT 4
 )
 GROUP BY sumc, sumd
 ----
@@ -33,7 +33,7 @@ Query:
 | Get materialize.public.test1 (u1)
 | Map (#0 + #1), (#4 + #2), (#4 + #3)
 | Project (#3, #5, #6)
-| TopK group=() order=(#0 asc) limit=4 offset=0
+| TopK group=() order=(#0 asc nulls_first) limit=4 offset=0
 | Reduce group=(#1, #2)
 | | agg sum(#0)
 | | agg count(#0)
@@ -126,6 +126,6 @@ Source materialize.public.t1 (u5):
 Query:
 %0 =
 | Get materialize.public.t1 (u5)
-| TopK group=() order=(#0 asc) limit=3 offset=3
+| TopK group=() order=(#0 asc nulls_last) limit=3 offset=3
 
 EOF

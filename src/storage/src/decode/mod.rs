@@ -35,13 +35,10 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
-use mz_dataflow_types::{
-    sources::{
-        encoding::{AvroEncoding, DataEncoding, RegexEncoding},
-        IncludedColumnSource,
-    },
-    DecodeError, LinearOperator,
-};
+use mz_dataflow_types::connections::ConnectionContext;
+use mz_dataflow_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
+use mz_dataflow_types::sources::{IncludedColumnSource, MzOffset};
+use mz_dataflow_types::{DecodeError, LinearOperator};
 use mz_interchange::avro::ConfluentAvroResolver;
 use mz_repr::Datum;
 use mz_repr::{Diff, Row, Timestamp};
@@ -52,6 +49,7 @@ use self::csv::CsvDecoderState;
 use self::protobuf::ProtobufDecoderState;
 use crate::source::{DecodeResult, SourceOutput};
 use metrics::DecodeMetrics;
+use mz_dataflow_types::sources::encoding::DataEncodingInner;
 
 mod avro;
 mod csv;
@@ -64,9 +62,9 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
     schema: &str,
-    registry: Option<mz_ccsr::ClientConfig>,
+    registry: Option<mz_ccsr::Client>,
     confluent_wire_format: bool,
 ) -> (Collection<G, Row, Diff>, Box<dyn Any + Send + Sync>) {
     // We will have already checked validity of the schema by now, so this can't fail.
@@ -75,7 +73,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
     stream.sink(
-        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>>::position_value_contract(),
+        SourceOutput::<Option<Vec<u8>>, Option<Vec<u8>>, ()>::position_value_contract(),
         "CDCv2-Decode",
         {
             let channel = Rc::clone(&channel);
@@ -253,18 +251,26 @@ fn get_decoder(
     // If the decoding elects to perform them, it should replace this with
     // `None`.
     operators: &mut Option<LinearOperator>,
-    is_connector_delimited: bool,
+    is_connection_delimited: bool,
     metrics: DecodeMetrics,
+    connection_context: &ConnectionContext,
 ) -> DataDecoder {
-    match encoding {
-        DataEncoding::Avro(AvroEncoding {
+    match encoding.inner {
+        DataEncodingInner::Avro(AvroEncoding {
             schema,
-            schema_registry_config,
+            csr_connection,
             confluent_wire_format,
         }) => {
+            let csr_client = match csr_connection {
+                None => None,
+                Some(csr_connection) => Some(
+                    block_on(csr_connection.connect(&connection_context.secrets_reader))
+                        .expect("CSR connection unexpectedly missing secrets"),
+                ),
+            };
             let state = avro::AvroDecoderState::new(
                 &schema,
-                schema_registry_config,
+                csr_client,
                 debug_name.to_string(),
                 confluent_wire_format,
             )
@@ -274,25 +280,25 @@ fn get_decoder(
                 metrics,
             }
         }
-        DataEncoding::Text
-        | DataEncoding::Bytes
-        | DataEncoding::Protobuf(_)
-        | DataEncoding::Regex(_) => {
-            let after_delimiting = match encoding {
-                DataEncoding::Regex(RegexEncoding { regex }) => {
+        DataEncodingInner::Text
+        | DataEncodingInner::Bytes
+        | DataEncodingInner::Protobuf(_)
+        | DataEncodingInner::Regex(_) => {
+            let after_delimiting = match encoding.inner {
+                DataEncodingInner::Regex(RegexEncoding { regex }) => {
                     PreDelimitedFormat::Regex(regex.0, Default::default())
                 }
-                DataEncoding::Protobuf(encoding) => {
+                DataEncodingInner::Protobuf(encoding) => {
                     PreDelimitedFormat::Protobuf(ProtobufDecoderState::new(encoding).expect(
                         "Failed to create protobuf decoder, even though we validated ccsr \
                                     client creation in purification.",
                     ))
                 }
-                DataEncoding::Bytes => PreDelimitedFormat::Bytes,
-                DataEncoding::Text => PreDelimitedFormat::Text,
+                DataEncodingInner::Bytes => PreDelimitedFormat::Bytes,
+                DataEncodingInner::Text => PreDelimitedFormat::Text,
                 _ => unreachable!(),
             };
-            let inner = if is_connector_delimited {
+            let inner = if is_connection_delimited {
                 DataDecoderInner::PreDelimited(after_delimiting)
             } else {
                 DataDecoderInner::DelimitedBytes {
@@ -302,17 +308,17 @@ fn get_decoder(
             };
             DataDecoder { inner, metrics }
         }
-        DataEncoding::Csv(enc) => {
+        DataEncodingInner::Csv(enc) => {
             let state = CsvDecoderState::new(enc, operators);
             DataDecoder {
                 inner: DataDecoderInner::Csv(state),
                 metrics,
             }
         }
-        DataEncoding::Postgres => {
+        DataEncodingInner::Postgres => {
             unreachable!("Postgres sources should not go through the general decoding path.")
         }
-        DataEncoding::RowCodec(_) => {
+        DataEncodingInner::RowCodec(_) => {
             unreachable!(
                 "Persist (RowCodec) sources should not go through the general decoding path."
             )
@@ -345,13 +351,13 @@ fn try_decode(
 /// that have already separated the stream into records/messages/etc. before we
 /// decode them.
 ///
-/// Because we expect the upstream connector to have already delimited the data,
+/// Because we expect the upstream connection to have already delimited the data,
 /// we return an error here if the decoder does not consume all the bytes. This
 /// often lets us, for example, detect when Avro decoding has gone off the rails
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -361,6 +367,7 @@ pub fn render_decode_delimited<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
+    connection_context: &ConnectionContext,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope,
@@ -374,12 +381,26 @@ where
         value_encoding.op_name()
     );
     let mut key_decoder = key_encoding.map(|key_encoding| {
-        get_decoder(key_encoding, debug_name, operators, true, metrics.clone())
+        get_decoder(
+            key_encoding,
+            debug_name,
+            operators,
+            true,
+            metrics.clone(),
+            connection_context,
+        )
     });
 
-    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, true, metrics);
+    let mut value_decoder = get_decoder(
+        value_encoding,
+        debug_name,
+        operators,
+        true,
+        metrics,
+        connection_context,
+    );
 
-    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>>| x.value.hashed();
+    let dist = |x: &SourceOutput<Option<Vec<u8>>, Option<Vec<u8>>, ()>| x.value.hashed();
 
     let results = stream.unary_frontier(Exchange::new(dist), &op_name, move |_, _| {
         move |input, output| {
@@ -394,6 +415,7 @@ where
                     upstream_time_millis,
                     partition,
                     headers,
+                    diff: (),
                 } in data.iter()
                 {
                     let key = key_decoder
@@ -410,7 +432,7 @@ where
 
                     session.give(DecodeResult {
                         key,
-                        value,
+                        value: value.map(|s| s.map(|r| (r, 1))),
                         position: *position,
                         upstream_time_millis: *upstream_time_millis,
                         partition: partition.clone(),
@@ -438,12 +460,12 @@ where
 
 /// Decode arbitrary chunks of bytes into rows.
 ///
-/// This decode API is used for upstream connectors
+/// This decode API is used for upstream connections
 /// that don't discover delimiters themselves; i.e., those
 /// (like CSV files) that need help from the decoding stage to discover where
 /// one record ends and another begins.
 ///
-/// As such, the connectors simply present arbitrary chunks of bytes about which
+/// As such, the connections simply present arbitrary chunks of bytes about which
 /// we can't assume any alignment properties. The `DataDecoder` API accepts these,
 /// and returns `None` if it needs more bytes to discover the boundary between messages.
 /// In that case, this function remembers the already-seen bytes and waits for new ones
@@ -452,7 +474,7 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<(), Option<Vec<u8>>>>,
+    stream: &Stream<G, SourceOutput<(), Option<Vec<u8>>, ()>>,
     value_encoding: DataEncoding,
     debug_name: &str,
     metadata_items: Vec<IncludedColumnSource>,
@@ -461,13 +483,21 @@ pub fn render_decode<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     metrics: DecodeMetrics,
+    connection_context: &ConnectionContext,
 ) -> (Stream<G, DecodeResult>, Option<Box<dyn Any + Send + Sync>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let op_name = format!("{}Decode", value_encoding.op_name());
 
-    let mut value_decoder = get_decoder(value_encoding, debug_name, operators, false, metrics);
+    let mut value_decoder = get_decoder(
+        value_encoding,
+        debug_name,
+        operators,
+        false,
+        metrics,
+        connection_context,
+    );
 
     let mut value_buf = vec![];
 
@@ -491,6 +521,7 @@ where
                     upstream_time_millis,
                     partition,
                     headers,
+                    diff: (),
                 } in data.iter()
                 {
                     let value = match value {
@@ -519,15 +550,15 @@ where
                                     let metadata = to_metadata_row(
                                         &metadata_items,
                                         partition.clone(),
-                                        position,
+                                        position.into(),
                                         *upstream_time_millis,
                                         headers.as_deref(),
                                     );
 
                                     session.give(DecodeResult {
                                         key: None,
-                                        value: Some(value),
-                                        position,
+                                        value: Some(value.map(|r| (r, 1))),
+                                        position: position.into(),
                                         upstream_time_millis: *upstream_time_millis,
                                         partition: partition.clone(),
                                         metadata,
@@ -580,7 +611,7 @@ where
                         let metadata = to_metadata_row(
                             &metadata_items,
                             partition.clone(),
-                            position,
+                            position.into(),
                             *upstream_time_millis,
                             headers.as_deref(),
                         );
@@ -588,8 +619,8 @@ where
                         if value_bytes_remaining.is_empty() {
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(value),
-                                position,
+                                value: Some(value.map(|r| (r, 1))),
+                                position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
@@ -599,8 +630,8 @@ where
                         } else {
                             session.give(DecodeResult {
                                 key: None,
-                                value: Some(value),
-                                position,
+                                value: Some(value.map(|r| (r, 1))),
+                                position: position.into(),
                                 upstream_time_millis: *upstream_time_millis,
                                 partition: partition.clone(),
                                 metadata,
@@ -629,10 +660,11 @@ where
 fn to_metadata_row(
     metadata_items: &[IncludedColumnSource],
     partition: PartitionId,
-    position: i64,
+    position: MzOffset,
     upstream_time_millis: Option<i64>,
     headers: Option<&[(String, Option<Vec<u8>>)]>,
 ) -> Row {
+    let position = position.offset;
     let mut row = Row::default();
     let mut packer = row.packer();
     match partition {
@@ -641,7 +673,11 @@ fn to_metadata_row(
                 match item {
                     IncludedColumnSource::Partition => packer.push(Datum::from(partition)),
                     IncludedColumnSource::Offset | IncludedColumnSource::DefaultPosition => {
-                        packer.push(Datum::from(position))
+                        // note this is bitwise cast, so offsets > i64::MAX will be
+                        // rendered as negative
+                        // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
+                        // is resolved.
+                        packer.push(Datum::from(position as i64))
                     }
                     IncludedColumnSource::Timestamp => {
                         let ts =
@@ -686,7 +722,13 @@ fn to_metadata_row(
         PartitionId::None => {
             for item in metadata_items.iter() {
                 match item {
-                    IncludedColumnSource::DefaultPosition => packer.push(Datum::from(position)),
+                    IncludedColumnSource::DefaultPosition => {
+                        // note this is bitwise cast, so offsets > i64::MAX will be
+                        // rendered as negative
+                        // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
+                        // is resolved.
+                        packer.push(Datum::from(position as i64))
+                    }
                     _ => unreachable!("Only Kafka supports non-defaultposition metadata items"),
                 }
             }

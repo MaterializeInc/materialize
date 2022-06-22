@@ -34,11 +34,12 @@ use uuid::Uuid;
 
 use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
-use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId};
+use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::{LogVariant, LoggingConfig};
 use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Row};
 
 use super::ReadPolicy;
@@ -56,7 +57,7 @@ pub(super) struct ComputeControllerState<T> {
 /// An immutable controller for a compute instance.
 #[derive(Debug, Copy, Clone)]
 pub struct ComputeController<'a, T> {
-    pub(super) _instance: ComputeInstanceId, // likely to be needed soon
+    pub(super) instance: ComputeInstanceId,
     pub(super) compute: &'a ComputeControllerState<T>,
     pub(super) storage_controller: &'a dyn StorageController<Timestamp = T>,
 }
@@ -145,10 +146,7 @@ impl<T> ComputeControllerState<T>
 where
     T: Timestamp + Lattice,
 {
-    pub(super) async fn new(
-        // client: ActiveReplication<Box<dyn ComputeClient<T>>, T>,
-        logging: &Option<LoggingConfig>,
-    ) -> Result<Self, anyhow::Error> {
+    pub(super) async fn new(logging: &Option<LoggingConfig>) -> Result<Self, anyhow::Error> {
         let mut collections = BTreeMap::default();
         if let Some(logging_config) = logging.as_ref() {
             for id in logging_config.log_identifiers() {
@@ -164,7 +162,10 @@ where
         }
         let mut client = crate::client::replicated::ActiveReplication::default();
         client
-            .send(ComputeCommand::CreateInstance(logging.clone()))
+            .send(ComputeCommand::CreateInstance(InstanceConfig {
+                replica_id: Default::default(),
+                logging: logging.clone(),
+            }))
             .await?;
 
         Ok(Self {
@@ -180,6 +181,11 @@ impl<'a, T> ComputeController<'a, T>
 where
     T: Timestamp + Lattice,
 {
+    /// Returns this controller's compute instance ID.
+    pub fn instance_id(&self) -> ComputeInstanceId {
+        self.instance
+    }
+
     /// Acquires an immutable handle to a controller for the storage instance.
     #[inline]
     pub fn storage(&self) -> &dyn crate::client::controller::StorageController<Timestamp = T> {
@@ -202,7 +208,7 @@ where
     /// Constructs an immutable handle from this mutable handle.
     pub fn as_ref<'b>(&'b self) -> ComputeController<'b, T> {
         ComputeController {
-            _instance: self.instance,
+            instance: self.instance,
             storage_controller: self.storage_controller,
             compute: &self.compute,
         }
@@ -217,9 +223,9 @@ where
     }
 
     /// Adds a new instance replica, by name.
-    pub async fn add_replica(
+    pub fn add_replica(
         &mut self,
-        id: String,
+        id: ReplicaId,
         client: Box<dyn ComputeClient<T>>,
         log_collections: HashMap<LogVariant, GlobalId>,
     ) {
@@ -233,19 +239,15 @@ where
                 (variant, meta)
             })
             .collect();
-
-        self.compute
-            .client
-            .add_replica(id, client, log_collections)
-            .await;
+        self.compute.client.add_replica(id, client, log_collections);
     }
 
-    pub fn get_replica_ids(&self) -> impl Iterator<Item = &String> {
-        self.compute.client.get_replica_identifiers()
+    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.compute.client.get_replica_ids()
     }
 
     /// Removes an existing instance replica, by name.
-    pub fn remove_replica(&mut self, id: &str) {
+    pub fn remove_replica(&mut self, id: ReplicaId) {
         self.compute.client.remove_replica(id);
     }
 
@@ -412,6 +414,7 @@ where
         Ok(())
     }
     /// Initiate a peek request for the contents of `id` at `timestamp`.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn peek(
         &mut self,
         id: GlobalId,
@@ -420,6 +423,7 @@ where
         timestamp: T,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        target_replica: Option<ReplicaId>,
     ) -> Result<(), ComputeError> {
         let since = self.as_ref().collection(id)?.read_capabilities.frontier();
 
@@ -442,11 +446,26 @@ where
                 timestamp,
                 finishing,
                 map_filter_project,
+                target_replica,
+                // Obtain an `OpenTelemetryContext` from the thread-local tracing
+                // tree to forward it on to the compute worker.
+                otel_ctx: OpenTelemetryContext::obtain(),
             }))
             .await
             .map_err(ComputeError::from)
     }
+
     /// Cancels existing peek requests.
+    ///
+    /// Canceling a peek is best effort. The caller may see any of the following
+    /// after canceling a peek request:
+    ///
+    ///   * A `PeekResponse::Rows` indicating that the cancellation request did
+    ///    not take effect in time and the query succeeded.
+    ///
+    ///   * A `PeekResponse::Canceled` affirming that the peek was canceled.
+    ///
+    ///   * No `PeekResponse` at all.
     pub async fn cancel_peeks(&mut self, uuids: &BTreeSet<Uuid>) -> Result<(), ComputeError> {
         self.remove_peeks(uuids.iter().cloned()).await?;
         self.compute
@@ -693,7 +712,7 @@ pub struct CollectionState<T> {
     ///
     /// Importantly, this is not a write capability, but what we have heard about the
     /// write capabilities of others. All future writes will have times greater than or
-    /// equal to `upper_frontier.frontier()`.
+    /// equal to `write_frontier.frontier()`.
     pub write_frontier: MutableAntichain<T>,
 }
 

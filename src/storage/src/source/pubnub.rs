@@ -17,14 +17,14 @@ use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport, PubNub};
 use timely::scheduling::SyncActivator;
 use tracing::info;
 
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, AwsExternalId, ExternalSourceConnector, MzOffset,
+    encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset,
 };
 use mz_expr::PartitionId;
 use mz_repr::{Datum, GlobalId, Row};
 
-use super::metrics::SourceBaseMetrics;
-use crate::source::{SourceMessage, SourceReader, SourceReaderError};
+use crate::source::{SourceMessage, SourceMessageType, SourceReader, SourceReaderError};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
@@ -37,6 +37,7 @@ pub struct PubNubSourceReader {
 impl SourceReader for PubNubSourceReader {
     type Key = ();
     type Value = Row;
+    type Diff = ();
 
     fn new(
         _source_name: String,
@@ -44,17 +45,17 @@ impl SourceReader for PubNubSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        _aws_external_id: AwsExternalId,
+        connection: ExternalSourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
-        _metrics: SourceBaseMetrics,
+        _: crate::source::metrics::SourceBaseMetrics,
+        _: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
-        let pubnub_conn = match connector {
-            ExternalSourceConnector::PubNub(pubnub_conn) => pubnub_conn,
+        let pubnub_conn = match connection {
+            ExternalSourceConnection::PubNub(pubnub_conn) => pubnub_conn,
             _ => {
                 panic!(
-                    "PubNub is the only legitimate ExternalSourceConnector for PubNubSourceReader"
+                    "PubNub is the only legitimate ExternalSourceConnection for PubNubSourceReader"
                 )
             }
         };
@@ -86,7 +87,8 @@ impl SourceReader for PubNubSourceReader {
     async fn next(
         &mut self,
         timestamp_frequency: Duration,
-    ) -> Option<Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>> {
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
+    {
         loop {
             let stream = match &mut self.stream {
                 None => {
@@ -103,7 +105,7 @@ impl SourceReader for PubNubSourceReader {
 
                         let row = Row::pack_slice(&[Datum::String(&s)]);
 
-                        return Some(Ok(SourceMessage {
+                        return Some(Ok(SourceMessageType::Finalized(SourceMessage {
                             partition: PartitionId::None,
                             offset: MzOffset {
                                 // NOTE(guswynn):
@@ -118,13 +120,14 @@ impl SourceReader for PubNubSourceReader {
                                 // documentation on the pubnub website on
                                 // if it is required to produce monotonic
                                 // timetokens.
-                                offset: msg.timetoken.t.try_into().unwrap(),
+                                offset: msg.timetoken.t,
                             },
                             upstream_time_millis: None,
                             key: (),
                             value: row,
                             headers: None,
-                        }));
+                            specific_diff: (),
+                        })));
                     }
                 }
                 None => {

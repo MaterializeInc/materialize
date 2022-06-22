@@ -15,9 +15,7 @@ You can use [Debezium](https://debezium.io/) to propagate Change Data Capture (C
 Debezium emits records using an envelope that contains valuable information about the change captured, like the `before` and `after` values for each record. This envelope is a powerful structure that lets Materialize perform more complex analysis to understand all CRUD-like operations happening in the upstream database. For more details on CDC support in Materialize, check the [documentation](/sql/create-source/kafka/#using-debezium).
 
 
-{{< note >}}
-Currently, Materialize only supports Avro-encoded Debezium records. If you're interested in JSON support, please reach out in the community Slack or leave a comment in [this GitHub issue](https://github.com/MaterializeInc/materialize/issues/5231).
-{{</ note >}}
+{{< debezium-json >}}
 
 ### CDC guides
 

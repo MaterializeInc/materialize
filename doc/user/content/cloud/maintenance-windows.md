@@ -1,5 +1,5 @@
 ---
-title: "Maintenance Windows"
+title: "Maintenance windows"
 description: "Update Materialize Cloud."
 menu:
   main:

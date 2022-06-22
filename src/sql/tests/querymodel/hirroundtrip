@@ -107,8 +107,8 @@ select x.a from (select true as a) x left join (select false as b) y on x.a;
 ----
 
 cat
-(defsource x [int32 int64 int32] [a b c])
-(defsource y [int32 int64 int32] [a b c])
+(defsource x ([int32 int64 int32] [a b c]))
+(defsource y ([int32 int64 int32] [a b c]))
 ----
 ok
 

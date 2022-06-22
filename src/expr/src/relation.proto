@@ -23,6 +23,7 @@ package mz_expr.relation;
 message ProtoColumnOrder {
     uint64 column = 1;
     bool desc = 2;
+    bool nulls_last = 3;
 }
 
 message ProtoWindowFrame {

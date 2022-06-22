@@ -1,5 +1,5 @@
 ---
-title: "TIMEZONE and AT TIME ZONE Functions"
+title: "TIMEZONE and AT TIME ZONE functions"
 description: "Converts timestamp to a different time zone."
 menu:
   main:

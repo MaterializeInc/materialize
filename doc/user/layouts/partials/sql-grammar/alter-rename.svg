@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="573" height="213">
+<svg xmlns="http://www.w3.org/2000/svg" width="573" height="169">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="66" height="32" rx="10"/>
@@ -17,38 +17,30 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="145" y="21">INDEX</text>
-   <rect x="137" y="47" width="52" height="32" rx="10"/>
+   <rect x="137" y="47" width="78" height="32" rx="10"/>
    <rect x="135"
          y="45"
-         width="52"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="145" y="65">SINK</text>
-   <rect x="137" y="91" width="78" height="32" rx="10"/>
-   <rect x="135"
-         y="89"
          width="78"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="145" y="109">SOURCE</text>
-   <rect x="137" y="135" width="58" height="32" rx="10"/>
+   <text class="terminal" x="145" y="65">SOURCE</text>
+   <rect x="137" y="91" width="58" height="32" rx="10"/>
    <rect x="135"
-         y="133"
+         y="89"
          width="58"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="145" y="153">VIEW</text>
-   <rect x="137" y="179" width="66" height="32" rx="10"/>
+   <text class="terminal" x="145" y="109">VIEW</text>
+   <rect x="137" y="135" width="66" height="32" rx="10"/>
    <rect x="135"
-         y="177"
+         y="133"
          width="66"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="145" y="197">TABLE</text>
+   <text class="terminal" x="145" y="153">TABLE</text>
    <rect x="255" y="3" width="56" height="32"/>
    <rect x="253" y="1" width="56" height="32" class="nonterminal"/>
    <text class="nonterminal" x="263" y="21">name</text>
@@ -64,7 +56,7 @@
    <rect x="453" y="1" width="90" height="32" class="nonterminal"/>
    <text class="nonterminal" x="463" y="21">new_name</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m66 0 h10 m20 0 h10 m62 0 h10 m0 0 h16 m-118 0 h20 m98 0 h20 m-138 0 q10 0 10 10 m118 0 q0 -10 10 -10 m-128 10 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m52 0 h10 m0 0 h26 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m78 0 h10 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m58 0 h10 m0 0 h20 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m66 0 h10 m0 0 h12 m20 -176 h10 m56 0 h10 m0 0 h10 m104 0 h10 m0 0 h10 m90 0 h10 m3 0 h-3"/>
+         d="m17 17 h2 m0 0 h10 m66 0 h10 m20 0 h10 m62 0 h10 m0 0 h16 m-118 0 h20 m98 0 h20 m-138 0 q10 0 10 10 m118 0 q0 -10 10 -10 m-128 10 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m78 0 h10 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m58 0 h10 m0 0 h20 m-108 -10 v20 m118 0 v-20 m-118 20 v24 m118 0 v-24 m-118 24 q0 10 10 10 m98 0 q10 0 10 -10 m-108 10 h10 m66 0 h10 m0 0 h12 m20 -132 h10 m56 0 h10 m0 0 h10 m104 0 h10 m0 0 h10 m90 0 h10 m3 0 h-3"/>
    <polygon points="563 17 571 13 571 21"/>
    <polygon points="563 17 555 13 555 21"/>
 </svg>

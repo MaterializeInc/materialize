@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -70,7 +71,7 @@ impl MaelstromConsensus {
         if let Some(data) = self.cache.lock().await.get(&(key.to_string(), expected)) {
             let value = VersionedData {
                 seqno: expected.clone(),
-                data: data.clone(),
+                data: Bytes::from(data.clone()),
             };
             return Ok(Ok(value));
         }
@@ -91,7 +92,6 @@ impl Consensus for MaelstromConsensus {
         _deadline: Instant,
         key: &str,
     ) -> Result<Option<VersionedData>, ExternalError> {
-        // TODO: Use the deadline.
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("consensus/{}", key)))
@@ -105,7 +105,7 @@ impl Consensus for MaelstromConsensus {
         self.cache
             .lock()
             .await
-            .insert((key.to_string(), value.seqno), value.data.clone());
+            .insert((key.to_string(), value.seqno), value.data.to_vec());
         Ok(Some(value))
     }
 
@@ -127,7 +127,6 @@ impl Consensus for MaelstromConsensus {
         };
         let new = MaelstromVersionedData::from(new);
         let to = Value::from(&new);
-        // TODO: Use the deadline.
         let cas_res = self
             .handle
             .lin_kv_compare_and_set(
@@ -193,7 +192,6 @@ impl MaelstromBlobMulti {
 #[async_trait]
 impl BlobMulti for MaelstromBlobMulti {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
-        // TODO: Use the deadline.
         let value = match self
             .handle
             .lin_kv_read(Value::from(format!("blob/{}", key)))
@@ -205,7 +203,7 @@ impl BlobMulti for MaelstromBlobMulti {
         };
         let value = value
             .as_str()
-            .ok_or_else(|| anyhow!("invalid blob at {}", key))?;
+            .ok_or_else(|| anyhow!("invalid blob at {}: {:?}", key, value))?;
         let value = serde_json::from_str(value)
             .map_err(|err| anyhow!("invalid blob at {}: {}", key, err))?;
         Ok(Some(value))
@@ -219,13 +217,12 @@ impl BlobMulti for MaelstromBlobMulti {
         &self,
         _deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         _atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // lin_kv_write is always atomic, so we're free to ignore the atomic
         // param.
-        let value = serde_json::to_string(&value).expect("failed to serialize value");
-        // TODO: Use the deadline.
+        let value = serde_json::to_string(value.as_ref()).expect("failed to serialize value");
         self.handle
             .lin_kv_write(Value::from(format!("blob/{}", key)), Value::from(value))
             .await
@@ -233,8 +230,13 @@ impl BlobMulti for MaelstromBlobMulti {
         Ok(())
     }
 
-    async fn delete(&self, _deadline: Instant, _key: &str) -> Result<(), ExternalError> {
-        unimplemented!("not yet used")
+    async fn delete(&self, _deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        // Setting the value to Null is as close as we can get with lin_kv.
+        self.handle
+            .lin_kv_write(Value::from(format!("blob/{}", key)), Value::Null)
+            .await
+            .map_err(anyhow::Error::new)?;
+        Ok(())
     }
 }
 
@@ -291,20 +293,22 @@ impl BlobMulti for CachingBlobMulti {
         &self,
         deadline: Instant,
         key: &str,
-        value: Vec<u8>,
+        value: Bytes,
         atomic: Atomicity,
     ) -> Result<(), ExternalError> {
         // Intentionally don't put this in the cache on set, so that this blob
         // gets fetched at least once (exercising those code paths).
-        self.blob.set(deadline, key, value.clone(), atomic).await
+        self.blob.set(deadline, key, value, atomic).await
     }
 
-    async fn delete(&self, _deadline: Instant, _key: &str) -> Result<(), ExternalError> {
-        unimplemented!("not yet used")
+    async fn delete(&self, deadline: Instant, key: &str) -> Result<(), ExternalError> {
+        self.cache.lock().await.remove(key);
+        self.blob.delete(deadline, key).await
     }
 }
 
 mod from_impls {
+    use bytes::Bytes;
     use mz_persist::location::{ExternalError, SeqNo, VersionedData};
     use serde_json::Value;
 
@@ -314,7 +318,7 @@ mod from_impls {
         fn from(x: VersionedData) -> Self {
             MaelstromVersionedData {
                 seqno: x.seqno.0,
-                data: x.data,
+                data: x.data.to_vec(),
             }
         }
     }
@@ -323,7 +327,7 @@ mod from_impls {
         fn from(x: MaelstromVersionedData) -> Self {
             VersionedData {
                 seqno: SeqNo(x.seqno),
-                data: x.data,
+                data: Bytes::from(x.data),
             }
         }
     }

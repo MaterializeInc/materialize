@@ -13,12 +13,6 @@
 > SELECT COUNT(*) FROM envelope_none_bytes;
 10000
 
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-envelope-none-bytes-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 0 FROM mz_kafka_source_statistics;
-true
-
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-envelope-none-text-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) = 0 FROM mz_kafka_source_statistics;
-true
-
 $ kafka-ingest topic=envelope-none-bytes format=bytes repeat=5000
 ABC
 XYZ

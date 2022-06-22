@@ -10,7 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
 use mz_repr::adt::numeric::{
@@ -331,9 +331,9 @@ impl fmt::Display for NumericConstraints {
     }
 }
 
-lazy_static! {
-    /// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYARRAY`].
-    pub static ref LIST: postgres_types::Type = postgres_types::Type::new(
+/// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYARRAY`].
+pub static LIST: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
         "list".to_owned(),
         // OID chosen to be the first OID not considered stable by
         // PostgreSQL. See the "OID Assignment" section of the PostgreSQL
@@ -342,33 +342,39 @@ lazy_static! {
         oid::TYPE_LIST_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
-    );
+    )
+});
 
-    /// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYARRAY`].
-    pub static ref MAP: postgres_types::Type = postgres_types::Type::new(
+/// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYARRAY`].
+pub static MAP: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
         "map".to_owned(),
         // OID chosen to follow our "LIST" type.
         oid::TYPE_MAP_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
-    );
+    )
+});
 
-    /// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
-    pub static ref ANYCOMPATIBLELIST: postgres_types::Type = postgres_types::Type::new(
+/// An anonymous [`Type::List`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
+pub static ANYCOMPATIBLELIST: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
         "anycompatiblelist".to_owned(),
         oid::TYPE_ANYCOMPATIBLELIST_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
-    );
+    )
+});
 
-    /// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
-    pub static ref ANYCOMPATIBLEMAP: postgres_types::Type = postgres_types::Type::new(
+/// An anonymous [`Type::Map`], akin to [`postgres_types::Type::ANYCOMPATIBLEARRAY`].
+pub static ANYCOMPATIBLEMAP: Lazy<postgres_types::Type> = Lazy::new(|| {
+    postgres_types::Type::new(
         "anycompatiblemap".to_owned(),
         oid::TYPE_ANYCOMPATIBLEMAP_OID,
         postgres_types::Kind::Pseudo,
         "mz_catalog".to_owned(),
-    );
-}
+    )
+});
 
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.

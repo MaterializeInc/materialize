@@ -158,8 +158,8 @@ from (select 10 as a, 5 as b, 'world' as c, 'realm' as d) x
 ----
 
 cat
-(defsource x ([(int32 false) int64 int32] [[0]]) [a b c])
-(defsource y ([(int32 false) int32] [[0]]) [a b])
+(defsource x (([(int32 false) int64 int32] [[0]]) [a b c]))
+(defsource y (([(int32 false) int32] [[0]]) [a b]))
 ----
 ok
 

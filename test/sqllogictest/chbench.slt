@@ -270,7 +270,7 @@ ORDER BY ol_number
 | Map (i64tof64(#1) / i64tof64(if (#3 = 0) then {null} else {#3})), (numerictof64(#2) / i64tof64(if (#4 = 0) then {null} else {#4}))
 | Project (#0..=#2, #6, #7, #5)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#5)
+Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#5)
 
 EOF
 
@@ -365,7 +365,7 @@ Query:
 | | implementation = Differential %3 %8.(#0, #1) %1.(#0) %2.(#0) %4.(#0) %0.(#0)
 | Project (#2, #3, #12, #0, #1, #4, #6, #7)
 
-Finish order_by=(#2 asc, #1 asc, #3 asc) limit=none offset=0 project=(#0..=#7)
+Finish order_by=(#2 asc nulls_last, #1 asc nulls_last, #3 asc nulls_last) limit=none offset=0 project=(#0..=#7)
 
 EOF
 
@@ -420,7 +420,7 @@ Query:
 | | agg sum(#4)
 | Project (#0..=#2, #4, #3)
 
-Finish order_by=(#3 desc, #4 asc) limit=none offset=0 project=(#0..=#4)
+Finish order_by=(#3 desc nulls_first, #4 asc nulls_last) limit=none offset=0 project=(#0..=#4)
 
 EOF
 
@@ -476,7 +476,7 @@ ORDER BY o_ol_cnt
 | Reduce group=(#0)
 | | agg count(true)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -554,7 +554,7 @@ Query:
 | Reduce group=(#1)
 | | agg sum(#0)
 
-Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#1 desc nulls_first) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -660,7 +660,7 @@ ORDER BY su_nationkey, cust_nation, l_year
 | Reduce group=(#0, substr(chartostr(#3), 1, 1), extract_year_d(#2))
 | | agg sum(#1)
 
-Finish order_by=(#0 asc, #1 asc, #2 asc) limit=none offset=0 project=(#0..=#3)
+Finish order_by=(#0 asc nulls_last, #1 asc nulls_last, #2 asc nulls_last) limit=none offset=0 project=(#0..=#3)
 
 EOF
 
@@ -761,7 +761,7 @@ Query:
 | Map (#1 / if (#2 = 0) then {1} else {#2})
 | Project (#0, #3)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -827,7 +827,7 @@ Query:
 | Reduce group=(#2, extract_year_d(#1))
 | | agg sum(#0)
 
-Finish order_by=(#0 asc, #1 desc) limit=none offset=0 project=(#0..=#2)
+Finish order_by=(#0 asc nulls_last, #1 desc nulls_first) limit=none offset=0 project=(#0..=#2)
 
 EOF
 
@@ -879,7 +879,7 @@ ORDER BY revenue DESC
 | | agg sum(#4)
 | Project (#0, #1, #5, #2..=#4)
 
-Finish order_by=(#2 desc) limit=none offset=0 project=(#0..=#5)
+Finish order_by=(#2 desc nulls_first) limit=none offset=0 project=(#0..=#5)
 
 EOF
 
@@ -939,7 +939,7 @@ ORDER BY ordercount DESC
 | Filter (i64tonumeric(#1) > (i64tonumeric(#2) * 0.005))
 | Project (#0, #1)
 
-Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#1 desc nulls_first) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -980,7 +980,7 @@ ORDER BY o_ol_cnt
 | | agg sum(if ((#0 = 1) || (#0 = 2)) then {1} else {0})
 | | agg sum(if ((#0 != 1) && (#0 != 2)) then {1} else {0})
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#2)
+Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#2)
 
 EOF
 
@@ -1043,7 +1043,7 @@ ORDER BY custdist DESC, c_count DESC
 | Reduce group=(#0)
 | | agg count(true)
 
-Finish order_by=(#1 desc, #0 desc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#1 desc nulls_first, #0 desc nulls_first) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -1172,7 +1172,7 @@ ORDER BY su_suppkey
 | | implementation = Differential %3 %4.(#0) %5.(#0)
 | Project (#0..=#3, #5)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#4)
+Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#4)
 
 EOF
 
@@ -1249,7 +1249,7 @@ Query:
 | Reduce group=(#1, substr(chartostr(#3), 1, 3), #2)
 | | agg count(distinct #0)
 
-Finish order_by=(#3 desc) limit=none offset=0 project=(#0..=#3)
+Finish order_by=(#3 desc nulls_first) limit=none offset=0 project=(#0..=#3)
 
 EOF
 
@@ -1363,7 +1363,7 @@ ORDER BY sum(ol_amount) DESC, o_entry_d
 | Filter (#7 > 200)
 | Project (#4, #3, #0, #5..=#7)
 
-Finish order_by=(#5 desc, #3 asc) limit=none offset=0 project=(#0..=#5)
+Finish order_by=(#5 desc nulls_first, #3 asc nulls_last) limit=none offset=0 project=(#0..=#5)
 
 EOF
 
@@ -1516,7 +1516,7 @@ Query:
 | | implementation = Differential %2 %7.(#0)
 | Project (#1, #2)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -1610,7 +1610,7 @@ ORDER BY numwait DESC, su_name
 | Reduce group=(#0)
 | | agg count(true)
 
-Finish order_by=(#1 desc, #0 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#1 desc nulls_first, #0 asc nulls_last) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -1692,6 +1692,6 @@ ORDER BY substr(c_state, 1, 1)
 | | agg count(true)
 | | agg sum(#1)
 
-Finish order_by=(#0 asc) limit=none offset=0 project=(#0..=#2)
+Finish order_by=(#0 asc nulls_last) limit=none offset=0 project=(#0..=#2)
 
 EOF

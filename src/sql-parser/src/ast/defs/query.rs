@@ -23,106 +23,7 @@ use std::hash::Hash;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{
-    Expr, FunctionArgs, Ident, UnresolvedDataType, UnresolvedDatabaseName, UnresolvedObjectName,
-    UnresolvedSchemaName, WithOption,
-};
-
-/// This represents the metadata that lives next to an AST, as we take it through
-/// various stages in the planning process.
-///
-/// Conceptually, when we first receive an AST from the parsing process, it only
-/// represents the syntax that the user input, and has no semantic information
-/// embedded in it. Later in this process, we want to be able to walk the tree
-/// and add additional information to it piecemeal, perhaps without going down
-/// the full planning pipeline. AstInfo represents various bits of information
-/// that get stored in the tree: for instance, at first, table names are only
-/// represented by the names the user input (in the `Raw` implementor of this
-/// trait), but later on, we replace them with both the name along with the ID
-/// that it gets resolved to.
-///
-/// Currently this process brings an Ast<Raw> to Ast<Aug>, and lives in
-/// sql/src/names.rs:resolve_names.
-pub trait AstInfo: Clone {
-    /// The type used for table references.
-    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
-    /// The type used for schema names.
-    type SchemaName: AstDisplay + Clone + Hash + Debug + Eq;
-    /// The type used for database names.
-    type DatabaseName: AstDisplay + Clone + Hash + Debug + Eq;
-    /// The type used for cluster names.
-    type ClusterName: AstDisplay + Clone + Hash + Debug + Eq;
-    /// The type used for data types.
-    type DataType: AstDisplay + Clone + Hash + Debug + Eq;
-    /// The type stored next to CTEs for their assigned ID.
-    type CteId: Clone + Hash + Debug + Eq;
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
-pub struct Raw;
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum RawObjectName {
-    Name(UnresolvedObjectName),
-    Id(String, UnresolvedObjectName),
-}
-
-impl RawObjectName {
-    pub fn name(&self) -> &UnresolvedObjectName {
-        match self {
-            RawObjectName::Name(name) => name,
-            RawObjectName::Id(_, name) => name,
-        }
-    }
-
-    pub fn name_mut(&mut self) -> &mut UnresolvedObjectName {
-        match self {
-            RawObjectName::Name(name) => name,
-            RawObjectName::Id(_, name) => name,
-        }
-    }
-}
-
-impl AstDisplay for RawObjectName {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            RawObjectName::Name(o) => f.write_node(o),
-            RawObjectName::Id(id, o) => {
-                f.write_str(format!("[{} AS ", id));
-                f.write_node(o);
-                f.write_str("]");
-            }
-        }
-    }
-}
-impl_display!(RawObjectName);
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub enum RawIdent {
-    Unresolved(Ident),
-    Resolved(String),
-}
-
-impl AstDisplay for RawIdent {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            RawIdent::Unresolved(id) => f.write_node(id),
-            RawIdent::Resolved(id) => {
-                f.write_str(format!("[{}]", id));
-            }
-        }
-    }
-}
-impl_display!(RawIdent);
-
-impl AstInfo for Raw {
-    type ObjectName = RawObjectName;
-    type SchemaName = UnresolvedSchemaName;
-    type DatabaseName = UnresolvedDatabaseName;
-    type ClusterName = RawIdent;
-    type DataType = UnresolvedDataType;
-    type CteId = ();
-}
+use crate::ast::{AstInfo, Expr, FunctionArgs, Ident, UnresolvedObjectName, WithOption};
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
@@ -130,7 +31,7 @@ impl AstInfo for Raw {
 pub struct Query<T: AstInfo> {
     /// WITH (common table expressions, or CTEs)
     pub ctes: Vec<Cte<T>>,
-    /// SELECT or UNION / EXCEPT / INTECEPT
+    /// SELECT or UNION / EXCEPT / INTERSECT
     pub body: SetExpr<T>,
     /// ORDER BY
     pub order_by: Vec<OrderByExpr<T>>,
@@ -687,6 +588,7 @@ pub enum JoinConstraint<T: AstInfo> {
 pub struct OrderByExpr<T: AstInfo> {
     pub expr: Expr<T>,
     pub asc: Option<bool>,
+    pub nulls_last: Option<bool>,
 }
 
 impl<T: AstInfo> AstDisplay for OrderByExpr<T> {
@@ -695,6 +597,11 @@ impl<T: AstInfo> AstDisplay for OrderByExpr<T> {
         match self.asc {
             Some(true) => f.write_str(" ASC"),
             Some(false) => f.write_str(" DESC"),
+            None => {}
+        }
+        match self.nulls_last {
+            Some(true) => f.write_str(" NULLS LAST"),
+            Some(false) => f.write_str(" NULLS FIRST"),
             None => {}
         }
     }

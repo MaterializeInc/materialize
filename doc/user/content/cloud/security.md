@@ -23,9 +23,9 @@ In the future, the enterprise product will also provide secure network ingress a
 
 All Materialize [Cloud deployments](../cloud-deployments/) come with a static IP address.
 
-This gives you the ability to connect your Materialize Cloud deployments to [sources](../../sql/create-source) and [sinks](../../sql/create-sink/) secured with a firewall.
+This gives you the ability to connect your Materialize Cloud deployments to [sources](../../sql/create-source) secured with a firewall.
 
-Allowing the static IP address enables the connection from your Materialize Cloud deployments to your sources and sinks.
+Allowing the static IP address enables the connection from your Materialize Cloud deployments to your sources.
 
 The specific commands to allow the static IP address will vary depending on your operating system and firewall (e.g. `iptables`, `firewall-cmd`, UFW, AWS, Azure, and etc). Please refer to the appropriate documentation for your specific firewall.
 

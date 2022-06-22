@@ -43,6 +43,14 @@ pub trait Visit<'ast, > {
         visit_function(self, node)
     }
 }
+pub trait VisitNode<'ast, > {
+    fn visit<V: Visit<'ast, >>(&'ast self, visitor: &mut V);
+}
+impl<'ast, > VisitNode<'ast, > for BinOp {
+    fn visit<V: Visit<'ast, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_bin_op(self)
+    }
+}
 pub fn visit_bin_op<'ast, V, >(visitor: &mut V, node: &'ast BinOp)
 where
     V: Visit<'ast, > + ?Sized,
@@ -54,6 +62,11 @@ where
         BinOp::Sub {
         } => {
         }
+    }
+}
+impl<'ast, > VisitNode<'ast, > for Expr {
+    fn visit<V: Visit<'ast, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_expr(self)
     }
 }
 pub fn visit_expr<'ast, V, >(visitor: &mut V, node: &'ast Expr)
@@ -75,6 +88,11 @@ where
             visitor.visit_bin_op(binding1);
             visitor.visit_expr(&*binding2);
         }
+    }
+}
+impl<'ast, > VisitNode<'ast, > for Function {
+    fn visit<V: Visit<'ast, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_function(self)
     }
 }
 pub fn visit_function<'ast, V, >(visitor: &mut V, node: &'ast Function)
@@ -119,6 +137,14 @@ pub trait VisitMut<'ast, > {
         visit_function_mut(self, node)
     }
 }
+pub trait VisitMutNode<'ast, > {
+    fn visit_mut<V: VisitMut<'ast, >>(&'ast mut self, visitor: &mut V);
+}
+impl<'ast, > VisitMutNode<'ast, > for BinOp {
+    fn visit_mut<V: VisitMut<'ast, >>(&'ast mut self, visitor: &mut V) {
+        visitor.visit_bin_op_mut(self)
+    }
+}
 pub fn visit_bin_op_mut<'ast, V, >(visitor: &mut V, node: &'ast mut BinOp)
 where
     V: VisitMut<'ast, > + ?Sized,
@@ -130,6 +156,11 @@ where
         BinOp::Sub {
         } => {
         }
+    }
+}
+impl<'ast, > VisitMutNode<'ast, > for Expr {
+    fn visit_mut<V: VisitMut<'ast, >>(&'ast mut self, visitor: &mut V) {
+        visitor.visit_expr_mut(self)
     }
 }
 pub fn visit_expr_mut<'ast, V, >(visitor: &mut V, node: &'ast mut Expr)
@@ -151,6 +182,11 @@ where
             visitor.visit_bin_op_mut(binding1);
             visitor.visit_expr_mut(&mut *binding2);
         }
+    }
+}
+impl<'ast, > VisitMutNode<'ast, > for Function {
+    fn visit_mut<V: VisitMut<'ast, >>(&'ast mut self, visitor: &mut V) {
+        visitor.visit_function_mut(self)
     }
 }
 pub fn visit_function_mut<'ast, V, >(visitor: &mut V, node: &'ast mut Function)
@@ -197,6 +233,14 @@ pub trait Visit<'ast, T, > {
         visit_function(self, node)
     }
 }
+pub trait VisitNode<'ast, T, > {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V);
+}
+impl<'ast, T, > VisitNode<'ast, T, > for BinOp {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_bin_op(self)
+    }
+}
 pub fn visit_bin_op<'ast, V, T, >(visitor: &mut V, node: &'ast BinOp)
 where
     V: Visit<'ast, T, > + ?Sized,
@@ -208,6 +252,11 @@ where
         BinOp::Sub {
         } => {
         }
+    }
+}
+impl<'ast, T, > VisitNode<'ast, T, > for Expr<T> {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_expr(self)
     }
 }
 pub fn visit_expr<'ast, V, T, >(visitor: &mut V, node: &'ast Expr<T>)
@@ -229,6 +278,11 @@ where
             visitor.visit_bin_op(binding1);
             visitor.visit_expr(&*binding2);
         }
+    }
+}
+impl<'ast, T, > VisitNode<'ast, T, > for Function<T> {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_function(self)
     }
 }
 pub fn visit_function<'ast, V, T, >(visitor: &mut V, node: &'ast Function<T>)
@@ -273,6 +327,14 @@ pub trait Visit<'ast, T: Foo, > {
         visit_function(self, node)
     }
 }
+pub trait VisitNode<'ast, T: Foo, > {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V);
+}
+impl<'ast, T: Foo, > VisitNode<'ast, T, > for BinOp {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_bin_op(self)
+    }
+}
 pub fn visit_bin_op<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast BinOp)
 where
     V: Visit<'ast, T, > + ?Sized,
@@ -284,6 +346,11 @@ where
         BinOp::Sub {
         } => {
         }
+    }
+}
+impl<'ast, T: Foo, > VisitNode<'ast, T, > for Expr<T> {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_expr(self)
     }
 }
 pub fn visit_expr<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast Expr<T>)
@@ -305,6 +372,11 @@ where
             visitor.visit_bin_op(binding1);
             visitor.visit_expr(&*binding2);
         }
+    }
+}
+impl<'ast, T: Foo, > VisitNode<'ast, T, > for Function<T> {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_function(self)
     }
 }
 pub fn visit_function<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast Function<T>)
@@ -330,6 +402,14 @@ pub trait Visit<'ast, T: Foo, > {
     }
     fn visit_table_name(&mut self, node: &'ast T::TableName) {
         visit_table_name(self, node)
+    }
+}
+pub trait VisitNode<'ast, T: Foo, > {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V);
+}
+impl<'ast, T: Foo, > VisitNode<'ast, T, > for Function<T> {
+    fn visit<V: Visit<'ast, T, >>(&'ast self, visitor: &mut V) {
+        visitor.visit_function(self)
     }
 }
 pub fn visit_function<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast Function<T>)

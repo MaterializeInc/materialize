@@ -19,19 +19,22 @@ use anyhow::anyhow;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::retry::Retry;
+use futures::Stream;
+use mz_ore::task::RuntimeExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use timely::PartialOrder;
-use tracing::{debug, info, trace, warn};
+use tokio::runtime::Handle;
+use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument};
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 use mz_persist::location::BlobMulti;
+use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
+use crate::r#impl::metrics::{Metrics, RetriesMetrics};
 use crate::r#impl::state::{DescriptionMeta, Since};
 use crate::ShardId;
 
@@ -78,6 +81,8 @@ pub struct SnapshotSplit {
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
+    metrics: Arc<Metrics>,
+    shard_id: ShardId,
     as_of: Antichain<T>,
     batches: Vec<(String, Description<T>)>,
     blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -98,6 +103,11 @@ where
 
     /// Attempt to pull out the next values of this iterator.
     ///
+    /// All times emitted will have been [advanced by] the [Self::as_of]
+    /// frontier.
+    ///
+    /// [advanced by]: Lattice::advance_by
+    ///
     /// The returned updates are not consolidated. In the presence of
     /// compaction, consolidation can take an unbounded amount of memory so it's
     /// not safe for persist to consolidate in the general case. Persist users
@@ -106,86 +116,36 @@ where
     /// [differential_dataflow::consolidation::consolidate_updates].
     ///
     /// An None value is returned if this iterator is exhausted.
+    #[instrument(level = "debug", name = "snap::next", skip_all, fields(shard = %self.shard_id))]
     pub async fn next(&mut self) -> Option<Vec<((Result<K, String>, Result<V, String>), T, D)>> {
         trace!("SnapshotIter::next");
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
         loop {
-            let (key, desc) = match self.batches.last() {
-                Some(x) => x.clone(),
+            let (key, desc) = match self.batches.pop() {
+                Some(x) => x,
                 // All done!
                 None => return None,
             };
-            let value = loop {
-                // TODO: Deduplicate this with the logic in Listen.
-                let value = retry_external("snap_next::get", || async {
-                    self.blob.get(Instant::now() + FOREVER, &key).await
-                })
-                .await;
-                match value {
-                    Some(x) => break x,
-                    // If the underlying impl of blob isn't linearizable, then we
-                    // might get a key reference that that blob isn't returning yet.
-                    // Keep trying, it'll show up. The deadline will eventually bail
-                    // us out of this loop if something has gone wrong internally.
-                    //
-                    // TODO: This should increment a counter.
-                    None => {
-                        info!(
-                            "unexpected missing blob, trying again in {:?}: {}",
-                            retry.next_sleep(),
-                            key
-                        );
-                        retry = retry.sleep().await;
-                        continue;
-                    }
-                };
-            };
 
-            // Now that we've successfully gotten the batch, we can remove it
-            // from the list. We wait until now to keep this method idempotent
-            // for retries.
-            //
-            // TODO: Restructure this loop so this is more obviously correct.
-            let (key1, desc1) = self.batches.pop().expect("known to exist");
-            assert_eq!(key1, key);
-            assert_eq!(desc1, desc);
-
-            let batch_part = BlobTraceBatchPart::decode(&value)
-                .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
-                // We received a State that we couldn't decode. This could
-                // happen if persist messes up backward/forward compatibility,
-                // if the durable data was corrupted, or if operations messes up
-                // deployment. In any case, fail loudly.
-                .expect("internal error: invalid encoded state");
-            let mut ret = Vec::new();
-            for chunk in batch_part.updates {
-                for ((k, v), t, d) in chunk.iter() {
-                    // TODO: Get rid of the to_le_bytes.
-                    let mut t = T::decode(t.to_le_bytes());
-                    if self.as_of.less_than(&t) {
-                        // This happens to be in the batch, but it would get
-                        // covered by a listen started at the same as_of.
-                        continue;
+            let updates = fetch_batch_part(
+                self.blob.as_ref(),
+                &self.metrics.retries,
+                &key,
+                &desc,
+                |t| {
+                    // This would get covered by a listen started at the same as_of.
+                    let keep = !self.as_of.less_than(&t);
+                    if keep {
+                        t.advance_by(self.as_of.borrow());
                     }
-                    if !desc.lower().less_equal(&t) {
-                        continue;
-                    }
-                    if desc.upper().less_equal(&t) {
-                        continue;
-                    }
-                    t.advance_by(self.as_of.borrow());
-                    let k = K::decode(k);
-                    let v = V::decode(v);
-                    // TODO: Get rid of the to_le_bytes.
-                    let d = D::decode(d.to_le_bytes());
-                    ret.push(((k, v), t, d));
-                }
-            }
-            if ret.is_empty() {
+                    keep
+                },
+            )
+            .await;
+            if updates.is_empty() {
                 // We might have filtered everything.
                 continue;
             }
-            return Some(ret);
+            return Some(updates);
         }
     }
 }
@@ -225,6 +185,7 @@ pub enum ListenEvent<K, V, T, D> {
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
 pub struct Listen<K, V, T, D> {
+    metrics: Arc<Metrics>,
     as_of: Antichain<T>,
     frontier: Antichain<T>,
     machine: Machine<K, V, T, D>,
@@ -238,16 +199,42 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
+    /// Convert listener into futures::Stream
+    pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<K, V, T, D>> {
+        async_stream::stream!({
+            loop {
+                for msg in self.next().await {
+                    yield msg;
+                }
+            }
+        })
+    }
+
     /// Attempt to pull out the next values of this subscription.
     ///
-    /// The returned updates might or might not be consolidated. If you have a
-    /// use for consolidated listen output, given that snapshots can't be
+    /// The updates received in [ListenEvent::Updates] should be assumed to be in arbitrary order
+    /// and not necessarily consolidated. However, the timestamp of each individual update will be
+    /// greater than or equal to the last received [ListenEvent::Progress] frontier (or this
+    /// [Listen]'s initial `as_of` frontier if no progress event has been emitted yet) and less
+    /// than the next [ListenEvent::Progress] frontier.
+    ///
+    /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
+    #[instrument(level = "debug", name = "listen::next", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
         trace!("Listen::next");
 
         let (batch_keys, desc) = self.machine.next_listen_batch(&self.frontier).await;
-        let updates = self.fetch_batch(&batch_keys, &desc).await;
+        let mut updates = Vec::new();
+        for key in batch_keys.iter() {
+            let mut updates_part =
+                fetch_batch_part(self.blob.as_ref(), &self.metrics.retries, key, &desc, |t| {
+                    // This would get covered by a snapshot started at the same as_of.
+                    self.as_of.less_than(&t)
+                })
+                .await;
+            updates.append(&mut updates_part);
+        }
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
@@ -266,72 +253,6 @@ where
         while self.frontier.less_than(ts) {
             let mut next = self.next().await;
             ret.append(&mut next);
-        }
-        ret
-    }
-
-    async fn fetch_batch(
-        &self,
-        keys: &[String],
-        desc: &Description<T>,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
-        let mut retry = Retry::persist_defaults(SystemTime::now()).into_retry_stream();
-        let mut ret = Vec::new();
-        for key in keys {
-            // TODO: Deduplicate this with the logic in SnapshotIter.
-            let value = loop {
-                let value = retry_external("listen_fetch::get", || async {
-                    self.blob.get(Instant::now() + FOREVER, &key).await
-                })
-                .await;
-                match value {
-                    Some(x) => break x,
-                    // If the underlying impl of blob isn't linearizable, then we
-                    // might get a key reference that that blob isn't returning yet.
-                    // Keep trying, it'll show up. The deadline will eventually bail
-                    // us out of this loop if something has gone wrong internally.
-                    //
-                    // TODO: This should increment a counter.
-                    None => {
-                        info!(
-                            "unexpected missing blob, trying again in {:?}: {}",
-                            retry.next_sleep(),
-                            key
-                        );
-                        retry = retry.sleep().await;
-                    }
-                };
-            };
-            let batch = BlobTraceBatchPart::decode(&value)
-                .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
-                // We received a State that we couldn't decode. This could
-                // happen if persist messes up backward/forward compatibility,
-                // if the durable data was corrupted, or if operations messes up
-                // deployment. In any case, fail loudly.
-                .expect("internal error: invalid encoded state");
-            for chunk in batch.updates {
-                for ((k, v), t, d) in chunk.iter() {
-                    // TODO: Get rid of the to_le_bytes.
-                    let t = T::decode(t.to_le_bytes());
-                    if !self.as_of.less_than(&t) {
-                        // This happens to be in the batch, but it
-                        // would get covered by a snapshot started
-                        // at the same as_of.
-                        continue;
-                    }
-                    if !desc.lower().less_equal(&t) {
-                        continue;
-                    }
-                    if desc.upper().less_equal(&t) {
-                        continue;
-                    }
-                    let k = K::decode(k);
-                    let v = V::decode(v);
-                    // TODO: Get rid of the to_le_bytes.
-                    let d = D::decode(d.to_le_bytes());
-                    ret.push(((k, v), t, d));
-                }
-            }
         }
         ret
     }
@@ -361,7 +282,12 @@ where
 pub struct ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
+    // These are only here so we can use them in the auto-expiring `Drop` impl.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
 {
+    pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
@@ -393,6 +319,7 @@ where
     ///
     /// It is possible to heartbeat a reader lease by calling this with
     /// `new_since` equal to `self.since()` (making the call a no-op).
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
         trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
         let (_seqno, current_reader_since) = self
@@ -414,19 +341,15 @@ where
     /// The `Since` error indicates that the requested `as_of` cannot be served
     /// (the caller has out of date information) and includes the smallest
     /// `as_of` that would have been accepted.
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn listen(&self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
         trace!("ReadHandle::listen as_of={:?}", as_of);
-        if PartialOrder::less_than(&as_of, &self.since) {
-            return Err(Since(self.since.clone()));
-        }
+        let machine = self.machine.verify_listen(&as_of).await?;
         Ok(Listen {
+            metrics: Arc::clone(&self.metrics),
             as_of: as_of.clone(),
             frontier: as_of,
-            machine: self.machine.clone(),
+            machine,
             blob: Arc::clone(&self.blob),
         })
     }
@@ -447,10 +370,7 @@ where
     /// immediately consuming it from a single place. If you need to parallelize
     /// snapshot iteration (potentially from multiple machines), see
     /// [Self::snapshot_splits] and [Self::snapshot_iter].
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
+    #[instrument(level = "trace", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot(
         &self,
         as_of: Antichain<T>,
@@ -490,10 +410,7 @@ where
     /// This method exists to allow users to parallelize snapshot iteration. If
     /// you want to immediately consume the snapshot from a single place, you
     /// likely want the [Self::snapshot] helper.
-    ///
-    /// TODO: If/when persist learns about the structure of the keys and values
-    /// being stored, this is an opportunity to push down projection and key
-    /// filter information.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot_splits(
         &self,
         as_of: Antichain<T>,
@@ -525,6 +442,7 @@ where
 
     /// Trade in an exchange-able [SnapshotSplit] for an iterator over the data
     /// it represents.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn snapshot_iter(
         &self,
         split: SnapshotSplit,
@@ -536,6 +454,7 @@ where
                 handle_shard: self.machine.shard_id(),
             });
         }
+        let shard_id = split.shard_id;
 
         let batches = split
             .batches
@@ -544,6 +463,8 @@ where
             .collect();
 
         let iter = SnapshotIter {
+            metrics: Arc::clone(&self.metrics),
+            shard_id,
             as_of: Antichain::from(
                 split
                     .as_of
@@ -560,12 +481,14 @@ where
 
     /// Returns an independent [ReadHandle] with a new [ReaderId] but the same
     /// `since`.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn clone(&self) -> Self {
         trace!("ReadHandle::clone");
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
         let read_cap = machine.clone_reader(&self.reader_id).await;
         let new_reader = ReadHandle {
+            metrics: Arc::clone(&self.metrics),
             reader_id: new_reader_id,
             machine,
             blob: Arc::clone(&self.blob),
@@ -576,6 +499,14 @@ where
     }
 
     /// Politely expires this reader, releasing its lease.
+    ///
+    /// There is a best-effort impl in Drop to expire a reader that wasn't
+    /// explictly expired with this method. When possible, explicit expiry is
+    /// still preferred because the Drop one is best effort and is dependant on
+    /// a tokio [Handle] being available in the TLC at the time of drop (which
+    /// is a bit subtle). Also, explicit expiry allows for control over when it
+    /// happens.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
         trace!("ReadHandle::expire");
         self.machine.expire_reader(&self.reader_id).await;
@@ -604,20 +535,188 @@ where
 impl<K, V, T, D> Drop for ReadHandle<K, V, T, D>
 where
     T: Timestamp + Lattice + Codec64,
+    // These are only here so we can use them in this auto-expiring `Drop` impl.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
 {
     fn drop(&mut self) {
         if self.explicitly_expired {
             return;
         }
-        // Adding explicit expiration everywhere in tests would either make the
-        // code noisy or the logs spammy, so downgrade this message.
-        if cfg!(test) {
-            debug!(
-                "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
-                self.reader_id
-            );
-        } else {
-            warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+        let handle = match Handle::try_current() {
+            Ok(x) => x,
+            Err(_) => {
+                warn!("ReadHandle {} dropped without being explicitly expired, falling back to lease timeout", self.reader_id);
+                return;
+            }
+        };
+        let mut machine = self.machine.clone();
+        let reader_id = self.reader_id.clone();
+        // Spawn a best-effort task to expire this read handle. It's fine if
+        // this doesn't run to completion, we'd just have to wait out the lease
+        // before the shard-global since is unblocked.
+        //
+        // Intentionally create the span outside the task to set the parent.
+        let expire_span = debug_span!("drop::expire");
+        let _ = handle.spawn_named(
+            || format!("ReadHandle::expire ({})", self.reader_id),
+            async move {
+                trace!("ReadHandle::expire");
+                machine.expire_reader(&reader_id).await;
+            }
+            .instrument(expire_span),
+        );
+    }
+}
+
+async fn fetch_batch_part<K, V, T, D, TFn>(
+    blob: &(dyn BlobMulti + Send + Sync),
+    metrics: &RetriesMetrics,
+    key: &str,
+    desc: &Description<T>,
+    mut t_fn: TFn,
+) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+    TFn: FnMut(&mut T) -> bool,
+{
+    let mut retry = metrics
+        .fetch_batch_part
+        .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
+    let get_span = debug_span!("fetch_batch::get");
+    let value = loop {
+        let value = retry_external(&metrics.external.fetch_batch_get, || async {
+            blob.get(Instant::now() + FOREVER, key).await
+        })
+        .instrument(get_span.clone())
+        .await;
+        match value {
+            Some(x) => break x,
+            // If the underlying impl of blob isn't linearizable, then we
+            // might get a key reference that that blob isn't returning yet.
+            // Keep trying, it'll show up. The deadline will eventually bail
+            // us out of this loop if something has gone wrong internally.
+            None => {
+                // This is quite unexpected given that our initial blobs _are_
+                // linearizable, so always log at info.
+                info!(
+                    "unexpected missing blob, trying again in {:?}: {}",
+                    retry.next_sleep(),
+                    key
+                );
+                retry = retry.sleep().await;
+            }
+        };
+    };
+    drop(get_span);
+
+    trace_span!("fetch_batch::decode").in_scope(|| {
+        let batch = BlobTraceBatchPart::decode(&value)
+            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
+            // We received a State that we couldn't decode. This could
+            // happen if persist messes up backward/forward compatibility,
+            // if the durable data was corrupted, or if operations messes up
+            // deployment. In any case, fail loudly.
+            .expect("internal error: invalid encoded state");
+
+        // Drop the encoded representation as soon as we can to reclaim memory.
+        drop(value);
+
+        let mut ret = Vec::new();
+        for chunk in batch.updates {
+            for ((k, v), t, d) in chunk.iter() {
+                let mut t = T::decode(t);
+                if !desc.lower().less_equal(&t) {
+                    continue;
+                }
+                if desc.upper().less_equal(&t) {
+                    continue;
+                }
+                // NB: t_fn might mutate t (i.e. a snapshots will forward it to the
+                // as_of), but the desc checks above only make sense if it hasn't be
+                // mutated yet.
+                let keep = t_fn(&mut t);
+                if !keep {
+                    continue;
+                }
+                let k = K::decode(k);
+                let v = V::decode(v);
+                let d = D::decode(d);
+                ret.push(((k, v), t, d));
+            }
         }
+        ret
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_persist::location::Consensus;
+    use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+    use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
+
+    use crate::r#impl::metrics::Metrics;
+    use crate::tests::all_ok;
+    use crate::{PersistClient, PersistConfig};
+
+    use super::*;
+
+    // Verifies performance optimizations where a SnapshotIter/Listener doesn't
+    // fetch the latest Consensus state if the one it currently has can serve
+    // the next request.
+    #[tokio::test]
+    async fn skip_consensus_fetch_optimization() {
+        mz_ore::test::init_logging();
+        let data = vec![
+            (("0".to_owned(), "zero".to_owned()), 0, 1),
+            (("1".to_owned(), "one".to_owned()), 1, 1),
+            (("2".to_owned(), "two".to_owned()), 2, 1),
+        ];
+
+        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
+        let consensus = Arc::new(MemConsensus::default());
+        let unreliable = UnreliableHandle::default();
+        unreliable.totally_available();
+        let consensus = Arc::new(UnreliableConsensus::new(consensus, unreliable.clone()))
+            as Arc<dyn Consensus + Send + Sync>;
+        let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+        let (mut write, read) =
+            PersistClient::new(PersistConfig::default(), blob, consensus, metrics)
+                .await
+                .expect("client construction failed")
+                .expect_open::<String, String, u64, i64>(ShardId::new())
+                .await;
+
+        write.expect_compare_and_append(&data[0..1], 0, 1).await;
+        write.expect_compare_and_append(&data[1..2], 1, 2).await;
+        write.expect_compare_and_append(&data[2..3], 2, 3).await;
+
+        let mut snapshot = read.expect_snapshot(2).await;
+        let mut listen = read.expect_listen(0).await;
+
+        // Manually advance the listener's machine so that it has the latest
+        // state by fetching the first events from next. This is awkward but
+        // only necessary because we're about to do some weird things with
+        // unreliable.
+        let mut listen_actual = listen.next().await;
+
+        // At this point, the snapshot and listen's state should have all the
+        // writes. Test this by making consensus completely unavailable.
+        unreliable.totally_unavailable();
+        assert_eq!(snapshot.read_all().await, all_ok(&data, 2));
+        let expected_events = vec![
+            ListenEvent::Progress(Antichain::from_elem(1)),
+            ListenEvent::Updates(all_ok(&data[1..2], 1)),
+            ListenEvent::Progress(Antichain::from_elem(2)),
+            ListenEvent::Updates(all_ok(&data[2..3], 1)),
+            ListenEvent::Progress(Antichain::from_elem(3)),
+        ];
+        listen_actual.append(&mut listen.read_until(&3).await);
+        assert_eq!(listen_actual, expected_events);
     }
 }

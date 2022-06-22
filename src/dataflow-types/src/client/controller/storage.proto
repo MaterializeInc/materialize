@@ -14,5 +14,8 @@ syntax = "proto3";
 package mz_dataflow_types.client.controller.storage;
 
 message ProtoCollectionMetadata {
-    // TODO fill this out
+    string blob_uri = 1;
+    string consensus_uri = 2;
+    string shard_id = 3;
+    string timestamp_shard_id = 4;
 }

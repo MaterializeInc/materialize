@@ -1,5 +1,5 @@
 ---
-title: "Create Deployments"
+title: "Create deployments"
 description: "Create Materialize Cloud deployments."
 hidden: true
 ---

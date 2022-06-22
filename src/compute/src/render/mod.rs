@@ -102,10 +102,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::AsCollection;
-use mz_dataflow_types::sources::{ExternalSourceConnector, SourceConnector};
-use mz_storage::source::persist_source;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
@@ -118,12 +117,12 @@ use mz_dataflow_types::*;
 use mz_expr::Id;
 use mz_ore::collections::CollectionExt as IteratorExt;
 use mz_repr::{GlobalId, Row};
+use mz_storage::source::persist_source;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 pub use context::CollectionBundle;
 use context::{ArrangementFlavor, Context};
-use mz_storage::boundary::ComputeReplay;
 
 pub mod context;
 mod flat_map;
@@ -138,11 +137,10 @@ mod top_k;
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
+pub fn build_compute_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<mz_dataflow_types::plan::Plan, CollectionMetadata>,
-    boundary: &mut B,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
@@ -161,53 +159,25 @@ pub fn build_compute_dataflow<A: Allocate, B: ComputeReplay>(
 
             // Import declared sources into the rendering context.
             for (source_id, source) in dataflow.source_imports.iter() {
-                let (mut ok, mut err, token) = if let SourceConnector::External {
-                    connector: ExternalSourceConnector::Persist(persist_connector),
-                    ..
-                } = &source.description.connector
-                {
-                    let (ok_stream, err_stream, token) = persist_source::persist_source(
-                        region,
-                        *source_id,
-                        persist_connector.consensus_uri.clone(),
-                        persist_connector.blob_uri.clone(),
-                        persist_connector.shard_id.clone(),
-                        dataflow.as_of.clone().unwrap(),
-                    );
+                // Note: For correctness, we require that sources only emit times advanced by
+                // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
+                let (ok_stream, err_stream, token) = persist_source::persist_source(
+                    region,
+                    source.storage_metadata.clone(),
+                    Arc::clone(&compute_state.persist_clients),
+                    dataflow.as_of.clone().unwrap(),
+                );
 
-                    (ok_stream.as_collection(), err_stream.as_collection(), token)
-                } else {
-                    // NOTE(aljoscha): In the post-platform, post-storage-compute-split world, we
-                    // will remove the boundary and only the branch that reads directly from
-                    // persist/STORAGE will remain.
-                    let request = SourceInstanceRequest {
-                        source_id: *source_id,
-                        dataflow_id: dataflow.id,
-                        arguments: source.arguments.clone(),
-                        as_of: dataflow.as_of.clone().unwrap(),
-                    };
+                // TODO(petrosagg): this is just wrapping an Arc<T> into an Rc<Arc<T>> to make the
+                // type checker happy. We should decide what we want our tokens to look like
+                let token = Rc::new(token) as Rc<dyn std::any::Any>;
 
-                    boundary.replay(region, &format!("{name}-{source_id}"), request)
-                };
-
-                // We do not trust `replay` to correctly advance times.
-                use timely::dataflow::operators::Map;
-                let as_of_frontier1 = dataflow.as_of.clone().unwrap();
-                ok = ok
-                    .inner
-                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
-                    .as_collection();
-
-                let as_of_frontier2 = dataflow.as_of.clone().unwrap();
-                err = err
-                    .inner
-                    .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
-                    .as_collection();
+                let (oks, errs) = (ok_stream.as_collection(), err_stream.as_collection());
 
                 // Associate collection bundle with the source identifier.
                 context.insert_id(
                     mz_expr::Id::Global(*source_id),
-                    crate::render::CollectionBundle::from_collections(ok, err),
+                    crate::render::CollectionBundle::from_collections(oks, errs),
                 );
                 // Associate returned tokens with the source identifier.
                 tokens.insert(*source_id, token);

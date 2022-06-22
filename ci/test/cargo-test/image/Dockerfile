@@ -14,7 +14,7 @@ RUN apt-get update && apt-get -qy install \
     jq \
     psmisc
 
-COPY tests /tests/
+COPY tests environmentd /tests/
 COPY storaged computed /
 COPY run-tests /usr/local/bin
 

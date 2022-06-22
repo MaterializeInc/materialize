@@ -35,9 +35,9 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 UPDATE toasted_full SET f1 = (REPEAT('c', 32 * 1024) || 'd') WHERE f1 IS NULL;
 UPDATE toasted_full SET f1 = (REPEAT('e', 32 * 1024) || 'f') WHERE f1 = REPEAT('a', 32 * 1024) || 'b';
 
-> SELECT length(f1) = (32 * 1024) + 1, substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full;
-true cc cd
-true ee ef
+> SELECT length(f1), substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full;
+32769 cc cd
+32769 ee ef
 
 # The documentation says that we do not support REPLICA IDENTITY DEFAULT, which is the more interesting
 # case, so we are not testing that here.

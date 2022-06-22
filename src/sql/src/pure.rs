@@ -10,36 +10,37 @@
 //! SQL purification.
 //!
 //! See the [crate-level documentation](crate) for details.
-
-use std::collections::BTreeMap;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
-use mz_sql_parser::ast::{CsrConnector, KafkaConnector, KafkaSourceConnector};
+use mz_sql_parser::ast::{CsrConnection, KafkaConnection, KafkaSourceConnection};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
 use protobuf_native::MessageLite;
-use tokio::task;
 use tracing::info;
 use uuid::Uuid;
 
 use mz_ccsr::{Client, GetBySubjectError};
-use mz_dataflow_types::postgres_source::PostgresSourceDetails;
-use mz_dataflow_types::sources::{AwsConfig, AwsExternalId};
-
+use mz_dataflow_types::connections::aws::{AwsConfig, AwsExternalIdPrefix};
+use mz_dataflow_types::connections::{Connection, ConnectionContext};
+use mz_dataflow_types::sources::PostgresSourceDetails;
+use mz_repr::proto::RustType;
 use mz_repr::strconv;
 
 use crate::ast::{
-    AvroSchema, CreateSourceConnector, CreateSourceFormat, CreateSourceStatement, CsrConnectorAvro,
-    CsrConnectorProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding, CsrSeedCompiledOrLegacy,
-    CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Raw, Value, WithOption,
-    WithOptionValue,
+    AvroSchema, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
+    CsrConnectionAvro, CsrConnectionProto, CsrSeed, CsrSeedCompiled, CsrSeedCompiledEncoding,
+    CsrSeedCompiledOrLegacy, CsvColumns, DbzMode, Envelope, Format, Ident, ProtobufSchema, Value,
+    WithOption, WithOptionValue,
 };
+use crate::catalog::SessionCatalog;
 use crate::kafka_util;
+use crate::names::Aug;
 use crate::normalize;
+use crate::plan::StatementContext;
 
 /// Purifies a statement, removing any dependencies on external state.
 ///
@@ -51,12 +52,13 @@ use crate::normalize;
 /// [`SessionCatalog`](crate::catalog::SessionCatalog), as that would require
 /// locking access to the catalog for an unbounded amount of time.
 pub async fn purify_create_source(
+    catalog: Box<dyn SessionCatalog>,
     now: u64,
-    aws_external_id: AwsExternalId,
-    mut stmt: CreateSourceStatement<Raw>,
-) -> Result<CreateSourceStatement<Raw>, anyhow::Error> {
+    mut stmt: CreateSourceStatement<Aug>,
+    connection_context: ConnectionContext,
+) -> Result<CreateSourceStatement<Aug>, anyhow::Error> {
     let CreateSourceStatement {
-        connector,
+        connection,
         format,
         envelope,
         with_options,
@@ -64,47 +66,39 @@ pub async fn purify_create_source(
         ..
     } = &mut stmt;
 
-    let mut with_options_map = normalize::options(with_options);
-    let mut config_options = BTreeMap::new();
+    let _ = catalog;
 
-    match connector {
-        CreateSourceConnector::Kafka(KafkaSourceConnector {
-            connector, topic, ..
+    let mut with_options_map = normalize::options(with_options)?;
+
+    match connection {
+        CreateSourceConnection::Kafka(KafkaSourceConnection {
+            connection, topic, ..
         }) => {
-            let (broker, connector_options) = match connector {
-                KafkaConnector::Reference {
-                    broker,
-                    with_options,
-                    connector,
-                } => {
-                    let broker_url = match broker {
-                        Some(url) => url.to_owned(),
-                        None => {
-                            bail!("Unable to find connector named {}", connector.to_string())
+            let (broker, connection_options) = match connection {
+                KafkaConnection::Reference { connection } => {
+                    let scx = StatementContext::new(None, &*catalog);
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    match item.connection()? {
+                        Connection::Kafka(connection) => {
+                            (connection.broker.to_string(), connection.options.clone())
                         }
-                    };
-                    let options = match with_options {
-                        Some(opts) => opts,
-                        None => {
-                            bail!("Unable to find connector named {}", connector.to_string())
-                        }
-                    };
-                    (broker_url, Some(options))
+                        _ => bail!("{} is not a kafka connection", item.name()),
+                    }
                 }
-                KafkaConnector::Inline { broker } => (broker.to_string(), None),
+                KafkaConnection::Inline { broker } => (
+                    broker.to_string(),
+                    kafka_util::extract_config(&*catalog, &mut with_options_map)?,
+                ),
             };
-            config_options = if let Some(options) = connector_options {
-                options
-                    .iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect::<BTreeMap<String, String>>()
-            } else {
-                // Verify that the provided security options are valid and then test them.
-                kafka_util::extract_config(&mut with_options_map)?
-            };
-            let consumer = kafka_util::create_consumer(&broker, &topic, &config_options)
-                .await
-                .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
+            let consumer = kafka_util::create_consumer(
+                &broker,
+                &topic,
+                &connection_options,
+                connection_context.librdkafka_log_level,
+                &connection_context.secrets_reader,
+            )
+            .await
+            .map_err(|e| anyhow!("Failed to create and connect Kafka consumer: {}", e))?;
 
             // Translate `kafka_time_offset` to `start_offset`.
             match kafka_util::lookup_start_offsets(
@@ -135,11 +129,15 @@ pub async fn purify_create_source(
                 None => {}
             }
         }
-        CreateSourceConnector::S3 { .. } => {
+        CreateSourceConnection::S3 { .. } => {
             let aws_config = normalize::aws_config(&mut with_options_map, None)?;
-            validate_aws_credentials(&aws_config, aws_external_id).await?;
+            validate_aws_credentials(
+                &aws_config,
+                connection_context.aws_external_id_prefix.as_ref(),
+            )
+            .await?;
         }
-        CreateSourceConnector::Kinesis { arn } => {
+        CreateSourceConnection::Kinesis { arn } => {
             let region = arn
                 .parse::<ARN>()
                 .context("Unable to parse provided ARN")?
@@ -147,48 +145,53 @@ pub async fn purify_create_source(
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
             let aws_config = normalize::aws_config(&mut with_options_map, Some(region.into()))?;
-            validate_aws_credentials(&aws_config, aws_external_id).await?;
+            validate_aws_credentials(
+                &aws_config,
+                connection_context.aws_external_id_prefix.as_ref(),
+            )
+            .await?;
         }
-        CreateSourceConnector::Postgres {
+        CreateSourceConnection::Postgres {
             conn,
             publication,
-            slot,
-            details,
+            details: details_ast,
         } => {
-            slot.get_or_insert_with(|| {
-                format!(
-                    "materialize_{}",
-                    Uuid::new_v4().to_string().replace('-', "")
-                )
-            });
-
             // verify that we can connect upstream and snapshot publication metadata
             let tables = mz_postgres_util::publication_info(&conn, &publication).await?;
 
-            let details_proto = PostgresSourceDetails {
-                tables: tables.into_iter().map(|t| t.into()).collect(),
-                slot: slot.clone().expect("slot must exist"),
+            let details = PostgresSourceDetails {
+                tables,
+                slot: format!(
+                    "materialize_{}",
+                    Uuid::new_v4().to_string().replace('-', "")
+                ),
             };
-            *details = Some(hex::encode(details_proto.encode_to_vec()));
+            *details_ast = Some(hex::encode(details.into_proto().encode_to_vec()));
         }
-        CreateSourceConnector::PubNub { .. } => (),
-        CreateSourceConnector::Persist { .. } => (),
+        CreateSourceConnection::PubNub { .. } => (),
     }
 
-    purify_source_format(format, connector, &envelope, &config_options, with_options).await?;
+    purify_source_format(
+        &*catalog,
+        format,
+        connection,
+        &envelope,
+        &connection_context,
+    )
+    .await?;
 
     Ok(stmt)
 }
 
 async fn purify_source_format(
-    format: &mut CreateSourceFormat<Raw>,
-    connector: &mut CreateSourceConnector<Raw>,
-    envelope: &Option<Envelope>,
-    connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<WithOption<Raw>>,
+    catalog: &dyn SessionCatalog,
+    format: &mut CreateSourceFormat<Aug>,
+    connection: &mut CreateSourceConnection<Aug>,
+    envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     if matches!(format, CreateSourceFormat::KeyValue { .. })
-        && !matches!(connector, CreateSourceConnector::Kafka { .. })
+        && !matches!(connection, CreateSourceConnection::Kafka { .. })
     {
         bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
     }
@@ -199,9 +202,9 @@ async fn purify_source_format(
     //
     // TODO(bwm): We should either make these semantics apply everywhere, or
     // deprecate this.
-    match (&connector, &envelope, &*format) {
+    match (&connection, &envelope, &*format) {
         (
-            CreateSourceConnector::Kafka { .. },
+            CreateSourceConnection::Kafka { .. },
             Some(Envelope::Upsert),
             CreateSourceFormat::Bare(f @ Format::Bytes | f @ Format::Text),
         ) => {
@@ -216,20 +219,14 @@ async fn purify_source_format(
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {
-            purify_source_format_single(
-                format,
-                connector,
-                envelope,
-                connector_options,
-                with_options,
-            )
-            .await?;
+            purify_source_format_single(catalog, format, connection, envelope, connection_context)
+                .await?;
         }
 
         CreateSourceFormat::KeyValue { key, value: val } => {
-            purify_source_format_single(key, connector, envelope, connector_options, with_options)
+            purify_source_format_single(catalog, key, connection, envelope, connection_context)
                 .await?;
-            purify_source_format_single(val, connector, envelope, connector_options, with_options)
+            purify_source_format_single(catalog, val, connection, envelope, connection_context)
                 .await?;
         }
     }
@@ -237,48 +234,41 @@ async fn purify_source_format(
 }
 
 async fn purify_source_format_single(
-    format: &mut Format<Raw>,
-    connector: &mut CreateSourceConnector<Raw>,
-    envelope: &Option<Envelope>,
-    connector_options: &BTreeMap<String, String>,
-    with_options: &Vec<WithOption<Raw>>,
+    catalog: &dyn SessionCatalog,
+    format: &mut Format<Aug>,
+    connection: &mut CreateSourceConnection<Aug>,
+    envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
     match format {
         Format::Avro(schema) => match schema {
-            AvroSchema::Csr { csr_connector } => {
-                purify_csr_connector_avro(connector, csr_connector, envelope, connector_options)
-                    .await?
+            AvroSchema::Csr { csr_connection } => {
+                purify_csr_connection_avro(
+                    catalog,
+                    connection,
+                    csr_connection,
+                    envelope,
+                    connection_context,
+                )
+                .await?
             }
-            AvroSchema::InlineSchema {
-                schema: mz_sql_parser::ast::Schema::File(path),
-                with_options,
-            } => {
-                let file_schema = tokio::fs::read_to_string(path).await?;
-                // Explicitly inject `confluent_wire_format = true`, if unset.
-                // This, in combination with the catalog migration that sets
-                // this option to true for sources created before this option
-                // existed, will make it easy to flip the default to `false`
-                // in the future, if we like.
-                if !with_options
-                    .iter()
-                    .any(|option| option.key.as_str() == "confluent_wire_format")
-                {
-                    with_options.push(WithOption {
-                        key: Ident::new("confluent_wire_format"),
-                        value: Some(WithOptionValue::Value(Value::Boolean(true))),
-                    });
+            AvroSchema::InlineSchema { schema, .. } => {
+                if let mz_sql_parser::ast::Schema::File(path) = schema {
+                    let file_schema = tokio::fs::read_to_string(path).await?;
+                    *schema = mz_sql_parser::ast::Schema::Inline(file_schema);
                 }
-                *schema = AvroSchema::InlineSchema {
-                    schema: mz_sql_parser::ast::Schema::Inline(file_schema),
-                    with_options: with_options.clone(),
-                };
             }
-            _ => {}
         },
         Format::Protobuf(schema) => match schema {
-            ProtobufSchema::Csr { csr_connector } => {
-                purify_csr_connector_proto(connector, csr_connector, envelope, with_options)
-                    .await?;
+            ProtobufSchema::Csr { csr_connection } => {
+                purify_csr_connection_proto(
+                    catalog,
+                    connection,
+                    csr_connection,
+                    envelope,
+                    connection_context,
+                )
+                .await?;
             }
             ProtobufSchema::InlineSchema {
                 message_name: _,
@@ -297,8 +287,8 @@ async fn purify_source_format_single(
             ref mut columns,
         } => {
             if let CsvColumns::Header { names } = columns {
-                match connector {
-                    CreateSourceConnector::S3 { .. } => {
+                match connection {
+                    CreateSourceConnection::S3 { .. } => {
                         if names.is_empty() {
                             bail!("CSV WITH HEADER for S3 sources requires specifying the header columns");
                         }
@@ -312,43 +302,49 @@ async fn purify_source_format_single(
     Ok(())
 }
 
-async fn purify_csr_connector_proto(
-    connector: &mut CreateSourceConnector<Raw>,
-    csr_connector: &mut CsrConnectorProto<Raw>,
-    envelope: &Option<Envelope>,
-    with_options: &Vec<WithOption<Raw>>,
+async fn purify_csr_connection_proto(
+    catalog: &dyn SessionCatalog,
+    connection: &mut CreateSourceConnection<Aug>,
+    csr_connection: &mut CsrConnectionProto<Aug>,
+    envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
-    {
-        topic
-    } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
-    };
+    let topic =
+        if let CreateSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) = connection {
+            topic
+        } else {
+            bail!("Confluent Schema Registry is only supported with Kafka sources")
+        };
 
-    let CsrConnectorProto {
-        connector,
+    let CsrConnectionProto {
+        connection,
         seed,
         with_options: ccsr_options,
-    } = csr_connector;
+    } = csr_connection;
     match seed {
         None => {
-            let url = match connector {
-                CsrConnector::Inline { url } => url,
-                CsrConnector::Reference { url, .. } => url
-                    .as_ref()
-                    .expect("CSR Connector must specify Registry URL"),
-            }
-            .parse()?;
-            let kafka_options = kafka_util::extract_config(&mut normalize::options(with_options))?;
-            let ccsr_config = kafka_util::generate_ccsr_client_config(
-                url,
-                &kafka_options,
-                &mut normalize::options(&ccsr_options),
-            )?;
+            let ccsr_connection = match connection {
+                CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                    catalog,
+                    url.parse()?,
+                    &mut normalize::options(&ccsr_options)?,
+                )?,
+                CsrConnection::Reference { connection } => {
+                    let scx = StatementContext::new(None, &*catalog);
+                    let item = scx.get_item_by_resolved_name(&connection)?;
+                    match item.connection()? {
+                        Connection::Csr(connection) => connection.clone(),
+                        _ => bail!("{} is not a schema registry connection", item.name()),
+                    }
+                }
+            };
 
-            let value =
-                compile_proto(&format!("{}-value", topic), ccsr_config.clone().build()?).await?;
-            let key = compile_proto(&format!("{}-key", topic), ccsr_config.build()?)
+            let ccsr_client = ccsr_connection
+                .connect(&connection_context.secrets_reader)
+                .await?;
+
+            let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
+            let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
                 .await
                 .ok();
 
@@ -370,46 +366,48 @@ async fn purify_csr_connector_proto(
     Ok(())
 }
 
-async fn purify_csr_connector_avro(
-    connector: &mut CreateSourceConnector<Raw>,
-    csr_connector: &mut CsrConnectorAvro<Raw>,
-    envelope: &Option<Envelope>,
-    connector_options: &BTreeMap<String, String>,
+async fn purify_csr_connection_avro(
+    catalog: &dyn SessionCatalog,
+    connection: &mut CreateSourceConnection<Aug>,
+    csr_connection: &mut CsrConnectionAvro<Aug>,
+    envelope: &Option<Envelope<Aug>>,
+    connection_context: &ConnectionContext,
 ) -> Result<(), anyhow::Error> {
-    let topic = if let CreateSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) = connector
-    {
-        topic
-    } else {
-        bail!("Confluent Schema Registry is only supported with Kafka sources")
-    };
+    let topic =
+        if let CreateSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) = connection {
+            topic
+        } else {
+            bail!("Confluent Schema Registry is only supported with Kafka sources")
+        };
 
-    let CsrConnectorAvro {
-        connector,
+    let CsrConnectionAvro {
+        connection,
         seed,
         with_options: ccsr_options,
-    } = csr_connector;
+    } = csr_connection;
     if seed.is_none() {
-        let url = match connector {
-            CsrConnector::Inline { url } => url,
-            CsrConnector::Reference { url, .. } => url
-                .as_ref()
-                .expect("CSR Connector must specify Registry URL"),
-        }
-        .parse()?;
-
-        let ccsr_config = task::block_in_place(|| {
-            kafka_util::generate_ccsr_client_config(
-                url,
-                &connector_options,
-                &mut normalize::options(ccsr_options),
-            )
-        })?;
-
+        let ccsr_connection = match connection {
+            CsrConnection::Inline { url } => kafka_util::generate_ccsr_connection(
+                catalog,
+                url.parse()?,
+                &mut normalize::options(&ccsr_options)?,
+            )?,
+            CsrConnection::Reference { connection } => {
+                let scx = StatementContext::new(None, &*catalog);
+                let item = scx.get_item_by_resolved_name(&connection)?;
+                match item.connection()? {
+                    Connection::Csr(connection) => connection.clone(),
+                    _ => bail!("{} is not a schema registry connection", item.name()),
+                }
+            }
+        };
+        let ccsr_client = ccsr_connection
+            .connect(&connection_context.secrets_reader)
+            .await?;
         let Schema {
             key_schema,
             value_schema,
-            ..
-        } = get_remote_csr_schema(ccsr_config, topic.clone()).await?;
+        } = get_remote_csr_schema(&ccsr_client, topic.clone()).await?;
         if matches!(envelope, Some(Envelope::Debezium(DbzMode::Upsert))) && key_schema.is_none() {
             bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
         }
@@ -427,16 +425,12 @@ async fn purify_csr_connector_avro(
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub schema_registry_config: Option<mz_ccsr::ClientConfig>,
-    pub confluent_wire_format: bool,
 }
 
 async fn get_remote_csr_schema(
-    schema_registry_config: mz_ccsr::ClientConfig,
+    ccsr_client: &mz_ccsr::Client,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
-    let ccsr_client = schema_registry_config.clone().build()?;
-
     let value_schema_name = format!("{}-value", topic);
     let value_schema = ccsr_client
         .get_schema_by_subject(&value_schema_name)
@@ -456,15 +450,13 @@ async fn get_remote_csr_schema(
     Ok(Schema {
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
-        schema_registry_config: Some(schema_registry_config),
-        confluent_wire_format: true,
     })
 }
 
 /// Collect protobuf message descriptor from CSR and compile the descriptor.
 async fn compile_proto(
     subject_name: &String,
-    ccsr_client: Client,
+    ccsr_client: &Client,
 ) -> Result<CsrSeedCompiledEncoding, anyhow::Error> {
     let (primary_subject, dependency_subjects) =
         ccsr_client.get_subject_and_references(subject_name).await?;
@@ -504,9 +496,9 @@ async fn compile_proto(
 /// whether the specified AWS configuration is valid.
 async fn validate_aws_credentials(
     config: &AwsConfig,
-    external_id: AwsExternalId,
+    external_id_prefix: Option<&AwsExternalIdPrefix>,
 ) -> Result<(), anyhow::Error> {
-    let config = config.load(external_id).await;
+    let config = config.load(external_id_prefix, None).await;
     let sts_client = aws_sdk_sts::Client::new(&config);
     let _ = sts_client
         .get_caller_identity()

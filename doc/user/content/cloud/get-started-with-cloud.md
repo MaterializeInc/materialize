@@ -1,5 +1,5 @@
 ---
-title: "Get Started with Cloud"
+title: "Get started with Cloud"
 description: "Connect to Cloud and create Materialize deployments."
 menu:
   main:

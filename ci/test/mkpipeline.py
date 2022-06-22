@@ -31,7 +31,7 @@ import yaml
 
 from materialize import mzbuild, mzcompose, spawn
 
-from ..deploy.deploy_util import materialized_rust_version
+from ..deploy.deploy_util import environmentd_rust_version
 
 # These paths contain "CI glue code", i.e., the code that powers CI itself,
 # including this very script! All of CI implicitly depends on this code, so
@@ -55,7 +55,7 @@ def main() -> int:
 
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
         raw = f.read()
-    raw = raw.replace("$MATERIALIZED_RUST_VERSION", materialized_rust_version())
+    raw = raw.replace("$ENVIRONMENTD_RUST_VERSION", environmentd_rust_version())
     pipeline = yaml.safe_load(raw)
 
     if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:

@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use anyhow::{anyhow, bail, Context};
 
 use prost_reflect::{
-    Cardinality, DynamicMessage, FieldDescriptor, FileDescriptor, Kind, MessageDescriptor,
+    Cardinality, DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor,
     ReflectMessage, Value,
 };
 
@@ -31,7 +31,7 @@ impl DecodedDescriptors {
     /// Builds a `DecodedDescriptors` from an encoded `FileDescriptorSet` and
     /// the fully qualified name of a message inside that file descriptor set.
     pub fn from_bytes(bytes: &[u8], message_name: String) -> Result<Self, anyhow::Error> {
-        let fds = FileDescriptor::decode(bytes).context("decoding file descriptor set")?;
+        let fds = DescriptorPool::decode(bytes).context("decoding file descriptor set")?;
         let message_descriptor = fds.get_message_by_name(&message_name).ok_or_else(|| {
             anyhow!(
                 "protobuf message {} not found in file descriptor set",

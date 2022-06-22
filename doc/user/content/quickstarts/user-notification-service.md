@@ -1,5 +1,5 @@
 ---
-title: "Build a User Notification Service"
+title: "Build a user notification service"
 description: "  "
 draft: true
 menu:

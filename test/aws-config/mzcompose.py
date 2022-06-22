@@ -45,7 +45,7 @@ SERVICES = [
         volumes_extra=AWS_VOLUME,
     ),
     Testdrive(
-        materialized_url=f"postgres://materialize@materialized:6875",
+        materialize_url=f"postgres://materialize@materialized:6875",
         seed=SEED,
     ),
 ]

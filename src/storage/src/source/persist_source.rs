@@ -16,20 +16,28 @@ use std::task::{Context, Poll};
 use std::time::Instant;
 
 use futures_util::Stream as FuturesStream;
-use timely::dataflow::operators::{Concat, Map, OkErr};
+use mz_persist_client::cache::PersistClientCache;
+use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use tokio::sync::Mutex;
 use tracing::trace;
 
-use mz_dataflow_types::{DataflowError, DecodeError, SourceError, SourceErrorDetails};
+use mz_dataflow_types::{
+    client::controller::storage::CollectionMetadata, sources::SourceData, DataflowError,
+};
+use mz_persist::location::ExternalError;
 use mz_persist_client::read::ListenEvent;
-use mz_persist_client::{PersistLocation, ShardId};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 
-use crate::source::SourceStatus;
-use crate::source::YIELD_INTERVAL;
+use crate::source::{SourceStatus, YIELD_INTERVAL};
 
 /// Creates a new source that reads from a persist shard.
+///
+/// All times emitted will have been [advanced by] the given `as_of` frontier.
+///
+/// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
+//
 // TODO(aljoscha): We need to change the `shard_id` parameter to be a `Vec<ShardId>` and teach the
 // operator to concurrently poll from multiple `Listen` instances. This will require us to put in
 // place the code that allows selecting from multiple `Listen`s, potentially by implementing async
@@ -37,10 +45,8 @@ use crate::source::YIELD_INTERVAL;
 // upper frontier from all shards.
 pub fn persist_source<G>(
     scope: &G,
-    source_id: GlobalId,
-    consensus_uri: String,
-    blob_uri: String,
-    shard_id: ShardId,
+    storage_metadata: CollectionMetadata,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
     as_of: Antichain<Timestamp>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -60,8 +66,7 @@ where
 
     // This is a generator that sets up an async `Stream` that can be continously polled to get the
     // values that are `yield`-ed from it's body.
-    let async_stream = async_stream::try_stream! {
-
+    let async_stream = async_stream::try_stream!({
         // We are reading only from worker 0. We can split the work of reading from the snapshot to
         // multiple workers, but someone has to distribute the splits. Also, in the glorious
         // STORAGE future, we will use multiple persist shards to back a STORAGE collection. Then,
@@ -71,49 +76,62 @@ where
             return;
         }
 
-        let persist_location = PersistLocation {
-            consensus_uri: consensus_uri,
-            blob_uri: blob_uri,
-        };
+        let mut read = persist_clients
+            .lock()
+            .await
+            .open(storage_metadata.persist_location)
+            .await
+            .expect("could not open persist client")
+            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
+                storage_metadata.persist_shard,
+            )
+            .await
+            .expect("could not open persist shard");
 
-        let persist_client = persist_location.open().await?;
+        /// Aggressively downgrade `since`, to not hold back compaction.
+        read.downgrade_since(as_of.clone()).await;
 
-        let (_write, read) =
-            persist_client.open::<Row, Row, Timestamp, Diff>(shard_id).await?;
+        let mut snapshot_iter = read
+            .snapshot(as_of.clone())
+            .await
+            .expect("cannot serve requested as_of");
 
-            let mut snapshot_iter = read
-                .snapshot(as_of.clone())
-                .await
-                .expect("cannot serve requested as_of");
+        // First, yield all the updates from the snapshot.
+        while let Some(next) = snapshot_iter.next().await {
+            yield ListenEvent::Updates(next);
+        }
 
+        // Then, listen continously and yield any new updates. This loop is expected to never
+        // finish.
+        let mut listen = read
+            .listen(as_of)
+            .await
+            .expect("cannot serve requested as_of");
 
-            // First, yield all the updates from the snapshot.
-            while let Some(next) = snapshot_iter.next().await {
-                yield ListenEvent::Updates(next);
+        loop {
+            for event in listen.next().await {
+                // TODO(petrosagg): We are incorrectly NOT downgrading the since frontier of this
+                // read handle which will hold back compaction in persist. This is currently a
+                // necessary evil to avoid too much contension on persist's consensus
+                // implementation.
+                //
+                // Once persist supports compaction and/or has better performance the code below
+                // should be enabled.
+                // if let ListenEvent::Progress(upper) = &event {
+                //     read.downgrade_since(upper.clone()).await;
+                // }
+                yield event;
             }
-
-            // Then, listen continously and yield any new updates. This loop is expected to never
-            // finish.
-            let mut listen = read
-                .listen(as_of)
-                .await
-                .expect("cannot serve requested as_of");
-
-            loop {
-                let next = listen.next().await;
-                for event in next {
-                    yield event;
-                }
-            }
-    };
+        }
+    });
 
     let mut pinned_stream = Box::pin(async_stream);
 
-    let (timely_stream, token) = crate::source::util::source(
-        scope,
-        "persist_source".to_string(),
-        move |info| {
-            let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+    let (timely_stream, token) =
+        crate::source::util::source(scope, "persist_source".to_string(), move |info| {
+            let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+            let waker = futures_util::task::waker(waker_activator);
+            let activator = scope.activator_for(&info.address[..]);
 
             // There is a bit of a mismatch: listening on a ReadHandle will give us an Antichain<T>
             // as a frontier in `Progress` messages while a timely source usually only has a single
@@ -124,92 +142,51 @@ where
             // need.
             let mut current_ts = 0;
 
-            move |cap, cap_set, output| {
-                let waker = futures_util::task::waker_ref(&activator);
+            move |cap, output| {
                 let mut context = Context::from_waker(&waker);
-
                 // Bound execution of operator to prevent a single operator from hogging
                 // the CPU if there are many messages to process
                 let timer = Instant::now();
 
                 while let Poll::Ready(item) = pinned_stream.as_mut().poll_next(&mut context) {
                     match item {
-                        Some(Ok(event)) => match event {
-                            ListenEvent::Progress(upper) => {
-                                // NOTE(aljoscha): Ideally, we would only get a CapabilitySet, that
-                                // we have to manage. Or the ability to drop the plain Capability
-                                // right at the start.
-                                if let Some(first_element) = upper.first() {
-                                    current_ts = *first_element;
-                                    cap.downgrade(first_element);
-                                }
-                                cap_set.downgrade(upper);
+                        Some(Ok(ListenEvent::Progress(upper))) => match upper.into_option() {
+                            Some(ts) => {
+                                current_ts = ts;
+                                cap.downgrade(&ts);
                             }
-                            ListenEvent::Updates(updates) => {
-                                let cap = cap_set.delayed(&current_ts);
-                                let mut session = output.session(&cap);
-                                for update in updates {
-                                    session.give(Ok(update));
-                                }
-                            }
+                            None => return SourceStatus::Done,
                         },
-                        Some(Err::<_, anyhow::Error>(e)) => {
-                            let cap = cap_set.delayed(&current_ts);
+                        Some(Ok(ListenEvent::Updates(mut updates))) => {
+                            // This operator guarantees that its output has been advanced by `as_of.
+                            // The persist SnapshotIter already has this contract, so nothing to do
+                            // here.
+                            let cap = cap.delayed(&current_ts);
                             let mut session = output.session(&cap);
-                            session.give(Err((format!("{}", e), current_ts, 1)));
+                            session.give_vec(&mut updates);
                         }
-                        None => {
-                            unreachable!("We poll from persist continuously, the Stream should therefore never be exhausted.")
+                        Some(Err::<_, ExternalError>(e)) => {
+                            // TODO(petrosagg): error handling
+                            panic!("unexpected error from persist {e}");
                         }
+                        None => return SourceStatus::Done,
                     }
-
                     if timer.elapsed() > YIELD_INTERVAL {
-                        let _ = activator.activate();
-                        return SourceStatus::Alive;
+                        activator.activate();
+                        break;
                     }
                 }
 
                 SourceStatus::Alive
             }
-        },
-    );
+        });
 
-    let (ok_stream, persist_err_stream) = timely_stream.ok_err(|x| x);
-    let persist_err_stream = persist_err_stream.map(move |(err, ts, diff)| {
-        (
-            DataflowError::from(SourceError::new(
-                source_id,
-                SourceErrorDetails::Persistence(err),
-            )),
-            ts,
-            diff,
-        )
+    let (ok_stream, err_stream) = timely_stream.ok_err(|x| match x {
+        ((Ok(SourceData(Ok(row))), Ok(())), ts, diff) => Ok((row, ts, diff)),
+        ((Ok(SourceData(Err(err))), Ok(())), ts, diff) => Err((err, ts, diff)),
+        // TODO(petrosagg): error handling
+        _ => panic!("decoding failed"),
     });
-
-    let mut row = Row::default();
-    let (ok_stream, err_stream) = ok_stream.ok_err(move |((key, value), ts, diff)| {
-        let mut row_packer = row.packer();
-
-        let key = match key {
-            Ok(key) => key,
-            Err(e) => return Err((DataflowError::from(DecodeError::Text(e)), ts, diff)),
-        };
-        let value = match value {
-            Ok(value) => value,
-            Err(e) => return Err((DataflowError::from(DecodeError::Text(e)), ts, diff)),
-        };
-
-        let unpacked_key = key.unpack();
-        let unpacked_value = value.unpack();
-        row_packer.extend(unpacked_key);
-        row_packer.extend(unpacked_value);
-
-        // TODO(aljoscha): Metrics about how many messages have been ingested from persist/STORAGE?
-        // metrics.messages_ingested.inc();
-        Ok((row.clone(), ts, diff))
-    });
-
-    let err_stream = err_stream.concat(&persist_err_stream);
 
     let token = Rc::new(token);
 

@@ -37,14 +37,14 @@ $ kafka-ingest format=avro topic=delayed-materialization key-format=avro key-sch
 
 > CREATE MATERIALIZED VIEW materialized_via_create_materialized_view_after_restart_view AS SELECT COUNT(*) AS f1 FROM materialized_via_create_materialized_view_after_restart;
 
-> SELECT COUNT(*) = ${count} FROM materialized_via_create_index_before_restart;
-true
+> SELECT COUNT(*) FROM materialized_via_create_index_before_restart;
+"${count}"
 
-> SELECT COUNT(*) = ${count} FROM materialized_via_create_index_after_restart;
-true
+> SELECT COUNT(*) FROM materialized_via_create_index_after_restart;
+"${count}"
 
-> SELECT f1 = ${count} FROM materialized_via_create_materialized_view_before_restart_view;
-true
+> SELECT f1 FROM materialized_via_create_materialized_view_before_restart_view;
+"${count}"
 
-> SELECT f1 = ${count} FROM materialized_via_create_materialized_view_after_restart_view;
-true
+> SELECT f1 FROM materialized_via_create_materialized_view_after_restart_view;
+"${count}"

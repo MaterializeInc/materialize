@@ -164,7 +164,8 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
             encode_bytes(&j.to_string(), buffer);
         }
         Value::Uuid(u) => {
-            encode_bytes(&u.to_string(), buffer);
+            let u_str = u.to_string();
+            encode_bytes(&u_str, buffer);
         }
     }
 }

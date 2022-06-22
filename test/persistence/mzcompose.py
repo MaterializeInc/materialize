@@ -10,7 +10,7 @@
 import os
 import time
 from argparse import Namespace
-from typing import List, Union
+from typing import Union
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
@@ -22,27 +22,12 @@ from materialize.mzcompose.services import (
     Zookeeper,
 )
 
-mz_options = "--persistent-user-tables --persistent-kafka-sources --disable-persistent-system-tables-test=true"
-
-mz_default = Materialized(options=mz_options)
-
-mz_logical_compaction_window_off = Materialized(
-    # We need to use 1s and not 100ms here as otherwise validate_timestamp_bindings()
-    # dominates the CPU see #10740
-    timestamp_frequency="1s",
-    options=f"{mz_options} --logical-compaction-window=off",
-)
-
-# TODO: add back mz_logical_compaction_window_off in the line below.
-# See: https://github.com/MaterializeInc/materialize/issues/10488
-mz_configurations = [mz_default]
-
 SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
-    mz_default,
+    Materialized(),
     Testdrive(no_reset=True),
 ]
 
@@ -69,22 +54,6 @@ def start_deps(
         dependencies = ["zookeeper", "kafka", "schema-registry"]
 
     c.start_and_wait_for_tcp(services=dependencies)
-
-
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument(
-        "--redpanda",
-        action="store_true",
-        help="run against Redpanda instead of the Confluent Platform",
-    )
-    args = parser.parse_args()
-
-    for mz in mz_configurations:
-        with c.override(mz):
-            workflow_kafka_sources(c, args)
-            workflow_user_tables(c)
-
-    workflow_compaction(c)
 
 
 def workflow_kafka_sources(
@@ -117,7 +86,7 @@ def workflow_kafka_sources(
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")
 
 
 def workflow_user_tables(c: Composition) -> None:
@@ -143,23 +112,21 @@ def workflow_user_tables(c: Composition) -> None:
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")
 
 
 def workflow_failpoints(c: Composition, parser: WorkflowArgumentParser) -> None:
     start_deps(c, parser)
 
-    for mz in mz_configurations:
-        with c.override(mz):
-            for failpoint in [
-                "fileblob_set_sync",
-                "fileblob_delete_before",
-                "fileblob_delete_after",
-                "insert_timestamp_bindings_before",
-                "insert_timestamp_bindings_after",
-            ]:
-                for action in ["return", "panic", "sleep(1000)"]:
-                    run_one_failpoint(c, failpoint, action)
+    for failpoint in [
+        "fileblob_set_sync",
+        "fileblob_delete_before",
+        "fileblob_delete_after",
+        "insert_timestamp_bindings_before",
+        "insert_timestamp_bindings_after",
+    ]:
+        for action in ["return", "panic", "sleep(1000)"]:
+            run_one_failpoint(c, failpoint, action)
 
 
 def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
@@ -188,13 +155,13 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")
 
 
 def workflow_compaction(c: Composition) -> None:
     with c.override(
         Materialized(
-            options=f"{mz_options} --metrics-scraping-interval=1s",
+            options=f"--metrics-scraping-interval=1s",
         )
     ):
         c.up("materialized")
@@ -206,4 +173,4 @@ def workflow_compaction(c: Composition) -> None:
 
     c.rm("materialized", "testdrive", destroy_volumes=True)
 
-    c.rm_volumes("mzdata")
+    c.rm_volumes("mzdata", "pgdata")

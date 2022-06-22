@@ -15,24 +15,26 @@
 //! [`ast`]: crate::ast
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use anyhow::{bail, Context};
 use itertools::Itertools;
 
-use mz_dataflow_types::sources::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
-use mz_repr::ColumnName;
+use mz_dataflow_types::connections::aws::{AwsAssumeRole, AwsConfig, AwsCredentials, SerdeUri};
+use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    AstInfo, CreateConnectorStatement, CreateIndexStatement, CreateSecretStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
-    KafkaConnector, KafkaSourceConnector, Op, Query, Statement, TableFactor, TableFunction,
-    UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
+    CreateConnectionStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
+    TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOption, WithOptionValue,
 };
 
 use crate::names::{
     Aug, FullObjectName, PartialObjectName, PartialSchemaName, RawDatabaseSpecifier,
+    ResolvedObjectName,
 };
 use crate::plan::error::PlanError;
 use crate::plan::statement::StatementContext;
@@ -107,35 +109,62 @@ pub fn op(op: &Op) -> Result<&str, PlanError> {
     Ok(&op.op)
 }
 
+#[derive(Debug, Clone)]
+pub enum SqlValueOrSecret {
+    Value(Value),
+    Secret(GlobalId),
+}
+
+impl fmt::Display for SqlValueOrSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SqlValueOrSecret::Value(v) => write!(f, "{}", v),
+            SqlValueOrSecret::Secret(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl From<SqlValueOrSecret> for Option<Value> {
+    fn from(s: SqlValueOrSecret) -> Self {
+        match s {
+            SqlValueOrSecret::Value(v) => Some(v),
+            SqlValueOrSecret::Secret(_id) => None,
+        }
+    }
+}
+
 /// Normalizes a list of `WITH` options.
 ///
-/// # Panics
+/// # Errors
 /// - If any `WithOption`'s `value` is `None`. You can prevent generating these
 ///   values during parsing.
-pub fn options<T: AstInfo>(options: &[WithOption<T>]) -> BTreeMap<String, Value> {
-    options
-        .iter()
-        .map(|o| {
-            (
-                o.key.to_string(),
-                match o
-                    .value
-                    .as_ref()
-                    // The only places that generate options that do not require
-                    // keys and values do not currently use this code path.
-                    .expect("check that all entries have values before calling `options`")
-                {
-                    WithOptionValue::Value(value) => value.clone(),
-                    WithOptionValue::ObjectName(object_name) => {
-                        Value::String(object_name.to_ast_string())
-                    }
-                    WithOptionValue::DataType(data_type) => {
-                        Value::String(data_type.to_ast_string())
-                    }
-                },
-            )
-        })
-        .collect()
+/// - If any `WithOption` has a value of type `WithOptionValue::Secret`.
+pub fn options(
+    options: &[WithOption<Aug>],
+) -> Result<BTreeMap<String, SqlValueOrSecret>, anyhow::Error> {
+    let mut out = BTreeMap::new();
+    for option in options {
+        let value = match &option.value {
+            Some(WithOptionValue::Value(value)) => SqlValueOrSecret::Value(value.clone()),
+            Some(WithOptionValue::Ident(id)) => {
+                SqlValueOrSecret::Value(Value::String(ident(id.clone())))
+            }
+            Some(WithOptionValue::DataType(data_type)) => {
+                SqlValueOrSecret::Value(Value::String(data_type.to_ast_string()))
+            }
+            Some(WithOptionValue::Secret(ResolvedObjectName::Object { id, .. })) => {
+                SqlValueOrSecret::Secret(id.clone())
+            }
+            Some(WithOptionValue::Secret(_)) => {
+                panic!("SECRET option {} must be Object", option.key)
+            }
+            None => {
+                bail!("option {} requires a value", option.key);
+            }
+        };
+        out.insert(option.key.to_string(), value);
+    }
+    Ok(out)
 }
 
 /// Normalizes `WITH` option keys without normalizing their corresponding
@@ -322,9 +351,9 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector,
-            with_options,
-            format,
+            connection: _,
+            with_options: _,
+            format: _,
             include_metadata: _,
             envelope: _,
             if_not_exists,
@@ -334,24 +363,6 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
-
-            for opt in with_options.iter_mut() {
-                if let Some(WithOptionValue::ObjectName(object_name)) = &mut opt.value {
-                    if ident_ref(&opt.key) == "tx_metadata" {
-                        // Use the catalog to resolve to a fully qualified name
-                        *object_name = allocate_name(object_name)?;
-                    }
-                }
-            }
-            if let mz_sql_parser::ast::CreateSourceConnector::Kafka(KafkaSourceConnector {
-                connector: KafkaConnector::Reference { connector, .. },
-                ..
-            }) = connector
-            {
-                *connector = allocate_name(connector)?;
-            };
-
-            crate::connectors::qualify_csr_connector_names(format, scx)?;
         }
 
         Statement::CreateTable(CreateTableStatement {
@@ -379,7 +390,7 @@ pub fn create_statement(
 
         Statement::CreateSink(CreateSinkStatement {
             name,
-            connector: _,
+            connection: _,
             with_options: _,
             in_cluster: _,
             format: _,
@@ -475,9 +486,9 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
         }
-        Statement::CreateConnector(CreateConnectorStatement {
+        Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connector: _,
+            connection: _,
             if_not_exists,
         }) => {
             *name = allocate_name(name)?;
@@ -490,62 +501,91 @@ pub fn create_statement(
     Ok(stmt.to_ast_string_stable())
 }
 
-macro_rules! with_option_type {
-    ($name:expr, String) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
-            Some(crate::ast::WithOptionValue::ObjectName(name)) => {
-                // TODO[btv]
-                //
-                // This is a hack to allow unquoted with options; e.g., `WITH foo=bar` instead of `WITH foo="bar"`.
-                // Despite it being an object name, it makes no sense for it to have more than one component.
-                //
-                // We would like to make this `WithOptionValue` variant take an ident,
-                // not an object name; the only reason we can't do that yet is because the "tx_metadata" WITH option
-                // actually genuinely needs an object name, but that is probably being promoted to syntax soon.
-                //
-                // Once we do that, we can simplify this code.
-                if name.0.len() != 1 {
-                    ::anyhow::bail!("expected String or bare identifier")
+/// Generates a struct capable of taking a `Vec` of types commonly used to
+/// represent `WITH` options into useful data types, such as strings.
+///
+/// # Parameters
+/// - `$option_ty`: Accepts a struct representing a set of `WITH` options, which
+///     must contain the fields `name` and `value`.
+///     - `name` must be of type `$option_tyName`, e.g. if `$option_ty` is
+///       `FooOption`, then `name` must be of type `FooOptionName`.
+///       `$option_tyName` must be an enum representing `WITH` option keys.
+///     - `TryFromValue<value>` must be implemented for the type you want to
+///       take the option to. The `sql::plan::with_option` module contains these
+///       implementations.
+/// - `$option_name` must be an element of `$option_tyName`
+/// - `$t` is the type you want to convert the option's value to. If the
+///   option's value is absent (i.e. the user only entered the option's key),
+///   you can also define a default value.
+/// - `Default($v)` is an optional parameter that sets the default value of the
+///   field to `$v`. `$v` must be convertible to `$t` using `.into`. This also
+///   converts the struct's type from `Option<$t>` to `<$t>`.
+macro_rules! generate_extracted_config {
+    // No default specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)], $(
+            $tail
+        ),*);
+    };
+    // No default specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option<$t>, None)]);
+    };
+    // Default specified, have remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)], $(
+            $tail
+        ),*);
+    };
+    // Default specified, no remaining options.
+    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
+        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v)]);
+    };
+    ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr))+]) => {
+        paste::paste! {
+            pub struct [<$option_ty Extracted>] {
+                $(
+                    [<$option_name:snake>]: $t,
+                )*
+            }
+
+            impl std::default::Default for [<$option_ty Extracted>] {
+                fn default() -> Self {
+                    [<$option_ty Extracted>] {
+                        $(
+                            [<$option_name:snake>]: $v.into(),
+                        )*
+                    }
                 }
-                name.0.into_iter().next().unwrap().into_string()
             }
-            _ => ::anyhow::bail!("expected String or bare identifier"),
-        }
-    };
-    ($name:expr, bool) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) => value,
-            // Bools, if they have no '= value', are true.
-            None => true,
-            _ => ::anyhow::bail!("expected bool"),
-        }
-    };
-    ($name:expr, Interval) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                mz_repr::strconv::parse_interval(&value)?
-            }
-            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                mz_repr::strconv::parse_interval(&interval.value)?
-            }
-            _ => ::anyhow::bail!("expected Interval"),
-        }
-    };
-    ($name:expr, OptionalInterval) => {
-        match $name {
-            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
-                if value.as_str() == "off" {
-                    None
-                } else {
-                    Some(mz_repr::strconv::parse_interval(&value)?)
+
+            impl std::convert::TryFrom<Vec<$option_ty<Aug>>> for [<$option_ty Extracted>] {
+                type Error = anyhow::Error;
+                fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
+                    use [<$option_ty Name>]::*;
+                    let mut seen = HashSet::<[<$option_ty Name>]>::new();
+                    let mut extracted = [<$option_ty Extracted>]::default();
+                    for option in v {
+                        if !seen.insert(option.name.clone()) {
+                            bail!("{} specified more than once", option.name.to_ast_string());
+                        }
+                        match option.name {
+                            $(
+                                $option_name => {
+                                    extracted.[<$option_name:snake>] =
+                                        <$t>::try_from_value(option.value)
+                                            .map_err(|e| anyhow!("invalid {}: {}", option.name.to_ast_string(), e))?;
+                                }
+                            )*
+                        }
+                    }
+                    Ok(extracted)
                 }
             }
-            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
-                Some(mz_repr::strconv::parse_interval(&interval.value)?)
-            }
-            _ => ::anyhow::bail!("expected Interval or 'off'"),
         }
+    };
+    ($option_ty:ty, $($h:tt),+) => {
+        generate_extracted_config!{$option_ty, [], $($h),+}
     };
 }
 
@@ -565,65 +605,14 @@ pub(crate) fn ensure_empty_options<V>(
     Ok(())
 }
 
-/// This macro accepts a struct definition and will generate it and a `try_from`
-/// method that takes a `Vec<WithOption>` which will extract and type check
-/// options based on the struct field names and types.
-///
-/// The macro wraps all field types in an `Option` in the generated struct. The
-/// `TryFrom` implementation sets fields to `None` if they are not present in
-/// the provided `WITH` options.
-///
-/// Field names must match exactly the lowercased option name. Supported types
-/// are:
-///
-/// - `String`: expects a SQL string (`WITH (name = "value")`) or identifier
-///   (`WITH (name = text)`).
-/// - `bool`: expects either a SQL bool (`WITH (name = true)`) or a valueless
-///   option which will be interpreted as true: (`WITH (name)`.
-/// - `Interval`: expects either a SQL interval or string that can be parsed as
-///   an interval.
-macro_rules! with_options {
-  (struct $name:ident {
-        $($field_name:ident: $field_type:ident,)*
-    }) => {
-        #[derive(Debug)]
-        pub struct $name {
-            pub $($field_name: Option<$field_type>,)*
-        }
-
-        impl ::std::convert::TryFrom<Vec<mz_sql_parser::ast::WithOption<Aug>>> for $name {
-            type Error = anyhow::Error;
-
-            fn try_from(mut options: Vec<mz_sql_parser::ast::WithOption<Aug>>) -> Result<Self, Self::Error> {
-                let v = Self {
-                    $($field_name: {
-                        match options.iter().position(|opt| opt.key.as_str() == stringify!($field_name)) {
-                            None => None,
-                            Some(pos) => {
-                                let value: Option<mz_sql_parser::ast::WithOptionValue<Aug>> = options.swap_remove(pos).value;
-                                let value: $field_type = with_option_type!(value, $field_type);
-                                Some(value)
-                            },
-                        }
-                    },
-                    )*
-                };
-                if !options.is_empty() {
-                    ::anyhow::bail!("unexpected options");
-                }
-                Ok(v)
-            }
-        }
-    }
-}
-
 /// Normalizes option values that contain AWS connection parameters.
 pub fn aws_config(
-    options: &mut BTreeMap<String, Value>,
+    options: &mut BTreeMap<String, SqlValueOrSecret>,
     region: Option<String>,
 ) -> Result<AwsConfig, anyhow::Error> {
     let mut extract = |key| match options.remove(key) {
-        Some(Value::String(key)) => {
+        // TODO: support secrets in S3
+        Some(SqlValueOrSecret::Value(Value::String(key))) => {
             if !key.is_empty() {
                 Ok(Some(key))
             } else {
@@ -699,7 +688,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::DummyCatalog;
-    use crate::names::resolve_names_stmt;
+    use crate::names;
 
     #[test]
     fn normalized_create() -> Result<(), Box<dyn Error>> {
@@ -710,7 +699,7 @@ mod tests {
         )?
         .into_element();
 
-        let (stmt, _) = resolve_names_stmt(scx, parsed)?;
+        let (stmt, _) = names::resolve(scx.catalog, parsed)?;
 
         // Ensure that all identifiers are quoted.
         assert_eq!(

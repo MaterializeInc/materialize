@@ -111,6 +111,16 @@ impl PortAllocator {
         PortAllocator(Mutex::new((min..=max).collect()))
     }
 
+    /// Creates a new `PortAllocator` that will assign ports between `min` and
+    /// `max`, both inclusive.
+    ///
+    /// The ports listed in `banned` will not be assigned.
+    pub fn new_with_filter(min: u16, max: u16, banned: &[u16]) -> PortAllocator {
+        PortAllocator(Mutex::new(
+            (min..=max).filter(|p| !banned.contains(p)).collect(),
+        ))
+    }
+
     /// Allocates a new port.
     ///
     /// Returns `None` if the allocator is exhausted.

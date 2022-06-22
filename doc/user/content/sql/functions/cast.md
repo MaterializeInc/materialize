@@ -1,5 +1,5 @@
 ---
-title: "CAST Function and Operator"
+title: "CAST function and operator"
 description: "Returns the value converted to the specified type"
 menu:
   main:

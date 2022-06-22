@@ -53,18 +53,12 @@ class TestCase:
 
 test_cases = [
     TestCase(
-        name="no-tls-head",
+        name="no-tls",
         materialized_options=[],
         dbt_env={},
     ),
     TestCase(
-        name="no-tls-min-supported-version",
-        materialized_options=[],
-        dbt_env={},
-        materialized_image="materialize/materialized:v0.20.0",
-    ),
-    TestCase(
-        name="tls-head",
+        name="tls",
         materialized_options=[
             "--tls-mode=verify-ca",
             "--tls-cert=/secrets/materialized.crt",
@@ -72,8 +66,8 @@ test_cases = [
             "--tls-ca=/secrets/ca.crt",
         ],
         dbt_env={
-            "DBT_SSLCERT": "/secrets/materialized.crt",
-            "DBT_SSLKEY": "/secrets/materialized.key",
+            "DBT_SSLCERT": "/secrets/postgres.crt",
+            "DBT_SSLKEY": "/secrets/postgres.key",
             "DBT_SSLROOTCERT": "/secrets/ca.crt",
         },
     ),

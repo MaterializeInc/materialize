@@ -1,26 +1,14 @@
-[advisories]
-ignore = [
-    # chrono calls localtime_r, which can result in memory unsafety if another
-    # thread is simultaneously calling setenv. The likelihood of this happening
-    # in Materialize is exceptionally low (we don't call setenv directly
-    # anywhere, and it is unlikely that our dependencies do either). There is
-    # no easy fix for chrono (https://github.com/chronotope/chrono/issues/499),
-    # so we're just ignoring the advisory for now.
-    "RUSTSEC-2020-0159",
-]
-
 [bans]
 multiple-versions = "deny"
 skip = [
     # Do not add to this list without good reason! Duplicate dependencies slow
     # down compilation and bloat the binary.
 
+    # Waiting on https://github.com/arcnmx/serde-value/pull/35.
+    { name = "ordered-float", version = "2.10.0" },
+
     # Waiting for csv, http, and aws_smithy_types to upgrade to v1.0.
     { name = "itoa", version = "0.4.1" },
-
-    # Waiting for pprof and prometheus to upgrade.
-    { name = "parking_lot_core", version = "0.8.3" },
-    { name = "parking_lot", version = "0.11.1" },
 
     # Waiting for vte to upgrade to v0.7.0.
     { name = "arrayvec", version = "0.5.2" },
@@ -28,8 +16,17 @@ skip = [
     # https://github.com/tokio-rs/tokio/pull/4521
     { name = "tokio-util", version = "0.6.9" },
 
-    # https://github.com/awslabs/smithy-rs/pull/1301
-    { name = "urlencoding", version = "1.3.0" },
+    # WASI dependencies from multiple sources.
+    { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
+    { name = "windows-sys", version = "0.32.0" },
+    { name = "windows_aarch64_msvc", version = "0.32.0" },
+    { name = "windows_i686_gnu", version = "0.32.0" },
+    { name = "windows_i686_msvc", version = "0.32.0" },
+    { name = "windows_x86_64_gnu", version = "0.32.0" },
+    { name = "windows_x86_64_msvc", version = "0.32.0" },
+
+    # Waiting on many dependencies throughout the ecosystem.
+    { name = "uuid", version = "0.8.2" },
 ]
 
 # Use `tracing` instead.
@@ -39,14 +36,6 @@ name = "env_logger"
 # Use `prost` or `protobuf-native` instead.
 [[bans.deny]]
 name = "protobuf"
-
-# The `md5` and `sha1` crates are not part of the RustCrypto project. Use
-# `md-5` and `sha-1` instead, despite their somewhat suspicious names.
-[[bans.deny]]
-name = "md5"
-wrappers = ["aws-sdk-s3"]
-[[bans.deny]]
-name = "sha1"
 
 # Strum has suspect code quality and includes many unneeded features. Use
 # more targeted enum macro crates, e.g. `enum-kinds`.
@@ -63,11 +52,6 @@ wrappers = [
     "globset",
     "jsonpath_lib",
     "mio",
-    # TODO(guswynn): switch to `tracing:enabled!` when its released
-    "mz-coord",
-    "mz-compute",
-    "mz-dataflow",
-    "mz-storage",
     "native-tls",
     "opentls",
     "os_info",
@@ -93,6 +77,42 @@ wrappers = [
 # mature and more widely used.
 [[bans.deny]]
 name = "rustls"
+
+# once_cell is going to be added to std, and doesn't use macros
+# Unfortunately, its heavily used, so we have lots of exceptions.
+[[bans.deny]]
+name = "lazy_static"
+wrappers = [
+  "aws-arn",
+  "aws-http",
+  "bindgen",
+  "bstr",
+  "clap",
+  "console",
+  "criterion",
+  "crossbeam-epoch",
+  "crossbeam-utils",
+  "fail",
+  "findshlibs",
+  "indicatif",
+  "mysql_async",
+  "mysql_common",
+  "native-tls",
+  "opentelemetry",
+  "procfs",
+  "prometheus",
+  "proptest",
+  "prost-build",
+  "rayon-core",
+  "reqwest",
+  "schannel",
+  "sharded-slab",
+  "tracing-core",
+  "tracing-log",
+  "tracing-subscriber",
+  "wasm-bindgen-backend",
+  "which",
+]
 
 # The `uncased` crate serves the same purpose as `unicase` and is more
 # actively maintained.
@@ -139,12 +159,15 @@ allow-git = [
     # Waiting on https://github.com/AltSysrq/proptest/pull/264.
     "https://github.com/MaterializeInc/proptest.git",
 
-    # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783.
+    # Waiting on https://github.com/open-telemetry/opentelemetry-rust/pull/783
+    # to make it into a release.
     "https://github.com/MaterializeInc/opentelemetry-rust.git",
+
+    # Works around https://github.com/tokio-rs/prost/issues/653.
+    "https://github.com/MaterializeInc/prost.git",
 
     # Dependencies that we control upstream whose official releases we don't
     # care about.
-    "https://github.com/MaterializeInc/cloud-sdks.git",
     "https://github.com/frankmcsherry/columnation",
     "https://github.com/TimelyDataflow/timely-dataflow",
     "https://github.com/TimelyDataflow/differential-dataflow.git",

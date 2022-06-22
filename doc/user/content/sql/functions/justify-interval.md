@@ -1,5 +1,5 @@
 ---
-title: "justify_interval Function"
+title: "justify_interval function"
 description: "Adjust interval using justify_days and justify_hours, with additional sign adjustments"
 menu:
   main:

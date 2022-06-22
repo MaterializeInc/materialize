@@ -240,7 +240,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
     }
 
     /// Builds a dataflow description for the sink with the specified name,
-    /// ID, source, and output connector.
+    /// ID, source, and output connection.
     ///
     /// For as long as this dataflow is active, `id` can be used to reference
     /// the sink (primarily to drop it, at the moment).

@@ -11,6 +11,7 @@
 
 //! Catalog abstraction layer.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -18,11 +19,12 @@ use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
-use lazy_static::lazy_static;
-use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
+use once_cell::sync::Lazy;
 
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::connections::Connection;
+use mz_dataflow_types::sources::SourceConnection;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
@@ -61,7 +63,7 @@ use crate::plan::statement::StatementDesc;
 /// [`list_databases`]: Catalog::list_databases
 /// [`get_item`]: Catalog::resolve_item
 /// [`resolve_item`]: SessionCatalog::resolve_item
-pub trait SessionCatalog: fmt::Debug + ExprHumanizer {
+pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync {
     /// Returns the name of the user who is issuing the query.
     fn active_user(&self) -> &str;
 
@@ -203,12 +205,10 @@ pub struct CatalogConfig {
     pub cluster_id: Uuid,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
-    /// Whether the server is running in experimental mode.
-    pub experimental_mode: bool,
+    /// Whether the server is running in unsafe mode.
+    pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// An external ID to be supplied to all AWS AssumeRole operations.
-    pub aws_external_id: AwsExternalId,
     /// Default timestamp frequency for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
@@ -249,7 +249,7 @@ pub trait CatalogRole {
     fn name(&self) -> &str;
 
     /// Returns a stable ID for the role.
-    fn id(&self) -> i64;
+    fn id(&self) -> u64;
 }
 
 /// A compute instance in a [`SessionCatalog`].
@@ -265,15 +265,6 @@ pub trait CatalogComputeInstance<'a> {
 
     /// Returns the set of non-transient indexes on this cluster.
     fn replica_names(&self) -> HashSet<&String>;
-}
-
-/// A connector in a [`SessionCatalog`]
-pub trait CatalogConnector {
-    /// Returns the connection URI for this connector regardless of type
-    fn uri(&self) -> String;
-
-    /// Returns the options associated with this connector as a Vec, if the type does not support options or none were specified this will be empty
-    fn options(&self) -> std::collections::BTreeMap<String, String>;
 }
 
 /// An item in a [`SessionCatalog`].
@@ -294,7 +285,7 @@ pub trait CatalogItem {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self, name: &FullObjectName) -> Result<&RelationDesc, CatalogError>;
+    fn desc(&self, name: &FullObjectName) -> Result<Cow<RelationDesc>, CatalogError>;
 
     /// Returns the resolved function.
     ///
@@ -302,17 +293,16 @@ pub trait CatalogItem {
     /// anything other than a function), it returns an error.
     fn func(&self) -> Result<&'static Func, CatalogError>;
 
-    /// Returns the resolved source connector.
+    /// Returns the resolved source connection.
     ///
-    /// If the catalog item is not of a type that contains a `SourceConnector`
+    /// If the catalog item is not of a type that contains a `SourceConnection`
     /// (i.e., anything other than sources), it returns an error.
-    fn source_connector(&self) -> Result<&SourceConnector, CatalogError>;
+    fn source_connection(&self) -> Result<&SourceConnection, CatalogError>;
 
-    /// Returns the resolved connector, called a catalog connector to disambiguate
+    /// Returns the resolved connection.
     ///
-    /// If the catalog item is not of a type that implements `CatalogConnector`
-    /// it returns an error
-    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, CatalogError>;
+    /// If the catalog item is not a connection, it returns an error.
+    fn connection(&self) -> Result<&Connection, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
@@ -358,10 +348,10 @@ pub enum CatalogItemType {
     Type,
     /// A func.
     Func,
-    /// A Secret.
+    /// A secret.
     Secret,
-    /// A Connector.
-    Connector,
+    /// A connection.
+    Connection,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -375,7 +365,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
-            CatalogItemType::Connector => f.write_str("connector"),
+            CatalogItemType::Connection => f.write_str("connection"),
         }
     }
 }
@@ -544,8 +534,8 @@ pub enum CatalogError {
     UnknownFunction(String),
     /// Unknown source.
     UnknownSource(String),
-    /// Unknown connector.
-    UnknownConnector(String),
+    /// Unknown connection.
+    UnknownConnection(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -561,7 +551,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
-            Self::UnknownConnector(name) => write!(f, "connector \"{}\" does not exist", name),
+            Self::UnknownConnection(name) => write!(f, "connection \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownComputeInstance(name) => write!(f, "unknown cluster '{}'", name),
@@ -593,20 +583,17 @@ impl Error for CatalogError {}
 #[derive(Debug)]
 pub struct DummyCatalog;
 
-lazy_static! {
-    static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
-        start_time: MIN_DATETIME,
-        start_instant: Instant::now(),
-        nonce: 0,
-        cluster_id: Uuid::from_u128(0),
-        session_id: Uuid::from_u128(0),
-        experimental_mode: true,
-        build_info: &DUMMY_BUILD_INFO,
-        aws_external_id: AwsExternalId::NotProvided,
-        timestamp_frequency: Duration::from_secs(1),
-        now: NOW_ZERO.clone(),
-    };
-}
+static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
+    start_time: MIN_DATETIME,
+    start_instant: Instant::now(),
+    nonce: 0,
+    cluster_id: Uuid::from_u128(0),
+    session_id: Uuid::from_u128(0),
+    unsafe_mode: true,
+    build_info: &DUMMY_BUILD_INFO,
+    timestamp_frequency: Duration::from_secs(1),
+    now: NOW_ZERO.clone(),
+});
 
 impl SessionCatalog for DummyCatalog {
     fn active_user(&self) -> &str {

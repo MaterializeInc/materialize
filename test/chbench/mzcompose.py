@@ -7,11 +7,36 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from typing import List
-
 import requests
 
-from materialize.mzcompose import Composition, WorkflowArgumentParser
+from materialize.mzcompose import Composition, Service, WorkflowArgumentParser
+from materialize.mzcompose.services import (
+    Debezium,
+    Kafka,
+    Materialized,
+    Metabase,
+    MySql,
+    SchemaRegistry,
+    Zookeeper,
+)
+
+SERVICES = [
+    Zookeeper(),
+    Kafka(auto_create_topics=True),
+    SchemaRegistry(),
+    Debezium(),
+    MySql(mysql_root_password="rootpw"),
+    Materialized(),
+    Metabase(),
+    Service(
+        name="chbench",
+        config={
+            "mzbuild": "chbenchmark",
+            "init": True,
+            "volumes": ["mydata:/gen"],
+        },
+    ),
+]
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -28,9 +53,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.wait_for_materialized()
 
     # Start MySQL and Debezium.
-    c.up("mysql", "connect")
+    c.up("mysql", "debezium")
     c.wait_for_tcp(host="mysql", port=3306)
-    c.wait_for_tcp(host="connect", port=8083)
+    c.wait_for_tcp(host="debezium", port=8083)
 
     # Generate initial data.
     c.run(
@@ -42,15 +67,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Start Debezium.
     response = requests.post(
-        f"http://localhost:{c.default_port('connect')}/connectors",
+        f"http://localhost:{c.default_port('debezium')}/connectors",
         json={
             "name": "mysql-connector",
             "config": {
                 "connector.class": "io.debezium.connector.mysql.MySqlConnector",
                 "database.hostname": "mysql",
                 "database.port": "3306",
-                "database.user": "debezium",
-                "database.password": "debezium",
+                "database.user": "root",
+                "database.password": "rootpw",
                 "database.server.name": "debezium",
                 "database.server.id": "1234",
                 "database.history.kafka.bootstrap.servers": "kafka:9092",

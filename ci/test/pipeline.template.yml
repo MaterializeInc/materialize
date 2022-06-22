@@ -75,7 +75,7 @@ steps:
     command: bin/check
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTUP_TOOLCHAIN: $MATERIALIZED_RUST_VERSION
+      RUSTUP_TOOLCHAIN: $ENVIRONMENTD_RUST_VERSION
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"
@@ -84,9 +84,9 @@ steps:
     agents:
       queue: mac
 
-  - id: lint-allocator
-    label: Lint memory allocator
-    command: bin/ci-builder run stable ci/test/lint-allocator.sh
+  - id: lint-deps
+    label: Lint dependencies
+    command: bin/ci-builder run stable ci/test/lint-deps.sh
     inputs:
       - Cargo.lock
       - "**/Cargo.toml"
@@ -146,6 +146,18 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: kafka-persistence
+    label: Kafka persistence
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persistence
+          run: kafka-sources
+    agents:
+      queue: linux-x86_64
+
   - id: cluster-smoke
     label: Cluster smoke test
     depends_on: build-x86_64
@@ -161,7 +173,7 @@ steps:
     label: Cluster isolation test
     depends_on: build-x86_64
     timeout_in_minutes: 10
-    inputs: [test/cluster]
+    inputs: [test/cluster-isolation]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-isolation
@@ -205,7 +217,7 @@ steps:
   - id: sqllogictest-fast
     label: Fast SQL logic tests
     depends_on: build-x86_64
-    timeout_in_minutes: 10
+    timeout_in_minutes: 30
     inputs: [test/sqllogictest]
     artifact_paths: junit_sqllogictest_*.xml
     plugins:
@@ -281,7 +293,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: metabase
-          run: smoketest
     agents:
       queue: linux-x86_64
 
@@ -395,6 +406,18 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: persist-maelstrom
+    label: Maelstrom coverage of persist
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/persist]
+    artifact_paths: junit_mzcompose_*.xml
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: persist
+    agents:
+      queue: linux-x86_64
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build-x86_64
@@ -404,7 +427,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: csharp
-          run: csharp
     agents:
       queue: linux-x86_64
 
@@ -417,7 +439,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: js
-          run: js
     agents:
       queue: linux-x86_64
 
@@ -430,7 +451,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: java
-          run: java-smoketest
     agents:
       queue: linux-x86_64
 
@@ -443,7 +463,6 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: python
-          run: python
     agents:
       queue: linux-x86_64
 

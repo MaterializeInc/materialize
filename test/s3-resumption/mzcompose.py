@@ -7,9 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from os import environ
-from unittest.mock import patch
-
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Localstack,
@@ -20,7 +17,9 @@ from materialize.mzcompose.services import (
 
 SERVICES = [
     Localstack(),
-    Materialized(environment=["MZ_LOG_FILTER=dataflow::source::s3=trace,info"]),
+    Materialized(
+        environment_extra=["MZ_LOG_FILTER=dataflow::source::s3=trace,info"],
+    ),
     Toxiproxy(),
     Testdrive(default_timeout="600s"),
 ]

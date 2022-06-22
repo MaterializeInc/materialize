@@ -49,6 +49,15 @@ to Docker Hub; the `ci-test` image would generate several gigabytes of debug
 symbols!) Whenever possible, try to reproduce the CI failure locally to get a
 real backtrace.
 
+Build agents sometimes become corrupted and start failing all builds assigned to
+them (e.g., because they run out of disk space). If this happens, you can
+navigate to the build agent page in the navigation bar, find the affected agent,
+and press the "Stop agent" button to terminate the agent. A new agent will spin
+up automatically within a minute or two to replace the stopped agent, so feel
+free to be aggressive with stopping agents. You can determine which agent ran a
+given build job under the "Timeline" tab, listed above the build job's log
+output.
+
 ## Build caching
 
 We configure [`sccache`](https://github.com/mozilla/sccache) to write

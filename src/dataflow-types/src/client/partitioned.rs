@@ -13,22 +13,36 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::iter;
+use std::time::Duration;
+use std::time::Instant;
 
 use async_trait::async_trait;
-use differential_dataflow::Hashable;
 use futures::StreamExt;
 use timely::progress::frontier::MutableAntichain;
 use tokio_stream::StreamMap;
 use tracing::debug;
 use uuid::Uuid;
 
-use mz_ore::cast::CastFrom;
 use mz_repr::{Diff, GlobalId, Row};
 
 use crate::client::{
     ComputeCommand, ComputeResponse, GenericClient, PeekResponse, StorageCommand, StorageResponse,
 };
 use crate::{DataflowDescription, TailResponse};
+
+use super::Reconnect;
+
+const PARTITIONED_INITIAL_BACKOFF: Duration = Duration::from_millis(1);
+
+#[derive(Debug)]
+struct ReconnectionState {
+    /// Why we are trying to reconnect
+    reason: anyhow::Error,
+    /// When we should actually begin reconnecting
+    backoff_expiry: Instant,
+    /// How many parts we have successfully reconnected already
+    parts_reconnected: usize,
+}
 
 /// A client whose implementation is partitioned across a number of other
 /// clients.
@@ -43,10 +57,14 @@ where
 {
     /// The individual partitions representing per-worker clients.
     pub parts: Vec<P>,
-    /// The number of errors observed from underlying clients.
-    seen_errors: usize,
     /// The partitioned state.
     state: <(C, R) as Partitionable<C, R>>::PartitionedState,
+    /// When the current successful connection (if any) began
+    last_successful_connection: Option<Instant>,
+    /// The current backoff, for preventing crash loops
+    backoff: Duration,
+    /// `Some` if we are in the process of reconnecting to the parts
+    reconnect: Option<ReconnectionState>,
 }
 
 impl<P, C, R> Partitioned<P, C, R>
@@ -58,20 +76,67 @@ where
         Self {
             state: <(C, R) as Partitionable<C, R>>::new(parts.len()),
             parts,
-            seen_errors: 0,
+            last_successful_connection: None,
+            backoff: PARTITIONED_INITIAL_BACKOFF,
+            reconnect: None,
         }
+    }
+}
+
+impl<P, C, R> Partitioned<P, C, R>
+where
+    (C, R): Partitionable<C, R>,
+    P: Reconnect,
+{
+    async fn try_reconnect(&mut self) -> anyhow::Error {
+        // Having received an error from one part, we can assume all of them are dead, because of the shared-fate architecture.
+        // Disconnect from all of them and try again.
+        let reconnect_state = self
+            .reconnect
+            .as_mut()
+            .expect("Must set `self.reconnect` before calling this function.");
+
+        // We need to back off here, in case we're crashing because we were accidentally connected
+        // to two different generations of the cluster -- e.g., reconnected some
+        // partitions to a cluster that was already crashing, and some other ones
+        // to the new one that was being booted up to replace it.
+        //
+        // The time such a state can persist for is assumed to be bounded, so the
+        // backoff ensures we will eventually converge to a valid state.
+
+        tokio::time::sleep_until(reconnect_state.backoff_expiry.into()).await;
+        let prc = reconnect_state.parts_reconnected;
+        for part in &mut self.parts[prc..] {
+            part.reconnect().await;
+            reconnect_state.parts_reconnected += 1;
+        }
+
+        self.last_successful_connection = Some(Instant::now());
+        // 60 seconds is arbitrarily chosen as a maximum plausible backoff.
+        // If Timely processes aren't realizing their buddies are down within that time,
+        // something is seriously hosed with the network anyway and its unlikely things will work.
+        self.backoff = (self.backoff * 2).min(Duration::from_secs(60));
+
+        let ReconnectionState { reason, .. } = self
+            .reconnect
+            .take()
+            .expect("Asserted to exist at the beginning of the function");
+        reason
     }
 }
 
 #[async_trait]
 impl<P, C, R> GenericClient<C, R> for Partitioned<P, C, R>
 where
-    P: GenericClient<C, R>,
+    P: GenericClient<C, R> + Reconnect,
     (C, R): Partitionable<C, R>,
     C: fmt::Debug + Send,
     R: fmt::Debug + Send,
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
+        if self.reconnect.is_some() {
+            anyhow::bail!("client is reconnecting");
+        }
         let cmd_parts = self.state.split_command(cmd);
         for (shard, cmd_part) in self.parts.iter_mut().zip(cmd_parts) {
             shard.send(cmd_part).await?;
@@ -80,7 +145,9 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-        let parts = self.parts.len();
+        if self.reconnect.is_some() {
+            return Err(self.try_reconnect().await);
+        }
         let mut stream: StreamMap<_, _> = self
             .parts
             .iter_mut()
@@ -90,13 +157,25 @@ where
         while let Some((index, response)) = stream.next().await {
             match response {
                 Err(e) => {
-                    // Only emit one out of every `parts` errors. (If one
-                    // underlying client observes an error, we expect all of
-                    // the other clients to observe the same error.)
-                    self.seen_errors += 1;
-                    if (self.seen_errors % parts) == 0 {
-                        return Err(e);
+                    drop(stream);
+                    // If we were previously up for long enough (60 seconds chosen arbitrarily), we consider the previous connection to have
+                    // been successful and reset the backoff.
+                    if let Some(prev) = self.last_successful_connection {
+                        if Instant::now() - prev > Duration::from_secs(60) {
+                            self.backoff = PARTITIONED_INITIAL_BACKOFF;
+                        }
                     }
+
+                    for p in &mut self.parts {
+                        p.disconnect();
+                    }
+
+                    self.reconnect = Some(ReconnectionState {
+                        reason: e,
+                        backoff_expiry: Instant::now() + self.backoff,
+                        parts_reconnected: 0,
+                    });
+                    return Err(self.try_reconnect().await);
                 }
                 Ok(response) => {
                     if let Some(response) = self.state.absorb_response(index, response) {
@@ -189,26 +268,7 @@ where
     fn split_command(&mut self, command: StorageCommand<T>) -> Vec<StorageCommand<T>> {
         self.observe_command(&command);
 
-        match command {
-            StorageCommand::Append(appends) => {
-                let mut appends_parts = vec![Vec::with_capacity(appends.len()); self.parts];
-                for (id, updates, upper) in appends {
-                    let mut updates_parts = vec![Vec::new(); self.parts];
-                    for update in updates {
-                        let part = usize::cast_from(update.row.hashed()) % self.parts;
-                        updates_parts[part].push(update);
-                    }
-                    for (part, updates) in appends_parts.iter_mut().zip(updates_parts) {
-                        part.push((id, updates, upper.clone()));
-                    }
-                }
-                appends_parts
-                    .into_iter()
-                    .map(StorageCommand::Append)
-                    .collect()
-            }
-            command => vec![command; self.parts],
-        }
+        vec![command; self.parts]
     }
 
     fn absorb_response(
@@ -218,8 +278,8 @@ where
     ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
         match response {
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
-            StorageResponse::TimestampBindings(mut feedback) => {
-                for (id, changes) in feedback.changes.iter_mut() {
+            StorageResponse::FrontierUppers(mut list) => {
+                for (id, changes) in list.iter_mut() {
                     if let Some(frontier) = self.uppers.get_mut(id) {
                         let iter = frontier.update_iter(changes.drain());
                         changes.extend(iter);
@@ -231,15 +291,19 @@ where
                 // This is more verbose than `list.retain()` because that method cannot mutate
                 // its argument, and `is_empty()` may need to do this (as it is lazily compacted).
                 let mut cursor = 0;
-                while let Some((_id, changes)) = feedback.changes.get_mut(cursor) {
+                while let Some((_id, changes)) = list.get_mut(cursor) {
                     if changes.is_empty() {
-                        feedback.changes.swap_remove(cursor);
+                        list.swap_remove(cursor);
                     } else {
                         cursor += 1;
                     }
                 }
 
-                Some(Ok(StorageResponse::TimestampBindings(feedback)))
+                if list.is_empty() {
+                    None
+                } else {
+                    Some(Ok(StorageResponse::FrontierUppers(list)))
+                }
             }
             // TODO(guswynn): is this the correct implementation?
             StorageResponse::LinearizedTimestamps(feedback) => {
@@ -415,7 +479,7 @@ where
                     Some(Ok(ComputeResponse::FrontierUppers(list)))
                 }
             }
-            ComputeResponse::PeekResponse(uuid, response) => {
+            ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
                 // Incorporate new peek responses; awaiting all responses.
                 let entry = self
                     .peek_responses
@@ -439,7 +503,8 @@ where
                         };
                     }
                     self.peek_responses.remove(&uuid);
-                    Some(Ok(ComputeResponse::PeekResponse(uuid, response)))
+                    // We take the otel_ctx from the last peek, but they should all be the same
+                    Some(Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)))
                 } else {
                     None
                 }

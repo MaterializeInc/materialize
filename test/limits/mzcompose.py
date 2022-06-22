@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import argparse
 import contextlib
-import inspect
 import os
 import sys
 import tempfile
@@ -71,17 +71,21 @@ class Generator:
 
 
 class Connections(Generator):
+    COUNT = 25  # https://github.com/MaterializeInc/materialize/issues/12775
+
     @classmethod
     def body(cls) -> None:
         for i in cls.all():
             print(
-                f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialized-addr}}"
+                f"$ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}"
             )
         for i in cls.all():
             print(f"$ postgres-execute connection=conn{i}\nSELECT 1;\n")
 
 
 class Tables(Generator):
+    COUNT = 10  # https://github.com/MaterializeInc/materialize/issues/12773
+
     @classmethod
     def body(cls) -> None:
         for i in cls.all():
@@ -361,6 +365,8 @@ class Columns(Generator):
 
 
 class TablesCommaJoinNoCondition(Generator):
+    COUNT = 100  # https://github.com/MaterializeInc/materialize/issues/12806
+
     @classmethod
     def body(cls) -> None:
         print("> CREATE TABLE t1 (f1 INTEGER);")
@@ -603,9 +609,9 @@ class NestedCTEsIndependent(Generator):
         )
         table_list = ", ".join(f"a{i}" for i in cls.all())
         print(
-            f"> WITH a{1} AS (SELECT * FROM t1 WHERE f1 <= 1), {cte_list} SELECT * FROM a{cls.COUNT};"
+            f"> WITH a{1} AS (SELECT * FROM t1 WHERE f1 <= 1), {cte_list} SELECT * FROM {table_list};"
         )
-        print(f"{cls.COUNT}")
+        print(" ".join(f"{a}" for a in cls.all()))
 
 
 class NestedCTEsChained(Generator):
@@ -621,7 +627,6 @@ class NestedCTEsChained(Generator):
             f"a{i} AS (SELECT a{i-1}.f1 + 0 AS f1 FROM a{i-1}, t1 WHERE a{i-1}.f1 = t1.f1)"
             for i in cls.no_first()
         )
-        table_list = ", ".join(f"a{i}" for i in cls.all())
         print(
             f"> WITH a{1} AS (SELECT * FROM t1), {cte_list} SELECT * FROM a{cls.COUNT};"
         )
@@ -910,6 +915,7 @@ class Rows(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='60s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT})")
 
@@ -982,6 +988,7 @@ class RowsJoinLargeRetraction(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("> SET statement_timeout='60s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
 
@@ -1031,28 +1038,42 @@ SERVICES = [
 ]
 
 
-def run_test(c: Composition) -> None:
+def run_test(c: Composition, args: argparse.Namespace) -> None:
     c.up("testdrive", persistent=True)
 
-    for cls in Generator.__subclasses__():
+    scenarios = (
+        [globals()[args.scenario]] if args.scenario else Generator.__subclasses__()
+    )
+
+    for scenario in scenarios:
         with tempfile.NamedTemporaryFile(mode="w", dir=c.path) as tmp:
             with contextlib.redirect_stdout(tmp):
-                cls.generate()
+                scenario.generate()
                 sys.stdout.flush()
                 c.exec("testdrive", os.path.basename(tmp.name))
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
+    )
+
+    args = parser.parse_args()
+
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     c.up("materialized")
     c.wait_for_materialized()
 
-    run_test(c)
+    run_test(c, args)
 
 
 def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run all the limits tests against a multi-node, multi-replica cluster"""
+
+    parser.add_argument(
+        "--scenario", metavar="SCENARIO", type=str, help="Scenario to run."
+    )
 
     parser.add_argument(
         "--workers",
@@ -1066,7 +1087,7 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
 
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
+    c.wait_for_materialized()
 
     nodes = [
         Computed(
@@ -1095,13 +1116,14 @@ def workflow_cluster(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.sql(
             """
-            CREATE CLUSTER cluster1
-            REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100')),
-            REPLICA replica2 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'))
+            CREATE CLUSTER cluster1 REPLICAS (
+                replica1 (REMOTE ['computed_1_1:2100', 'computed_1_2:2100']),
+                replica2 (REMOTE ['computed_2_1:2100', 'computed_2_2:2100'])
+            )
         """
         )
 
-        run_test(c)
+        run_test(c, args)
 
 
 def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1141,7 +1163,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
     c.up("testdrive", persistent=True)
     c.up("materialized")
-    c.wait_for_materialized(service="materialized")
+    c.wait_for_materialized()
 
     # Construct the requied Computed instances and peer them into clusters
     computeds = []
@@ -1198,14 +1220,15 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     replica_name = f"replica_{cluster_id}_{replica_id}"
 
                     replica_definitions.append(
-                        f"REPLICA {replica_name} (REMOTE ("
-                        + ", ".join(f'"{n}:2100"' for n in nodes)
-                        + "))"
+                        f"{replica_name} (REMOTE ["
+                        + ", ".join(f"'{n}:2100'" for n in nodes)
+                        + "])"
                     )
 
                 c.sql(
-                    f"CREATE CLUSTER cluster_{cluster_id} "
+                    f"CREATE CLUSTER cluster_{cluster_id} REPLICAS ("
                     + ",".join(replica_definitions)
+                    + ")"
                 )
 
             # Construct some dataflows in each cluster

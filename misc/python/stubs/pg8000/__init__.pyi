@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from types import TracebackType
 from typing import Any, ContextManager, Optional, Sequence
 
 class Connection:
@@ -18,6 +19,12 @@ class Cursor(ContextManager):
     def execute(self, sql: str) -> None: ...
     def fetchall(self) -> Sequence[Sequence[Any]]: ...
     def fetchone(self) -> Sequence[Any]: ...
+    def __exit__(
+        self,
+        typ: Optional[type[BaseException]],
+        value: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> None: ...
 
 def connect(
     host: str = ...,

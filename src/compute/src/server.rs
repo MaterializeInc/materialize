@@ -10,40 +10,53 @@
 //! An interactive dataflow server.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use crossbeam_channel::TryRecvError;
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
+use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
+use timely::WorkerConfig;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, LocalClient, LocalComputeClient};
-use mz_dataflow_types::sources::AwsExternalId;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_storage::boundary::ComputeReplay;
 
+use crate::communication::initialize_networking;
 use crate::compute_state::ActiveComputeState;
 use crate::compute_state::ComputeState;
 use crate::SinkBaseMetrics;
 use crate::{TraceManager, TraceMetrics};
 
+/// Configuration of the cluster we will spin up
+pub struct CommunicationConfig {
+    /// Number of per-process worker threads
+    pub threads: usize,
+    /// Identity of this process
+    pub process: usize,
+    /// Addresses of all processes
+    pub addresses: Vec<String>,
+}
+
 /// Configures a dataflow server.
 pub struct Config {
     /// The number of worker threads to spawn.
     pub workers: usize,
-    /// The Timely configuration
-    pub timely_config: timely::Config,
-    /// Whether the server is running in experimental mode.
-    pub experimental_mode: bool,
+    /// Configuration for the communication mesh
+    pub comm_config: CommunicationConfig,
     /// Function to get wall time now.
     pub now: NowFn,
     /// Metrics registry through which dataflow metrics will be reported.
     pub metrics_registry: MetricsRegistry,
-    /// An external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id: AwsExternalId,
+    /// Configuration for sink connections.
+    // TODO: remove when sinks move to storage.
+    pub connection_context: ConnectionContext,
 }
 
 /// A handle to a running dataflow server.
@@ -54,12 +67,7 @@ pub struct Server {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-///
-/// * `create_boundary`: A function to obtain the worker-local boundary components.
-pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'static>(
-    config: Config,
-    create_boundary: B,
-) -> Result<(Server, LocalComputeClient), anyhow::Error> {
+pub fn serve(config: Config) -> Result<(Server, LocalComputeClient), anyhow::Error> {
     assert!(config.workers > 0);
 
     // Various metrics related things.
@@ -87,29 +95,41 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
 
     let tokio_executor = tokio::runtime::Handle::current();
 
-    let worker_guards = timely::execute::execute(config.timely_config, move |timely_worker| {
-        let timely_worker_index = timely_worker.index();
-        let compute_boundary = create_boundary(timely_worker_index);
-        let _tokio_guard = tokio_executor.enter();
-        let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
-            .take()
-            .unwrap();
-        let compute_response_tx = compute_response_channels.lock().unwrap()
-            [timely_worker_index % config.workers]
-            .take()
-            .unwrap();
-        let (_sink_metrics, _trace_metrics) = metrics_bundle.clone();
-        Worker {
-            timely_worker,
-            command_rx,
-            compute_state: None,
-            compute_boundary,
-            compute_response_tx,
-            metrics_bundle: metrics_bundle.clone(),
-        }
-        .run()
-    })
-    .map_err(|e| anyhow!("{}", e))?;
+    let (builders, other) =
+        initialize_networking(config.comm_config).map_err(|e| anyhow!("{e}"))?;
+
+    let persist_clients = PersistClientCache::new(&config.metrics_registry);
+    let persist_clients = Arc::new(tokio::sync::Mutex::new(persist_clients));
+
+    let worker_guards = execute_from(
+        builders,
+        other,
+        WorkerConfig::default(),
+        move |timely_worker| {
+            let timely_worker_index = timely_worker.index();
+            let _tokio_guard = tokio_executor.enter();
+            let command_rx = command_channels.lock().unwrap()[timely_worker_index % config.workers]
+                .take()
+                .unwrap();
+            let compute_response_tx = compute_response_channels.lock().unwrap()
+                [timely_worker_index % config.workers]
+                .take()
+                .unwrap();
+            let (_sink_metrics, _trace_metrics) = metrics_bundle.clone();
+            let persist_clients = Arc::clone(&persist_clients);
+            Worker {
+                timely_worker,
+                command_rx,
+                compute_state: None,
+                compute_response_tx,
+                metrics_bundle: metrics_bundle.clone(),
+                connection_context: config.connection_context.clone(),
+                persist_clients,
+            }
+            .run()
+        },
+    )
+    .map_err(|e| anyhow!("{e}"))?;
     let worker_threads = worker_guards
         .guards()
         .iter()
@@ -126,30 +146,26 @@ pub fn serve_boundary<CR: ComputeReplay, B: Fn(usize) -> CR + Send + Sync + 'sta
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A, CR>
-where
-    A: Allocate,
-    CR: ComputeReplay,
-{
+struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
     timely_worker: &'w mut TimelyWorker<A>,
     /// The channel from which commands are drawn.
     command_rx: crossbeam_channel::Receiver<ComputeCommand>,
     /// The state associated with rendering dataflows.
     compute_state: Option<ComputeState>,
-    /// The boundary between storage and compute layers, compute side.
-    compute_boundary: CR,
     /// The channel over which compute responses are reported.
     compute_response_tx: mpsc::UnboundedSender<ComputeResponse>,
     /// Metrics bundle.
     metrics_bundle: (SinkBaseMetrics, TraceMetrics),
+    /// Configuration for sink connections.
+    // TODO: remove when sinks move to storage.
+    pub connection_context: ConnectionContext,
+    /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+    /// This is intentionally shared between workers
+    persist_clients: Arc<tokio::sync::Mutex<PersistClientCache>>,
 }
 
-impl<'w, A, CR> Worker<'w, A, CR>
-where
-    A: Allocate + 'w,
-    CR: ComputeReplay,
-{
+impl<'w, A: Allocate> Worker<'w, A> {
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
         let mut shutdown = false;
@@ -186,8 +202,9 @@ where
             for cmd in cmds {
                 let mut should_drop_compute = false;
                 match &cmd {
-                    ComputeCommand::CreateInstance(_logging) => {
+                    ComputeCommand::CreateInstance(config) => {
                         self.compute_state = Some(ComputeState {
+                            replica_id: config.replica_id,
                             traces: TraceManager::new(
                                 self.metrics_bundle.1.clone(),
                                 self.timely_worker.index(),
@@ -201,6 +218,8 @@ where
                             reported_frontiers: HashMap::new(),
                             sink_metrics: self.metrics_bundle.0.clone(),
                             materialized_logger: None,
+                            connection_context: self.connection_context.clone(),
+                            persist_clients: Arc::clone(&self.persist_clients),
                         });
                     }
                     ComputeCommand::DropInstance => {
@@ -209,8 +228,19 @@ where
                     _ => (),
                 }
 
-                self.activate_compute().unwrap().handle_compute_command(cmd);
-
+                if self.compute_state.is_none() {
+                    // STOP-GAP for #12233 FIXME
+                    // We should never reach this branch, but due to a bug in the controller,
+                    // we don't start the protocol correctly and might send messages in the window
+                    // between establishing the connection and hydrating this instance. We need to
+                    // ignore these messages until the controller produces a correct instance of
+                    // the communication protocol. It seems that this is the case when we see a
+                    // `CreateInstance` command floating by, from which point on we're confident we
+                    // won't drop messages anymore.
+                    warn!("Received command without initialization (stop-gap for #12233): {cmd:?}");
+                } else {
+                    self.activate_compute().unwrap().handle_compute_command(cmd);
+                }
                 if should_drop_compute {
                     self.compute_state = None;
                 }
@@ -227,13 +257,12 @@ where
         }
     }
 
-    fn activate_compute(&mut self) -> Option<ActiveComputeState<A, CR>> {
+    fn activate_compute(&mut self) -> Option<ActiveComputeState<A>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
                 response_tx: &mut self.compute_response_tx,
-                boundary: &mut self.compute_boundary,
             })
         } else {
             None

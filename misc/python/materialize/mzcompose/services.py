@@ -11,13 +11,27 @@ import os
 import random
 from typing import Dict, List, Optional, Tuple, Union
 
+from packaging import version
+
 from materialize.mzcompose import Service, ServiceConfig
 
 DEFAULT_CONFLUENT_PLATFORM_VERSION = "7.0.3"
-DEFAULT_DEBEZIUM_VERSION = "1.9"
+
+# Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest
+# minor version in the release series, and minor versions have been known to
+# introduce breakage.
+#
+# Do not upgrade past v1.9.2.Final until debezium/debezium#3570 is resolved.
+DEFAULT_DEBEZIUM_VERSION = "1.9.2.Final"
+
 LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5", "1.6"]
 
-DEFAULT_MZ_VOLUMES = ["mzdata:/share/mzdata", "tmp:/share/tmp"]
+DEFAULT_MZ_VOLUMES = [
+    "mzdata:/mzdata",
+    "pgdata:/var/lib/postgresql",
+    "mydata:/var/lib/mysql-files",
+    "tmp:/share/tmp",
+]
 
 
 class Materialized(Service):
@@ -26,11 +40,11 @@ class Materialized(Service):
         name: str = "materialized",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
-        port: Union[int, str] = 6875,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
-        data_directory: str = "/share/mzdata",
-        timestamp_frequency: str = "100ms",
+        data_directory: str = "/mzdata",
+        timestamp_frequency: str = "1s",
+        workers: Optional[int] = None,
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         environment_extra: Optional[List[str]] = None,
@@ -42,7 +56,8 @@ class Materialized(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
+                "MZ_UNSAFE_MODE=1",
+                "MZ_EXPERIMENTAL=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -52,7 +67,6 @@ class Materialized(Service):
                 "MZ_LOG_FILTER",
                 "STORAGED_LOG_FILTER",
                 "COMPUTED_LOG_FILTER",
-                "MZ_PROCESS_LISTEN_HOST=0.0.0.0",
             ]
 
         if forward_aws_credentials:
@@ -70,16 +84,21 @@ class Materialized(Service):
         if volumes_extra:
             volumes.extend(volumes_extra)
 
-        guest_port = port
-        if isinstance(port, str) and ":" in port:
-            guest_port = port.split(":")[1]
-
         command_list = [
             f"--data-directory={data_directory}",
-            f"--listen-addr 0.0.0.0:{guest_port}",
-            "--experimental",
             f"--timestamp-frequency {timestamp_frequency}",
         ]
+
+        config_ports = [6875, 5432, *extra_ports, 6876]
+
+        if isinstance(image, str) and ":v" in image:
+            requested_version = image.split(":v")[1]
+            if version.parse(requested_version) < version.parse("0.27.0"):
+                # HTTP and SQL ports in older versions of Materialize are the same
+                config_ports.pop()
+
+        if workers:
+            command_list.append(f"--workers {workers}")
 
         if options:
             if isinstance(options, str):
@@ -91,8 +110,7 @@ class Materialized(Service):
             {"image": image} if image else {"mzbuild": "materialized"}
         )
 
-        if hostname:
-            config["hostname"] = hostname
+        config["hostname"] = hostname or name
 
         # Depending on the docker-compose version, this may either work or be ignored with a warning
         # Unfortunately no portable way of setting the memory limit is known
@@ -103,7 +121,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_on or [],
                 "command": " ".join(command_list),
-                "ports": [port, *extra_ports],
+                "ports": config_ports,
                 "environment": environment,
                 "volumes": volumes,
             }
@@ -124,14 +142,12 @@ class Computed(Service):
         options: Optional[Union[str, List[str]]] = "",
         environment: Optional[List[str]] = None,
         volumes: Optional[List[str]] = None,
-        storage_addr: Optional[str] = "materialized:2101",
         workers: Optional[int] = None,
     ) -> None:
         if environment is None:
             environment = [
                 "COMPUTED_LOG_FILTER",
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
             ]
 
         if volumes is None:
@@ -156,16 +172,14 @@ class Computed(Service):
             else:
                 command_list.extend(options)
 
-        if storage_addr:
-            command_list.append(f"--storage-addr {storage_addr}")
-
         if workers:
             command_list.append(f"--workers {workers}")
 
         if peers:
-            command_list.append(f"--processes {len(peers)}")
             command_list.append(f"--process {peers.index(name)}")
             command_list.append(" ".join(f"{peer}:2102" for peer in peers))
+
+        command_list.append("--secrets-path=/mzdata/secrets")
 
         config.update(
             {
@@ -335,13 +349,22 @@ class MySql(Service):
         mysql_root_password: str,
         name: str = "mysql",
         image: str = "mysql:8.0.27",
-        command: str = "--default-authentication-plugin=mysql_native_password",
+        command: Optional[str] = None,
         port: int = 3306,
         environment: Optional[List[str]] = None,
+        volumes: list[str] = ["mydata:/var/lib/mysql-files"],
     ) -> None:
         if environment is None:
             environment = []
         environment.append(f"MYSQL_ROOT_PASSWORD={mysql_root_password}")
+
+        if not command:
+            command = "\n".join(
+                [
+                    "--default-authentication-plugin=mysql_native_password",
+                    "--secure-file-priv=/var/lib/mysql-files",
+                ]
+            )
 
         super().__init__(
             name=name,
@@ -350,6 +373,7 @@ class MySql(Service):
                 "ports": [port],
                 "environment": environment,
                 "command": command,
+                "volumes": volumes,
             },
         )
 
@@ -492,12 +516,12 @@ class Testdrive(Service):
         self,
         name: str = "testdrive",
         mzbuild: str = "testdrive",
-        materialized_url: str = "postgres://materialize@materialized:6875",
-        materialized_params: Dict[str, str] = {},
+        materialize_url: str = "postgres://materialize@materialized:6875",
+        materialize_params: Dict[str, str] = {},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: Optional[int] = None,
         no_reset: bool = False,
-        default_timeout: str = "30s",
+        default_timeout: str = "120s",
         seed: Optional[int] = None,
         consistent_seed: bool = False,
         validate_data_dir: bool = True,
@@ -517,7 +541,6 @@ class Testdrive(Service):
             environment = [
                 "TMPDIR=/share/tmp",
                 "MZ_SOFT_ASSERTIONS=1",
-                "RUST_BACKTRACE=1",
                 # Please think twice before forwarding additional environment
                 # variables from the host, as it's easy to write tests that are
                 # then accidentally dependent on the state of the host machine.
@@ -541,7 +564,7 @@ class Testdrive(Service):
                 "testdrive",
                 f"--kafka-addr={kafka_url}",
                 "--schema-registry-url=http://schema-registry:8081",
-                f"--materialized-url={materialized_url}",
+                f"--materialize-url={materialize_url}",
             ]
 
         if aws_region:
@@ -551,18 +574,18 @@ class Testdrive(Service):
             entrypoint.append(f"--aws-endpoint={aws_endpoint}")
 
         if validate_data_dir:
-            entrypoint.append("--validate-data-dir=/share/mzdata")
+            entrypoint.append("--validate-data-dir=/mzdata")
 
         if validate_postgres_stash:
             entrypoint.append(
-                "--validate-postgres-stash=postgres://postgres:postgres@postgres/postgres"
+                "--validate-postgres-stash=postgres://materialize@materialized/materialize?options=--search_path=catalog"
             )
 
         if no_reset:
             entrypoint.append("--no-reset")
 
-        for (k, v) in materialized_params.items():
-            entrypoint.append(f"--materialized-param={k}={v}")
+        for (k, v) in materialize_params.items():
+            entrypoint.append(f"--materialize-param={k}={v}")
 
         entrypoint.append(f"--default-timeout={default_timeout}")
 
@@ -619,12 +642,7 @@ class SqlLogicTest(Service):
         name: str = "sqllogictest-svc",
         mzbuild: str = "sqllogictest",
         environment: List[str] = [
-            "RUST_BACKTRACE=full",
-            "PGUSER=postgres",
-            "PGHOST=postgres",
-            "PGPASSWORD=postgres",
             "MZ_SOFT_ASSERTIONS=1",
-            "RUST_BACKTRACE=1",
         ],
         volumes: List[str] = ["../..:/workdir"],
         depends_on: List[str] = ["postgres"],
@@ -663,5 +681,16 @@ class Kgen(Service):
                 "mzbuild": mzbuild,
                 "depends_on": depends_on,
                 "entrypoint": entrypoint,
+            },
+        )
+
+
+class Metabase(Service):
+    def __init__(self, name: str = "metabase") -> None:
+        super().__init__(
+            name=name,
+            config={
+                "image": "metabase/metabase:v0.41.4",
+                "ports": ["3000"],
             },
         )

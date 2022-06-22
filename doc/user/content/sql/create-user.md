@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.7.0 />}}
-
 `CREATE USER` creates a new [role](/sql/create-role).
 
 ## Syntax

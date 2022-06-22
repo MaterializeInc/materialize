@@ -1,5 +1,5 @@
 ---
-title: "Materialize as a Reactive Database"
+title: "Materialize as a reactive database"
 description: "  "
 draft: true
 menu:

@@ -10,7 +10,6 @@
 use std::time::Duration;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::sources::AwsExternalId;
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::catalog::storage;
@@ -20,14 +19,10 @@ use crate::catalog::storage;
 pub struct Config<'a, S> {
     /// The connection to the stash.
     pub storage: storage::Connection<S>,
-    /// Whether to enable experimental mode.
-    pub experimental_mode: Option<bool>,
+    /// Whether to enable unsafe mode.
+    pub unsafe_mode: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// An [External ID][] to use for all AWS AssumeRole operations.
-    ///
-    /// [External ID]: https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html
-    pub aws_external_id: AwsExternalId,
     /// Timestamp frequency to use for CREATE SOURCE
     pub timestamp_frequency: Duration,
     /// Function to generate wall clock now; can be mocked.

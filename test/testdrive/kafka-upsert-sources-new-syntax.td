@@ -264,19 +264,19 @@ $ set keyschema2={
     "name": "Key2",
     "fields": [
         {"name": "f3", "type": ["null", "string"]},
-        {"name": "f1", "type": ["null", "string"]}
+        {"name": "f4", "type": ["null", "string"]}
     ]
   }
 
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
-{"f3": {"string": "fire"}, "f1": {"string": "yang"}} {"f1": "dog", "f2": 42}
-{"f3": null, "f1": {"string": "yin"}} {"f1": "sheep", "f2": 53}
-{"f3": {"string": "water"}, "f1": null} {"f1":"plesiosaur", "f2": 224}
-{"f3": {"string": "earth"}, "f1": {"string": "dao"}} {"f1": "turtle", "f2": 34}
-{"f3": null, "f1": {"string": "yin"}} {"f1": "sheep", "f2": 54}
-{"f3": {"string": "earth"}, "f1": {"string": "dao"}} {"f1": "snake", "f2": 68}
-{"f3": {"string": "water"}, "f1": null} {"f1": "crocodile", "f2": 7}
-{"f3": {"string": "earth"}, "f1":{"string": "dao"}}
+{"f3": {"string": "fire"}, "f4": {"string": "yang"}} {"f1": "dog", "f2": 42}
+{"f3": null, "f4": {"string": "yin"}} {"f1": "sheep", "f2": 53}
+{"f3": {"string": "water"}, "f4": null} {"f1":"plesiosaur", "f2": 224}
+{"f3": {"string": "earth"}, "f4": {"string": "dao"}} {"f1": "turtle", "f2": 34}
+{"f3": null, "f4": {"string": "yin"}} {"f1": "sheep", "f2": 54}
+{"f3": {"string": "earth"}, "f4": {"string": "dao"}} {"f1": "snake", "f2": 68}
+{"f3": {"string": "water"}, "f4": null} {"f1": "crocodile", "f2": 7}
+{"f3": {"string": "earth"}, "f4":{"string": "dao"}}
 
 > CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
@@ -303,21 +303,21 @@ water     <null>  crocodile      7
   ENVELOPE UPSERT
 
 > SELECT * FROM realtimeavroavro_ff
-f3        f1        f1           f2
+f3        f4        f1           f2
 -----------------------------------
 <null>    yin       sheep        54
 water     <null>    crocodile    7
 
 # ensure that having deletion on a key that never existed does not break anything
 $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${keyschema2} schema=${schema} publish=true
-{"f3": {"string": "fire"}, "f1": {"string": "yin"}}
-{"f3": {"string": "air"}, "f1":{"string": "qi"}} {"f1": "pigeon", "f2": 10}
-{"f3": {"string": "air"}, "f1":{"string": "qi"}} {"f1": "owl", "f2": 15}
-{"f3": {"string": "earth"}, "f1": {"string": "dao"}} {"f1": "rhinoceros", "f2": 211}
-{"f3": {"string": "air"}, "f1":{"string": "qi"}} {"f1": "chicken", "f2": 47}
-{"f3": null, "f1":{"string": "yin"}}
-{"f3": null, "f1":{"string": "yin"}} {"f1":"dog", "f2": 243}
-{"f3": {"string": "water"}, "f1": null}
+{"f3": {"string": "fire"}, "f4": {"string": "yin"}}
+{"f3": {"string": "air"}, "f4":{"string": "qi"}} {"f1": "pigeon", "f2": 10}
+{"f3": {"string": "air"}, "f4":{"string": "qi"}} {"f1": "owl", "f2": 15}
+{"f3": {"string": "earth"}, "f4": {"string": "dao"}} {"f1": "rhinoceros", "f2": 211}
+{"f3": {"string": "air"}, "f4":{"string": "qi"}} {"f1": "chicken", "f2": 47}
+{"f3": null, "f4":{"string": "yin"}}
+{"f3": null, "f4":{"string": "yin"}} {"f1":"dog", "f2": 243}
+{"f3": {"string": "water"}, "f4": null}
 
 > select * from realtimeavroavro_view
 f3         f4          f1             f2
@@ -510,7 +510,7 @@ librairie 10
   ENVELOPE UPSERT
 
 > SELECT * FROM include_metadata
-f3        f1        f1           f2   partition  offset
+f3        f4        f1           f2   partition  offset
 -------------------------------------------------------
 <null>    yin       dog          243   0         15
 air       qi        chicken      47    0         13

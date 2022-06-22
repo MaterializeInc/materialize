@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+// NOTE(benesch): this is presently disabled because it needs to be rewritten
+// for the persist-backed timestamp bindings.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +68,7 @@ impl Action for VerifyTimestampCompactionAction {
             })
             .await?;
         // Skip if we don't know where the timestamp stash is or the catalog is.
-        if item_id.is_none() || state.materialized_data_path.is_none() {
+        if item_id.is_none() || state.materialize_data_path.is_none() {
             println!(
                 "Skipping timestamp binding compaction verification for {:?}.",
                 self.source
@@ -74,7 +77,7 @@ impl Action for VerifyTimestampCompactionAction {
         } else {
             // Unwrap is safe because this is known to be Some.
             let item_id = item_id.unwrap()?;
-            let path = state.materialized_data_path.as_ref().unwrap();
+            let path = state.materialize_data_path.as_ref().unwrap();
             let temp_mzdata = mzdata_copy(path)?;
             let path = temp_mzdata.path();
             let initial_highest_base = Arc::new(AtomicU64::new(u64::MAX));

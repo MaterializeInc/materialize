@@ -207,8 +207,11 @@ impl<'a> ViewExplanation<'a> {
                         " {}",
                         separated(
                             " ",
-                            rows.iter()
-                                .flat_map(|(row, count)| (0..*count).map(move |_| row))
+                            rows.iter().map(|(row, count)| if *count == 1 {
+                                format!("{row}")
+                            } else {
+                                format!("({row} x {count})")
+                            })
                         )
                     )?,
                     Ok(_) => writeln!(f)?,

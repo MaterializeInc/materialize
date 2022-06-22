@@ -23,7 +23,7 @@ exclude = "/venv/"
 explicit_package_bases = true
 namespace_packages = true
 pretty = true
-python_version = "3.8"
+python_version = "3.9"
 
 # Lint rules.
 allow_redefinition = true

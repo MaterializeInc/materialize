@@ -9,11 +9,14 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
+use chrono::Utc;
 use clap::ArgEnum;
+use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container, ContainerPort, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
@@ -25,12 +28,17 @@ use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::client::Client;
 use kube::config::{Config, KubeConfigOptions};
 use kube::error::Error;
+use kube::runtime::{watcher, WatchStreamExt};
 use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
-use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
+use mz_orchestrator::{
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceStatus,
+};
 
-const FIELD_MANAGER: &str = "materialized";
+const FIELD_MANAGER: &str = "environmentd";
+const SECRETS_MOUNT_PATH: &str = "/secrets";
 
 /// Configures a [`KubernetesOrchestrator`].
 #[derive(Debug, Clone)]
@@ -113,9 +121,6 @@ impl KubernetesOrchestrator {
 }
 
 impl Orchestrator for KubernetesOrchestrator {
-    fn listen_host(&self) -> &str {
-        "0.0.0.0"
-    }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         Arc::new(NamespacedKubernetesOrchestrator {
             service_api: Api::default_namespaced(self.client.clone()),
@@ -148,6 +153,18 @@ impl fmt::Debug for NamespacedKubernetesOrchestrator {
     }
 }
 
+impl NamespacedKubernetesOrchestrator {
+    /// Return a `ListParams` instance that limits results to the namespace
+    /// assigned to this orchestrator.
+    fn list_params(&self) -> ListParams {
+        let ns_selector = format!(
+            "environmentd.materialize.cloud/namespace={}",
+            self.namespace
+        );
+        ListParams::default().labels(&ns_selector)
+    }
+}
+
 #[async_trait]
 impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
     async fn ensure_service(
@@ -168,22 +185,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut labels = BTreeMap::new();
         for (key, value) in labels_in {
             labels.insert(
-                format!("{}.materialized.materialize.cloud/{}", self.namespace, key),
+                format!("{}.environmentd.materialize.cloud/{}", self.namespace, key),
                 value,
             );
         }
         for port in &ports_in {
             labels.insert(
-                format!("materialized.materialize.cloud/port-{}", port.name),
+                format!("environmentd.materialize.cloud/port-{}", port.name),
                 "true".into(),
             );
         }
         labels.insert(
-            "materialized.materialize.cloud/namespace".into(),
+            "environmentd.materialize.cloud/namespace".into(),
             self.namespace.clone(),
         );
         labels.insert(
-            "materialized.materialize.cloud/service-id".into(),
+            "environmentd.materialize.cloud/service-id".into(),
             id.into(),
         );
         for (key, value) in &self.config.service_labels {
@@ -244,11 +261,15 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 )
             })
             .collect::<Vec<_>>();
-
         let ports = ports_in
             .iter()
             .map(|p| (p.name.clone(), p.port_hint))
             .collect::<HashMap<_, _>>();
+        let peers = hosts
+            .iter()
+            .map(|host| (host.clone(), ports.clone()))
+            .collect::<Vec<_>>();
+
         let mut node_selector: BTreeMap<String, String> = self
             .config
             .service_node_selector
@@ -261,10 +282,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 availability_zone,
             );
         }
-        let hosts_ports = hosts
-            .iter()
-            .map(|host| (host.clone(), ports.clone()))
-            .collect::<Vec<_>>();
+        let mut args = args(&ServiceAssignments {
+            listen_host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            ports: &ports,
+            index: None,
+            peers: &peers,
+        });
+        args.push(format!("--secrets-path={SECRETS_MOUNT_PATH}"));
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
@@ -275,7 +299,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 containers: vec![Container {
                     name: "default".into(),
                     image: Some(image),
-                    args: Some(args(&hosts_ports, &ports, None)),
+                    args: Some(args),
                     image_pull_policy: Some(self.config.image_pull_policy.to_string()),
                     ports: Some(
                         ports_in
@@ -292,7 +316,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                         ..Default::default()
                     }),
                     volume_mounts: Some(vec![VolumeMount {
-                        mount_path: "/secrets".to_string(),
+                        mount_path: SECRETS_MOUNT_PATH.into(),
                         name: volume_name.clone(),
                         ..Default::default()
                     }]),
@@ -308,7 +332,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
         let pod_template_hash = format!("{:x}", hasher.finalize());
-        let pod_template_hash_annotation = "materialized.materialize.cloud/pod-template-hash";
+        let pod_template_hash_annotation = "environmentd.materialize.cloud/pod-template-hash";
         pod_template_spec
             .metadata
             .as_mut()
@@ -397,7 +421,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
-        let stateful_sets = self.stateful_set_api.list(&ListParams::default()).await?;
+        let stateful_sets = self.stateful_set_api.list(&self.list_params()).await?;
         let name_prefix = format!("{}-", self.namespace);
         Ok(stateful_sets
             .into_iter()
@@ -409,6 +433,48 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     .map(Into::into)
             })
             .collect())
+    }
+
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
+            let process_id = pod.name().split('-').last().unwrap().parse()?;
+            let service_id_label = "environmentd.materialize.cloud/service-id";
+            let service_id = pod
+                .labels()
+                .get(service_id_label)
+                .ok_or_else(|| anyhow!("missing label: {service_id_label}"))?
+                .clone();
+
+            let (pod_ready, last_probe_time) = pod
+                .status
+                .and_then(|status| status.conditions)
+                .and_then(|conditions| conditions.into_iter().find(|c| c.type_ == "Ready"))
+                .map(|c| (c.status == "True", c.last_probe_time))
+                .unwrap_or((false, None));
+
+            let status = if pod_ready {
+                ServiceStatus::Ready
+            } else {
+                ServiceStatus::NotReady
+            };
+            let time = if let Some(time) = last_probe_time {
+                time.0
+            } else {
+                Utc::now()
+            };
+
+            Ok(ServiceEvent {
+                service_id,
+                process_id,
+                status,
+                time,
+            })
+        }
+
+        let stream = watcher(self.pod_api.clone(), self.list_params())
+            .touched_objects()
+            .map(|object| object.map_err(Into::into).and_then(into_service_event));
+        Box::pin(stream)
     }
 }
 

@@ -105,8 +105,8 @@ impl SourceSpecificMetrics {
 
 #[derive(Clone, Debug)]
 pub(super) struct PartitionSpecificMetrics {
-    pub(super) offset_ingested: IntGaugeVec,
-    pub(super) offset_received: IntGaugeVec,
+    pub(super) offset_ingested: UIntGaugeVec,
+    pub(super) offset_received: UIntGaugeVec,
     pub(super) closed_ts: UIntGaugeVec,
     pub(super) messages_ingested: GenericCounterVec<AtomicI64>,
     pub(super) partition_offset_max: IntGaugeVec,

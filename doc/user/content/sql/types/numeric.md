@@ -1,5 +1,5 @@
 ---
-title: "numeric Data Type"
+title: "numeric type"
 description: "Expresses an exact number with user-defined precision and scale"
 menu:
   main:

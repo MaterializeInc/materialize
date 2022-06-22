@@ -22,6 +22,15 @@ import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.client;
 
+service ProtoCompute {
+    rpc CommandResponseStream (stream ProtoComputeCommand) returns (stream ProtoComputeResponse);
+}
+
+message ProtoInstanceConfig {
+    mz_dataflow_types.logging.ProtoLoggingConfig logging = 1;
+    uint64 replica_id = 2;
+}
+
 message ProtoPeek {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_repr.row.ProtoRow key = 2;
@@ -29,13 +38,11 @@ message ProtoPeek {
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
+    optional uint64 target_replica = 7;
+    map<string, string> otel_ctx = 8;
 }
 
 message ProtoComputeCommand {
-    message ProtoCreateInstance {
-        mz_dataflow_types.logging.ProtoLoggingConfig logging = 1;
-    }
-
     message ProtoCreateDataflows {
         repeated mz_dataflow_types.types.ProtoDataflowDescription dataflows = 1;
     }
@@ -54,11 +61,44 @@ message ProtoComputeCommand {
     }
 
     oneof kind {
-        ProtoCreateInstance create_instance = 1;
+        ProtoInstanceConfig create_instance = 1;
         google.protobuf.Empty drop_instance = 2;
         ProtoCreateDataflows create_dataflows = 3;
         ProtoAllowCompaction allow_compaction = 4;
         ProtoPeek peek = 5;
         ProtoCancelPeeks cancel_peeks = 6;
+    }
+}
+
+message ProtoComputeResponse {
+    message ProtoUpdate {
+        uint64 timestamp = 1;
+        int64 diff = 2;
+    }
+
+    message ProtoTrace {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        repeated ProtoUpdate updates = 2;
+    }
+
+    message ProtoFrontierUppersKind {
+        repeated ProtoTrace traces = 1;
+    }
+
+    message ProtoPeekResponseKind {
+        mz_repr.proto.ProtoU128 id = 1;
+        mz_dataflow_types.types.ProtoPeekResponse resp = 2;
+    map<string, string> otel_ctx = 3;
+    }
+
+    message ProtoTailResponseKind {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        mz_dataflow_types.types.ProtoTailResponse resp = 2;
+    }
+
+    oneof kind {
+        ProtoFrontierUppersKind frontier_uppers = 1;
+        ProtoPeekResponseKind peek_response = 2;
+        ProtoTailResponseKind tail_response = 3;
     }
 }

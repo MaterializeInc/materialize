@@ -12,17 +12,18 @@
 //! See row.proto for details.
 
 use bytes::BufMut;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{Datelike, Timelike};
 use dec::Decimal;
-use mz_ore::cast::CastFrom;
-use mz_persist_types::Codec;
 use prost::Message;
 use uuid::Uuid;
+
+use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::numeric::Numeric;
 use crate::chrono::{ProtoNaiveDate, ProtoNaiveTime};
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::{ProtoType, RustType, TryFromProtoError};
 use crate::row::proto_datum::DatumType;
 use crate::row::{
     ProtoArray, ProtoArrayDimension, ProtoDatum, ProtoDatumOther, ProtoDict, ProtoDictElement,
@@ -44,7 +45,7 @@ impl Codec for Row {
     where
         B: BufMut,
     {
-        ProtoRow::from(self)
+        self.into_proto()
             .encode(buf)
             .expect("no required fields means no initialization errors");
     }
@@ -82,7 +83,7 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
             }),
             Datum::Timestamp(x) => DatumType::Timestamp(x.into_proto()),
             Datum::TimestampTz(x) => DatumType::TimestampTz(x.into_proto()),
-            Datum::Interval(x) => DatumType::Interval((&x).into()),
+            Datum::Interval(x) => DatumType::Interval(x.into_proto()),
             Datum::Bytes(x) => DatumType::Bytes(x.to_vec()),
             Datum::String(x) => DatumType::String(x.to_owned()),
             Datum::Array(x) => DatumType::Array(ProtoArray {
@@ -143,13 +144,6 @@ impl<'a> From<Datum<'a>> for ProtoDatum {
     }
 }
 
-impl From<&Row> for ProtoRow {
-    fn from(x: &Row) -> Self {
-        let datums = x.iter().map(|x| x.into()).collect();
-        ProtoRow { datums }
-    }
-}
-
 impl RowPacker<'_> {
     fn try_push_proto(&mut self, x: &ProtoDatum) -> Result<(), String> {
         match &x.datum_type {
@@ -192,21 +186,15 @@ impl RowPacker<'_> {
                 let u = Uuid::from_slice(&x).map_err(|err| err.to_string())?;
                 self.push(Datum::Uuid(u));
             }
-            Some(DatumType::Date(x)) => self.push(Datum::Date(
-                NaiveDate::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
-            Some(DatumType::Time(x)) => self.push(Datum::Time(
-                NaiveTime::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
-            Some(DatumType::Timestamp(x)) => self.push(Datum::Timestamp(
-                NaiveDateTime::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
-            Some(DatumType::TimestampTz(x)) => self.push(Datum::TimestampTz(
-                DateTime::<Utc>::from_proto(x.clone()).map_err(|e| e.to_string())?,
-            )),
+            Some(DatumType::Date(x)) => self.push(Datum::Date(x.clone().into_rust()?)),
+            Some(DatumType::Time(x)) => self.push(Datum::Time(x.clone().into_rust()?)),
+            Some(DatumType::Timestamp(x)) => self.push(Datum::Timestamp(x.clone().into_rust()?)),
+            Some(DatumType::TimestampTz(x)) => {
+                self.push(Datum::TimestampTz(x.clone().into_rust()?))
+            }
             Some(DatumType::Interval(x)) => self.push(Datum::Interval(
                 x.clone()
-                    .try_into()
+                    .into_rust()
                     .map_err(|e: TryFromProtoError| e.to_string())?,
             )),
             Some(DatumType::List(x)) => self.push_list_with(|row| -> Result<(), String> {
@@ -258,11 +246,13 @@ impl RowPacker<'_> {
     }
 }
 
+/// TODO: remove this in favor of [`RustType::from_proto`].
 impl TryFrom<&ProtoRow> for Row {
     type Error = String;
 
     fn try_from(x: &ProtoRow) -> Result<Self, Self::Error> {
         // TODO: Try to pre-size this.
+        // see https://github.com/MaterializeInc/materialize/issues/12631
         let mut row = Row::default();
         let mut packer = row.packer();
         for d in x.datums.iter() {
@@ -272,13 +262,23 @@ impl TryFrom<&ProtoRow> for Row {
     }
 }
 
-impl TryFrom<ProtoRow> for Row {
-    type Error = TryFromProtoError;
+impl RustType<ProtoRow> for Row {
+    fn into_proto(self: &Self) -> ProtoRow {
+        let datums = self.iter().map(|x| x.into()).collect();
+        ProtoRow { datums }
+    }
 
-    fn try_from(x: ProtoRow) -> Result<Self, Self::Error> {
-        //TODO(lluki): Revisit this when we fix #12125
-        (&x).try_into()
-            .map_err(TryFromProtoError::RowConversionError)
+    fn from_proto(proto: ProtoRow) -> Result<Self, TryFromProtoError> {
+        // TODO: Try to pre-size this.
+        // see https://github.com/MaterializeInc/materialize/issues/12631
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        for d in proto.datums.iter() {
+            packer
+                .try_push_proto(d)
+                .map_err(TryFromProtoError::RowConversionError)?;
+        }
+        Ok(row)
     }
 }
 

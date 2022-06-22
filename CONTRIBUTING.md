@@ -21,8 +21,7 @@ Prospective code contributors might find the [good first issue tag](https://gith
 Bug reports are welcome, and the most effective way to report a bug is to [file
 an issue](https://github.com/MaterializeInc/materialize/issues/new/choose). As
 Materialize is under rapid development, it is helpful if you report the version
-of Materialize that you are using, and if it a crash report, the stack trace
-printed from the `materialized` binary.
+of Materialize that you are using, and if it a crash report, the stack trace.
 
 ### Landing PRs + communicating changes
 

@@ -1,5 +1,0 @@
-0:tikv_jemallocator:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms
-1:materialized:default,jemalloc,tikv-jemallocator
-2:mz_sqllogictest:
-1:mz_compute:default,jemalloc,tikv-jemallocator
-1::default,jemalloc,tikv-jemallocator

@@ -3,21 +3,21 @@ name = "mz-perf-kinesis"
 description = "Tool to test Materialize's performance with AWS Kinesis."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
-aws-config = { version = "0.10.1", default-features = false, features = ["native-tls"] }
-aws-sdk-kinesis = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"] }
+anyhow = "1.0.58"
+aws-config = { version = "0.13.0", default-features = false, features = ["native-tls"] }
+aws-sdk-kinesis = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 bytes = "1.1.0"
-clap = { version = "3.1.15", features = ["derive"] }
+clap = { version = "3.2.5", features = ["derive"] }
 futures = "0.3.21"
 mz-kinesis-util = { path = "../../src/kinesis-util" }
 mz-ore = { path = "../../src/ore", features = ["task"] }
 mz-test-util = { path = "../test-util" }
 rand = "0.8.5"
-tokio = "1.17.0"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tracing = "0.1.34"
+tokio = "1.19.2"
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tracing = "0.1.35"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter"] }

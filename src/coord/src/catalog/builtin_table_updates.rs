@@ -7,12 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_dataflow_types::client::{ComputeInstanceId, ConcreteComputeInstanceReplicaConfig};
-use mz_dataflow_types::sinks::KafkaSinkConnector;
-use mz_dataflow_types::sources::ConnectorInner;
+use chrono::{DateTime, NaiveDateTime, Utc};
+
+use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
+use mz_dataflow_types::client::controller::ComputeInstanceStatus;
+use mz_dataflow_types::client::{
+    ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
+};
+use mz_dataflow_types::sinks::KafkaSinkConnection;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql::ast::{CreateIndexStatement, Statement};
 use mz_sql::catalog::{CatalogDatabase, CatalogType, TypeCategory};
@@ -20,14 +26,14 @@ use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpeci
 use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
-    MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS, MZ_COLUMNS, MZ_CONNECTORS,
-    MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES,
-    MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES,
-    MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
+    MZ_CLUSTER_REPLICAS_STATUS, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES,
+    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES,
+    MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
-    CatalogItem, CatalogState, Connector, Func, Index, Sink, SinkConnector, SinkConnectorState,
-    Source, Type, View, SYSTEM_CONN_ID,
+    CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, Sink, SinkConnection,
+    SinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
 
 /// An update to a built-in table.
@@ -47,7 +53,8 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_DATABASES),
             row: Row::pack_slice(&[
-                Datum::Int64(id.0),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(id.0 as i64),
                 Datum::UInt32(database.oid),
                 Datum::String(database.name()),
             ]),
@@ -71,9 +78,11 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_SCHEMAS),
             row: Row::pack_slice(&[
-                Datum::Int64(schema_id.0),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(schema_id.0 as i64),
                 Datum::UInt32(schema.oid),
-                Datum::from(database_id),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::from(database_id.map(|id| id as i64)),
                 Datum::String(&schema.name.schema),
             ]),
             diff,
@@ -85,7 +94,8 @@ impl CatalogState {
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_ROLES),
             row: Row::pack_slice(&[
-                Datum::Int64(role.id),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(role.id as i64),
                 Datum::UInt32(role.oid),
                 Datum::String(&name),
             ]),
@@ -101,7 +111,8 @@ impl CatalogState {
         let id = self.compute_instances_by_name[name];
         BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_CLUSTERS),
-            row: Row::pack_slice(&[Datum::Int64(id), Datum::String(&name)]),
+            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+            row: Row::pack_slice(&[Datum::Int64(id as i64), Datum::String(&name)]),
             diff,
         }
     }
@@ -118,23 +129,52 @@ impl CatalogState {
 
         let (size, az) = match &replica.config {
             ConcreteComputeInstanceReplicaConfig::Managed {
-                size_config,
+                size_config: _,
+                size_name,
                 availability_zone,
-            } => (
-                Some(format!("{}-{}", size_config.scale, size_config.workers)),
-                availability_zone.as_deref(),
-            ),
+            } => (Some(&**size_name), availability_zone.as_deref()),
             ConcreteComputeInstanceReplicaConfig::Remote { .. } => (None, None),
         };
 
         BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS),
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_BASE),
             row: Row::pack_slice(&[
-                Datum::Int64(compute_instance_id),
-                Datum::Int64(id),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(compute_instance_id as i64),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(id as i64),
                 Datum::String(&name),
-                Datum::from(size.as_deref()),
+                Datum::from(size),
                 Datum::from(az),
+            ]),
+            diff,
+        }
+    }
+
+    pub(super) fn pack_compute_instance_status_update(
+        &self,
+        compute_instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        process_id: ProcessId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let event = self
+            .try_get_compute_instance_status(compute_instance_id, replica_id, process_id)
+            .expect("status not known");
+        let status = match event.status {
+            ComputeInstanceStatus::Ready => "ready",
+            ComputeInstanceStatus::NotReady => "not_ready",
+            ComputeInstanceStatus::Unknown => "unknown",
+        };
+
+        BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_STATUS),
+            row: Row::pack_slice(&[
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(replica_id as i64),
+                Datum::Int64(process_id),
+                Datum::String(status),
+                Datum::TimestampTz(event.time),
             ]),
             diff,
         }
@@ -154,18 +194,19 @@ impl CatalogState {
             .id;
         let name = &entry.name().item;
         let mut updates = match entry.item() {
+            CatalogItem::Log(_) => self.pack_source_update(id, oid, schema_id, name, "log", diff),
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                self.pack_source_update(id, oid, schema_id, name, source, diff)
+                self.pack_source_update(id, oid, schema_id, name, source.connection.name(), diff)
             }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
             CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),
             CatalogItem::Secret(_) => self.pack_secret_update(id, schema_id, name, diff),
-            CatalogItem::Connector(connector) => {
-                self.pack_connector_update(id, oid, schema_id, name, connector, diff)
+            CatalogItem::Connection(connection) => {
+                self.pack_connection_update(id, oid, schema_id, name, connection, diff)
             }
         };
 
@@ -213,7 +254,8 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id.into()),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
             ]),
             diff,
@@ -226,7 +268,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        source: &Source,
+        source_connection_name: &str,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -234,34 +276,38 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id.into()),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
-                Datum::String(source.connector.name()),
+                Datum::String(source_connection_name),
                 Datum::String(self.is_volatile(id).as_str()),
             ]),
             diff,
         }]
     }
 
-    fn pack_connector_update(
+    fn pack_connection_update(
         &self,
         id: GlobalId,
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        connector: &Connector,
+        connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CONNECTORS),
+            id: self.resolve_builtin_table(&MZ_CONNECTIONS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id.into()),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
-                Datum::String(match connector.connector {
-                    ConnectorInner::Kafka { .. } => "kafka",
-                    ConnectorInner::CSR { .. } => "schema registry",
+                Datum::String(match connection.connection {
+                    mz_dataflow_types::connections::Connection::Kafka { .. } => "kafka",
+                    mz_dataflow_types::connections::Connection::Csr { .. } => {
+                        "confluent-schema-registry"
+                    }
                 }),
             ]),
             diff,
@@ -295,7 +341,8 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id.into()),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
                 Datum::String(self.is_volatile(id).as_str()),
                 Datum::String(&query_string),
@@ -315,12 +362,12 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate> {
         let mut updates = vec![];
         if let Sink {
-            connector: SinkConnectorState::Ready(connector),
+            connection: SinkConnectionState::Ready(connection),
             ..
         } = sink
         {
-            match connector {
-                SinkConnector::Kafka(KafkaSinkConnector {
+            match connection {
+                SinkConnection::Kafka(KafkaSinkConnection {
                     topic, consistency, ..
                 }) => {
                     let consistency_topic = if let Some(consistency) = consistency {
@@ -345,11 +392,13 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(oid),
-                    Datum::Int64(schema_id.into()),
+                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                    Datum::Int64(u64::from(schema_id) as i64),
                     Datum::String(name),
-                    Datum::String(connector.name()),
+                    Datum::String(connection.name()),
                     Datum::String(self.is_volatile(id).as_str()),
-                    Datum::Int64(sink.compute_instance),
+                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                    Datum::Int64(sink.compute_instance as i64),
                 ]),
                 diff,
             });
@@ -383,7 +432,8 @@ impl CatalogState {
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
                 Datum::String(self.is_volatile(id).as_str()),
-                Datum::Int64(index.compute_instance),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(index.compute_instance as i64),
             ]),
             diff,
         });
@@ -440,7 +490,8 @@ impl CatalogState {
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
                 Datum::UInt32(oid),
-                Datum::Int64(schema_id.into()),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
                 Datum::String(&TypeCategory::from_catalog_type(&typ.details.typ).to_string()),
             ]),
@@ -518,7 +569,8 @@ impl CatalogState {
                 row: Row::pack_slice(&[
                     Datum::String(&id.to_string()),
                     Datum::UInt32(func_impl_details.oid),
-                    Datum::Int64(schema_id.into()),
+                    // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                    Datum::Int64(u64::from(schema_id) as i64),
                     Datum::String(name),
                     arg_ids,
                     Datum::from(
@@ -552,10 +604,59 @@ impl CatalogState {
             id: self.resolve_builtin_table(&MZ_SECRETS),
             row: Row::pack_slice(&[
                 Datum::String(&id.to_string()),
-                Datum::Int64(schema_id.into()),
+                // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+                Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
             ]),
             diff,
         }]
+    }
+
+    pub fn pack_audit_log_update(
+        &self,
+        event: &VersionedEvent,
+    ) -> Result<BuiltinTableUpdate, Error> {
+        let (id, event_type, object_type, event_details, user, occurred_at): (
+            uuid::Uuid,
+            &EventType,
+            &ObjectType,
+            &EventDetails,
+            &str,
+            u64,
+        ) = match event {
+            VersionedEvent::V1(ev) => (
+                ev.uuid,
+                &ev.event_type,
+                &ev.object_type,
+                &ev.event_details,
+                &ev.user,
+                ev.occurred_at,
+            ),
+        };
+        let event_details = Jsonb::from_serde_json(event_details.as_json())
+            .map_err(|e| {
+                Error::new(ErrorKind::Unstructured(format!(
+                    "could not pack audit log update: {}",
+                    e
+                )))
+            })?
+            .into_row();
+        let event_details = event_details.iter().next().unwrap();
+        let dt = NaiveDateTime::from_timestamp(
+            (occurred_at / 1_000_000_000).try_into().expect("must fit"),
+            (occurred_at % 1_000_000_000).try_into().expect("must fit"),
+        );
+        Ok(BuiltinTableUpdate {
+            id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
+            row: Row::pack_slice(&[
+                Datum::Uuid(id),
+                Datum::String(&format!("{}", event_type)),
+                Datum::String(&format!("{}", object_type)),
+                event_details,
+                Datum::String(user),
+                Datum::TimestampTz(DateTime::from_utc(dt, Utc)),
+            ]),
+            diff: 1,
+        })
     }
 }

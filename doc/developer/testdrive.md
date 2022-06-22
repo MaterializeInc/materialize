@@ -187,7 +187,7 @@ Specifies the backoff factor that will be applied to increase the backoff interv
 
 ## Interfacing with services
 
-#### `--materialized-url <materialized-url>`
+#### `--materialize-url <materialize-url>`
 
 materialized connection string [default: postgres://materialize@localhost:6875]
 
@@ -326,32 +326,36 @@ The syntax is identical, however the statement will not be retried on error:
 
 ## Executing a statement that is expected to return an error
 
+Specify a statement that is expected to return an error with the `!` sigil. For
+example:
+
 ```
 ! SELECT * FROM no_such_table
 contains:unknown catalog item
 ```
 
-The expected error string is provided after the statement and `testdrive` will retry the statement until the expected error is returned or a timeout occurs.
+The expected error is specified after the statement. `testdrive` will retry the
+statement until the expected error is returned or a timeout occurs.
 
-The full error above would have been `ERROR:  unknown catalog item 'no_such_table'` but the match specifier `contains` ensures that the substring `unknown catalog item` will match and the test will pass.
-
-There are three match specifiers: `contains`, `exact`, and `regex`.
-
-The alternatives would be written as:
+In the example above, the full error returned by Materialize is:
 
 ```
-! SELECT * FROM no_such_table
-exact: ERROR:  unknown catalog item 'no_such_table'
+ERROR:  unknown catalog item 'no_such_table'
 ```
 
-or:
+The `contains:` prefix in the expected error means that the presence of the
+substring `unknown catalog item` in the error message is considered a pass.
 
-```
-! SELECT * FROM no_such_table
-regex: unknown catalog.*no_such_table
-```
+There are four types of error expectations:
 
-It is possible to include variables in expected errors:
+  * `contains:STRING` expects any error message containing `STRING`.
+  * `exact:STRING` expects an error message that is exactly `STRING`.
+  * `regex:REGEX` expects an error message that matches the regex `REGEX`.
+  * `timeout` expects the query to time out.
+
+
+You can include include variables in `contains`, `exact`, and `regex`
+expectations:
 
 ```
 $ set table_name=no_table
@@ -360,7 +364,10 @@ $ SELECT * FROM ${table_name}
 exact:ERROR:  unknown catalog item '${table_name}'
 ```
 
-And for regex matches all variables match literally, they are not treated as regular expression patterns. A variable valued `my.+name` will match the string `my.+name`, not `my friend's name`.
+With regex matches, the values of any interpolated variables are matched
+literally, i.e.,  their values are *not* treated as regular expression patterns.
+For example, a variable with value `my.+name` will match the string `my.+name`,
+not `my friend's name`.
 
 ## Executing statements in multiple sessions
 
@@ -467,9 +474,11 @@ The temporary directory to use. If no ```--temp-dir``` option is specified, it w
 
 #### `"stdrive.aws-endpoint`
 
-#### `testdrive.materialized-addr`
+#### `testdrive.materialize-http-addr`
 
-#### `testdrive.materialized-user`
+#### `testdrive.materialize-sql-addr`
+
+#### `testdrive.materialize-user`
 
 ## Accessing the environment variables
 
@@ -520,7 +529,7 @@ In addition to the default connection that is used for the `>` and `!` statement
 Executes a list of statements over the specified connection. The `connection` can be specified as either an URL or as a named connection created by `$ postgres-connect`:
 
 ```
-$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 CREATE TABLE postgres_execute (f1 INTEGER);
 ```
 
@@ -531,7 +540,7 @@ If any of the statements fail, the entire test will fail. Any result sets return
 Creates a named psql connection that can be used by multiple `$ postgres-execute` statements
 
 ```
-$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
 $ postgres-execute connection=conn1
 BEGIN;
@@ -550,7 +559,10 @@ single-threaded context, so will be serialized in the order they appear in the
 
 #### `$ postgres-verify-slot connection=... slot=... active=(true|false)`
 
-Pauses the test until the desired Postgres replication slot has become active or inactive on the Postgres side of the direct Postgres replication. This is used to prevent flakiness in Postgres-related tests.
+Pauses the test until the desired Postgres replication slot (identified by
+`LIKE` pattern) has become active or inactive on the Postgres side of the direct
+Postgres replication. This is used to prevent flakiness in Postgres-related
+tests.
 
 
 ## Connecting to MySQL

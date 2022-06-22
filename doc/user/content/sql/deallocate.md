@@ -6,8 +6,6 @@ menu:
     parent: "commands"
 ---
 
-{{< version-added v0.9.7 />}}
-
 `DEALLOCATE` clears [prepared statements](../prepare) that have been created during the current session. Even without an explicit `DEALLOCATE` command, all prepared statements will be cleared at the end of a session.
 
 ## Syntax

@@ -18,10 +18,10 @@ use differential_dataflow::{
 };
 use differential_dataflow::{AsCollection, Collection};
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use maplit::hashmap;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{ColumnName, ColumnType, Datum, Diff, GlobalId, Row, RowPacker, ScalarType};
+use once_cell::sync::Lazy;
 use timely::dataflow::{channels::pact::Pipeline, operators::Operator, Scope, Stream};
 
 use crate::avro::DiffPair;
@@ -127,12 +127,12 @@ where
 pub(crate) const TRANSACTION_TYPE_ID: GlobalId = GlobalId::Transient(1);
 pub(crate) const DBZ_ROW_TYPE_ID: GlobalId = GlobalId::Transient(2);
 
-lazy_static! {
-    pub static ref ENVELOPE_CUSTOM_NAMES: HashMap<GlobalId, String> = hashmap! {
+pub static ENVELOPE_CUSTOM_NAMES: Lazy<HashMap<GlobalId, String>> = Lazy::new(|| {
+    hashmap! {
         TRANSACTION_TYPE_ID => "transaction".into(),
         DBZ_ROW_TYPE_ID => "row".into(),
-    };
-}
+    }
+});
 
 pub(crate) fn dbz_envelope(
     names_and_types: Vec<(ColumnName, ColumnType)>,

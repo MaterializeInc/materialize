@@ -1,5 +1,5 @@
 ---
-title: "justify_hours Function"
+title: "justify_hours function"
 description: "Adjust interval so 24-hour time periods are represented as days"
 menu:
   main:

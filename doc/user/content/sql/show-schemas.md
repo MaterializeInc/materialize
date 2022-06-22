@@ -23,10 +23,6 @@ _database&lowbar;name_ | The database to show schemas from. Defaults to the curr
 
 `SHOW SCHEMAS`'s output is a table with one column, `name`.
 
-{{< version-changed v0.5.0 >}}
-The output column is renamed from `SCHEMAS` to `name`.
-{{< /version-changed >}}
-
 ## Examples
 
 ```sql

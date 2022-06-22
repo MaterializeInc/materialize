@@ -14,7 +14,7 @@
 //!   * Embed the JavaScript assets into the production binary so that the
 //!     binary does not depend on any external resources, like JavaScript CDNs.
 //!     Access to these CDNs may be blocked by corporate firewalls, and old
-//!     versions of materialized may outlive the CDNs they refer to.
+//!     versions of environmentd may outlive the CDNs they refer to.
 //!
 //!   * Avoid checking in the code for JavaScript assets. Checking in blobs of
 //!     JavaScript code bloats the repository and leads to merge conflicts. Plus
@@ -46,7 +46,7 @@
 //! "UMD".
 //!
 //! To determine the correct digest, the easiest course of action is to provide
-//! a bogus digest, then build materialized. The error message will contain the
+//! a bogus digest, then build environmentd. The error message will contain the
 //! actual digest computed from the downloaded assets, which you can then copy
 //! into the `NpmPackage` struct.
 //!

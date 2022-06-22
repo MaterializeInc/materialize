@@ -73,15 +73,14 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader_schema: &str,
-        schema_registry: Option<mz_ccsr::ClientConfig>,
+        ccsr_client: Option<mz_ccsr::Client>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
         let csr_avro =
-            ConfluentAvroResolver::new(reader_schema, schema_registry, confluent_wire_format)?;
+            ConfluentAvroResolver::new(reader_schema, ccsr_client, confluent_wire_format)?;
 
         Ok(Decoder {
             csr_avro,

@@ -7,11 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use chrono::MIN_DATETIME;
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use mz_build_info::DUMMY_BUILD_INFO;
+use mz_dataflow_types::connections::Connection;
+use mz_dataflow_types::sources::SourceConnection;
+use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
+use mz_lowertest::*;
+use mz_ore::now::{EpochMillis, NOW_ZERO};
+use mz_repr::{GlobalId, RelationDesc, ScalarType};
+
 use crate::ast::Expr;
 use crate::catalog::{
-    CatalogComputeInstance, CatalogConfig, CatalogConnector, CatalogDatabase, CatalogError,
-    CatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference,
-    SessionCatalog,
+    CatalogComputeInstance, CatalogConfig, CatalogDatabase, CatalogError, CatalogItem,
+    CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails, IdReference, SessionCatalog,
 };
 use crate::func::{Func, MZ_CATALOG_BUILTINS, MZ_INTERNAL_BUILTINS, PG_CATALOG_BUILTINS};
 use crate::names::{
@@ -20,38 +36,18 @@ use crate::names::{
 };
 use crate::plan::StatementDesc;
 use crate::DEFAULT_SCHEMA;
-use chrono::MIN_DATETIME;
-use lazy_static::lazy_static;
-use mz_build_info::DUMMY_BUILD_INFO;
-use mz_dataflow_types::sources::{AwsExternalId, SourceConnector};
-use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
-use mz_lowertest::*;
-use mz_ore::now::{EpochMillis, NOW_ZERO};
-use mz_repr::{GlobalId, RelationDesc, RelationType, ScalarType};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use uuid::Uuid;
 
-lazy_static! {
-    static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
-        start_time: MIN_DATETIME,
-        start_instant: Instant::now(),
-        nonce: 0,
-        cluster_id: Uuid::from_u128(0),
-        session_id: Uuid::from_u128(0),
-        experimental_mode: false,
-        build_info: &DUMMY_BUILD_INFO,
-        aws_external_id: AwsExternalId::NotProvided,
-        timestamp_frequency: Duration::from_secs(1),
-        now: NOW_ZERO.clone(),
-    };
-    static ref RTI: ReflectedTypeInfo = {
-        let mut rti = ReflectedTypeInfo::default();
-        TestCatalogCommand::add_to_reflected_type_info(&mut rti);
-        rti
-    };
-}
+static DUMMY_CONFIG: Lazy<CatalogConfig> = Lazy::new(|| CatalogConfig {
+    start_time: MIN_DATETIME,
+    start_instant: Instant::now(),
+    nonce: 0,
+    cluster_id: Uuid::from_u128(0),
+    session_id: Uuid::from_u128(0),
+    unsafe_mode: false,
+    build_info: &DUMMY_BUILD_INFO,
+    timestamp_frequency: Duration::from_secs(1),
+    now: NOW_ZERO.clone(),
+});
 
 /// A dummy [`CatalogItem`] implementation.
 ///
@@ -87,9 +83,9 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn desc(&self, _: &FullObjectName) -> Result<&RelationDesc, CatalogError> {
+    fn desc(&self, _: &FullObjectName) -> Result<Cow<RelationDesc>, CatalogError> {
         match &self {
-            TestCatalogItem::BaseTable { desc, .. } => Ok(desc),
+            TestCatalogItem::BaseTable { desc, .. } => Ok(Cow::Borrowed(desc)),
             _ => Err(CatalogError::UnknownItem(format!(
                 "{:?} does not have a desc() method",
                 self
@@ -107,7 +103,7 @@ impl CatalogItem for TestCatalogItem {
         }
     }
 
-    fn source_connector(&self) -> Result<&SourceConnector, CatalogError> {
+    fn source_connection(&self) -> Result<&SourceConnection, CatalogError> {
         unimplemented!()
     }
 
@@ -142,7 +138,7 @@ impl CatalogItem for TestCatalogItem {
         unimplemented!()
     }
 
-    fn catalog_connector(&self) -> Result<&dyn CatalogConnector, CatalogError> {
+    fn connection(&self) -> Result<&Connection, CatalogError> {
         unimplemented!()
     }
 }
@@ -311,63 +307,50 @@ impl ExprHumanizer for TestCatalog {
 
 /// Contains the arguments for a command for [TestCatalog].
 ///
-/// See [lowertest] for the command syntax.
+/// See [mz_lowertest] for the command syntax.
 #[derive(Debug, Serialize, Deserialize, MzReflect)]
 pub enum TestCatalogCommand {
     /// Insert a source into the catalog.
     Defsource {
         source_name: String,
-        typ: RelationType,
-        #[serde(default)]
-        column_names: Vec<String>,
+        desc: RelationDesc,
     },
 }
 
 impl TestCatalog {
     pub(crate) fn execute_commands(&mut self, spec: &str) -> Result<String, String> {
         let mut stream_iter = tokenize(spec)?.into_iter();
-        loop {
-            let command: Option<TestCatalogCommand> = deserialize_optional(
-                &mut stream_iter,
-                "TestCatalogCommand",
-                &RTI,
-                &mut GenericTestDeserializeContext::default(),
-            )?;
-            if let Some(command) = command {
-                match command {
-                    TestCatalogCommand::Defsource {
-                        source_name,
-                        typ,
-                        column_names,
-                    } => {
-                        assert_eq!(
-                            typ.arity(),
-                            column_names.len(),
-                            "Ensure that there are the right number of column names for source {}",
-                            source_name
-                        );
-                        let id = GlobalId::User(self.tables.len() as u64);
-                        self.id_to_name.insert(id, source_name.clone());
-                        self.tables.insert(
-                            source_name.clone(),
-                            TestCatalogItem::BaseTable {
-                                name: QualifiedObjectName {
-                                    qualifiers: ObjectQualifiers {
-                                        database_spec: ResolvedDatabaseSpecifier::Id(
-                                            self.active_database().unwrap().clone(),
-                                        ),
-                                        schema_spec: SchemaSpecifier::Id(SchemaId(1)),
-                                    },
-                                    item: source_name,
+        while let Some(command) = deserialize_optional_generic::<TestCatalogCommand, _>(
+            &mut stream_iter,
+            "TestCatalogCommand",
+        )? {
+            match command {
+                TestCatalogCommand::Defsource { source_name, desc } => {
+                    assert_eq!(
+                        desc.typ().arity(),
+                        desc.iter_names().count(),
+                        "Ensure that there are the right number of column names for source {}",
+                        source_name
+                    );
+                    let id = GlobalId::User(self.tables.len() as u64);
+                    self.id_to_name.insert(id, source_name.clone());
+                    self.tables.insert(
+                        source_name.clone(),
+                        TestCatalogItem::BaseTable {
+                            name: QualifiedObjectName {
+                                qualifiers: ObjectQualifiers {
+                                    database_spec: ResolvedDatabaseSpecifier::Id(
+                                        self.active_database().unwrap().clone(),
+                                    ),
+                                    schema_spec: SchemaSpecifier::Id(SchemaId(1)),
                                 },
-                                id,
-                                desc: RelationDesc::new(typ, column_names.into_iter()),
+                                item: source_name,
                             },
-                        );
-                    }
+                            id,
+                            desc,
+                        },
+                    );
                 }
-            } else {
-                break;
             }
         }
         Ok("ok\n".to_string())

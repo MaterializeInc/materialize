@@ -19,8 +19,8 @@ use axum::response::IntoResponse;
 use axum::routing::{self, Router};
 use cfg_if::cfg_if;
 use http::StatusCode;
-use lazy_static::lazy_static;
 use mz_build_info::BuildInfo;
+use once_cell::sync::Lazy;
 
 use crate::{ProfStartTime, StackProfile};
 
@@ -32,16 +32,16 @@ cfg_if! {
     }
 }
 
-lazy_static! {
-    static ref EXECUTABLE: String = {
+static EXECUTABLE: Lazy<String> = Lazy::new(|| {
+    {
         env::current_exe()
             .ok()
             .as_ref()
             .and_then(|exe| exe.file_name())
             .map(|exe| exe.to_string_lossy().into_owned())
             .unwrap_or_else(|| "<unknown executable>".into())
-    };
-}
+    }
+});
 
 mz_http_util::make_handle_static!(
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/http/static"),

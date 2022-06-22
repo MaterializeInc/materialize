@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Provides convenience functions for working with upstream Postgres sources from the `sql` package.
+//! PostgreSQL utility library.
 
 use anyhow::{anyhow, bail};
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
@@ -18,28 +18,9 @@ use tokio_postgres::{Client, Config};
 
 use mz_ore::task;
 
-/// The schema of a single column
-#[derive(Eq, PartialEq)]
-pub struct PgColumn {
-    pub name: String,
-    pub oid: u32,
-    pub typmod: i32,
-    pub nullable: bool,
-    pub primary_key: bool,
-}
+use crate::desc::{PostgresColumnDesc, PostgresTableDesc};
 
-/// Information about a remote table
-#[derive(Eq, PartialEq)]
-pub struct TableInfo {
-    /// The OID of the table
-    pub rel_id: u32,
-    /// The namespace the table belongs to
-    pub namespace: String,
-    /// The name of the table
-    pub name: String,
-    /// The schema of each column, in order
-    pub schema: Vec<PgColumn>,
-}
+pub mod desc;
 
 /// Creates a TLS connector for the given [`Config`].
 pub fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
@@ -106,7 +87,7 @@ pub fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
 pub async fn publication_info(
     conn: &str,
     publication: &str,
-) -> Result<Vec<TableInfo>, anyhow::Error> {
+) -> Result<Vec<PostgresTableDesc>, anyhow::Error> {
     let config = conn.parse()?;
     let tls = make_tls(&config)?;
     let (client, connection) = config.connect(tls).await?;
@@ -138,13 +119,13 @@ pub async fn publication_info(
 
     let mut table_infos = vec![];
     for row in tables {
-        let rel_id = row.get("oid");
+        let oid = row.get("oid");
 
-        let schema = client
+        let columns = client
             .query(
                 "SELECT
                         a.attname AS name,
-                        a.atttypid AS oid,
+                        a.atttypid AS typoid,
                         a.atttypmod AS typmod,
                         a.attnotnull AS not_null,
                         b.oid IS NOT NULL AS primary_key
@@ -157,31 +138,31 @@ pub async fn publication_info(
                         AND NOT a.attisdropped
                         AND a.attrelid = $1
                     ORDER BY a.attnum",
-                &[&rel_id],
+                &[&oid],
             )
             .await?
             .into_iter()
             .map(|row| {
                 let name: String = row.get("name");
-                let oid = row.get("oid");
-                let typmod: i32 = row.get("typmod");
+                let type_oid = row.get("typoid");
+                let type_mod: i32 = row.get("typmod");
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
-                Ok(PgColumn {
+                Ok(PostgresColumnDesc {
                     name,
-                    oid,
-                    typmod,
+                    type_oid,
+                    type_mod,
                     nullable: !not_null,
                     primary_key,
                 })
             })
             .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-        table_infos.push(TableInfo {
-            rel_id,
+        table_infos.push(PostgresTableDesc {
+            oid,
             namespace: row.get("schemaname"),
             name: row.get("tablename"),
-            schema,
+            columns,
         });
     }
 

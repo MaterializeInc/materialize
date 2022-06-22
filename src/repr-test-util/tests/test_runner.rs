@@ -9,7 +9,7 @@
 
 #[cfg(test)]
 mod tests {
-    use mz_lowertest::{deserialize_optional, tokenize, GenericTestDeserializeContext};
+    use mz_lowertest::{deserialize_optional_generic, tokenize};
     use mz_ore::str::separated;
     use mz_repr::ScalarType;
     use mz_repr_test_util::*;
@@ -43,12 +43,8 @@ mod tests {
                 .next()
                 .ok_or_else(|| "Empty row spec".to_string())?,
         )?;
-        let scalar_types: Option<Vec<ScalarType>> = deserialize_optional(
-            &mut stream_iter,
-            "Vec<ScalarType>",
-            &RTI,
-            &mut GenericTestDeserializeContext::default(),
-        )?;
+        let scalar_types: Option<Vec<ScalarType>> =
+            deserialize_optional_generic(&mut stream_iter, "Vec<ScalarType>")?;
         let scalar_types = if let Some(scalar_types) = scalar_types {
             scalar_types
         } else {

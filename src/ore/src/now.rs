@@ -14,7 +14,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, TimeZone, Utc};
@@ -78,12 +78,10 @@ fn now_zero() -> EpochMillis {
     0
 }
 
-lazy_static! {
-    /// A [`NowFn`] that returns the actual system time.
-    pub static ref SYSTEM_TIME: NowFn = NowFn::from(system_time);
+/// A [`NowFn`] that returns the actual system time.
+pub static SYSTEM_TIME: Lazy<NowFn> = Lazy::new(|| NowFn::from(system_time));
 
-    /// A [`NowFn`] that always returns zero.
-    ///
-    /// For use in tests.
-    pub static ref NOW_ZERO: NowFn = NowFn::from(now_zero);
-}
+/// A [`NowFn`] that always returns zero.
+///
+/// For use in tests.
+pub static NOW_ZERO: Lazy<NowFn> = Lazy::new(|| NowFn::from(now_zero));

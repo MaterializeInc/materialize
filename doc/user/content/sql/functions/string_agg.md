@@ -1,5 +1,5 @@
 ---
-title: "string_agg Function"
+title: "string_agg function"
 description: "Concatenates the non-null input values into a string. Each value after the first is preceded by the corresponding delimiter (if it's not null)."
 menu:
   main:

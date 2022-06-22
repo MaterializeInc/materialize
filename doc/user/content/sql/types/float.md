@@ -1,5 +1,5 @@
 ---
-title: "Floating-Point Data Types"
+title: "Floating-point types"
 description: "Express signed, inexact numbers"
 menu:
   main:

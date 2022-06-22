@@ -3,7 +3,7 @@ name = "mz-timely-util"
 description = "Utilities for working with Timely."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
@@ -12,4 +12,4 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 
 [dev-dependencies]
-tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.19.2", features = ["macros", "rt-multi-thread", "time"] }

@@ -18,7 +18,7 @@ use std::{ffi::CString, io::BufRead, time::Instant};
 use tokio::sync::Mutex;
 
 use anyhow::bail;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use tempfile::NamedTempFile;
 use tikv_jemalloc_ctl::{epoch, raw, stats};
 
@@ -28,15 +28,13 @@ use super::{ProfStartTime, StackProfile, WeightedStack};
 #[export_name = "malloc_conf"]
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:false\0";
 
-lazy_static! {
-    pub static ref PROF_CTL: Option<Arc<Mutex<JemallocProfCtl>>> = {
-        if let Some(ctl) = JemallocProfCtl::get() {
-            Some(Arc::new(Mutex::new(ctl)))
-        } else {
-            None
-        }
-    };
-}
+pub static PROF_CTL: Lazy<Option<Arc<Mutex<JemallocProfCtl>>>> = Lazy::new(|| {
+    if let Some(ctl) = JemallocProfCtl::get() {
+        Some(Arc::new(Mutex::new(ctl)))
+    } else {
+        None
+    }
+});
 
 #[derive(Copy, Clone, Debug)]
 pub struct JemallocProfMetadata {

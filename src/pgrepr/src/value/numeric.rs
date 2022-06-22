@@ -15,7 +15,7 @@ use std::fmt;
 use byteorder::{NetworkEndian, ReadBytesExt};
 use bytes::{BufMut, BytesMut};
 use dec::OrderedDecimal;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
 use mz_repr::adt::numeric::{self, cx_datum, Numeric as AdtNumeric, NumericAgg};
@@ -40,10 +40,9 @@ impl From<AdtNumeric> for Numeric {
 /// `ToSql` and `FromSql` use base 10,000 units.
 const TO_FROM_SQL_BASE_POW: usize = 4;
 
-lazy_static! {
-    static ref TO_SQL_BASER: AdtNumeric = AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW as u32));
-    static ref FROM_SQL_SCALER: AdtNumeric = AdtNumeric::from(TO_FROM_SQL_BASE_POW);
-}
+static TO_SQL_BASER: Lazy<AdtNumeric> =
+    Lazy::new(|| AdtNumeric::from(10u32.pow(TO_FROM_SQL_BASE_POW as u32)));
+static FROM_SQL_SCALER: Lazy<AdtNumeric> = Lazy::new(|| AdtNumeric::from(TO_FROM_SQL_BASE_POW));
 
 /// The maximum number of units necessary to represent a valid [`AdtNumeric`] value.
 const UNITS_LEN: usize = 11;

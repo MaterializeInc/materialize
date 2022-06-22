@@ -18,10 +18,13 @@ use serde::{Deserialize, Serialize};
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
 
-use crate::proto::{ProtoRepr, TryFromProtoError, TryIntoIfSome};
+use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::{Datum, ScalarType};
 
-pub use crate::relation_and_scalar::{ProtoColumnName, ProtoColumnType, ProtoRelationType};
+use crate::relation_and_scalar::proto_relation_type::ProtoKey;
+pub use crate::relation_and_scalar::{
+    ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
+};
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -113,24 +116,20 @@ impl ColumnType {
     }
 }
 
-impl From<&ColumnType> for ProtoColumnType {
-    fn from(x: &ColumnType) -> Self {
+impl RustType<ProtoColumnType> for ColumnType {
+    fn into_proto(&self) -> ProtoColumnType {
         ProtoColumnType {
-            nullable: x.nullable,
-            scalar_type: Some((&x.scalar_type).into()),
+            nullable: self.nullable,
+            scalar_type: Some(self.scalar_type.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoColumnType> for ColumnType {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoColumnType) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoColumnType) -> Result<Self, TryFromProtoError> {
         Ok(ColumnType {
-            nullable: x.nullable,
-            scalar_type: x
+            nullable: proto.nullable,
+            scalar_type: proto
                 .scalar_type
-                .try_into_if_some("ProtoColumnType::scalar_type")?,
+                .into_rust_if_some("ProtoColumnType::scalar_type")?,
         })
     }
 }
@@ -205,44 +204,31 @@ impl RelationType {
     }
 }
 
-impl From<&RelationType> for ProtoRelationType {
-    fn from(x: &RelationType) -> Self {
-        use crate::relation_and_scalar::proto_relation_type::ProtoKey;
+impl RustType<ProtoRelationType> for RelationType {
+    fn into_proto(&self) -> ProtoRelationType {
         ProtoRelationType {
-            column_types: x.column_types.iter().map(Into::into).collect(),
-            keys: x
-                .keys
-                .iter()
-                .map(|key_set| ProtoKey {
-                    keys: key_set.iter().map(|k| k.into_proto()).collect(),
-                })
-                .collect(),
+            column_types: self.column_types.into_proto(),
+            keys: self.keys.into_proto(),
         }
+    }
+
+    fn from_proto(proto: ProtoRelationType) -> Result<Self, TryFromProtoError> {
+        Ok(RelationType {
+            column_types: proto.column_types.into_rust()?,
+            keys: proto.keys.into_rust()?,
+        })
     }
 }
 
-impl TryFrom<ProtoRelationType> for RelationType {
-    type Error = TryFromProtoError;
+impl RustType<ProtoKey> for Vec<usize> {
+    fn into_proto(self: &Self) -> ProtoKey {
+        ProtoKey {
+            keys: self.into_proto(),
+        }
+    }
 
-    fn try_from(x: ProtoRelationType) -> Result<Self, Self::Error> {
-        Ok(RelationType {
-            column_types: x
-                .column_types
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
-            keys: x
-                .keys
-                .into_iter()
-                .map(|key_set| {
-                    key_set
-                        .keys
-                        .into_iter()
-                        .map(usize::from_proto)
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        })
+    fn from_proto(proto: ProtoKey) -> Result<Self, TryFromProtoError> {
+        proto.keys.into_rust()
     }
 }
 
@@ -288,19 +274,15 @@ impl From<&ColumnName> for ColumnName {
     }
 }
 
-impl From<&ColumnName> for ProtoColumnName {
-    fn from(x: &ColumnName) -> Self {
+impl RustType<ProtoColumnName> for ColumnName {
+    fn into_proto(&self) -> ProtoColumnName {
         ProtoColumnName {
-            value: Some(x.0.clone()),
+            value: Some(self.0.clone()),
         }
     }
-}
 
-impl TryFrom<ProtoColumnName> for ColumnName {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoColumnName) -> Result<Self, Self::Error> {
-        Ok(ColumnName(x.value.ok_or_else(|| {
+    fn from_proto(proto: ProtoColumnName) -> Result<Self, TryFromProtoError> {
+        Ok(ColumnName(proto.value.ok_or_else(|| {
             TryFromProtoError::missing_field("ProtoColumnName::value")
         })?))
     }
@@ -339,10 +321,26 @@ impl TryFrom<ProtoColumnName> for ColumnName {
 /// });
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
     typ: RelationType,
     names: Vec<ColumnName>,
+}
+
+impl RustType<ProtoRelationDesc> for RelationDesc {
+    fn into_proto(self: &Self) -> ProtoRelationDesc {
+        ProtoRelationDesc {
+            typ: Some(self.typ.into_proto()),
+            names: self.names.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRelationDesc) -> Result<Self, TryFromProtoError> {
+        Ok(RelationDesc {
+            typ: proto.typ.into_rust_if_some("ProtoRelationDesc::typ")?,
+            names: proto.names.into_rust()?,
+        })
+    }
 }
 
 impl RelationDesc {

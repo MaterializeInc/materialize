@@ -12,23 +12,12 @@
 //! These test utilities are relied by crates other than `repr`.
 
 use chrono::NaiveDateTime;
-use lazy_static::lazy_static;
 use proc_macro2::TokenTree;
 
-use mz_lowertest::{
-    deserialize_optional, GenericTestDeserializeContext, MzReflect, ReflectedTypeInfo,
-};
+use mz_lowertest::deserialize_optional_generic;
 use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
-
-lazy_static! {
-    pub static ref RTI: ReflectedTypeInfo = {
-        let mut rti = ReflectedTypeInfo::default();
-        ColumnType::add_to_reflected_type_info(&mut rti);
-        rti
-    };
-}
+use mz_repr::{Datum, Row, RowArena, ScalarType};
 
 /* #endregion */
 
@@ -125,12 +114,7 @@ pub fn get_scalar_type_or_default<I>(
 where
     I: Iterator<Item = TokenTree>,
 {
-    let typ: Option<ScalarType> = deserialize_optional(
-        scalar_type_stream,
-        "ScalarType",
-        &RTI,
-        &mut GenericTestDeserializeContext::default(),
-    )?;
+    let typ: Option<ScalarType> = deserialize_optional_generic(scalar_type_stream, "ScalarType")?;
     match typ {
         Some(typ) => Ok(typ),
         None => {

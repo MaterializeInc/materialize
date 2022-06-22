@@ -13,11 +13,16 @@ syntax = "proto3";
 
 import "dataflow-types/src/client/controller/storage.proto";
 import "dataflow-types/src/plan.proto";
+import "dataflow-types/src/types/sinks.proto";
+import "dataflow-types/src/types/sources.proto";
 import "expr/src/scalar.proto";
 import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
 import "repr/src/proto.proto";
 import "repr/src/relation_and_scalar.proto";
+import "repr/src/row.proto";
+
+import "google/protobuf/empty.proto";
 
 package mz_dataflow_types.types;
 
@@ -35,7 +40,7 @@ message ProtoDataflowDescription {
 
     message ProtoSinkExport {
         mz_repr.global_id.ProtoGlobalId id = 1;
-        string sink_desc = 2;
+        mz_dataflow_types.types.sinks.ProtoSinkDesc sink_desc = 2;
     }
 
     repeated ProtoSourceImport source_imports = 1;
@@ -59,7 +64,7 @@ message ProtoBuildDesc {
 }
 
 message ProtoSourceInstanceDesc {
-    string description = 1;
+    mz_dataflow_types.types.sources.ProtoSourceDesc description = 1;
     ProtoSourceInstanceArguments arguments = 2;
     mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 3;
 }
@@ -71,4 +76,40 @@ message ProtoSourceInstanceArguments {
 message ProtoLinearOperator {
     repeated mz_expr.scalar.ProtoMirScalarExpr predicates = 1;
     repeated uint64 projection = 2;
+}
+
+message ProtoPeekResponse {
+    message ProtoRow {
+        mz_repr.row.ProtoRow row = 1;
+        uint64 diff = 2;
+    }
+
+    message ProtoRows {
+        repeated ProtoRow rows = 1;
+    }
+
+    oneof kind {
+        ProtoRows rows = 1;
+        string error = 2;
+        google.protobuf.Empty canceled = 3;
+    }
+}
+
+message ProtoTailBatch {
+    message ProtoUpdate {
+        uint64 timestamp = 1;
+        mz_repr.row.ProtoRow row = 2;
+        int64 diff = 3;
+    }
+
+    mz_persist.gen.persist.ProtoU64Antichain lower = 1;
+    mz_persist.gen.persist.ProtoU64Antichain upper = 2;
+    repeated ProtoUpdate updates = 3;
+}
+
+message ProtoTailResponse {
+    oneof kind {
+        ProtoTailBatch batch = 1;
+        mz_persist.gen.persist.ProtoU64Antichain dropped_at = 2;
+    }
 }

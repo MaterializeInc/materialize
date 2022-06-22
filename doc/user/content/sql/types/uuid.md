@@ -1,5 +1,5 @@
 ---
-title: "uuid Data Type"
+title: "uuid type"
 description: "Expresses a universally-unique identifier"
 menu:
   main:

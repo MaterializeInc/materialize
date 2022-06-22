@@ -19,8 +19,8 @@ XYZ
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> SELECT COUNT(*) = 10000 FROM envelope_none_bytes
-true
+> SELECT COUNT(*) FROM envelope_none_bytes
+10000
 
 $ kafka-create-topic topic=envelope-none-text
 
@@ -34,5 +34,5 @@ XYZ
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> SELECT COUNT(*) = 10000 FROM envelope_none_text
-true
+> SELECT COUNT(*) FROM envelope_none_text
+10000

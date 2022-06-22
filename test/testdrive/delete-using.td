@@ -30,8 +30,8 @@ contains:column reference "f1" is ambiguous
 
 > DELETE FROM t1 AS a1 USING t1 AS a2;
 
-> SELECT COUNT(*) = 0 from t1;
-true
+> SELECT COUNT(*) from t1;
+0
 
 # Impossible join condition
 
@@ -41,8 +41,8 @@ true
 
 > DELETE FROM t1 USING t2 WHERE FALSE;
 
-> SELECT COUNT(*) = 3  FROM t1;
-true
+> SELECT COUNT(*)  FROM t1;
+3
 
 > DELETE FROM t1;
 
@@ -128,8 +128,8 @@ true
 
 > DELETE FROM t1 USING t2 WHERE t1.f1 = t2.f1 OR t1.f1 = 10;
 
-> SELECT COUNT(*) = 3 FROM t1;
-true
+> SELECT COUNT(*) FROM t1;
+3
 
 > DELETE FROM t1;
 
@@ -161,8 +161,8 @@ true
 
 > DELETE FROM t1 USING t2;
 
-> SELECT COUNT(*) = 0 FROM t1;
-true
+> SELECT COUNT(*) FROM t1;
+0
 
 > DELETE FROM t1;
 

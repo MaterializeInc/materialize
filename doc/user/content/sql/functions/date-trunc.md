@@ -1,5 +1,5 @@
 ---
-title: "date_trunc Function"
+title: "date_trunc function"
 description: "Truncates a timestamp at the specified time component"
 menu:
   main:

@@ -1,5 +1,5 @@
 ---
-title: "EXTRACT Function"
+title: "EXTRACT function"
 description: "Returns a specified time component from a time-based value"
 menu:
   main:

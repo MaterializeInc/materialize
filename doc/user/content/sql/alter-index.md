@@ -6,8 +6,6 @@ menu:
     parent: 'commands'
 ---
 
-{{< version-added v0.4.3 />}}
-
 `ALTER INDEX` changes the parameters of an index.
 
 ## Syntax
@@ -55,4 +53,3 @@ ALTER INDEX some_primary_idx RESET (logical_compaction_window);
 - [`SHOW CREATE VIEW`](/sql/show-create-view)
 - [`SHOW VIEWS`](/sql/show-views)
 - [`SHOW SOURCES`](/sql/show-sources)
-- [`SHOW SINKS`](/sql/show-sinks)

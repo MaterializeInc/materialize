@@ -17,6 +17,7 @@ fn main() {
                 "repr/src/row.proto",
                 "repr/src/strconv.proto",
                 "repr/src/relation_and_scalar.proto",
+                "repr/src/url.proto",
                 "repr/src/adt/array.proto",
                 "repr/src/adt/char.proto",
                 "repr/src/adt/datetime.proto",

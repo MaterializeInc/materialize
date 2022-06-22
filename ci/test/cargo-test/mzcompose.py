@@ -34,6 +34,9 @@ SERVICES = [
                 "AWS_SESSION_TOKEN",
             ],
             "volumes": ["../../../:/workdir"],
+            "ulimits": {
+                "core": 0,
+            },
         },
     ),
 ]

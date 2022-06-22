@@ -26,5 +26,5 @@ $ set schema={
 $ kafka-ingest format=avro topic=topic-compression key-format=avro key-schema=${keyschema} schema=${schema} publish=true repeat=1000
 {"f1": ${kafka-ingest.iteration}} {"f2": "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"}
 
-> SELECT COUNT(*) = 1000, COUNT(DISTINCT f2) = 1, MIN(LENGTH(f2)) = 100, MAX(LENGTH(f2)) = 100 FROM topic_compression;
-true true true true
+> SELECT COUNT(*), COUNT(DISTINCT f2), MIN(LENGTH(f2)), MAX(LENGTH(f2)) FROM topic_compression;
+1000 1 100 100

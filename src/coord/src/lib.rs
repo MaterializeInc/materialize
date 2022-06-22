@@ -36,7 +36,7 @@ mod client;
 mod command;
 mod coord;
 mod error;
-mod sink_connector;
+mod sink_connection;
 mod tail;
 mod util;
 
@@ -44,6 +44,6 @@ pub mod catalog;
 pub mod session;
 
 pub use crate::client::{Client, ConnClient, Handle, SessionClient};
-pub use crate::command::{Canceled, ExecuteResponse, StartupMessage, StartupResponse};
+pub use crate::command::{Canceled, ExecuteResponse, RowsFuture, StartupMessage, StartupResponse};
 pub use crate::coord::{serve, Config, PeekResponseUnary};
 pub use crate::error::CoordError;

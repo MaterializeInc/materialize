@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.7.0 />}}
-
 `DROP ROLE` removes a role from your Materialize instance.
 
 ## Syntax

@@ -31,7 +31,7 @@ $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${sche
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
 
-> SELECT COUNT(*) = 10000 FROM envelope_none
-true
+> SELECT COUNT(*) FROM envelope_none
+10000
 
 $ kafka-add-partitions topic=envelope-none total-partitions=4

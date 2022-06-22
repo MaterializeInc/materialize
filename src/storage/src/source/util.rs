@@ -7,15 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OperatorInfo, OutputHandle};
-use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
+use timely::scheduling::ActivateOnDrop;
 use timely::Data;
 
+use mz_ore::collections::CollectionExt;
 use mz_repr::Timestamp;
 
 use super::{SourceStatus, SourceToken};
@@ -55,7 +57,6 @@ where
     B: FnOnce(OperatorInfo) -> L,
     L: FnMut(
             &mut Capability<Timestamp>,
-            &mut CapabilitySet<Timestamp>,
             &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
         ) -> SourceStatus
         + 'static,
@@ -68,35 +69,34 @@ where
     let (mut data_output, data_stream) = builder.new_output();
     builder.set_notify(false);
 
-    builder.build(|mut capabilities| {
-        let data_capability = capabilities.pop().unwrap();
-        let durability_capability = CapabilitySet::from_elem(data_capability.clone());
+    builder.build(|capabilities| {
+        let mut capability = Some(capabilities.into_element());
 
-        let mut capabilities = Some((data_capability, durability_capability));
-
-        let drop_activator = Arc::new(scope.sync_activator_for(&operator_info.address[..]));
-        let drop_activator_weak = Arc::downgrade(&drop_activator);
+        let drop_activator = Rc::new(ActivateOnDrop::new(
+            (),
+            Rc::new(operator_info.address.clone()),
+            scope.activations(),
+        ));
+        let drop_activator_weak = Rc::downgrade(&drop_activator);
 
         // Export a token to the outside word that will keep this source alive.
         token = Some(SourceToken {
-            activator: drop_activator,
+            _activator: drop_activator,
         });
 
         let mut tick = construct(operator_info);
 
         move |_frontier| {
-            // Drop all capabilities if the thread-safe `SourceToken` is dropped.
+            // Drop all capabilities if `token` is dropped.
             if drop_activator_weak.upgrade().is_none() {
-                capabilities = None;
+                capability = None;
             }
-            if let Some((data_cap, durability_capability)) = &mut capabilities {
+            if let Some(cap) = &mut capability {
                 // We still have our capability, so the source is still alive.
                 // Delegate to the inner source.
-                if let SourceStatus::Done =
-                    tick(data_cap, durability_capability, &mut data_output.activate())
-                {
+                if let SourceStatus::Done = tick(cap, &mut data_output.activate()) {
                     // The inner source is finished. Drop our capability.
-                    capabilities = None;
+                    capability = None;
                 }
             }
         }

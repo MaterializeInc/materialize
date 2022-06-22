@@ -3,7 +3,7 @@ name = "mz-interchange"
 description = "Translations for various data serialization formats."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [[bench]]
@@ -12,26 +12,26 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 byteorder = "1.4.3"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
 itertools = "0.10.3"
-lazy_static = "1.4.0"
+once_cell = "1.12.0"
 maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-avro-derive = { path = "../avro-derive" }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-ordered-float = { version = "2.10.0", features = ["serde"] }
-prost = "0.10.1"
-prost-reflect = "0.7.0"
-serde_json = "1.0.80"
+ordered-float = { version = "3.0.0", features = ["serde"] }
+prost = "0.10.3"
+prost-reflect = "0.8.1"
+serde_json = "1.0.81"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tracing = "0.1.34"
-uuid = { version = "0.8.2", features = ["serde"] }
+tracing = "0.1.35"
+uuid = { version = "1.1.2", features = ["serde"] }
 
 [dev-dependencies]
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git" }

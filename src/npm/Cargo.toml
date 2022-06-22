@@ -3,15 +3,15 @@ name = "mz-npm"
 description = "A lightweight JavaScript package manager, like npm."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
-flate2 = "1.0.23"
+anyhow = "1.0.58"
+flate2 = "1.0.24"
 hex = "0.4.3"
 hex-literal = "0.3.4"
-reqwest = { version = "0.11.10", features = ["blocking", "native-tls-vendored"] }
+reqwest = { version = "0.11.11", features = ["blocking", "native-tls-vendored"] }
 sha2 = "0.10.2"
 tar = "0.4.38"
 walkdir = "2.3.2"

@@ -1,5 +1,5 @@
 ---
-title: "SUBSTRING Function"
+title: "SUBSTRING function"
 description: "Returns substring at specified positions"
 menu:
   main:

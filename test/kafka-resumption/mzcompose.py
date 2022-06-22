@@ -8,8 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import random
-from os import environ
-from unittest.mock import patch
 
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (

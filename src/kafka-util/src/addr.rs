@@ -12,10 +12,15 @@ use std::fmt::{self, Write};
 use std::num::ParseIntError;
 use std::str::FromStr;
 
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
+
+include!(concat!(env!("OUT_DIR"), "/mz_kafka_util.addr.rs"));
+
 /// Represents the addresses of several Kafka brokers.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaAddrs(Vec<(String, u16)>);
 
 impl FromStr for KafkaAddrs {
@@ -45,6 +50,31 @@ impl fmt::Display for KafkaAddrs {
             write!(f, "{}:{}", host, port)?;
         }
         Ok(())
+    }
+}
+
+impl RustType<proto_kafka_addrs::ProtoKafkaAddr> for (String, u16) {
+    fn into_proto(&self) -> proto_kafka_addrs::ProtoKafkaAddr {
+        proto_kafka_addrs::ProtoKafkaAddr {
+            host: self.0.clone(),
+            port: self.1.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto_kafka_addrs::ProtoKafkaAddr) -> Result<Self, TryFromProtoError> {
+        Ok((proto.host, proto.port.into_rust()?))
+    }
+}
+
+impl RustType<ProtoKafkaAddrs> for KafkaAddrs {
+    fn into_proto(&self) -> ProtoKafkaAddrs {
+        ProtoKafkaAddrs {
+            addrs: self.0.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaAddrs) -> Result<Self, TryFromProtoError> {
+        Ok(KafkaAddrs(proto.addrs.into_rust()?))
     }
 }
 

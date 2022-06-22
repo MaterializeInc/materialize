@@ -5,7 +5,7 @@ weight: 40
 menu:
   main:
     parent: 'reference'
-    name: 'SQL Namespaces'
+    name: 'SQL namespaces'
     weight: 126
 ---
 

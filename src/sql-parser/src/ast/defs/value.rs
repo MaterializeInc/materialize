@@ -22,7 +22,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::RawObjectName;
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -221,57 +220,3 @@ impl Default for IntervalValue {
         }
     }
 }
-
-/// SQL data types
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum UnresolvedDataType {
-    /// Array
-    Array(Box<UnresolvedDataType>),
-    /// List
-    List(Box<UnresolvedDataType>),
-    /// Map
-    Map {
-        key_type: Box<UnresolvedDataType>,
-        value_type: Box<UnresolvedDataType>,
-    },
-    /// Types who don't embed other types, e.g. INT
-    Other {
-        name: RawObjectName,
-        /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
-        typ_mod: Vec<i64>,
-    },
-}
-
-impl AstDisplay for UnresolvedDataType {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            UnresolvedDataType::Array(ty) => {
-                f.write_node(&ty);
-                f.write_str("[]");
-            }
-            UnresolvedDataType::List(ty) => {
-                f.write_node(&ty);
-                f.write_str(" list");
-            }
-            UnresolvedDataType::Map {
-                key_type,
-                value_type,
-            } => {
-                f.write_str("map[");
-                f.write_node(&key_type);
-                f.write_str("=>");
-                f.write_node(&value_type);
-                f.write_str("]");
-            }
-            UnresolvedDataType::Other { name, typ_mod } => {
-                f.write_node(name);
-                if typ_mod.len() > 0 {
-                    f.write_str("(");
-                    f.write_node(&display::comma_separated(typ_mod));
-                    f.write_str(")");
-                }
-            }
-        }
-    }
-}
-impl_display!(UnresolvedDataType);

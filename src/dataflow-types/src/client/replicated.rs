@@ -22,19 +22,23 @@
 //! compacted frontiers, as the underlying resources to rebuild them any earlier may not
 //! exist any longer.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 
-use timely::progress::{frontier::MutableAntichain, Antichain};
+use timely::progress::frontier::MutableAntichain;
+use timely::progress::Antichain;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use crate::client::Peek;
 use crate::logging::LogVariant;
 use mz_repr::GlobalId;
 
 use super::controller::storage::CollectionMetadata;
+use mz_ore::tracing::OpenTelemetryContext;
+
+use super::ReplicaId;
 use super::{ComputeClient, GenericClient};
 use super::{ComputeCommand, ComputeResponse};
+use super::{Peek, PeekResponse};
 
 /// Spawns a task that repeatedly sends messages back and forth
 /// between a client and its owner, and return channels to communicate with it.
@@ -93,22 +97,33 @@ struct Replica<T> {
     rx: UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
     log_collections: HashMap<LogVariant, CollectionMetadata>,
 }
+/// Additional information to store with pening peeks.
+#[derive(Debug)]
+pub struct PendingPeek {
+    /// The OpenTelemetry context for this peek.
+    otel_ctx: OpenTelemetryContext,
+}
 
 /// A client backed by multiple replicas.
 #[derive(Debug)]
 pub struct ActiveReplication<T> {
     /// Handles to the replicas themselves.
-    replicas: HashMap<String, Replica<T>>,
+    replicas: HashMap<ReplicaId, Replica<T>>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
-    peeks: HashSet<uuid::Uuid>,
+    peeks: HashMap<uuid::Uuid, PendingPeek>,
     /// Reported frontier of each in-progress tail.
     tails: HashMap<GlobalId, Antichain<T>>,
     /// Frontier information, both unioned across all replicas and from each individual replica.
-    uppers: HashMap<GlobalId, (Antichain<T>, HashMap<String, MutableAntichain<T>>)>,
+    uppers: HashMap<GlobalId, (Antichain<T>, HashMap<ReplicaId, MutableAntichain<T>>)>,
     /// The command history, used when introducing new replicas or restarting existing replicas.
     history: crate::client::ComputeCommandHistory<T>,
     /// Most recent count of the volume of unpacked commands (e.g. dataflows in `CreateDataflows`).
     last_command_count: usize,
+    /// Responses that should be emitted on the next `recv` call.
+    ///
+    /// This is introduced to produce peek cancelation responses eagerly, without awaiting a replica
+    /// responding with the response itself, which allows us to compact away the peek in `self.history`.
+    pending_response: VecDeque<ComputeResponse<T>>,
 }
 
 impl<T> Default for ActiveReplication<T> {
@@ -120,6 +135,7 @@ impl<T> Default for ActiveReplication<T> {
             uppers: Default::default(),
             history: Default::default(),
             last_command_count: 0,
+            pending_response: Default::default(),
         }
     }
 }
@@ -131,14 +147,14 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub async fn add_replica<C: ComputeClient<T> + 'static>(
+    pub fn add_replica<C: ComputeClient<T> + 'static>(
         &mut self,
-        identifier: String,
+        id: ReplicaId,
         client: C,
         log_collections: HashMap<LogVariant, CollectionMetadata>,
     ) {
         for (_, frontiers) in self.uppers.values_mut() {
-            frontiers.insert(identifier.clone(), {
+            frontiers.insert(id, {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
                 frontier.update_iter(Some((T::minimum(), 1)));
                 frontier
@@ -146,36 +162,36 @@ where
         }
         let (tx, rx) = spawn_client_task(client, || "ActiveReplication client message pump");
         self.replicas.insert(
-            identifier.clone(),
+            id,
             Replica {
                 tx,
                 rx: rx.into(),
                 log_collections,
             },
         );
-        self.hydrate_replica(&identifier);
+        self.hydrate_replica(id);
     }
 
-    pub fn get_replica_identifiers(&self) -> impl Iterator<Item = &String> {
-        self.replicas.keys()
+    pub fn get_replica_ids(&self) -> impl Iterator<Item = ReplicaId> + '_ {
+        self.replicas.keys().copied()
     }
 
     /// Remove a replica by its identifier.
-    pub fn remove_replica(&mut self, id: &str) {
-        self.replicas.remove(id);
+    pub fn remove_replica(&mut self, id: ReplicaId) {
+        self.replicas.remove(&id);
         for (_frontier, frontiers) in self.uppers.iter_mut() {
-            frontiers.1.remove(id);
+            frontiers.1.remove(&id);
         }
     }
 
     /// Pipes a command stream at the indicated replica, introducing new dataflow identifiers.
-    fn hydrate_replica(&mut self, replica_id: &str) {
+    fn hydrate_replica(&mut self, replica_id: ReplicaId) {
         // Zero out frontiers maintained by this replica.
         for (_id, (_, frontiers)) in self.uppers.iter_mut() {
-            *frontiers.get_mut(replica_id).unwrap() =
+            *frontiers.get_mut(&replica_id).unwrap() =
                 timely::progress::frontier::MutableAntichain::new();
             frontiers
-                .get_mut(replica_id)
+                .get_mut(&replica_id)
                 .unwrap()
                 .update_iter(Some((T::minimum(), 1)));
         }
@@ -183,21 +199,11 @@ where
         self.last_command_count = self.history.reduce(&self.peeks);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let replica = self.replicas.get_mut(replica_id).unwrap();
+        let replica = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.history.iter() {
             let mut command = command.clone();
+            specialize_command(&mut command, replica_id, replica);
 
-            // Make logging config replica-specific.
-            if let ComputeCommand::CreateInstance(Some(logging)) = &mut command {
-                logging.sink_logs = replica.log_collections.clone();
-            }
-
-            // Replace dataflow identifiers with new unique ids.
-            if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
-                for dataflow in dataflows.iter_mut() {
-                    dataflow.id = uuid::Uuid::new_v4();
-                }
-            }
             replica
                 .tx
                 .send(command)
@@ -211,10 +217,42 @@ impl<T> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for ActiveReplicati
 where
     T: timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::fmt::Debug,
 {
+    /// The ADAPTER layer's isolation from COMPUTE depends on the fact that this
+    /// function is essentially non-blocking, i.e. the ADAPTER blindly awaits
+    /// calls to this function. This lets the ADAPTER continue operating even in
+    /// the face of unhealthy or absent replicas.
+    ///
+    /// If this function every become blocking (e.g. making networking calls),
+    /// the ADAPTER must amend its contract with COMPUTE.
     async fn send(&mut self, cmd: ComputeCommand<T>) -> Result<(), anyhow::Error> {
-        // Register an interest in the peek.
-        if let ComputeCommand::Peek(Peek { uuid, .. }) = &cmd {
-            self.peeks.insert(*uuid);
+        // Update our tracking of peek commands.
+        match &cmd {
+            ComputeCommand::Peek(Peek { uuid, otel_ctx, .. }) => {
+                self.peeks.insert(
+                    *uuid,
+                    PendingPeek {
+                        // TODO(guswynn): can we just hold the `tracing::Span`
+                        // here instead?
+                        otel_ctx: otel_ctx.clone(),
+                    },
+                );
+            }
+            ComputeCommand::CancelPeeks { uuids } => {
+                // Enqueue the response to the cancelation.
+                self.pending_response.extend(uuids.iter().map(|uuid| {
+                    // Canceled peeks should not be further responded to.
+                    let otel_ctx = self
+                        .peeks
+                        .remove(uuid)
+                        .map(|pending| pending.otel_ctx)
+                        .unwrap_or_else(|| {
+                            tracing::warn!("did not find pending peek for {}", uuid);
+                            OpenTelemetryContext::empty()
+                        });
+                    ComputeResponse::PeekResponse(*uuid, PeekResponse::Canceled, otel_ctx)
+                }));
+            }
+            _ => {}
         }
 
         // Initialize any necessary frontier tracking.
@@ -249,17 +287,18 @@ where
         }
 
         // Clone the command for each active replica.
-        for (_id, replica) in self.replicas.iter_mut() {
+        for (id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
-            // Replace dataflow identifiers with new unique ids.
-            if let ComputeCommand::CreateDataflows(dataflows) = &mut command {
-                for dataflow in dataflows.iter_mut() {
-                    dataflow.id = uuid::Uuid::new_v4();
-                }
-            }
+            specialize_command(&mut command, *id, replica);
 
-            // Errors are suppressed by this client, which awaits a reconnection in `recv` and
-            // will rehydrate the client when that happens.
+            // Errors are suppressed by this client, which awaits a reconnection
+            // in `recv` and will rehydrate the client when that happens.
+            //
+            // NOTE: Broadcasting commands to replicas irrespective of their
+            // presence or health is part of the isolation contract between
+            // ADAPTER and COMPUTE. If this changes (e.g. awaiting responses
+            // from replicas), ADAPTER needs to handle its interactions with
+            // COMPUTE differently.
             let _ = replica.tx.send(command);
         }
 
@@ -267,6 +306,11 @@ where
     }
 
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
+        // If we have a pending response, we should send it immediately.
+        if let Some(response) = self.pending_response.pop_front() {
+            return Ok(Some(response));
+        }
+
         if self.replicas.is_empty() {
             // We want to communicate that the result is not ready
             futures::future::pending().await
@@ -286,12 +330,21 @@ where
                 use futures::StreamExt;
                 while let Some((replica_id, message)) = stream.next().await {
                     match message {
-                        Ok(ComputeResponse::PeekResponse(uuid, response)) => {
+                        Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)) => {
                             // If this is the first response, forward it; otherwise do not.
                             // TODO: we could collect the other responses to assert equivalence?
                             // Trades resources (memory) for reassurances; idk which is best.
-                            if self.peeks.remove(&uuid) {
-                                return Ok(Some(ComputeResponse::PeekResponse(uuid, response)));
+                            //
+                            // NOTE: we use the `otel_ctx` from the response, not the
+                            // pending peek, because we currently want the parent
+                            // to be whatever the compute worker did with this peek.
+                            //
+                            // Additionally, we just use the `otel_ctx` from the first worker to
+                            // respond.
+                            if self.peeks.remove(&uuid).is_some() {
+                                return Ok(Some(ComputeResponse::PeekResponse(
+                                    uuid, response, otel_ctx,
+                                )));
                             }
                         }
                         Ok(ComputeResponse::FrontierUppers(mut list)) => {
@@ -379,7 +432,7 @@ where
                 }
                 drop(stream);
 
-                if let Some(replica_id) = &errored_replica {
+                if let Some(replica_id) = errored_replica {
                     tracing::warn!("Rehydrating replica {:?}", replica_id);
                     self.hydrate_replica(replica_id);
                 }
@@ -388,6 +441,34 @@ where
             }
             // Indicate completion of the communication.
             Ok(None)
+        }
+    }
+}
+
+/// Specialize a command for the given `ReplicaId`.
+///
+/// Most `ComputeCommand`s are independent of the target replica, but some
+/// contain replica-specific fields that must be adjusted before sending.
+fn specialize_command<T>(
+    command: &mut ComputeCommand<T>,
+    replica_id: ReplicaId,
+    replica: &Replica<T>,
+) {
+    // Tell new instances their replica ID.
+    if let ComputeCommand::CreateInstance(config) = command {
+        // Set sink_logs
+        if let Some(logging) = &mut config.logging {
+            logging.sink_logs = replica.log_collections.clone();
+        };
+
+        // Set replica id
+        config.replica_id = replica_id;
+    }
+
+    // Replace dataflow identifiers with new unique ids.
+    if let ComputeCommand::CreateDataflows(dataflows) = command {
+        for dataflow in dataflows.iter_mut() {
+            dataflow.id = uuid::Uuid::new_v4();
         }
     }
 }

@@ -3,31 +3,26 @@ name = "mz-storage"
 description = "Materialize's storage layer."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
-async-compression = { version = "0.3.12", features = ["tokio", "gzip"], optional = true }
+anyhow = "1.0.58"
+async-compression = { version = "0.3.14", features = ["tokio", "gzip"], optional = true }
 async-stream = "0.3.3"
-async-trait = "0.1.53"
-aws-sdk-kinesis = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
-aws-sdk-s3 = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
-aws-sdk-sqs = { version = "0.10.1", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
+async-trait = "0.1.56"
+aws-sdk-kinesis = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
+aws-sdk-s3 = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
+aws-sdk-sqs = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"], optional = true }
 bincode = { version = "1.3.3", optional = true }
-bytes = { version = "1.1.0", optional = true }
 chrono = { version = "0.4.0", default-features = false, features = ["std"], optional = true }
-crossbeam-channel = { version = "0.5.4", optional = true }
+crossbeam-channel = { version = "0.5.5", optional = true }
 csv-core = { version = "0.1.10", optional = true }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-flate2 = { version = "1.0.23", optional = true }
 futures = "0.3.21"
 futures-executor = "0.3.21"
 futures-util = "0.3.19"
-globset = { version = "0.4.8", optional = true }
-inotify = { version = "0.10.0", optional = true }
-lazy_static = { version = "1.4.0", optional = true }
-log = { version = "0.4.16", optional = true }
+globset = { version = "0.4.9", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
 mz-ccsr = { path = "../ccsr", optional = true }
 mz-dataflow-types = { path = "../dataflow-types" }
@@ -36,31 +31,31 @@ mz-interchange = { path = "../interchange", optional = true }
 mz-kafka-util = { path = "../kafka-util", optional = true }
 mz-kinesis-util = { path = "../kinesis-util", optional = true }
 mz-ore = { path = "../ore", features = ["task"] }
-mz-persist = { path = "../persist" }
+mz-persist = { path = "../persist", optional = true }
 mz-persist-client = { path = "../persist-client", optional = true }
 mz-persist-types = { path = "../persist-types", optional = true }
 mz-pgcopy = { path = "../pgcopy", optional = true }
 mz-postgres-util = { path = "../postgres-util", optional = true }
 mz-repr = { path = "../repr" }
 mz-timely-util = { path = "../timely-util" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", optional = true }
-prometheus = { version = "0.13.0", default-features = false, optional = true }
-prost = { version = "0.10.1", optional = true }
+once_cell = { version = "1.12.0", optional = true }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
+prometheus = { version = "0.13.1", default-features = false, optional = true }
+prost = { version = "0.10.3", optional = true }
 pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust", default-features = false, optional = true }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"], optional = true }
-regex = { version = "1.5.4", optional = true }
+regex = { version = "1.5.6", optional = true }
 serde = { version = "1.0.137", features = ["derive"] }
-serde_json = { version = "1.0.80", optional = true }
+serde_json = { version = "1.0.81", optional = true }
 tempfile = { version = "3.2.0", optional = true }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.17.0", features = ["fs", "rt", "sync"] }
-tokio-byteorder = "0.3.0"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", optional = true }
+tokio = { version = "1.19.2", features = ["fs", "rt", "sync"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
-tokio-util = { version = "0.7.1", features = ["codec", "io"] }
-tracing = "0.1.34"
+tokio-util = { version = "0.7.3", features = ["codec", "io"] }
+tracing = "0.1.35"
 thiserror = { version = "1.0.31", optional = true }
-uuid = { version = "0.8.2", features = ["serde", "v4"] }
+uuid = { version = "1.1.2", features = ["serde", "v4"] }
 
 [features]
 server = [
@@ -69,24 +64,22 @@ server = [
     "aws-sdk-s3",
     "aws-sdk-sqs",
     "bincode",
-    "bytes",
     "chrono",
     "crossbeam-channel",
     "csv-core",
-    "flate2",
     "globset",
-    "inotify",
-    "lazy_static",
-    "log",
+    "once_cell",
     "mz-avro",
     "mz-ccsr",
     "mz-interchange",
     "mz-kafka-util",
     "mz-kinesis-util",
+    "mz-persist",
     "mz-persist-client",
     "mz-persist-types",
     "mz-pgcopy",
     "mz-postgres-util",
+    "once_cell",
     "postgres-protocol",
     "prometheus",
     "prost",

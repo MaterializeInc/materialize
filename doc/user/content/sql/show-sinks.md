@@ -1,9 +1,10 @@
 ---
 title: "SHOW SINKS"
 description: "`SHOW SINKS` returns a list of all sinks available to your Materialize instances."
-menu:
-  main:
-    parent: commands
+draft: true
+#menu:
+  #main:
+    #parent: commands
 aliases:
     - /sql/show-sink
 ---
@@ -37,18 +38,6 @@ Field | Meaning
 **name** | The name of the sink.
 **type** | Whether the sink was created by the `user` or the `system`.
 **volatility** | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
-
-{{< version-changed v0.5.0 >}}
-The output column is renamed from `SINKS` to `name`.
-{{< /version-changed >}}
-
-{{< version-added v0.7.2 >}}
-The `volatile` column.
-{{< /version-added >}}
-
-{{< version-added v0.23.0 >}}
-The `cluster` column.
-{{< /version-added >}}
 
 ## Examples
 

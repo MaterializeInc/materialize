@@ -1,10 +1,10 @@
 ---
-title: "SQL Data Types"
-description: "Learn more about the SQL data types you love...."
+title: "SQL data types"
+description: "Learn more about the SQL data types supported in Materialize"
 menu:
   main:
     identifier: sql-types
-    name: SQL Data Types
+    name: SQL data types
     parent: reference
     weight: 110
 disable_list: true

@@ -28,8 +28,8 @@ CREATE SEQUENCE pk_sequence;
 ALTER TABLE alter_drop_primary_key DROP CONSTRAINT alter_drop_primary_key_pkey;
 INSERT INTO alter_drop_primary_key VALUES (123);
 
-> SELECT COUNT(*) = 2 FROM alter_drop_primary_key;
-true
+> SELECT COUNT(*) FROM alter_drop_primary_key;
+2
 
 > SELECT DISTINCT f1 FROM alter_drop_primary_key;
 123

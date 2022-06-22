@@ -1,5 +1,5 @@
 ---
-title: "Top K by Group"
+title: "Top K by group"
 description: "Find the top- or bottom-K elements in a group."
 weight:
 aliases:

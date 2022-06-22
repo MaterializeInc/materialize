@@ -7,14 +7,16 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::logging::Logger;
 use timely::order::PartialOrder;
@@ -22,13 +24,15 @@ use timely::progress::frontier::Antichain;
 use timely::progress::reachability::logging::TrackerEvent;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
-use mz_dataflow_types::client::{ComputeCommand, ComputeResponse};
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+use mz_dataflow_types::client::{ComputeCommand, ComputeResponse, InstanceConfig, Peek, ReplicaId};
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::logging::LoggingConfig;
-use mz_dataflow_types::{DataflowError, PeekResponse, TailResponse};
+use mz_dataflow_types::{DataflowDescription, DataflowError, PeekResponse, Plan, TailResponse};
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage::boundary::ComputeReplay;
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::operator::CollectionExt;
 
@@ -42,6 +46,8 @@ use crate::sink::SinkBaseMetrics;
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
 /// done between data ingress and egress.
 pub struct ComputeState {
+    /// The ID of the replica this worker belongs to.
+    pub replica_id: ReplicaId,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
@@ -63,146 +69,178 @@ pub struct ComputeState {
     pub sink_metrics: SinkBaseMetrics,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub materialized_logger: Option<logging::materialized::Logger>,
+    /// Configuration for sink connections.
+    // TODO: remove when sinks move to storage.
+    pub connection_context: ConnectionContext,
+    /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
+    /// This is intentionally shared between workers.
+    pub persist_clients: Arc<Mutex<PersistClientCache>>,
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub struct ActiveComputeState<'a, A: Allocate, B: ComputeReplay> {
+pub struct ActiveComputeState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut mpsc::UnboundedSender<ComputeResponse>,
-    /// The boundary with the Storage layer
-    pub boundary: &'a mut B,
 }
 
-impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
+impl<'a, A: Allocate> ActiveComputeState<'a, A> {
     /// Entrypoint for applying a compute command.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
+        use ComputeCommand::*;
+
         match cmd {
-            ComputeCommand::CreateInstance(logging) => {
-                if let Some(logging) = logging {
-                    self.initialize_logging(&logging);
-                }
+            CreateInstance(config) => self.handle_create_instance(config),
+            DropInstance => (),
+            CreateDataflows(dataflows) => self.handle_create_dataflows(dataflows),
+            AllowCompaction(list) => self.handle_allow_compaction(list),
+            Peek(peek) => {
+                peek.otel_ctx.attach_as_parent();
+                self.handle_peek(peek)
             }
-            ComputeCommand::DropInstance => {}
+            CancelPeeks { uuids } => self.handle_cancel_peeks(uuids),
+        }
+    }
 
-            ComputeCommand::CreateDataflows(dataflows) => {
-                for dataflow in dataflows.into_iter() {
-                    // Collect the exported object identifiers, paired with their associated "collection" identifier.
-                    // The latter is used to extract dependency information, which is in terms of collections ids.
-                    let sink_ids = dataflow
-                        .sink_exports
-                        .iter()
-                        .map(|(sink_id, sink)| (*sink_id, sink.from));
-                    let index_ids = dataflow
-                        .index_exports
-                        .iter()
-                        .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
-                    let exported_ids = index_ids.chain(sink_ids);
+    fn handle_create_instance(&mut self, config: InstanceConfig) {
+        if let Some(logging) = config.logging {
+            self.initialize_logging(&logging);
+        }
+    }
 
-                    // Initialize frontiers for each object, and optionally log their construction.
-                    for (object_id, collection_id) in exported_ids {
-                        self.compute_state
-                            .reported_frontiers
-                            .insert(object_id, Antichain::from_elem(0));
+    fn handle_create_dataflows(
+        &mut self,
+        dataflows: Vec<DataflowDescription<Plan, CollectionMetadata>>,
+    ) {
+        for dataflow in dataflows.into_iter() {
+            // Collect the exported object identifiers, paired with their associated "collection" identifier.
+            // The latter is used to extract dependency information, which is in terms of collections ids.
+            let sink_ids = dataflow
+                .sink_exports
+                .iter()
+                .map(|(sink_id, sink)| (*sink_id, sink.from));
+            let index_ids = dataflow
+                .index_exports
+                .iter()
+                .map(|(idx_id, (idx, _))| (*idx_id, idx.on_id));
+            let exported_ids = index_ids.chain(sink_ids);
 
-                        // Log dataflow construction, frontier construction, and any dependencies.
-                        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                            logger.log(ComputeEvent::Dataflow(object_id, true));
-                            logger.log(ComputeEvent::Frontier(object_id, 0, 1));
-                            for import_id in dataflow.depends_on(collection_id) {
-                                logger.log(ComputeEvent::DataflowDependency {
-                                    dataflow: object_id,
-                                    source: import_id,
-                                })
-                            }
-                        }
-                    }
+            // Initialize frontiers for each object, and optionally log their construction.
+            for (object_id, collection_id) in exported_ids {
+                self.compute_state
+                    .reported_frontiers
+                    .insert(object_id, Antichain::from_elem(0));
 
-                    crate::render::build_compute_dataflow(
-                        self.timely_worker,
-                        &mut self.compute_state,
-                        dataflow,
-                        self.boundary,
-                    );
-                }
-            }
-            ComputeCommand::AllowCompaction(list) => {
-                for (id, frontier) in list {
-                    if frontier.is_empty() {
-                        // Indicates that we may drop `id`, as there are no more valid times to read.
-
-                        // Sink-specific work:
-                        self.compute_state.sink_write_frontiers.remove(&id);
-                        self.compute_state.dataflow_tokens.remove(&id);
-                        // Index-specific work:
-                        self.compute_state.traces.del_trace(&id);
-
-                        // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
-                        let frontier = self
-                            .compute_state
-                            .reported_frontiers
-                            .remove(&id)
-                            .expect("Dropped compute collection with no frontier");
-                        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                            logger.log(ComputeEvent::Dataflow(id, false));
-                            for time in frontier.elements().iter() {
-                                logger.log(ComputeEvent::Frontier(id, *time, -1));
-                            }
-                        }
-                    } else {
-                        self.compute_state
-                            .traces
-                            .allow_compaction(id, frontier.borrow());
-                    }
-                }
-            }
-
-            ComputeCommand::Peek(peek) => {
-                // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
-                let timestamp_frontier = Antichain::from_elem(peek.timestamp);
-                let empty_frontier = Antichain::new();
-                trace_bundle
-                    .oks_mut()
-                    .set_logical_compaction(timestamp_frontier.borrow());
-                trace_bundle
-                    .errs_mut()
-                    .set_logical_compaction(timestamp_frontier.borrow());
-                trace_bundle
-                    .oks_mut()
-                    .set_physical_compaction(empty_frontier.borrow());
-                trace_bundle
-                    .errs_mut()
-                    .set_physical_compaction(empty_frontier.borrow());
-                // Prepare a description of the peek work to do.
-                let mut peek = PendingPeek { peek, trace_bundle };
-                // Log the receipt of the peek.
+                // Log dataflow construction, frontier construction, and any dependencies.
                 if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-                    logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
-                }
-                // Attempt to fulfill the peek.
-                if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
-                    self.send_peek_response(peek, response);
-                } else {
-                    self.compute_state.pending_peeks.push(peek);
-                }
-            }
-            ComputeCommand::CancelPeeks { uuids } => {
-                let pending_peeks_len = self.compute_state.pending_peeks.len();
-                let mut pending_peeks = std::mem::replace(
-                    &mut self.compute_state.pending_peeks,
-                    Vec::with_capacity(pending_peeks_len),
-                );
-                for peek in pending_peeks.drain(..) {
-                    if uuids.contains(&peek.peek.uuid) {
-                        self.send_peek_response(peek, PeekResponse::Canceled);
-                    } else {
-                        self.compute_state.pending_peeks.push(peek);
+                    logger.log(ComputeEvent::Dataflow(object_id, true));
+                    logger.log(ComputeEvent::Frontier(object_id, 0, 1));
+                    for import_id in dataflow.depends_on(collection_id) {
+                        logger.log(ComputeEvent::DataflowDependency {
+                            dataflow: object_id,
+                            source: import_id,
+                        })
                     }
                 }
+            }
+
+            crate::render::build_compute_dataflow(
+                self.timely_worker,
+                &mut self.compute_state,
+                dataflow,
+            );
+        }
+    }
+
+    fn handle_allow_compaction(&mut self, list: Vec<(GlobalId, Antichain<Timestamp>)>) {
+        for (id, frontier) in list {
+            if frontier.is_empty() {
+                // Indicates that we may drop `id`, as there are no more valid times to read.
+
+                // Sink-specific work:
+                self.compute_state.sink_write_frontiers.remove(&id);
+                self.compute_state.dataflow_tokens.remove(&id);
+                // Index-specific work:
+                self.compute_state.traces.del_trace(&id);
+
+                // Work common to sinks and indexes (removing frontier tracking and cleaning up logging).
+                let frontier = self
+                    .compute_state
+                    .reported_frontiers
+                    .remove(&id)
+                    .expect("Dropped compute collection with no frontier");
+                if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+                    logger.log(ComputeEvent::Dataflow(id, false));
+                    for time in frontier.elements().iter() {
+                        logger.log(ComputeEvent::Frontier(id, *time, -1));
+                    }
+                }
+            } else {
+                self.compute_state
+                    .traces
+                    .allow_compaction(id, frontier.borrow());
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn handle_peek(&mut self, peek: Peek) {
+        // Only handle peeks that are not targeted at a different replica.
+        if let Some(target) = peek.target_replica {
+            if target != self.compute_state.replica_id {
+                return;
+            }
+        }
+
+        // Acquire a copy of the trace suitable for fulfilling the peek.
+        let mut trace_bundle = self.compute_state.traces.get(&peek.id).unwrap().clone();
+        let timestamp_frontier = Antichain::from_elem(peek.timestamp);
+        let empty_frontier = Antichain::new();
+        trace_bundle
+            .oks_mut()
+            .set_logical_compaction(timestamp_frontier.borrow());
+        trace_bundle
+            .errs_mut()
+            .set_logical_compaction(timestamp_frontier.borrow());
+        trace_bundle
+            .oks_mut()
+            .set_physical_compaction(empty_frontier.borrow());
+        trace_bundle
+            .errs_mut()
+            .set_physical_compaction(empty_frontier.borrow());
+        // Prepare a description of the peek work to do.
+        let mut peek = PendingPeek {
+            peek,
+            trace_bundle,
+            span: tracing::Span::current(),
+        };
+        // Log the receipt of the peek.
+        if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
+            logger.log(ComputeEvent::Peek(peek.as_log_event(), true));
+        }
+        // Attempt to fulfill the peek.
+        if let Some(response) = peek.seek_fulfillment(&mut Antichain::new()) {
+            self.send_peek_response(peek, response);
+        } else {
+            self.compute_state.pending_peeks.push(peek);
+        }
+    }
+
+    fn handle_cancel_peeks(&mut self, uuids: BTreeSet<uuid::Uuid>) {
+        let pending_peeks_len = self.compute_state.pending_peeks.len();
+        let mut pending_peeks = std::mem::replace(
+            &mut self.compute_state.pending_peeks,
+            Vec::with_capacity(pending_peeks_len),
+        );
+        for peek in pending_peeks.drain(..) {
+            if uuids.contains(&peek.peek.uuid) {
+                self.send_peek_response(peek, PeekResponse::Canceled);
+            } else {
+                self.compute_state.pending_peeks.push(peek);
             }
         }
     }
@@ -556,6 +594,7 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
         );
         for mut peek in pending_peeks.drain(..) {
             if let Some(response) = peek.seek_fulfillment(&mut upper) {
+                let _span = tracing::info_span!(parent: &peek.span,  "process_peek").entered();
                 self.send_peek_response(peek, response);
             } else {
                 self.compute_state.pending_peeks.push(peek);
@@ -567,13 +606,19 @@ impl<'a, A: Allocate, B: ComputeReplay> ActiveComputeState<'a, A, B> {
     ///
     /// Note that this function takes ownership of the `PendingPeek`, which is
     /// meant to prevent multiple responses to the same peek.
+    #[tracing::instrument(level = "debug", skip(self, peek))]
     fn send_peek_response(&mut self, peek: PendingPeek, response: PeekResponse) {
+        let log_event = peek.as_log_event();
         // Respond with the response.
-        self.send_compute_response(ComputeResponse::PeekResponse(peek.peek.uuid, response));
+        self.send_compute_response(ComputeResponse::PeekResponse(
+            peek.peek.uuid,
+            response,
+            OpenTelemetryContext::obtain(),
+        ));
 
         // Log responding to the peek request.
         if let Some(logger) = self.compute_state.materialized_logger.as_mut() {
-            logger.log(ComputeEvent::Peek(peek.as_log_event(), false));
+            logger.log(ComputeEvent::Peek(log_event, false));
         }
     }
 
@@ -601,6 +646,8 @@ pub struct PendingPeek {
     peek: mz_dataflow_types::client::Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
+    /// The `tracing::Span` tracking this peek's operation
+    span: tracing::Span,
 }
 
 impl PendingPeek {

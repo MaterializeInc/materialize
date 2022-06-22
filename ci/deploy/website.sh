@@ -29,7 +29,7 @@ set -euo pipefail
 declare -A shortlinks=(
     [bug]="https://github.com/MaterializeInc/materialize/issues/new?labels=C-bug&template=01-bug.yml"
     [non-materialized-error]="https://materialize.com/docs/sql/create-view/#querying-non-materialized-views"
-    [chat]="https://join.slack.com/t/materializecommunity/shared_invite/zt-ljdufufo-PTwVPmgzlZtI7RIQLDrAiA"
+    [chat]="https://materializecommunity.slack.com/join/shared_invite/zt-19287i0fb-zlGYWbtx31ANimPSO1jYZw"
 )
 
 cd doc/user

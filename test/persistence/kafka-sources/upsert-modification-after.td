@@ -28,8 +28,8 @@ $ set schema={
 $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=${keyschema} schema=${schema} publish=true start-iteration=2500 repeat=5000
 {"f1": ${kafka-ingest.iteration}} {"f2": "a${kafka-ingest.iteration}"}
 
-> SELECT COUNT(*) = 10000, MIN(f1) = 0, MAX(f1) = 9999 FROM upsert_modification;
-true true true
+> SELECT COUNT(*), MIN(f1), MAX(f1) FROM upsert_modification;
+10000 0 9999
 
 > SELECT MIN(f1), MAX(f1), COUNT(*) FROM upsert_modification WHERE f2 LIKE 'a%';
 2500 7499 5000

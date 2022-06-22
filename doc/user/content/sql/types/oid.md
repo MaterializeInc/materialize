@@ -1,5 +1,5 @@
 ---
-title: "oid Data Type"
+title: "oid type"
 description: "Express a PostgreSQL-compatible object identifier"
 menu:
   main:

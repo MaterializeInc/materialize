@@ -60,8 +60,8 @@ Source materialize.public.abc (u1):
 Query:
 %0 =
 | Get materialize.public.abc (u1)
-| TopK group=(#2) order=(#1 asc) limit=1 offset=0
+| TopK group=(#2) order=(#1 asc nulls_last) limit=1 offset=0
 
-Finish order_by=(#2 asc, #1 asc) limit=none offset=0 project=(#0)
+Finish order_by=(#2 asc nulls_last, #1 asc nulls_last) limit=none offset=0 project=(#0)
 
 EOF

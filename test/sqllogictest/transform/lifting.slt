@@ -250,7 +250,7 @@ Source materialize.public.t (u1):
 
 Query:
 %0 =
-| Constant () () () () () () ()
+| Constant (() x 7)
 
 %1 =
 | Get materialize.public.t (u1)

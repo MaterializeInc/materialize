@@ -26,7 +26,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=(#0) order=(#0 asc) limit=1 offset=3
+| TopK group=(#0) order=(#0 asc nulls_first) limit=1 offset=3
 
 # outer limit is greater than inner limit plus outer offset
 
@@ -35,14 +35,14 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=(#0) order=(#0 asc) limit=3 offset=2
+| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
 
 build apply=TopKFusion
 (top_k (top_k (get x) [0] [#0] 3 2) [0] [#0] 10 1)
 ----
 %0 =
 | Get x (u0)
-| TopK group=(#0) order=(#0 asc) limit=2 offset=3
+| TopK group=(#0) order=(#0 asc nulls_first) limit=2 offset=3
 
 # outer offset is equal to inner limit
 
@@ -67,7 +67,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=(#0) order=(#0 asc) limit=10 offset=3
+| TopK group=(#0) order=(#0 asc nulls_first) limit=10 offset=3
 
 # both have no limit, but offset
 
@@ -76,7 +76,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=(#0) order=(#0 asc) offset=3
+| TopK group=(#0) order=(#0 asc nulls_first) offset=3
 
 # outer has no limit, but both have offset
 
@@ -85,7 +85,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=() order=(#0 asc) limit=2 offset=3
+| TopK group=() order=(#0 asc nulls_first) limit=2 offset=3
 
 # outer has no limit and no offset
 
@@ -94,7 +94,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=() order=(#0 asc) limit=3 offset=2
+| TopK group=() order=(#0 asc nulls_first) limit=3 offset=2
 
 # inner has no limit and no offset
 
@@ -103,7 +103,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=() order=(#0 asc) limit=3 offset=2
+| TopK group=() order=(#0 asc nulls_first) limit=3 offset=2
 
 # inner has no limit and no offset, and outer has only limit
 
@@ -112,7 +112,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=() order=(#0 asc) limit=3 offset=0
+| TopK group=() order=(#0 asc nulls_first) limit=3 offset=0
 
 # inner has no limit and no offset, and outer has only offset
 
@@ -121,7 +121,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=() order=(#0 asc) offset=1
+| TopK group=() order=(#0 asc nulls_first) offset=1
 
 # both have no limit and no offset
 
@@ -130,7 +130,7 @@ build apply=TopKFusion
 ----
 %0 =
 | Get x (u0)
-| TopK group=() order=(#0 asc) offset=0
+| TopK group=() order=(#0 asc nulls_first) offset=0
 
 # both have limit 0 and no offset
 
@@ -189,23 +189,23 @@ build apply=TopKFusion
 ----
 %0 =
 | Constant (5, 4) (3, 2) (1, 0)
-| TopK group=() order=(#1 asc) limit=3 offset=2
-| TopK group=() order=(#0 asc) limit=1 offset=0
+| TopK group=() order=(#1 asc nulls_first) limit=3 offset=2
+| TopK group=() order=(#0 asc nulls_first) limit=1 offset=0
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [] [#1] 3 2) [] [#1] 1 0)
 ----
 %0 =
 | Constant (5, 4) (3, 2) (1, 0)
-| TopK group=() order=(#1 asc) limit=1 offset=2
+| TopK group=() order=(#1 asc nulls_first) limit=1 offset=2
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [#0] 3 2) [1] [#1] 1 0)
 ----
 %0 =
 | Constant (5, 4) (3, 2) (1, 0)
-| TopK group=(#0) order=(#0 asc) limit=3 offset=2
-| TopK group=(#1) order=(#1 asc) limit=1 offset=0
+| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
+| TopK group=(#1) order=(#1 asc nulls_first) limit=1 offset=0
 
 build apply=TopKFusion
 (top_k (top_k (constant [[5 4] [3 2] [1 0]] [int32 int32]) [0] [] 3 2) [0] [#1] 1 0)
@@ -213,7 +213,7 @@ build apply=TopKFusion
 %0 =
 | Constant (5, 4) (3, 2) (1, 0)
 | TopK group=(#0) order=() limit=3 offset=2
-| TopK group=(#0) order=(#1 asc) limit=1 offset=0
+| TopK group=(#0) order=(#1 asc nulls_first) limit=1 offset=0
 
 # Fusionable TopK operators with grouping key
 
@@ -235,3 +235,32 @@ build apply=FoldConstants
 ----
 %0 =
 | Constant (1, 1)
+
+# Both nulls_last
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [(#0 false true)] 3 2) [0] [(#0 false true)] 1 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc nulls_last) limit=1 offset=3
+
+# Cannot be fused, because nulls_last differs
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [(#0 false false)] 3 2) [0] [(#0 false true)] 1 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
+| TopK group=(#0) order=(#0 asc nulls_last) limit=1 offset=1
+
+# Cannot be fused, because asc-desc differs
+
+build apply=TopKFusion
+(top_k (top_k (get x) [0] [(#0 false false)] 3 2) [0] [(#0 true false)] 1 1)
+----
+%0 =
+| Get x (u0)
+| TopK group=(#0) order=(#0 asc nulls_first) limit=3 offset=2
+| TopK group=(#0) order=(#0 desc nulls_first) limit=1 offset=1

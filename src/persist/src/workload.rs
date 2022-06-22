@@ -15,9 +15,8 @@ use std::io::Write;
 use std::mem::size_of;
 
 use mz_ore::cast::CastFrom;
+use mz_persist_types::Codec64;
 
-use crate::client::StreamWriteHandle;
-use crate::error::Error;
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 
 /// A configurable data generator for benchmarking.
@@ -166,8 +165,9 @@ impl DataGenerator {
             0,
         );
         for record_idx in batch_start..batch_end {
+            let (kv, t, d) = self.gen_record(record_idx);
             assert!(
-                batch.push(self.gen_record(record_idx)),
+                batch.push((kv, Codec64::encode(&t), Codec64::encode(&d))),
                 "generator exceeded batch size; smaller batches needed"
             );
         }
@@ -232,43 +232,6 @@ impl Iterator for DataGeneratorBatchIter {
     }
 }
 
-/// Load the dataset into a persist collection.
-///
-/// The data is loaded with one concurrent write call per generated data batch.
-/// If `do_seals` is true, data is sealed as it's loaded.
-///
-/// The "goodput" bytes represented by this data load are returned on success.
-pub fn load(
-    handle: &StreamWriteHandle<Vec<u8>, Vec<u8>>,
-    data: &DataGenerator,
-    do_seals: bool,
-) -> Result<u64, Error> {
-    let mut writes = Vec::new();
-    let mut seals = Vec::new();
-    for batch in data.batches() {
-        // It's unfortunate to turn this into a Vec just to turn it back into a
-        // columnar batch.
-        let batch = batch
-            .iter()
-            .map(|((k, v), t, d)| ((k.to_vec(), v.to_vec()), t, d))
-            .collect::<Vec<_>>();
-        writes.push(handle.write(&batch));
-        if let Some((_, batch_largest_ts, _)) = batch.get(batch.len() - 1) {
-            if do_seals {
-                let seal_ts = batch_largest_ts + 1;
-                seals.push(handle.seal(seal_ts));
-            }
-        }
-    }
-    for write in writes {
-        write.recv()?;
-    }
-    for seal in seals {
-        seal.recv()?;
-    }
-    Ok(data.goodput_bytes())
-}
-
 /// Encodes the given data into a flat buffer that is exactly
 /// `data.goodput_bytes()` long.
 pub fn flat_blob(data: &DataGenerator) -> Vec<u8> {
@@ -277,8 +240,8 @@ pub fn flat_blob(data: &DataGenerator) -> Vec<u8> {
         for ((k, v), t, d) in batch.iter() {
             buf.extend_from_slice(k);
             buf.extend_from_slice(v);
-            buf.extend_from_slice(&t.to_le_bytes());
-            buf.extend_from_slice(&d.to_le_bytes());
+            buf.extend_from_slice(&t);
+            buf.extend_from_slice(&d);
         }
     }
     assert_eq!(buf.len(), usize::cast_from(data.goodput_bytes()));

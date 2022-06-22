@@ -21,7 +21,7 @@ use crate::plan::{Plan, StartTransactionPlan};
 
 pub fn describe_start_transaction(
     _: &StatementContext,
-    _: &StartTransactionStatement,
+    _: StartTransactionStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -36,7 +36,7 @@ pub fn plan_start_transaction(
 
 pub fn describe_set_transaction(
     _: &StatementContext,
-    _: &SetTransactionStatement,
+    _: SetTransactionStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     bail_unsupported!("SET TRANSACTION")
 }
@@ -67,7 +67,7 @@ fn verify_transaction_modes(
 
 pub fn describe_rollback(
     _: &StatementContext,
-    _: &RollbackStatement,
+    _: RollbackStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -82,7 +82,7 @@ pub fn plan_rollback(
 
 pub fn describe_commit(
     _: &StatementContext,
-    _: &CommitStatement,
+    _: CommitStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }

@@ -1,5 +1,5 @@
 ---
-title: "jsonb_object_agg Function"
+title: "jsonb_object_agg function"
 description: "Aggregate keys and values (including nulls) into a jsonb object"
 menu:
   main:

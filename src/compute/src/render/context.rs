@@ -415,8 +415,6 @@ where
         Tr: TraceReader<Key = Row, Val = Row, Time = S::Timestamp, R = mz_repr::Diff>
             + Clone
             + 'static,
-        Tr::Batch: BatchReader<Row, Tr::Val, S::Timestamp, mz_repr::Diff> + 'static,
-        Tr::Cursor: Cursor<Row, Tr::Val, S::Timestamp, mz_repr::Diff> + 'static,
         I: IntoIterator,
         I::Item: Data,
         L: for<'a, 'b> FnMut(
@@ -630,15 +628,23 @@ where
 
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::Capability;
-struct PendingWork<K, V, T: Timestamp, R, C: Cursor<K, V, T, R>> {
-    capability: Capability<T>,
+struct PendingWork<C>
+where
+    C: Cursor,
+    C::Time: Timestamp,
+{
+    capability: Capability<C::Time>,
     cursor: C,
     batch: C::Storage,
 }
 
-impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, T, R, C> {
+impl<C: Cursor> PendingWork<C>
+where
+    C::Key: PartialEq,
+    C::Time: Timestamp,
+{
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
-    fn new(capability: Capability<T>, cursor: C, batch: C::Storage) -> Self {
+    fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
         Self {
             capability,
             cursor,
@@ -648,19 +654,25 @@ impl<K: PartialEq, V, T: Timestamp, R, C: Cursor<K, V, T, R>> PendingWork<K, V, 
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
     fn do_work<I, L>(
         &mut self,
-        key: &Option<K>,
+        key: &Option<C::Key>,
         logic: &mut L,
         fuel: &mut usize,
         output: &mut OutputHandle<
             '_,
-            T,
+            C::Time,
             I::Item,
-            timely::dataflow::channels::pushers::Tee<T, I::Item>,
+            timely::dataflow::channels::pushers::Tee<C::Time, I::Item>,
         >,
     ) where
         I: IntoIterator,
         I::Item: Data,
-        L: for<'a, 'b> FnMut(RefOrMut<'b, K>, RefOrMut<'b, V>, &'a T, &'a R) -> I + 'static,
+        L: for<'a, 'b> FnMut(
+                RefOrMut<'b, C::Key>,
+                RefOrMut<'b, C::Val>,
+                &'a C::Time,
+                &'a C::R,
+            ) -> I
+            + 'static,
     {
         // Attempt to make progress on this batch.
         let mut work: usize = 0;

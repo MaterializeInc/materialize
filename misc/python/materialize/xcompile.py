@@ -136,13 +136,16 @@ def tool(arch: Arch, name: str, channel: Optional[str] = None) -> List[str]:
 
 
 def _enter_builder(arch: Arch, channel: Optional[str] = None) -> List[str]:
-    assert (
-        arch == Arch.host()
-    ), f"target architecture {arch} does not match host architecture {Arch.host()}"
     if "MZ_DEV_CI_BUILDER" in os.environ or sys.platform == "darwin":
         return []
     else:
-        return ["bin/ci-builder", "run", channel if channel else "stable"]
+        return [
+            "env",
+            f"MZ_DEV_CI_BUILDER_ARCH={arch}",
+            "bin/ci-builder",
+            "run",
+            channel if channel else "stable",
+        ]
 
 
 def _bootstrap_darwin(arch: Arch) -> None:

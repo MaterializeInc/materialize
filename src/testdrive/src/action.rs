@@ -25,11 +25,11 @@ use aws_types::credentials::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use mz_coord::catalog::{Catalog, ConnCatalog};
 use mz_coord::session::Session;
-use mz_kafka_util::client::MzClientContext;
+use mz_kafka_util::client::{create_new_client_config_simple, MzClientContext};
 use mz_ore::now::NOW_ZERO;
+use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
@@ -41,9 +41,8 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 
 use crate::error::PosError;
-use crate::parser::{validate_ident, Command, PosCommand, SqlErrorMatchType, SqlOutput};
+use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};
 use crate::util;
-use crate::util::mz_data::catalog_copy;
 
 mod file;
 mod http;
@@ -60,7 +59,6 @@ mod skip_if;
 mod sleep;
 mod sql;
 mod sql_server;
-mod verify_timestamp_compaction;
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -95,15 +93,16 @@ pub struct Config {
     pub backoff_factor: f64,
 
     // === Materialize options. ===
-    /// The connection parameters for the materialized instance that testdrive
-    /// will connect to.
-    pub materialized_pgconfig: tokio_postgres::Config,
-    /// Session parameters to set after connecting to materialized.
-    pub materialized_params: Vec<(String, String)>,
-    /// An optional path to the data directory for the materialized instance.
-    pub materialized_data_path: Option<PathBuf>,
+    /// The pgwire connection parameters for the Materialize instance that
+    /// testdrive will connect to.
+    pub materialize_pgconfig: tokio_postgres::Config,
+    /// The port for the public endpoints of the materialize instance that
+    /// testdrive will connect to via HTTP.
+    pub materialize_http_port: u16,
+    /// Session parameters to set after connecting to materialize.
+    pub materialize_params: Vec<(String, String)>,
     /// An optional Postgres connection string to the catalog stash.
-    pub materialized_catalog_postgres_stash: Option<String>,
+    pub materialize_catalog_postgres_stash: Option<String>,
 
     // === Confluent options. ===
     /// The address of the Kafka broker that testdrive will interact with.
@@ -152,10 +151,10 @@ pub struct State {
     regex_replacement: String,
 
     // === Materialize state. ===
-    materialized_data_path: Option<PathBuf>,
-    materialized_catalog_postgres_stash: Option<String>,
-    materialized_addr: String,
-    materialized_user: String,
+    materialize_catalog_postgres_stash: Option<String>,
+    materialize_sql_addr: String,
+    materialize_http_addr: String,
+    materialize_user: String,
     pgclient: tokio_postgres::Client,
 
     // === Confluent state. ===
@@ -193,7 +192,7 @@ impl State {
     where
         F: FnOnce(ConnCatalog) -> T,
     {
-        if let Some(url) = &self.materialized_catalog_postgres_stash {
+        if let Some(url) = &self.materialize_catalog_postgres_stash {
             let schema = format!("mz_stash_copy_{}", self.seed);
 
             let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
@@ -203,6 +202,9 @@ impl State {
                 }
             });
 
+            let current_schema: String =
+                client.query_one("SELECT current_schema", &[]).await?.get(0);
+
             client
                 .execute(format!("CREATE SCHEMA {schema}").as_str(), &[])
                 .await?;
@@ -210,15 +212,16 @@ impl State {
                 .execute(format!("SET search_path TO {schema}").as_str(), &[])
                 .await?;
             client
-                .batch_execute(
+                .batch_execute(&format!(
                     "
-                                CREATE TABLE fence AS SELECT * FROM public.fence;
-                                CREATE TABLE collections AS SELECT * FROM public.collections;
-                                CREATE TABLE data AS SELECT * FROM public.data;
-                                CREATE TABLE sinces AS SELECT * FROM public.sinces;
-                                CREATE TABLE uppers AS SELECT * FROM public.uppers;
-                            ",
-                )
+                    CREATE TABLE fence AS SELECT * FROM {0}.fence;
+                    CREATE TABLE collections AS SELECT * FROM {0}.collections;
+                    CREATE TABLE data AS SELECT * FROM {0}.data;
+                    CREATE TABLE sinces AS SELECT * FROM {0}.sinces;
+                    CREATE TABLE uppers AS SELECT * FROM {0}.uppers;
+                    ",
+                    current_schema,
+                ))
                 .await?;
 
             let catalog =
@@ -229,11 +232,6 @@ impl State {
                 .execute(format!("DROP SCHEMA {schema} CASCADE").as_str(), &[])
                 .await?;
             Ok(Some(res))
-        } else if let Some(path) = &self.materialized_data_path {
-            let temp_mzdata = catalog_copy(path)?;
-            let path = temp_mzdata.path();
-            let catalog = Catalog::open_debug_sqlite(&path, NOW_ZERO.clone()).await?;
-            Ok(Some(f(catalog.for_session(&Session::dummy()))))
         } else {
             Ok(None)
         }
@@ -261,25 +259,25 @@ impl State {
         self.aws_config.region().map(|r| r.as_ref()).unwrap_or("")
     }
 
-    pub async fn reset_materialized(&mut self) -> Result<(), anyhow::Error> {
+    pub async fn reset_materialize(&mut self) -> Result<(), anyhow::Error> {
         for row in self
             .pgclient
             .query("SHOW DATABASES", &[])
             .await
-            .context("resetting materialized state: SHOW DATABASES")?
+            .context("resetting materialize state: SHOW DATABASES")?
         {
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
             sql::print_query(&query);
             self.pgclient.batch_execute(&query).await.context(format!(
-                "resetting materialized state: DROP DATABASE {}",
+                "resetting materialize state: DROP DATABASE {}",
                 db_name,
             ))?;
         }
         self.pgclient
             .batch_execute("CREATE DATABASE materialize")
             .await
-            .context("resetting materialized state: CREATE DATABASE materialize")?;
+            .context("resetting materialize state: CREATE DATABASE materialize")?;
 
         // Attempt to remove all users but the current user. Old versions of
         // Materialize did not support roles, so this degrades gracefully if
@@ -287,13 +285,13 @@ impl State {
         if let Ok(rows) = self.pgclient.query("SELECT name FROM mz_roles", &[]).await {
             for row in rows {
                 let role_name: String = row.get(0);
-                if role_name == self.materialized_user || role_name.starts_with("mz_") {
+                if role_name == self.materialize_user || role_name.starts_with("mz_") {
                     continue;
                 }
                 let query = format!("DROP ROLE {}", role_name);
                 sql::print_query(&query);
                 self.pgclient.batch_execute(&query).await.context(format!(
-                    "resetting materialized state: DROP ROLE {}",
+                    "resetting materialize state: DROP ROLE {}",
                     role_name,
                 ))?;
             }
@@ -495,12 +493,12 @@ pub(crate) async fn build(
         );
     }
     vars.insert(
-        "testdrive.materialized-addr".into(),
-        state.materialized_addr.clone(),
+        "testdrive.materialize-sql-addr".into(),
+        state.materialize_sql_addr.clone(),
     );
     vars.insert(
-        "testdrive.materialized-user".into(),
-        state.materialized_user.clone(),
+        "testdrive.materialize-user".into(),
+        state.materialize_user.clone(),
     );
 
     for (key, value) in env::vars() {
@@ -618,12 +616,12 @@ pub(crate) async fn build(
                         }
                         continue;
                     }
-                    "verify-timestamp-compaction" => Box::new(
-                        verify_timestamp_compaction::build_verify_timestamp_compaction_action(
-                            builtin,
-                        )
-                        .map_err(wrap_err)?,
-                    ),
+                    // "verify-timestamp-compaction" => Box::new(
+                    //     verify_timestamp_compaction::build_verify_timestamp_compaction_action(
+                    //         builtin,
+                    //     )
+                    //     .map_err(wrap_err)?,
+                    // ),
                     _ => {
                         return Err(PosError::new(
                             anyhow!("unknown built-in command {}", builtin.name),
@@ -645,11 +643,11 @@ pub(crate) async fn build(
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
-
-                sql.expected_error = if matches!(sql.error_match_type, SqlErrorMatchType::Regex) {
-                    subst_re(&sql.expected_error)?
-                } else {
-                    subst(&sql.expected_error)?
+                sql.expected_error = match &sql.expected_error {
+                    SqlExpectedError::Contains(s) => SqlExpectedError::Contains(subst(s)?),
+                    SqlExpectedError::Exact(s) => SqlExpectedError::Exact(subst(s)?),
+                    SqlExpectedError::Regex(s) => SqlExpectedError::Regex(subst_re(&s)?),
+                    SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
                 Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?)
             }
@@ -669,9 +667,7 @@ fn substitute_vars(
     ignore_prefix: &Option<String>,
     regex_escape: bool,
 ) -> Result<String, anyhow::Error> {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"\$\{([^}]+)\}").unwrap();
-    }
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$\{([^}]+)\}").unwrap());
     let mut err = None;
     let out = RE.replace_all(msg, |caps: &Captures| {
         let name = &caps[1];
@@ -725,31 +721,28 @@ pub async fn create_state(
         }
     };
 
-    let materialized_data_path = match config.materialized_data_path.clone() {
-        Some(path) => match fs::metadata(&path) {
-            Ok(m) if !m.is_dir() => {
-                bail!("materialized data path is not a directory");
-            }
-            Ok(_) => Some(path),
-            Err(e) => return Err(e).context("opening materialized data directory"),
-        },
-        None => None,
-    };
+    let materialize_catalog_postgres_stash = config.materialize_catalog_postgres_stash.clone();
 
-    let materialized_catalog_postgres_stash = config.materialized_catalog_postgres_stash.clone();
+    let (materialize_sql_addr, materialize_http_addr, materialize_user, pgclient, pgconn_task) = {
+        let materialize_url = util::postgres::config_url(&config.materialize_pgconfig)?;
 
-    let (materialized_addr, materialized_user, pgclient, pgconn_task) = {
-        let materialized_url = util::postgres::config_url(&config.materialized_pgconfig)?;
-        let (pgclient, pgconn) = config
-            .materialized_pgconfig
-            .connect(tokio_postgres::NoTls)
-            .await
-            .with_context(|| format!("opening SQL connection: {}", materialized_url))?;
+        let (pgclient, pgconn) = Retry::default()
+            .max_duration(config.default_timeout)
+            .retry_async_canceling(|_| async move {
+                config
+                    .materialize_pgconfig
+                    .clone()
+                    .connect_timeout(config.default_timeout)
+                    .connect(tokio_postgres::NoTls)
+                    .await
+                    .map_err(|e| anyhow!(e))
+            })
+            .await?;
         let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
             join.expect("pgconn_task unexpectedly canceled")
                 .context("running SQL connection")
         });
-        for (key, value) in &config.materialized_params {
+        for (key, value) in &config.materialize_params {
             pgclient
                 .batch_execute(&format!("SET {key} = {value}"))
                 .await
@@ -758,17 +751,28 @@ pub async fn create_state(
 
         // Old versions of Materialize did not support `current_user`, so we
         // fail gracefully.
-        let materialized_user = match pgclient.query_one("SELECT current_user", &[]).await {
+        let materialize_user = match pgclient.query_one("SELECT current_user", &[]).await {
             Ok(row) => row.get(0),
             Err(_) => "<unknown user>".to_owned(),
         };
 
-        let materialized_addr = format!(
+        let materialize_sql_addr = format!(
             "{}:{}",
-            materialized_url.host_str().unwrap(),
-            materialized_url.port().unwrap()
+            materialize_url.host_str().unwrap(),
+            materialize_url.port().unwrap()
         );
-        (materialized_addr, materialized_user, pgclient, pgconn_task)
+        let materialize_http_addr = format!(
+            "{}:{}",
+            materialize_url.host_str().unwrap(),
+            config.materialize_http_port
+        );
+        (
+            materialize_sql_addr,
+            materialize_http_addr,
+            materialize_user,
+            pgclient,
+            pgconn_task,
+        )
     };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
@@ -795,7 +799,7 @@ pub async fn create_state(
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::producer::FutureProducer;
 
-        let mut kafka_config = ClientConfig::new();
+        let mut kafka_config = create_new_client_config_simple();
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
         kafka_config.set("group.id", "materialize-testdrive");
         kafka_config.set("auto.offset.reset", "earliest");
@@ -854,10 +858,10 @@ pub async fn create_state(
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
 
         // === Materialize state. ===
-        materialized_data_path,
-        materialized_catalog_postgres_stash,
-        materialized_addr,
-        materialized_user,
+        materialize_catalog_postgres_stash,
+        materialize_sql_addr,
+        materialize_http_addr,
+        materialize_user,
         pgclient,
 
         // === Confluent state. ===

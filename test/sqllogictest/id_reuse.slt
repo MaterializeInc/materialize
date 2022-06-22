@@ -1,0 +1,106 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test that cluster ids aren't reused.
+
+mode cockroach
+
+statement ok
+CREATE SCHEMA foo
+
+query IT rowsort
+SELECT id, name FROM mz_schemas
+----
+1 mz_catalog
+2 pg_catalog
+3 public
+4 mz_internal
+5 information_schema
+6 foo
+
+statement ok
+DROP schema foo
+
+statement ok
+CREATE schema bar
+
+query IT rowsort
+SELECT id, name FROM mz_schemas
+----
+1 mz_catalog
+2 pg_catalog
+3 public
+4 mz_internal
+5 information_schema
+7 bar
+
+statement ok
+CREATE DATABASE foo
+
+query IT rowsort
+SELECT id, name FROM mz_databases
+----
+1 materialize
+2 foo
+
+statement ok
+DROP DATABASE foo
+
+statement ok
+CREATE DATABASE bar
+
+query IT rowsort
+SELECT id, name FROM mz_databases
+----
+1 materialize
+3 bar
+
+statement ok
+CREATE ROLE foo LOGIN SUPERUSER
+
+query IT rowsort
+SELECT id, name FROM mz_roles
+----
+0 mz_system
+1 materialize
+2 foo
+
+statement ok
+DROP ROLE foo
+
+statement ok
+CREATE ROLE bar LOGIN SUPERUSER
+
+query IT rowsort
+SELECT id, name FROM mz_roles
+----
+0 mz_system
+1 materialize
+3 bar
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (size '1'))
+
+query IT rowsort
+SELECT id, name FROM mz_clusters
+----
+1 default
+2 foo
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER bar REPLICAS (r1 (size '1'))
+
+query IT rowsort
+SELECT id, name FROM mz_clusters
+----
+1 default
+3 bar

@@ -25,10 +25,12 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use time::Instant;
+use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
 use url::Url;
 use walkdir::WalkDir;
 
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 
 use mz_testdrive::Config;
@@ -64,7 +66,7 @@ struct Args {
     #[clap(long, value_name = "PATH")]
     temp_dir: Option<String>,
     /// Default timeout for cancellable operations.
-    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "10s", value_name = "DURATION")]
+    #[clap(long, parse(try_from_str = mz_repr::util::parse_duration), default_value = "30s", value_name = "DURATION")]
     default_timeout: Duration,
     /// The default number of times to retry a query expecting it to converge to the desired result.
     #[clap(long, default_value = "18446744073709551615", value_name = "N")]
@@ -102,25 +104,30 @@ struct Args {
     junit_report: Option<PathBuf>,
     /// Which log messages to emit.
     ///
-    /// See materialized's `--log-filter` option for details.
+    /// See environmentd's `--log-filter` option for details.
     #[clap(long, value_name = "FILTER", default_value = "off")]
     log_filter: EnvFilter,
     /// Glob patterns of testdrive scripts to run.
     globs: Vec<String>,
 
     // === Materialize options. ===
-    /// materialized connection string.
+    /// materialize SQL connection string.
     #[clap(
         long,
         default_value = "postgres://materialize@localhost:6875",
         value_name = "URL"
     )]
-    materialized_url: tokio_postgres::Config,
+    materialize_url: tokio_postgres::Config,
+    /// The port on which Materialize is listening for untrusted HTTP connections.
+    ///
+    /// The hostname is taken from `materialize_url`.
+    #[clap(long, default_value = "6876", value_name = "PORT")]
+    materialize_http_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
-    /// materialized.
+    /// Materialize.
     #[clap(long, value_name = "KEY=VAL", parse(from_str = parse_kafka_opt))]
-    materialized_param: Vec<(String, String)>,
-    /// Validate the on-disk state of the specified materialized data directory.
+    materialize_param: Vec<(String, String)>,
+    /// Validate the on-disk state of the specified Materialize data directory.
     #[clap(long, value_name = "PATH")]
     validate_data_dir: Option<PathBuf>,
     /// Validate the stash state of the specified postgres connection string.
@@ -177,7 +184,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
         .with_env_filter(args.log_filter)
@@ -231,15 +238,15 @@ async fn main() {
         }
     };
 
-    eprintln!(
+    info!(
         "Configuration parameters:
     Kafka address: {}
     Schema registry URL: {}
-    materialized host: {:?}
+    Materialize host: {:?}
     Error limit: {}",
         args.kafka_addr,
         args.schema_registry_url,
-        args.materialized_url.get_hosts()[0],
+        args.materialize_url.get_hosts()[0],
         args.max_errors
     );
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {
@@ -272,10 +279,10 @@ async fn main() {
         backoff_factor: args.backoff_factor,
 
         // === Materialize options. ===
-        materialized_pgconfig: args.materialized_url,
-        materialized_params: args.materialized_param,
-        materialized_data_path: args.validate_data_dir,
-        materialized_catalog_postgres_stash: args.validate_postgres_stash,
+        materialize_pgconfig: args.materialize_url,
+        materialize_http_port: args.materialize_http_port,
+        materialize_params: args.materialize_param,
+        materialize_catalog_postgres_stash: args.validate_postgres_stash,
 
         // === Confluent options. ===
         kafka_addr: args.kafka_addr,

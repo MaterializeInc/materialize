@@ -110,14 +110,14 @@ build
 ----
 %0 =
 | Get y (u1)
-| TopK group=(#1) order=(#0 asc) limit=5 offset=1
+| TopK group=(#1) order=(#0 asc nulls_first) limit=5 offset=1
 
 build
-(top_k (get y) [0 1] [(2 true)] )
+(top_k (get y) [0 1] [(2 true true)] )
 ----
 %0 =
 | Get y (u1)
-| TopK group=(#0, #1) order=(#2 desc) offset=0
+| TopK group=(#0, #1) order=(#2 desc nulls_last) offset=0
 
 build
 (reduce (get y)

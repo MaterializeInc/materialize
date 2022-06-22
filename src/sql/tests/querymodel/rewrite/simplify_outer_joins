@@ -8,9 +8,9 @@
 # by the Apache License, Version 2.0.
 
 cat
-(defsource x [int32 int32] [f1 f2])
-(defsource y [int32 int32 int32 int32] [f1 f2 f3 f4])
-(defsource z [int32 int32] [f1 f2])
+(defsource x ([int32 int32] [f1 f2]))
+(defsource y ([int32 int32 int32 int32] [f1 f2 f3 f4]))
+(defsource z ([int32 int32] [f1 f2]))
 ----
 ok
 

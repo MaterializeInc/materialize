@@ -237,11 +237,11 @@ pub struct ConfluentAvroResolver {
 impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
-        config: Option<mz_ccsr::ClientConfig>,
+        ccsr_client: Option<mz_ccsr::Client>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
-        let writer_schemas = config.map(SchemaCache::new).transpose()?;
+        let writer_schemas = ccsr_client.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
@@ -311,10 +311,10 @@ struct SchemaCache {
 }
 
 impl SchemaCache {
-    fn new(schema_registry: mz_ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
+    fn new(ccsr_client: mz_ccsr::Client) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: HashMap::new(),
-            ccsr_client: schema_registry.build()?,
+            ccsr_client,
         })
     }
 

@@ -13,13 +13,13 @@ use std::fmt::{self, Write};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use lazy_static::lazy_static;
 use num_traits::CheckedMul;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
 use crate::adt::numeric::{DecimalLike, Numeric};
-use crate::proto::TryFromProtoError;
+use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 
@@ -51,24 +51,20 @@ impl Default for Interval {
     }
 }
 
-impl From<&Interval> for ProtoInterval {
-    fn from(x: &Interval) -> Self {
+impl RustType<ProtoInterval> for Interval {
+    fn into_proto(&self) -> ProtoInterval {
         ProtoInterval {
-            months: x.months,
-            days: x.days,
-            micros: x.micros,
+            months: self.months,
+            days: self.days,
+            micros: self.micros,
         }
     }
-}
 
-impl TryFrom<ProtoInterval> for Interval {
-    type Error = TryFromProtoError;
-
-    fn try_from(repr: ProtoInterval) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoInterval) -> Result<Self, TryFromProtoError> {
         Ok(Interval {
-            months: repr.months,
-            days: repr.days,
-            micros: repr.micros,
+            months: proto.months,
+            days: proto.days,
+            micros: proto.micros,
         })
     }
 }
@@ -87,21 +83,31 @@ impl num_traits::ops::checked::CheckedNeg for Interval {
     }
 }
 
-lazy_static! {
-    static ref MONTH_OVERFLOW_ERROR: String = format!(
+impl std::str::FromStr for Interval {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        crate::strconv::parse_interval(s).map_err(|e| anyhow!(e))
+    }
+}
+
+static MONTH_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
+    format!(
         "Overflows maximum months; cannot exceed {}/{} microseconds",
         i32::MAX,
         i32::MIN,
-    );
-    static ref DAY_OVERFLOW_ERROR: String = format!(
+    )
+});
+static DAY_OVERFLOW_ERROR: Lazy<String> = Lazy::new(|| {
+    format!(
         "Overflows maximum days; cannot exceed {}/{} microseconds",
         i32::MAX,
         i32::MIN,
-    );
-    static ref USECS_PER_DAY: i64 =
-        Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64)
-            .unwrap();
-}
+    )
+});
+static USECS_PER_DAY: Lazy<i64> = Lazy::new(|| {
+    Interval::convert_date_time_unit(DateTimeField::Day, DateTimeField::Microseconds, 1i64).unwrap()
+});
 
 impl Interval {
     // Don't let our duration exceed Postgres' min/max for those same fields,

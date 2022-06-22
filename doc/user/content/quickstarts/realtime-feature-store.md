@@ -1,5 +1,5 @@
 ---
-title: "Build a live Feature Store for ML"
+title: "Build a live feature store for ML"
 description: "  "
 draft: true
 menu:

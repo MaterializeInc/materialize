@@ -30,7 +30,7 @@ pub(crate) fn persist_sink<G>(
     let active_worker_index = 0;
 
     let write = if active_worker_index == scope.index() {
-        let shard_id = target.shard_id.expect("missing shard_id");
+        let shard_id = target.persist_shard;
         let persist_client =
             futures_executor::block_on(target.persist_location.open()).expect("cannot open client");
         let (write, read) =
@@ -81,8 +81,7 @@ pub(crate) fn persist_sink<G>(
                     .append(updates, write.upper().clone(), frontier.clone())
                     .await
                     .expect("cannot append updates")
-                    .expect("cannot append updates")
-                    .expect("invalid/outdated upper");
+                    .expect("cannot append updates");
 
                 stash.retain(|ts, _updates| frontier.less_equal(ts));
             }

@@ -1,5 +1,5 @@
 ---
-title: "Account Limits"
+title: "Account limits"
 description: "Learn what features Materialize Cloud offers."
 menu:
   main:

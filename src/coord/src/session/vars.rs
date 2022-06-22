@@ -9,9 +9,10 @@
 
 use std::borrow::Borrow;
 use std::fmt;
+use std::time::Duration;
 
 use const_format::concatcp;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use uncased::UncasedStr;
 
 use mz_ore::cast;
@@ -19,14 +20,6 @@ use mz_sql::DEFAULT_SCHEMA;
 
 use crate::error::CoordError;
 use crate::session::EndTransactionAction;
-
-// TODO(benesch): remove this when SergioBenitez/uncased#3 resolves.
-macro_rules! static_uncased_str {
-    ($string:expr) => {{
-        // This is safe for the same reason that `UncasedStr::new` is safe.
-        unsafe { ::core::mem::transmute::<&'static str, &'static UncasedStr>($string) }
-    }};
-}
 
 // We pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
 // be. Too new and some clients will emit a "server too new" warning. Too old
@@ -46,85 +39,96 @@ pub const SERVER_PATCH_VERSION: u8 = 0;
 pub const DEFAULT_DATABASE_NAME: &str = "materialize";
 
 const APPLICATION_NAME: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("application_name"),
+    name: UncasedStr::new("application_name"),
     value: "",
     description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
 };
 
 const CLIENT_ENCODING: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("client_encoding"),
+    name: UncasedStr::new("client_encoding"),
     value: "UTF8",
     description: "Sets the client's character set encoding (PostgreSQL).",
 };
 
 const CLIENT_MIN_MESSAGES: ServerVar<ClientSeverity> = ServerVar {
-    name: static_uncased_str!("client_min_messages"),
+    name: UncasedStr::new("client_min_messages"),
     value: &ClientSeverity::Notice,
     description: "Sets the message levels that are sent to the client (PostgreSQL).",
 };
 
 const CLUSTER: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("cluster"),
+    name: UncasedStr::new("cluster"),
     value: "default",
     description: "Sets the current cluster (Materialize).",
 };
 
+const CLUSTER_REPLICA: ServerVar<Option<String>> = ServerVar {
+    name: UncasedStr::new("cluster_replica"),
+    value: &None,
+    description: "Sets a target cluster replica for SELECT queries (Materialize).",
+};
+
 const DATABASE: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("database"),
+    name: UncasedStr::new("database"),
     value: DEFAULT_DATABASE_NAME,
     description: "Sets the current database (CockroachDB).",
 };
 
 const DATE_STYLE: ServerVar<str> = ServerVar {
     // DateStyle has nonstandard capitalization for historical reasons.
-    name: static_uncased_str!("DateStyle"),
+    name: UncasedStr::new("DateStyle"),
     value: "ISO, MDY",
     description: "Sets the display format for date and time values (PostgreSQL).",
 };
 
 const EXTRA_FLOAT_DIGITS: ServerVar<i32> = ServerVar {
-    name: static_uncased_str!("extra_float_digits"),
+    name: UncasedStr::new("extra_float_digits"),
     value: &3,
     description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
 };
 
 const FAILPOINTS: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("failpoints"),
+    name: UncasedStr::new("failpoints"),
     value: "",
     description: "Allows failpoints to be dynamically activated.",
 };
 
 const INTEGER_DATETIMES: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("integer_datetimes"),
+    name: UncasedStr::new("integer_datetimes"),
     value: &true,
     description: "Reports whether the server uses 64-bit-integer dates and times (PostgreSQL).",
 };
 
 const INTERVAL_STYLE: ServerVar<str> = ServerVar {
     // IntervalStyle has nonstandard capitalization for historical reasons.
-    name: static_uncased_str!("IntervalStyle"),
+    name: UncasedStr::new("IntervalStyle"),
     value: "postgres",
     description: "Sets the display format for interval values (PostgreSQL).",
 };
 
 const QGM_OPTIMIZATIONS: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("qgm_optimizations_experimental"),
+    name: UncasedStr::new("qgm_optimizations_experimental"),
     value: &false,
     description: "Enables optimizations based on a Query Graph Model (QGM) query representation.",
 };
 
-lazy_static! {
-    static ref DEFAULT_SEARCH_PATH: [String; 1] = [DEFAULT_SCHEMA.to_owned(),];
-    static ref SEARCH_PATH: ServerVar<[String]> = ServerVar {
-        name: static_uncased_str!("search_path"),
-        value: &*DEFAULT_SEARCH_PATH,
-        description:
-            "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
-    };
-}
+static DEFAULT_SEARCH_PATH: Lazy<[String; 1]> = Lazy::new(|| [DEFAULT_SCHEMA.to_owned()]);
+static SEARCH_PATH: Lazy<ServerVar<[String]>> = Lazy::new(|| ServerVar {
+    name: UncasedStr::new("search_path"),
+    value: &*DEFAULT_SEARCH_PATH,
+    description:
+        "Sets the schema search order for names that are not schema-qualified (PostgreSQL).",
+});
+
+const STATEMENT_TIMEOUT: ServerVar<Duration> = ServerVar {
+    name: UncasedStr::new("statement_timeout"),
+    value: &Duration::from_secs(10),
+    description:
+        "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations.",
+};
 
 const SERVER_VERSION: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("server_version"),
+    name: UncasedStr::new("server_version"),
     value: concatcp!(
         SERVER_MAJOR_VERSION,
         ".",
@@ -136,7 +140,7 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
 };
 
 const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
-    name: static_uncased_str!("server_version_num"),
+    name: UncasedStr::new("server_version_num"),
     value: &((cast::u8_to_i32(SERVER_MAJOR_VERSION) * 10_000)
         + (cast::u8_to_i32(SERVER_MINOR_VERSION) * 100)
         + cast::u8_to_i32(SERVER_PATCH_VERSION)),
@@ -144,26 +148,26 @@ const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
 };
 
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("sql_safe_updates"),
+    name: UncasedStr::new("sql_safe_updates"),
     value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
 const STANDARD_CONFORMING_STRINGS: ServerVar<bool> = ServerVar {
-    name: static_uncased_str!("standard_conforming_strings"),
+    name: UncasedStr::new("standard_conforming_strings"),
     value: &true,
     description: "Causes '...' strings to treat backslashes literally (PostgreSQL).",
 };
 
 const TIMEZONE: ServerVar<TimeZone> = ServerVar {
     // TimeZone has nonstandard capitalization for historical reasons.
-    name: static_uncased_str!("TimeZone"),
+    name: UncasedStr::new("TimeZone"),
     value: &TimeZone::UTC,
     description: "Sets the time zone for displaying and interpreting time stamps (PostgreSQL).",
 };
 
 const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
-    name: static_uncased_str!("transaction_isolation"),
+    name: UncasedStr::new("transaction_isolation"),
     value: "serializable",
     description: "Sets the current transaction's isolation level (PostgreSQL).",
 };
@@ -198,6 +202,7 @@ pub struct Vars {
     client_encoding: ServerVar<str>,
     client_min_messages: SessionVar<ClientSeverity>,
     cluster: SessionVar<str>,
+    cluster_replica: SessionVar<Option<String>>,
     database: SessionVar<str>,
     date_style: ServerVar<str>,
     extra_float_digits: SessionVar<i32>,
@@ -210,6 +215,7 @@ pub struct Vars {
     server_version_num: ServerVar<i32>,
     sql_safe_updates: SessionVar<bool>,
     standard_conforming_strings: ServerVar<bool>,
+    statement_timeout: SessionVar<Duration>,
     timezone: SessionVar<TimeZone>,
     transaction_isolation: ServerVar<str>,
 }
@@ -221,6 +227,7 @@ impl Default for Vars {
             client_encoding: CLIENT_ENCODING,
             client_min_messages: SessionVar::new(&CLIENT_MIN_MESSAGES),
             cluster: SessionVar::new(&CLUSTER),
+            cluster_replica: SessionVar::new(&CLUSTER_REPLICA),
             database: SessionVar::new(&DATABASE),
             date_style: DATE_STYLE,
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
@@ -233,6 +240,7 @@ impl Default for Vars {
             server_version_num: SERVER_VERSION_NUM,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
+            statement_timeout: SessionVar::new(&STATEMENT_TIMEOUT),
             timezone: SessionVar::new(&TIMEZONE),
             transaction_isolation: TRANSACTION_ISOLATION,
         }
@@ -248,6 +256,7 @@ impl Vars {
             &self.client_encoding,
             &self.client_min_messages,
             &self.cluster,
+            &self.cluster_replica,
             &self.database,
             &self.date_style,
             &self.extra_float_digits,
@@ -260,6 +269,7 @@ impl Vars {
             &self.server_version_num,
             &self.sql_safe_updates,
             &self.standard_conforming_strings,
+            &self.statement_timeout,
             &self.timezone,
             &self.transaction_isolation,
         ]
@@ -300,6 +310,8 @@ impl Vars {
             Ok(&self.client_min_messages)
         } else if name == CLUSTER.name {
             Ok(&self.cluster)
+        } else if name == CLUSTER_REPLICA.name {
+            Ok(&self.cluster_replica)
         } else if name == DATABASE.name {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
@@ -324,6 +336,8 @@ impl Vars {
             Ok(&self.sql_safe_updates)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
             Ok(&self.standard_conforming_strings)
+        } else if name == STATEMENT_TIMEOUT.name {
+            Ok(&self.statement_timeout)
         } else if name == TIMEZONE.name {
             Ok(&self.timezone)
         } else if name == TRANSACTION_ISOLATION.name {
@@ -368,6 +382,8 @@ impl Vars {
             }
         } else if name == CLUSTER.name {
             self.cluster.set(value, local)
+        } else if name == CLUSTER_REPLICA.name {
+            self.cluster_replica.set(value, local)
         } else if name == DATABASE.name {
             self.database.set(value, local)
         } else if name == DATE_STYLE.name {
@@ -437,6 +453,8 @@ impl Vars {
                     &STANDARD_CONFORMING_STRINGS,
                 )),
             }
+        } else if name == STATEMENT_TIMEOUT.name {
+            self.statement_timeout.set(value, local)
         } else if name == TIMEZONE.name {
             if let Ok(_) = TimeZone::parse(value) {
                 self.timezone.set(value, local)
@@ -454,6 +472,54 @@ impl Vars {
         }
     }
 
+    /// Sets the configuration parameter named `name` to its default value.
+    ///
+    /// The new value may be either committed or rolled back by the next call to
+    /// [`Vars::end_transaction`]. If `local` is true, the new value is always
+    /// discarded by the next call to [`Vars::end_transaction`], even if the
+    /// transaction is marked to commit.
+    ///
+    /// Like with [`Vars::get`], configuration parameters are matched case
+    /// insensitively. If the named configuration parameter does not exist, an
+    /// error is returned.
+    pub fn reset(&mut self, name: &str, local: bool) -> Result<(), CoordError> {
+        if name == APPLICATION_NAME.name {
+            self.application_name.reset(local);
+        } else if name == CLIENT_MIN_MESSAGES.name {
+            self.client_min_messages.reset(local);
+        } else if name == CLUSTER.name {
+            self.cluster.reset(local);
+        } else if name == CLUSTER_REPLICA.name {
+            self.cluster_replica.reset(local);
+        } else if name == DATABASE.name {
+            self.database.reset(local);
+        } else if name == EXTRA_FLOAT_DIGITS.name {
+            self.extra_float_digits.reset(local);
+        } else if name == QGM_OPTIMIZATIONS.name {
+            self.qgm_optimizations.reset(local);
+        } else if name == SEARCH_PATH.name {
+            self.search_path.reset(local);
+        } else if name == SQL_SAFE_UPDATES.name {
+            self.sql_safe_updates.reset(local);
+        } else if name == TIMEZONE.name {
+            self.timezone.reset(local);
+        } else if name == CLIENT_ENCODING.name
+            || name == DATE_STYLE.name
+            || name == FAILPOINTS.name
+            || name == INTEGER_DATETIMES.name
+            || name == INTERVAL_STYLE.name
+            || name == SERVER_VERSION.name
+            || name == SERVER_VERSION_NUM.name
+            || name == STANDARD_CONFORMING_STRINGS.name
+            || name == TRANSACTION_ISOLATION.name
+        {
+            // fixed value
+        } else {
+            return Err(CoordError::UnknownParameter(name.into()));
+        }
+        Ok(())
+    }
+
     /// Commits or rolls back configuration parameter updates made via
     /// [`Vars::set`] since the last call to `end_transaction`.
     pub fn end_transaction(&mut self, action: EndTransactionAction) {
@@ -463,7 +529,8 @@ impl Vars {
             application_name,
             client_encoding: _,
             client_min_messages,
-            cluster: _,
+            cluster,
+            cluster_replica,
             database,
             date_style: _,
             extra_float_digits,
@@ -476,16 +543,20 @@ impl Vars {
             server_version_num: _,
             sql_safe_updates,
             standard_conforming_strings: _,
-            timezone: _,
+            statement_timeout: _,
+            timezone,
             transaction_isolation: _,
         } = self;
         application_name.end_transaction(action);
         client_min_messages.end_transaction(action);
+        cluster.end_transaction(action);
+        cluster_replica.end_transaction(action);
         database.end_transaction(action);
+        extra_float_digits.end_transaction(action);
         qgm_optimizations.end_transaction(action);
         search_path.end_transaction(action);
-        extra_float_digits.end_transaction(action);
         sql_safe_updates.end_transaction(action);
+        timezone.end_transaction(action);
     }
 
     /// Returns the value of the `application_name` configuration parameter.
@@ -506,6 +577,11 @@ impl Vars {
     /// Returns the value of the `cluster` configuration parameter.
     pub fn cluster(&self) -> &str {
         self.cluster.value()
+    }
+
+    /// Returns the value of the `cluster_replica` configuration parameter.
+    pub fn cluster_replica(&self) -> Option<&str> {
+        self.cluster_replica.value().as_deref()
     }
 
     /// Returns the value of the `DateStyle` configuration parameter.
@@ -566,6 +642,11 @@ impl Vars {
     /// parameter.
     pub fn standard_conforming_strings(&self) -> bool {
         *self.standard_conforming_strings.value
+    }
+
+    /// Returns the value of the `statement_timeout` configuration parameter.
+    pub fn statement_timeout(&self) -> &Duration {
+        self.statement_timeout.value()
     }
 
     /// Returns the value of the `timezone` configuration parameter.
@@ -644,6 +725,7 @@ struct SessionVar<V>
 where
     V: Value + fmt::Debug + ?Sized + 'static,
 {
+    default_value: &'static V,
     local_value: Option<V::Owned>,
     staged_value: Option<V::Owned>,
     session_value: Option<V::Owned>,
@@ -656,6 +738,7 @@ where
 {
     fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
         SessionVar {
+            default_value: &parent.value,
             local_value: None,
             staged_value: None,
             session_value: None,
@@ -675,6 +758,16 @@ where
                 Ok(())
             }
             Err(()) => Err(CoordError::InvalidParameterType(self.parent)),
+        }
+    }
+
+    fn reset(&mut self, local: bool) {
+        let value = self.default_value.to_owned();
+        if local {
+            self.local_value = Some(value);
+        } else {
+            self.local_value = None;
+            self.staged_value = Some(value);
         }
     }
 
@@ -761,6 +854,139 @@ impl Value for i32 {
     }
 }
 
+const SEC_TO_MIN: u64 = 60u64;
+const SEC_TO_HOUR: u64 = 60u64 * 60;
+const SEC_TO_DAY: u64 = 60u64 * 60 * 24;
+const MICRO_TO_MILLI: u32 = 1000u32;
+
+impl Value for Duration {
+    const TYPE_NAME: &'static str = "duration";
+
+    fn parse(s: &str) -> Result<Duration, ()> {
+        let s = s.trim();
+        // Take all numeric values from [0..]
+        let split_pos = s
+            .chars()
+            .position(|p| !char::is_numeric(p))
+            .unwrap_or_else(|| s.chars().count());
+
+        // Error if the numeric values don't parse, i.e. there aren't any.
+        let d = s[..split_pos].parse::<u64>().map_err(|_| ())?;
+
+        // We've already trimmed end
+        let (f, m): (fn(u64) -> Duration, u64) = match s[split_pos..].trim_start() {
+            "us" => (Duration::from_micros, 1),
+            // Default unit is milliseconds
+            "ms" | "" => (Duration::from_millis, 1),
+            "s" => (Duration::from_secs, 1),
+            "min" => (Duration::from_secs, SEC_TO_MIN),
+            "h" => (Duration::from_secs, SEC_TO_HOUR),
+            "d" => (Duration::from_secs, SEC_TO_DAY),
+            _ => return Err(()),
+        };
+
+        let d = if d == 0 {
+            Duration::from_secs(u64::MAX)
+        } else {
+            f(d.checked_mul(m).ok_or(())?)
+        };
+        Ok(d)
+    }
+
+    // The strategy for formatting these strings is to find the least
+    // significant unit of time that can be printed as an integer––we know this
+    // is always possible because the input can only be an integer of a single
+    // unit of time.
+    fn format(&self) -> String {
+        let micros = self.subsec_micros();
+        if micros > 0 {
+            match micros {
+                ms if ms != 0 && ms % MICRO_TO_MILLI == 0 => {
+                    format!(
+                        "{} ms",
+                        self.as_secs() * 1000 + u64::from(ms / MICRO_TO_MILLI)
+                    )
+                }
+                us => format!("{} us", self.as_secs() * 1_000_000 + u64::from(us)),
+            }
+        } else {
+            match self.as_secs() {
+                zero if zero == u64::MAX => "0".to_string(),
+                d if d != 0 && d % SEC_TO_DAY == 0 => format!("{} d", d / SEC_TO_DAY),
+                h if h != 0 && h % SEC_TO_HOUR == 0 => format!("{} h", h / SEC_TO_HOUR),
+                m if m != 0 && m % SEC_TO_MIN == 0 => format!("{} min", m / SEC_TO_MIN),
+                s => format!("{} s", s),
+            }
+        }
+    }
+}
+
+#[test]
+fn test_value_duration() {
+    fn inner(t: &'static str, e: Duration, expected_format: Option<&'static str>) {
+        let d = Duration::parse(t).unwrap();
+        assert_eq!(d, e);
+        let mut d_format = d.format();
+        d_format.retain(|c| !c.is_whitespace());
+        if let Some(expected) = expected_format {
+            assert_eq!(d_format, expected);
+        } else {
+            assert_eq!(
+                t.chars().filter(|c| !c.is_whitespace()).collect::<String>(),
+                d_format
+            )
+        }
+    }
+    inner("1", Duration::from_millis(1), Some("1ms"));
+    inner("0", Duration::from_secs(u64::MAX), None);
+    inner("1ms", Duration::from_millis(1), None);
+    inner("1000ms", Duration::from_millis(1000), Some("1s"));
+    inner("1001ms", Duration::from_millis(1001), None);
+    inner("1us", Duration::from_micros(1), None);
+    inner("1000us", Duration::from_micros(1000), Some("1ms"));
+    inner("1s", Duration::from_secs(1), None);
+    inner("60s", Duration::from_secs(60), Some("1min"));
+    inner("3600s", Duration::from_secs(3600), Some("1h"));
+    inner("3660s", Duration::from_secs(3660), Some("61min"));
+    inner("1min", Duration::from_secs(1 * SEC_TO_MIN), None);
+    inner("60min", Duration::from_secs(60 * SEC_TO_MIN), Some("1h"));
+    inner("1h", Duration::from_secs(1 * SEC_TO_HOUR), None);
+    inner("24h", Duration::from_secs(24 * SEC_TO_HOUR), Some("1d"));
+    inner("1d", Duration::from_secs(1 * SEC_TO_DAY), None);
+    inner("2d", Duration::from_secs(2 * SEC_TO_DAY), None);
+    inner("  1   s ", Duration::from_secs(1), None);
+    inner("1s ", Duration::from_secs(1), None);
+    inner("   1s", Duration::from_secs(1), None);
+    inner("0s", Duration::from_secs(u64::MAX), Some("0"));
+    inner("0d", Duration::from_secs(u64::MAX), Some("0"));
+    inner(
+        "18446744073709551615",
+        Duration::from_millis(u64::MAX),
+        Some("18446744073709551615ms"),
+    );
+    inner(
+        "18446744073709551615 s",
+        Duration::from_secs(u64::MAX),
+        Some("0"),
+    );
+
+    fn errs(t: &'static str) {
+        assert!(Duration::parse(t).is_err());
+    }
+    errs("1 m");
+    errs("1 sec");
+    errs("1 min 1 s");
+    errs("1m1s");
+    errs("1.1");
+    errs("1.1 min");
+    errs("-1 s");
+    errs("");
+    errs("   ");
+    errs("x");
+    errs("s");
+    errs("18446744073709551615 min");
+}
+
 impl Value for str {
     const TYPE_NAME: &'static str = "string";
 
@@ -784,6 +1010,24 @@ impl Value for [String] {
 
     fn format(&self) -> String {
         self.join(", ")
+    }
+}
+
+impl Value for Option<String> {
+    const TYPE_NAME: &'static str = "optional string";
+
+    fn parse(s: &str) -> Result<Self::Owned, ()> {
+        match s {
+            "" => Ok(None),
+            _ => Ok(Some(s.into())),
+        }
+    }
+
+    fn format(&self) -> String {
+        match self {
+            Some(s) => s.clone(),
+            None => "".into(),
+        }
     }
 }
 

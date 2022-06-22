@@ -1,5 +1,5 @@
 ---
-title: "Timestamp Data Types"
+title: "Timestamp types"
 description: "Expresses a date and time"
 menu:
   main:

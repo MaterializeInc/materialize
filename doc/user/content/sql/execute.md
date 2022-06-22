@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.9.7 />}}
-
 `EXECUTE` plans and executes [prepared statements](../prepare). Since prepared statements only last the duration of a session, the statement must have been prepared during the current session.
 
 If the `PREPARE` statement specified some parameters, you must pass values compatible with those parameters to `EXECUTE`.

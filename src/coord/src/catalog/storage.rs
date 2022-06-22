@@ -13,9 +13,12 @@ use std::iter::once;
 
 use bytes::BufMut;
 use futures::future::BoxFuture;
+use itertools::max;
+use mz_repr::proto::{IntoRustIfSome, RustType};
 use prost::{self, Message};
 use uuid::Uuid;
 
+use mz_audit_log::VersionedEvent;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ReplicaId,
 };
@@ -37,6 +40,22 @@ use crate::catalog::error::{Error, ErrorKind};
 
 const USER_VERSION: &str = "user_version";
 
+const MATERIALIZE_DATABASE_ID: u64 = 1;
+const MZ_CATALOG_SCHEMA_ID: u64 = 1;
+const PG_CATALOG_SCHEMA_ID: u64 = 2;
+const PUBLIC_SCHEMA_ID: u64 = 3;
+const MZ_INTERNAL_SCHEMA_ID: u64 = 4;
+const INFORMATION_SCHEMA_ID: u64 = 5;
+const MATERIALIZE_ROLE_ID: u64 = 1;
+const DEFAULT_COMPUTE_INSTANCE_ID: u64 = 1;
+const DEFAULT_REPLICA_ID: u64 = 1;
+
+const DATABASE_ID_ALLOC_KEY: &str = "database";
+const SCHEMA_ID_ALLOC_KEY: &str = "schema";
+const ROLE_ID_ALLOC_KEY: &str = "role";
+const COMPUTE_ID_ALLOC_KEY: &str = "compute";
+const REPLICA_ID_ALLOC_KEY: &str = "replica";
+
 async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashError> {
     // Initial state.
     let migrations: &[fn(&mut S) -> BoxFuture<Result<(), StashError>>] = &[
@@ -49,22 +68,71 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     .upsert(stash, vec![])
                     .await?;
                 COLLECTION_ITEM.upsert(stash, vec![]).await?;
+                COLLECTION_AUDIT_LOG.upsert(stash, vec![]).await?;
 
-                COLLECTION_GID_ALLOC
+                COLLECTION_ID_ALLOC
                     .upsert(
                         stash,
                         vec![
                             (
-                                GidAllocKey {
+                                IdAllocKey {
                                     name: "user".into(),
                                 },
-                                GidAllocValue { next_gid: 1 },
+                                IdAllocValue { next_id: 1 },
                             ),
                             (
-                                GidAllocKey {
+                                IdAllocKey {
                                     name: "system".into(),
                                 },
-                                GidAllocValue { next_gid: 1 },
+                                IdAllocValue { next_id: 1 },
+                            ),
+                            (
+                                IdAllocKey {
+                                    name: DATABASE_ID_ALLOC_KEY.into(),
+                                },
+                                IdAllocValue {
+                                    next_id: MATERIALIZE_DATABASE_ID + 1,
+                                },
+                            ),
+                            (
+                                IdAllocKey {
+                                    name: SCHEMA_ID_ALLOC_KEY.into(),
+                                },
+                                IdAllocValue {
+                                    next_id: max(&[
+                                        MZ_CATALOG_SCHEMA_ID,
+                                        PG_CATALOG_SCHEMA_ID,
+                                        PUBLIC_SCHEMA_ID,
+                                        MZ_INTERNAL_SCHEMA_ID,
+                                        INFORMATION_SCHEMA_ID,
+                                    ])
+                                    .unwrap()
+                                        + 1,
+                                },
+                            ),
+                            (
+                                IdAllocKey {
+                                    name: ROLE_ID_ALLOC_KEY.into(),
+                                },
+                                IdAllocValue {
+                                    next_id: MATERIALIZE_ROLE_ID + 1,
+                                },
+                            ),
+                            (
+                                IdAllocKey {
+                                    name: COMPUTE_ID_ALLOC_KEY.into(),
+                                },
+                                IdAllocValue {
+                                    next_id: DEFAULT_COMPUTE_INSTANCE_ID + 1,
+                                },
+                            ),
+                            (
+                                IdAllocKey {
+                                    name: REPLICA_ID_ALLOC_KEY.into(),
+                                },
+                                IdAllocValue {
+                                    next_id: DEFAULT_REPLICA_ID + 1,
+                                },
                             ),
                         ],
                     )
@@ -73,7 +141,9 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     .upsert(
                         stash,
                         vec![(
-                            DatabaseKey { id: 1 },
+                            DatabaseKey {
+                                id: MATERIALIZE_DATABASE_ID,
+                            },
                             DatabaseValue {
                                 name: "materialize".into(),
                             },
@@ -85,35 +155,45 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                         stash,
                         vec![
                             (
-                                SchemaKey { id: 1 },
+                                SchemaKey {
+                                    id: MZ_CATALOG_SCHEMA_ID,
+                                },
                                 SchemaValue {
                                     database_id: None,
                                     name: "mz_catalog".into(),
                                 },
                             ),
                             (
-                                SchemaKey { id: 2 },
+                                SchemaKey {
+                                    id: PG_CATALOG_SCHEMA_ID,
+                                },
                                 SchemaValue {
                                     database_id: None,
                                     name: "pg_catalog".into(),
                                 },
                             ),
                             (
-                                SchemaKey { id: 3 },
+                                SchemaKey {
+                                    id: PUBLIC_SCHEMA_ID,
+                                },
                                 SchemaValue {
                                     database_id: Some(1),
                                     name: "public".into(),
                                 },
                             ),
                             (
-                                SchemaKey { id: 4 },
+                                SchemaKey {
+                                    id: MZ_INTERNAL_SCHEMA_ID,
+                                },
                                 SchemaValue {
                                     database_id: None,
                                     name: "mz_internal".into(),
                                 },
                             ),
                             (
-                                SchemaKey { id: 5 },
+                                SchemaKey {
+                                    id: INFORMATION_SCHEMA_ID,
+                                },
                                 SchemaValue {
                                     database_id: None,
                                     name: "information_schema".into(),
@@ -126,7 +206,9 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     .upsert(
                         stash,
                         vec![(
-                            RoleKey { id: 1 },
+                            RoleKey {
+                                id: MATERIALIZE_ROLE_ID,
+                            },
                             RoleValue {
                                 name: "materialize".into(),
                             },
@@ -137,8 +219,8 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                     .upsert(
                         stash,
                         vec![(
-                    ComputeInstanceKey { id: 1 },
-                    ComputeInstanceValue {
+                            ComputeInstanceKey { id: DEFAULT_COMPUTE_INSTANCE_ID },
+                            ComputeInstanceValue {
                         name: "default".into(),
                         config: Some(
                             "{\"debugging\":false,\"granularity\":{\"secs\":1,\"nanos\":0}}".into(),
@@ -147,19 +229,27 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
                 )],
                     )
                     .await?;
-                COLLECTION_COMPUTE_INSTANCE_REPLICAS.upsert(
-                    stash,
-                    vec![
-                        (
-                            ComputeInstanceReplicaKey { id: 1},
+                COLLECTION_COMPUTE_INSTANCE_REPLICAS
+                    .upsert(
+                        stash,
+                        vec![(
+                            ComputeInstanceReplicaKey {
+                                id: DEFAULT_REPLICA_ID,
+                            },
                             ComputeInstanceReplicaValue {
-                                compute_instance_id: 1,
+                                compute_instance_id: DEFAULT_COMPUTE_INSTANCE_ID,
                                 name: "default_replica".into(),
-                                config: "{\"Managed\":{\"size_config\":{\"memory_limit\": null, \"cpu_limit\": null, \"scale\": 1, \"workers\": 1}}}".into(),
-                            }
-                        )
-                    ]
-                ).await?;
+                                config: "{ \
+                                    \"Managed\": { \
+                                        \"size_config\": {\"scale\": 1, \"workers\": 1}, \
+                                        \"size_name\": \"default\" \
+                                    } \
+                                }"
+                                .into(),
+                            },
+                        )],
+                    )
+                    .await?;
                 Ok(())
             })
         },
@@ -175,7 +265,7 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
         //
         // Please include @benesch on any code reviews that add or edit migrations.
         // Migrations must preserve backwards compatibility with all past releases
-        // of materialized. Migrations can be edited up until they ship in a
+        // of Materialize. Migrations can be edited up until they ship in a
         // release, after which they must never be removed, only patched by future
         // migrations. Migrations must be transactional or idempotent (in case of
         // midway failure).
@@ -203,15 +293,11 @@ async fn migrate<S: Append>(stash: &mut S, version: u64) -> Result<(), StashErro
 #[derive(Debug)]
 pub struct Connection<S> {
     stash: S,
-    experimental_mode: bool,
     cluster_id: Uuid,
 }
 
 impl<S: Append> Connection<S> {
-    pub async fn open(
-        mut stash: S,
-        experimental_mode: Option<bool>,
-    ) -> Result<Connection<S>, Error> {
+    pub async fn open(mut stash: S) -> Result<Connection<S>, Error> {
         // Run unapplied migrations. The `user_version` field stores the index
         // of the last migration that was run. If the upper is min, the config
         // collection is empty.
@@ -232,8 +318,6 @@ impl<S: Append> Connection<S> {
         migrate(&mut stash, skip).await?;
 
         let conn = Connection {
-            experimental_mode: Self::set_or_get_experimental_mode(&mut stash, experimental_mode)
-                .await?,
             cluster_id: Self::set_or_get_cluster_id(&mut stash).await?,
             stash,
         };
@@ -243,59 +327,6 @@ impl<S: Append> Connection<S> {
 }
 
 impl<S: Append> Connection<S> {
-    /// Sets catalog's `experimental_mode` setting on initialization or gets
-    /// that value.
-    ///
-    /// Note that using `None` for `experimental_mode` is appropriate when
-    /// reading the catalog outside the context of starting the server.
-    ///
-    /// # Errors
-    ///
-    /// - If server was initialized and `experimental_mode.unwrap()` does not
-    ///   match the initialized value.
-    ///
-    ///   This means that experimental mode:
-    ///   - Can only be enabled on initialization
-    ///   - Cannot be disabled once enabled
-    ///
-    /// # Panics
-    ///
-    /// - If server has not been initialized and `experimental_mode.is_none()`.
-    async fn set_or_get_experimental_mode(
-        stash: &mut impl Append,
-        experimental_mode: Option<bool>,
-    ) -> Result<bool, Error> {
-        let current_setting = Self::get_setting_stash(stash, "experimental_mode")
-            .await?
-            .map(|cs| cs.parse::<bool>().unwrap());
-
-        let res = match (current_setting, experimental_mode) {
-            // Server init
-            (None, Some(experimental_mode)) => {
-                Self::set_setting_stash(stash, "experimental_mode", experimental_mode.to_string())
-                    .await?;
-                Ok(experimental_mode)
-            }
-            // Server reboot
-            (Some(current_setting), Some(experimental_mode)) => {
-                if current_setting && !experimental_mode {
-                    // Setting is true but was not given `--experimental` flag.
-                    Err(Error::new(ErrorKind::ExperimentalModeRequired))
-                } else if !current_setting && experimental_mode {
-                    // Setting is false but was given `--experimental` flag.
-                    Err(Error::new(ErrorKind::ExperimentalModeUnavailable))
-                } else {
-                    Ok(experimental_mode)
-                }
-            }
-            // Reading existing catalog
-            (Some(cs), None) => Ok(cs),
-            // Test code that doesn't care. Just disable experimental mode.
-            (None, None) => Ok(false),
-        };
-        res
-    }
-
     async fn get_setting(&mut self, key: &str) -> Result<Option<String>, Error> {
         Self::get_setting_stash(&mut self.stash, key).await
     }
@@ -350,10 +381,8 @@ impl<S: Append> Connection<S> {
         }
     }
 
-    pub async fn get_catalog_content_version(&mut self) -> Result<String, Error> {
-        self.get_setting("catalog_content_version")
-            .await
-            .map(|v| v.unwrap_or_else(|| "new".to_string()))
+    pub async fn get_catalog_content_version(&mut self) -> Result<Option<String>, Error> {
+        self.get_setting("catalog_content_version").await
     }
 
     pub async fn set_catalog_content_version(&mut self, new_version: &str) -> Result<(), Error> {
@@ -387,7 +416,7 @@ impl<S: Append> Connection<S> {
             .collect())
     }
 
-    pub async fn load_roles(&mut self) -> Result<Vec<(i64, String)>, Error> {
+    pub async fn load_roles(&mut self) -> Result<Vec<(u64, String)>, Error> {
         Ok(COLLECTION_ROLE
             .peek_one(&mut self.stash)
             .await?
@@ -442,6 +471,14 @@ impl<S: Append> Connection<S> {
                 Ok((v.compute_instance_id, k.id, v.name, config))
             })
             .collect()
+    }
+
+    pub async fn load_audit_log(&mut self) -> Result<impl Iterator<Item = Vec<u8>>, Error> {
+        Ok(COLLECTION_AUDIT_LOG
+            .peek_one(&mut self.stash)
+            .await?
+            .into_keys()
+            .map(|ev| ev.event))
     }
 
     /// Load the persisted mapping of system object to global ID. Key is (schema-name, object-name).
@@ -543,33 +580,33 @@ impl<S: Append> Connection<S> {
     }
 
     pub async fn allocate_system_ids(&mut self, amount: u64) -> Result<Vec<GlobalId>, Error> {
-        let id = self.allocate_global_id("system", amount).await?;
+        let id = self.allocate_id("system", amount).await?;
 
         Ok(id.into_iter().map(GlobalId::System).collect())
     }
 
     pub async fn allocate_user_id(&mut self) -> Result<GlobalId, Error> {
-        let id = self.allocate_global_id("user", 1).await?;
+        let id = self.allocate_id("user", 1).await?;
         let id = id.into_element();
         Ok(GlobalId::User(id))
     }
 
-    async fn allocate_global_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
-        let key = GidAllocKey {
+    async fn allocate_id(&mut self, id_type: &str, amount: u64) -> Result<Vec<u64>, Error> {
+        let key = IdAllocKey {
             name: id_type.to_string(),
         };
-        let prev = COLLECTION_GID_ALLOC
+        let prev = COLLECTION_ID_ALLOC
             .peek_key_one(&mut self.stash, &key)
             .await?;
-        let id = prev.expect("must exist").next_gid;
+        let id = prev.expect("must exist").next_id;
         let next = match id.checked_add(amount) {
-            Some(next_gid) => GidAllocValue { next_gid },
+            Some(next_gid) => IdAllocValue { next_id: next_gid },
             None => return Err(Error::new(ErrorKind::IdExhaustion)),
         };
-        COLLECTION_GID_ALLOC
+        COLLECTION_ID_ALLOC
             .upsert_key(&mut self.stash, &key, &next)
             .await?;
-        Ok((id..next.next_gid).collect())
+        Ok((id..next.next_id).collect())
     }
 
     pub async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a, S>, Error> {
@@ -586,54 +623,48 @@ impl<S: Append> Connection<S> {
         let introspection_sources = COLLECTION_COMPUTE_INTROSPECTION_SOURCE_INDEX
             .peek_one(&mut self.stash)
             .await?;
+        let id_allocator = COLLECTION_ID_ALLOC.peek_one(&mut self.stash).await?;
 
         Ok(Transaction {
             stash: &mut self.stash,
-            databases: TableTransaction::new(databases, Some(|k| k.id), |a, b| a.name == b.name),
-            schemas: TableTransaction::new(schemas, Some(|k| k.id), |a, b| {
+            databases: TableTransaction::new(databases, |a, b| a.name == b.name),
+            schemas: TableTransaction::new(schemas, |a, b| {
                 a.database_id == b.database_id && a.name == b.name
             }),
-            items: TableTransaction::new(items, None, |a, b| {
+            items: TableTransaction::new(items, |a, b| {
                 a.schema_id == b.schema_id && a.name == b.name
             }),
-            roles: TableTransaction::new(roles, Some(|k| k.id), |a, b| a.name == b.name),
-            compute_instances: TableTransaction::new(compute_instances, Some(|k| k.id), |a, b| {
-                a.name == b.name
+            roles: TableTransaction::new(roles, |a, b| a.name == b.name),
+            compute_instances: TableTransaction::new(compute_instances, |a, b| a.name == b.name),
+            compute_instance_replicas: TableTransaction::new(compute_instance_replicas, |a, b| {
+                a.compute_instance_id == b.compute_instance_id && a.name == b.name
             }),
-            compute_instance_replicas: TableTransaction::new(
-                compute_instance_replicas,
-                Some(|k| k.id),
-                |a, b| a.compute_instance_id == b.compute_instance_id && a.name == b.name,
-            ),
-            introspection_sources: TableTransaction::new(introspection_sources, None, |_a, _b| {
-                false
-            }),
+            introspection_sources: TableTransaction::new(introspection_sources, |_a, _b| false),
+            id_allocator: TableTransaction::new(id_allocator, |_a, _b| false),
+            audit_log_updates: Vec::new(),
         })
     }
 
     pub fn cluster_id(&self) -> Uuid {
         self.cluster_id
     }
-
-    pub fn experimental_mode(&self) -> bool {
-        self.experimental_mode
-    }
 }
 
 pub struct Transaction<'a, S> {
     stash: &'a mut S,
-    databases: TableTransaction<DatabaseKey, DatabaseValue, i64>,
-    schemas: TableTransaction<SchemaKey, SchemaValue, i64>,
-    items: TableTransaction<ItemKey, ItemValue, i64>,
-    roles: TableTransaction<RoleKey, RoleValue, i64>,
-    compute_instances: TableTransaction<ComputeInstanceKey, ComputeInstanceValue, i64>,
+    databases: TableTransaction<DatabaseKey, DatabaseValue>,
+    schemas: TableTransaction<SchemaKey, SchemaValue>,
+    items: TableTransaction<ItemKey, ItemValue>,
+    roles: TableTransaction<RoleKey, RoleValue>,
+    compute_instances: TableTransaction<ComputeInstanceKey, ComputeInstanceValue>,
     compute_instance_replicas:
-        TableTransaction<ComputeInstanceReplicaKey, ComputeInstanceReplicaValue, i64>,
-    introspection_sources: TableTransaction<
-        ComputeIntrospectionSourceIndexKey,
-        ComputeIntrospectionSourceIndexValue,
-        i64,
-    >,
+        TableTransaction<ComputeInstanceReplicaKey, ComputeInstanceReplicaValue>,
+    introspection_sources:
+        TableTransaction<ComputeIntrospectionSourceIndexKey, ComputeIntrospectionSourceIndexValue>,
+    id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
+    // Don't make this a table transaction so that it's not read into the stash
+    // memory cache.
+    audit_log_updates: Vec<(AuditLogKey, (), i64)>,
 }
 
 impl<'a, S: Append> Transaction<'a, S> {
@@ -670,14 +701,20 @@ impl<'a, S: Append> Transaction<'a, S> {
         items
     }
 
+    pub fn insert_audit_log_event(&mut self, event: VersionedEvent) {
+        let event = event.serialize();
+        self.audit_log_updates.push((AuditLogKey { event }, (), 1));
+    }
+
     pub fn insert_database(&mut self, database_name: &str) -> Result<DatabaseId, Error> {
+        let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
         match self.databases.insert(
-            |id| DatabaseKey { id: id.unwrap() },
+            DatabaseKey { id },
             DatabaseValue {
                 name: database_name.to_string(),
             },
         ) {
-            Ok(id) => Ok(DatabaseId::new(id.unwrap())),
+            Ok(_) => Ok(DatabaseId::new(id)),
             Err(()) => Err(Error::new(ErrorKind::DatabaseAlreadyExists(
                 database_name.to_owned(),
             ))),
@@ -689,28 +726,30 @@ impl<'a, S: Append> Transaction<'a, S> {
         database_id: DatabaseId,
         schema_name: &str,
     ) -> Result<SchemaId, Error> {
+        let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
         match self.schemas.insert(
-            |id| SchemaKey { id: id.unwrap() },
+            SchemaKey { id },
             SchemaValue {
                 database_id: Some(database_id.0),
                 name: schema_name.to_string(),
             },
         ) {
-            Ok(id) => Ok(SchemaId::new(id.unwrap())),
+            Ok(_) => Ok(SchemaId::new(id)),
             Err(()) => Err(Error::new(ErrorKind::SchemaAlreadyExists(
                 schema_name.to_owned(),
             ))),
         }
     }
 
-    pub fn insert_role(&mut self, role_name: &str) -> Result<i64, Error> {
+    pub fn insert_role(&mut self, role_name: &str) -> Result<u64, Error> {
+        let id = self.get_and_increment_id(ROLE_ID_ALLOC_KEY.to_string())?;
         match self.roles.insert(
-            |id| RoleKey { id: id.unwrap() },
+            RoleKey { id },
             RoleValue {
                 name: role_name.to_string(),
             },
         ) {
-            Ok(id) => Ok(id.unwrap()),
+            Ok(_) => Ok(id),
             Err(()) => Err(Error::new(ErrorKind::RoleAlreadyExists(
                 role_name.to_owned(),
             ))),
@@ -724,21 +763,19 @@ impl<'a, S: Append> Transaction<'a, S> {
         config: &Option<ComputeInstanceIntrospectionConfig>,
         introspection_sources: &Vec<(&'static BuiltinLog, GlobalId)>,
     ) -> Result<ComputeInstanceId, Error> {
+        let id = self.get_and_increment_id(COMPUTE_ID_ALLOC_KEY.to_string())?;
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
-        let id = match self.compute_instances.insert(
-            |id| ComputeInstanceKey { id: id.unwrap() },
+        if let Err(_) = self.compute_instances.insert(
+            ComputeInstanceKey { id },
             ComputeInstanceValue {
                 name: cluster_name.to_string(),
                 config: Some(config),
             },
         ) {
-            Ok(id) => id.unwrap(),
-            Err(()) => {
-                return Err(Error::new(ErrorKind::ClusterAlreadyExists(
-                    cluster_name.to_owned(),
-                )))
-            }
+            return Err(Error::new(ErrorKind::ClusterAlreadyExists(
+                cluster_name.to_owned(),
+            )));
         };
 
         for (builtin, index_id) in introspection_sources {
@@ -749,7 +786,7 @@ impl<'a, S: Append> Transaction<'a, S> {
             };
             self.introspection_sources
                 .insert(
-                    |_| ComputeIntrospectionSourceIndexKey {
+                    ComputeIntrospectionSourceIndexKey {
                         compute_id: id,
                         name: builtin.name.to_string(),
                     },
@@ -767,6 +804,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         replica_name: &str,
         config: &ConcreteComputeInstanceReplicaConfig,
     ) -> Result<ReplicaId, Error> {
+        let id = self.get_and_increment_id(REPLICA_ID_ALLOC_KEY.to_string())?;
         let config = serde_json::to_string(config)
             .map_err(|err| Error::from(StashError::from(err.to_string())))?;
         let mut compute_instance_id = None;
@@ -783,21 +821,18 @@ impl<'a, S: Append> Transaction<'a, S> {
                 break;
             }
         }
-        let id = match self.compute_instance_replicas.insert(
-            |id| ComputeInstanceReplicaKey { id: id.unwrap() },
+        if let Err(_) = self.compute_instance_replicas.insert(
+            ComputeInstanceReplicaKey { id },
             ComputeInstanceReplicaValue {
                 compute_instance_id: compute_instance_id.unwrap(),
                 name: replica_name.into(),
                 config,
             },
         ) {
-            Ok(id) => id.unwrap(),
-            Err(_) => {
-                return Err(Error::new(ErrorKind::DuplicateReplica(
-                    replica_name.to_string(),
-                    compute_name.to_string(),
-                )))
-            }
+            return Err(Error::new(ErrorKind::DuplicateReplica(
+                replica_name.to_string(),
+                compute_name.to_string(),
+            )));
         };
         Ok(id)
     }
@@ -810,7 +845,7 @@ impl<'a, S: Append> Transaction<'a, S> {
         item: &[u8],
     ) -> Result<(), Error> {
         match self.items.insert(
-            |_| ItemKey { gid: id },
+            ItemKey { gid: id },
             ItemValue {
                 schema_id: schema_id.0,
                 name: item_name.to_string(),
@@ -822,6 +857,32 @@ impl<'a, S: Append> Transaction<'a, S> {
                 item_name.to_owned(),
             ))),
         }
+    }
+
+    fn get_and_increment_id(&mut self, key: String) -> Result<u64, Error> {
+        let id = self
+            .id_allocator
+            .items()
+            .get(&IdAllocKey { name: key.clone() })
+            .unwrap_or_else(|| panic!("{key} id allocator missing"))
+            .next_id;
+        let next_id = id
+            .checked_add(1)
+            .ok_or_else(|| Error::new(ErrorKind::IdExhaustion))?;
+        // TODO(jkosh44) We currently don't support u64 Datums, so these eventually are converted to
+        //i64 to store in system tables
+        if next_id > u64::try_from(i64::MAX).expect("max i64 should fit in u64") {
+            return Err(Error::new(ErrorKind::IdExhaustion));
+        }
+        let diff = self.id_allocator.update(|k, _v| {
+            if k.name == key {
+                Some(IdAllocValue { next_id })
+            } else {
+                None
+            }
+        })?;
+        assert_eq!(diff, 1);
+        Ok(id)
     }
 
     pub fn remove_database(&mut self, id: &DatabaseId) -> Result<(), Error> {
@@ -999,6 +1060,20 @@ impl<'a, S: Append> Transaction<'a, S> {
             self.introspection_sources.pending(),
         )
         .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_ID_ALLOC,
+            self.id_allocator.pending(),
+        )
+        .await?;
+        add_batch(
+            self.stash,
+            &mut batches,
+            &COLLECTION_AUDIT_LOG,
+            self.audit_log_updates,
+        )
+        .await?;
         if batches.is_empty() {
             return Ok(());
         }
@@ -1039,18 +1114,18 @@ struct SettingValue {
 impl_codec!(SettingValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
-struct GidAllocKey {
+struct IdAllocKey {
     #[prost(string)]
     name: String,
 }
-impl_codec!(GidAllocKey);
+impl_codec!(IdAllocKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
-struct GidAllocValue {
+struct IdAllocValue {
     #[prost(uint64)]
-    next_gid: u64,
+    next_id: u64,
 }
-impl_codec!(GidAllocValue);
+impl_codec!(IdAllocValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct GidMappingKey {
@@ -1072,8 +1147,8 @@ impl_codec!(GidMappingValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceKey {
-    #[prost(int64)]
-    id: i64,
+    #[prost(uint64)]
+    id: u64,
 }
 impl_codec!(ComputeInstanceKey);
 
@@ -1088,8 +1163,8 @@ impl_codec!(ComputeInstanceValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeIntrospectionSourceIndexKey {
-    #[prost(int64)]
-    compute_id: i64,
+    #[prost(uint64)]
+    compute_id: ComputeInstanceId,
     #[prost(string)]
     name: String,
 }
@@ -1104,21 +1179,21 @@ impl_codec!(ComputeIntrospectionSourceIndexValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct DatabaseKey {
-    #[prost(int64)]
-    id: i64,
+    #[prost(uint64)]
+    id: u64,
 }
 impl_codec!(DatabaseKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct ComputeInstanceReplicaKey {
-    #[prost(int64)]
+    #[prost(uint64)]
     id: ReplicaId,
 }
 impl_codec!(ComputeInstanceReplicaKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
 struct ComputeInstanceReplicaValue {
-    #[prost(int64)]
+    #[prost(uint64)]
     compute_instance_id: ComputeInstanceId,
     #[prost(string)]
     name: String,
@@ -1136,15 +1211,15 @@ impl_codec!(DatabaseValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct SchemaKey {
-    #[prost(int64)]
-    id: i64,
+    #[prost(uint64)]
+    id: u64,
 }
 impl_codec!(SchemaKey);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
 struct SchemaValue {
-    #[prost(int64, optional)]
-    database_id: Option<i64>,
+    #[prost(uint64, optional)]
+    database_id: Option<u64>,
     #[prost(string)]
     name: String,
 }
@@ -1170,23 +1245,25 @@ impl Codec for ItemKey {
 
     fn encode<B: BufMut>(&self, buf: &mut B) {
         let proto = ProtoItemKey {
-            gid: Some(ProtoGlobalId::from(&self.gid)),
+            gid: Some(self.gid.into_proto()),
         };
         Message::encode(&proto, buf).expect("provided buffer had sufficient capacity")
     }
 
     fn decode<'a>(buf: &'a [u8]) -> Result<Self, String> {
         let proto: ProtoItemKey = Message::decode(buf).map_err(|err| err.to_string())?;
-        Ok(Self {
-            gid: GlobalId::try_from(proto.gid.unwrap()).unwrap(),
-        })
+        let gid = proto
+            .gid
+            .into_rust_if_some("ProtoItemKey.gid")
+            .map_err(|e| e.to_string())?;
+        Ok(Self { gid })
     }
 }
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord)]
 struct ItemValue {
-    #[prost(int64)]
-    schema_id: i64,
+    #[prost(uint64)]
+    schema_id: u64,
     #[prost(string)]
     name: String,
     #[prost(bytes)]
@@ -1196,8 +1273,8 @@ impl_codec!(ItemValue);
 
 #[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
 struct RoleKey {
-    #[prost(int64)]
-    id: i64,
+    #[prost(uint64)]
+    id: u64,
 }
 impl_codec!(RoleKey);
 
@@ -1215,11 +1292,18 @@ struct ConfigValue {
 }
 impl_codec!(ConfigValue);
 
+#[derive(Clone, Message, PartialOrd, PartialEq, Eq, Ord, Hash)]
+struct AuditLogKey {
+    #[prost(bytes)]
+    event: Vec<u8>,
+}
+impl_codec!(AuditLogKey);
+
 static COLLECTION_CONFIG: TypedCollection<String, ConfigValue> = TypedCollection::new("config");
 static COLLECTION_SETTING: TypedCollection<SettingKey, SettingValue> =
     TypedCollection::new("setting");
-static COLLECTION_GID_ALLOC: TypedCollection<GidAllocKey, GidAllocValue> =
-    TypedCollection::new("gid_alloc");
+static COLLECTION_ID_ALLOC: TypedCollection<IdAllocKey, IdAllocValue> =
+    TypedCollection::new("id_alloc");
 static COLLECTION_SYSTEM_GID_MAPPING: TypedCollection<GidMappingKey, GidMappingValue> =
     TypedCollection::new("system_gid_mapping");
 static COLLECTION_COMPUTE_INSTANCES: TypedCollection<ComputeInstanceKey, ComputeInstanceValue> =
@@ -1237,3 +1321,4 @@ static COLLECTION_DATABASE: TypedCollection<DatabaseKey, DatabaseValue> =
 static COLLECTION_SCHEMA: TypedCollection<SchemaKey, SchemaValue> = TypedCollection::new("schema");
 static COLLECTION_ITEM: TypedCollection<ItemKey, ItemValue> = TypedCollection::new("item");
 static COLLECTION_ROLE: TypedCollection<RoleKey, RoleValue> = TypedCollection::new("role");
+static COLLECTION_AUDIT_LOG: TypedCollection<AuditLogKey, ()> = TypedCollection::new("audit_log");

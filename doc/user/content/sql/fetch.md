@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.5.3 />}}
-
 `FETCH` retrieves rows from a query using a cursor previously opened with [`DECLARE`](/sql/declare).
 
 ## Syntax
@@ -25,20 +23,12 @@ The following option is valid within the `WITH` clause.
 
 Option name | Value type | Default | Describes
 ------------|------------|---------|----------
-`timeout`   | `interval` | None    | When fetching from a [`TAIL`](/sql/tail) cursor, complete if there are no more rows ready after this timeout. The default will cause `FETCH` to wait for at least one row to be available. {{< version-added v0.6.0 />}}
-
-{{< version-changed v0.6.1 >}}
-The default timeout is `None`, rather than `0s`.
-{{< /version-changed >}}
+`timeout`   | `interval` | None    | When fetching from a [`TAIL`](/sql/tail) cursor, complete if there are no more rows ready after this timeout. The default will cause `FETCH` to wait for at least one row to be available.
 
 ## Details
 
-`FETCH` will return at most the specified _count_ of available rows.
-
-{{< version-added v0.6.1 >}}
-Specifying a _count_ of `ALL` indicates that there is no limit on the number of
+`FETCH` will return at most the specified _count_ of available rows. Specifying a _count_ of `ALL` indicates that there is no limit on the number of
 rows to be returned.
-{{< /version-added >}}
 
 For [`TAIL`](/sql/tail) queries, `FETCH` by default will wait for rows to be available before returning.
-Specify a timeout of `0s` to return only rows that are immediately available.
+Specifying a _timeout_ of `0s` returns only rows that are immediately available.

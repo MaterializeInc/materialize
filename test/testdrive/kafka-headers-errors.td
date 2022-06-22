@@ -20,7 +20,7 @@ $ kafka-create-topic topic=headers_src
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE DEBEZIUM
-exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
+contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 ! CREATE MATERIALIZED SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -29,7 +29,7 @@ exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE DEBEZIUM UPSERT
-exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
+contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 ! CREATE MATERIALIZED SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -38,7 +38,7 @@ exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE MATERIALIZE
-exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
+contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 ! CREATE MATERIALIZED SOURCE headers_src
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
@@ -47,7 +47,7 @@ exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE MATERIALIZE
-exact:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
+contains:INCLUDE HEADERS requires ENVELOPE UPSERT or no ENVELOPE
 
 # even the csv header validation doesn't happen before this error
 $ s3-create-bucket bucket=test
@@ -64,4 +64,4 @@ $ s3-put-object bucket=test key=static.csv
   )
   FORMAT CSV WITH HEADER (city, state, zip)
   INCLUDE HEADERS
-exact:INCLUDE HEADERS with non-Kafka sources not supported
+contains:INCLUDE HEADERS with non-Kafka sources not supported

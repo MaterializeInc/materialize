@@ -67,18 +67,6 @@ pub enum ErrorKind {
     AmbiguousRename(#[from] AmbiguousRename),
     #[error("cannot rename type: {0}")]
     TypeRename(String),
-    #[error(
-        r#"Materialize previously started with --experimental to
-enable experimental features, so now must be started in experimental
-mode. For more details, see
-https://materialize.com/docs/cli#experimental-mode"#
-    )]
-    ExperimentalModeRequired,
-    #[error(
-        r#"Experimental mode is only available on new nodes. For
-more details, see https://materialize.com/docs/cli#experimental-mode"#
-    )]
-    ExperimentalModeUnavailable,
     #[error("cannot migrate from catalog version {last_seen_version} to version {this_version} (earlier versions might still work): {cause}")]
     FailedMigration {
         last_seen_version: String,

@@ -8,15 +8,14 @@
 # by the Apache License, Version 2.0.
 
 from dataclasses import dataclass
-from pathlib import Path
 from textwrap import dedent
-from typing import Callable, Optional
+from typing import Callable
 
-from materialize import spawn
 from materialize.mzcompose import Composition
 from materialize.mzcompose.services import (
     Computed,
     Kafka,
+    Localstack,
     Materialized,
     SchemaRegistry,
     Testdrive,
@@ -27,7 +26,8 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Materialized(extra_ports=[2101]),
+    Localstack(),
+    Materialized(),
     Testdrive(),
 ]
 
@@ -72,7 +72,7 @@ def drop_create_replica(c: Composition) -> None:
         dedent(
             """
             > DROP CLUSTER REPLICA cluster1.replica1
-            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ('computed_2_1:2100', 'computed_2_2:2100')
+            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ['computed_1_1:2100', 'computed_1_2:2100']
             """
         )
     )
@@ -82,7 +82,7 @@ def create_invalid_replica(c: Composition) -> None:
     c.testdrive(
         dedent(
             """
-            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ('no_such_host:2100')
+            > CREATE CLUSTER REPLICA cluster1.replica3 REMOTE ['no_such_host:2100']
             """
         )
     )
@@ -170,7 +170,9 @@ def workflow_default(c: Composition) -> None:
     and then making sure that the cluster continues to operate properly
     """
 
-    c.start_and_wait_for_tcp(services=["zookeeper", "kafka", "schema-registry"])
+    c.start_and_wait_for_tcp(
+        services=["zookeeper", "kafka", "schema-registry", "localstack"]
+    )
     for id, disruption in enumerate(disruptions):
         run_test(c, disruption, id)
 
@@ -181,10 +183,22 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
     c.up("testdrive", persistent=True)
 
     nodes = [
-        Computed(name="computed_1_1", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_1_2", peers=["computed_1_1", "computed_1_2"]),
-        Computed(name="computed_2_1", peers=["computed_2_1", "computed_2_2"]),
-        Computed(name="computed_2_2", peers=["computed_2_1", "computed_2_2"]),
+        Computed(
+            name="computed_1_1",
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_1_2",
+            peers=["computed_1_1", "computed_1_2"],
+        ),
+        Computed(
+            name="computed_2_1",
+            peers=["computed_2_1", "computed_2_2"],
+        ),
+        Computed(
+            name="computed_2_2",
+            peers=["computed_2_1", "computed_2_2"],
+        ),
     ]
 
     with c.override(*nodes):
@@ -193,9 +207,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
 
         c.sql(
             """
-            CREATE CLUSTER cluster1
-            REPLICA replica1 (REMOTE ('computed_1_1:2100', 'computed_1_2:2100')),
-            REPLICA replica2 (REMOTE ('computed_2_1:2100', 'computed_2_2:2100'))
+            CREATE CLUSTER cluster1 REPLICAS (
+                replica1 (REMOTE ['computed_1_1:2100', 'computed_1_2:2100']),
+                replica2 (REMOTE ['computed_2_1:2100', 'computed_2_2:2100'])
+            )
             """
         )
 
@@ -203,7 +218,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             Testdrive(
                 validate_data_dir=False,
                 no_reset=True,
-                materialized_params={"cluster": "cluster1"},
+                materialize_params={"cluster": "cluster1"},
                 seed=id,
             )
         ):
@@ -217,4 +232,4 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         cleanup_list = ["materialized", "testdrive", *[n.name for n in nodes]]
         c.kill(*cleanup_list)
         c.rm(*cleanup_list, destroy_volumes=True)
-        c.rm_volumes("mzdata")
+        c.rm_volumes("mzdata", "pgdata")

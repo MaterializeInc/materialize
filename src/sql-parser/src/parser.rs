@@ -73,7 +73,7 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
 }
 
 /// Parses a SQL string containing a single data type.
-pub fn parse_data_type(sql: &str) -> Result<UnresolvedDataType, ParserError> {
+pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     let tokens = lexer::lex(sql)?;
     let mut parser = Parser::new(sql, tokens);
     let data_type = parser.parse_data_type()?;
@@ -244,6 +244,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(ALTER) => Ok(self.parse_alter()?),
                 Token::Keyword(COPY) => Ok(self.parse_copy()?),
                 Token::Keyword(SET) => Ok(self.parse_set()?),
+                Token::Keyword(RESET) => Ok(self.parse_reset()?),
                 Token::Keyword(SHOW) => Ok(self.parse_show()?),
                 Token::Keyword(START) => Ok(self.parse_start_transaction()?),
                 // `BEGIN` is a nonstandard but common alias for the
@@ -1584,8 +1585,8 @@ impl<'a> Parser<'a> {
             self.parse_create_table()
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
-        } else if self.peek_keyword(CONNECTOR) {
-            self.parse_create_connector()
+        } else if self.peek_keyword(CONNECTION) {
+            self.parse_create_connection()
         } else {
             let index = self.index;
 
@@ -1678,16 +1679,17 @@ impl<'a> Parser<'a> {
 
     fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector_avro()?;
-            AvroSchema::Csr { csr_connector }
+            let csr_connection = self.parse_csr_connection_avro()?;
+            AvroSchema::Csr { csr_connection }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
             let schema = self.parse_schema()?;
             // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
             // accept `WITH (...)` here.
-            let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
-                self.expect_keyword(WITH)?;
-                self.parse_with_options(false)?
+            let with_options = if self.peek_keyword(WITH)
+                && self.peek_nth_token(1) != Some(Token::Keyword(SNAPSHOT))
+            {
+                self.parse_kw_options(Parser::parse_avro_schema_options)?
             } else {
                 vec![]
             };
@@ -1705,10 +1707,19 @@ impl<'a> Parser<'a> {
         Ok(avro_schema)
     }
 
+    fn parse_avro_schema_options(&mut self) -> Result<AvroSchemaOption<Raw>, ParserError> {
+        self.expect_keywords(&[CONFLUENT, WIRE, FORMAT])?;
+        let _ = self.consume_token(&Token::Eq);
+        Ok(AvroSchemaOption {
+            name: AvroSchemaOptionName::ConfluentWireFormat,
+            value: self.parse_opt_with_option_value(false)?,
+        })
+    }
+
     fn parse_protobuf_schema(&mut self) -> Result<ProtobufSchema<Raw>, ParserError> {
         if self.parse_keywords(&[USING, CONFLUENT, SCHEMA, REGISTRY]) {
-            let csr_connector = self.parse_csr_connector_proto()?;
-            Ok(ProtobufSchema::Csr { csr_connector })
+            let csr_connection = self.parse_csr_connection_proto()?;
+            Ok(ProtobufSchema::Csr { csr_connection })
         } else if self.parse_keyword(MESSAGE) {
             let message_name = self.parse_literal_string()?;
             self.expect_keyword(USING)?;
@@ -1726,16 +1737,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_csr_connector_avro(&mut self) -> Result<CsrConnectorAvro<Raw>, ParserError> {
-        let connector = if self.peek_keyword(CONNECTOR) {
-            let _ = self.expect_keyword(CONNECTOR);
-            CsrConnector::Reference {
-                connector: self.parse_object_name()?,
-                url: None,
-                with_options: None,
+    fn parse_csr_connection_avro(&mut self) -> Result<CsrConnectionAvro<Raw>, ParserError> {
+        let connection = if self.parse_keyword(CONNECTION) {
+            CsrConnection::Reference {
+                connection: self.parse_raw_name()?,
             }
         } else {
-            CsrConnector::Inline {
+            CsrConnection::Inline {
                 url: self.parse_literal_string()?,
             }
         };
@@ -1763,23 +1771,20 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
-        Ok(CsrConnectorAvro {
-            connector,
+        Ok(CsrConnectionAvro {
+            connection,
             seed,
             with_options,
         })
     }
 
-    fn parse_csr_connector_proto(&mut self) -> Result<CsrConnectorProto<Raw>, ParserError> {
-        let connector = if self.peek_keyword(CONNECTOR) {
-            let _ = self.expect_keyword(CONNECTOR);
-            CsrConnector::Reference {
-                connector: self.parse_object_name()?,
-                url: None,
-                with_options: None,
+    fn parse_csr_connection_proto(&mut self) -> Result<CsrConnectionProto<Raw>, ParserError> {
+        let connection = if self.parse_keyword(CONNECTION) {
+            CsrConnection::Reference {
+                connection: self.parse_raw_name()?,
             }
         } else {
-            CsrConnector::Inline {
+            CsrConnection::Inline {
                 url: self.parse_literal_string()?,
             }
         };
@@ -1835,8 +1840,8 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        Ok(CsrConnectorProto {
-            connector,
+        Ok(CsrConnectionProto {
+            connection,
             seed,
             with_options,
         })
@@ -1852,14 +1857,38 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
             let debezium_mode = if self.parse_keyword(UPSERT) {
                 DbzMode::Upsert
             } else {
-                DbzMode::Plain
+                let tx_metadata = if self.consume_token(&Token::LParen) {
+                    self.expect_keywords(&[TRANSACTION, METADATA])?;
+                    self.expect_token(&Token::LParen)?;
+                    let options = self.parse_comma_separated(|parser| {
+                        match parser.expect_one_of_keywords(&[SOURCE, COLLECTION])? {
+                            SOURCE => {
+                                let _ = parser.consume_token(&Token::Eq);
+                                Ok(DbzTxMetadataOption::Source(parser.parse_raw_name()?))
+                            }
+                            COLLECTION => {
+                                let _ = parser.consume_token(&Token::Eq);
+                                Ok(DbzTxMetadataOption::Collection(
+                                    parser.parse_with_option_value()?,
+                                ))
+                            }
+                            _ => unreachable!(),
+                        }
+                    })?;
+                    self.expect_token(&Token::RParen)?;
+                    self.expect_token(&Token::RParen)?;
+                    options
+                } else {
+                    vec![]
+                };
+                DbzMode::Plain { tx_metadata }
             };
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
@@ -1887,17 +1916,17 @@ impl<'a> Parser<'a> {
         Ok(compression)
     }
 
-    fn parse_create_connector(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keyword(CONNECTOR)?;
+    fn parse_create_connection(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(CONNECTION)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FOR)?;
-        let connector = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
+        let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
             Keyword::Kafka => {
                 self.expect_keyword(BROKER)?;
                 let broker = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
-                CreateConnector::Kafka {
+                CreateConnection::Kafka {
                     broker,
                     with_options,
                 }
@@ -1906,16 +1935,16 @@ impl<'a> Parser<'a> {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
                 let registry = self.parse_literal_string()?;
                 let with_options = self.parse_opt_with_options()?;
-                CreateConnector::CSR {
-                    registry,
+                CreateConnection::Csr {
+                    url: registry,
                     with_options,
                 }
             }
             _ => unreachable!(),
         };
-        Ok(Statement::CreateConnector(CreateConnectorStatement {
+        Ok(Statement::CreateConnection(CreateConnectionStatement {
             name,
-            connector,
+            connection,
             if_not_exists,
         }))
     }
@@ -1927,7 +1956,7 @@ impl<'a> Parser<'a> {
         let name = self.parse_object_name()?;
         let (col_names, key_constraint) = self.parse_source_columns()?;
         self.expect_keyword(FROM)?;
-        let connector = self.parse_create_source_connector()?;
+        let connection = self.parse_create_source_connection()?;
         let with_options = self.parse_opt_with_options()?;
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
@@ -1970,7 +1999,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
-            connector,
+            connection,
             with_options,
             format,
             include_metadata,
@@ -2031,7 +2060,7 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
         self.expect_keyword(INTO)?;
-        let connector = self.parse_create_sink_connector()?;
+        let connection = self.parse_create_sink_connection()?;
         let mut with_options = vec![];
         if self.parse_keyword(WITH) {
             if let Some(Token::LParen) = self.next_token() {
@@ -2066,7 +2095,7 @@ impl<'a> Parser<'a> {
             name,
             in_cluster,
             from,
-            connector,
+            connection,
             with_options,
             format,
             envelope,
@@ -2076,15 +2105,17 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_create_source_connector(&mut self) -> Result<CreateSourceConnector<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, PERSIST, POSTGRES, PUBNUB])? {
+    fn parse_create_source_connection(
+        &mut self,
+    ) -> Result<CreateSourceConnection<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
                 let subscribe_key = self.parse_literal_string()?;
                 self.expect_keyword(CHANNEL)?;
                 let channel = self.parse_literal_string()?;
 
-                Ok(CreateSourceConnector::PubNub {
+                Ok(CreateSourceConnection::PubNub {
                     subscribe_key,
                     channel,
                 })
@@ -2094,52 +2125,25 @@ impl<'a> Parser<'a> {
                 let conn = self.parse_literal_string()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
-                let slot = if self.parse_keyword(SLOT) {
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
                 let details = if self.parse_keyword(DETAILS) {
                     Some(self.parse_literal_string()?)
                 } else {
                     None
                 };
 
-                Ok(CreateSourceConnector::Postgres {
+                Ok(CreateSourceConnection::Postgres {
                     conn,
                     publication,
-                    slot,
                     details,
                 })
             }
-            PERSIST => {
-                self.expect_keyword(CONSENSUS)?;
-                let consensus_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(BLOB)?;
-                let blob_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(SHARD)?;
-                let shard_id = self.parse_literal_string()?;
-
-                // TODO: fail if/when we have constraints
-                let (columns, _constraints) = self.parse_columns(Mandatory)?;
-                Ok(CreateSourceConnector::Persist {
-                    consensus_uri,
-                    blob_uri,
-                    collection_id: shard_id,
-                    columns,
-                })
-            }
             KAFKA => {
-                let connector = match self.expect_one_of_keywords(&[BROKER, CONNECTOR])? {
-                    BROKER => KafkaConnector::Inline {
+                let connection = match self.expect_one_of_keywords(&[BROKER, CONNECTION])? {
+                    BROKER => KafkaConnection::Inline {
                         broker: self.parse_literal_string()?,
                     },
-                    CONNECTOR => KafkaConnector::Reference {
-                        connector: self.parse_object_name()?,
-                        broker: None,
-                        with_options: None,
+                    CONNECTION => KafkaConnection::Reference {
+                        connection: self.parse_raw_name()?,
                     },
                     _ => unreachable!(),
                 };
@@ -2156,8 +2160,8 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                Ok(CreateSourceConnector::Kafka(KafkaSourceConnector {
-                    connector,
+                Ok(CreateSourceConnection::Kafka(KafkaSourceConnection {
+                    connection,
                     topic,
                     key,
                 }))
@@ -2165,7 +2169,7 @@ impl<'a> Parser<'a> {
             KINESIS => {
                 self.expect_keyword(ARN)?;
                 let arn = self.parse_literal_string()?;
-                Ok(CreateSourceConnector::Kinesis { arn })
+                Ok(CreateSourceConnection::Kinesis { arn })
             }
             S3 => {
                 // FROM S3 DISCOVER OBJECTS
@@ -2206,7 +2210,7 @@ impl<'a> Parser<'a> {
                 } else {
                     Compression::None
                 };
-                Ok(CreateSourceConnector::S3 {
+                Ok(CreateSourceConnection::S3 {
                     key_sources,
                     pattern,
                     compression,
@@ -2216,7 +2220,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_create_sink_connector(&mut self) -> Result<CreateSinkConnector<Raw>, ParserError> {
+    fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
         match self.expect_one_of_keywords(&[KAFKA, AVRO, PERSIST])? {
             KAFKA => {
                 self.expect_keyword(BROKER)?;
@@ -2246,7 +2250,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 let consistency = self.parse_kafka_consistency()?;
-                Ok(CreateSinkConnector::Kafka {
+                Ok(CreateSinkConnection::Kafka {
                     broker,
                     topic,
                     key,
@@ -2276,7 +2280,7 @@ impl<'a> Parser<'a> {
                     format!("{}", shard_id)
                 };
 
-                Ok(CreateSinkConnector::Persist {
+                Ok(CreateSinkConnection::Persist {
                     consensus_uri,
                     blob_uri,
                     shard_id,
@@ -2373,40 +2377,30 @@ impl<'a> Parser<'a> {
             if_exists = IfExistsBehavior::Skip;
         }
 
-        let definitions = if self.parse_keywords(&[FROM, SOURCE]) {
-            let name = self.parse_raw_name()?;
-            let targets = if self.consume_token(&Token::LParen) {
-                let targets = self.parse_comma_separated(|parser| {
-                    let name = parser.parse_object_name()?;
-                    let alias = if parser.parse_keyword(AS) {
-                        Some(parser.parse_object_name()?)
-                    } else {
-                        None
-                    };
-                    Ok(CreateViewsSourceTarget { name, alias })
-                })?;
-                self.expect_token(&Token::RParen)?;
-                Some(targets)
-            } else {
-                None
-            };
-            CreateViewsDefinitions::Source { name, targets }
-        } else {
-            let views = self.parse_comma_separated(|parser| {
-                parser.expect_token(&Token::LParen)?;
-                let view = parser.parse_view_definition()?;
-                parser.expect_token(&Token::RParen)?;
-                Ok(view)
+        self.expect_keywords(&[FROM, SOURCE])?;
+        let source = self.parse_raw_name()?;
+        let targets = if self.consume_token(&Token::LParen) {
+            let targets = self.parse_comma_separated(|parser| {
+                let name = parser.parse_object_name()?;
+                let alias = if parser.parse_keyword(AS) {
+                    Some(parser.parse_object_name()?)
+                } else {
+                    None
+                };
+                Ok(CreateViewsSourceTarget { name, alias })
             })?;
-
-            CreateViewsDefinitions::Literal(views)
+            self.expect_token(&Token::RParen)?;
+            Some(targets)
+        } else {
+            None
         };
 
         Ok(Statement::CreateViews(CreateViewsStatement {
             temporary,
             materialized,
             if_exists,
-            definitions,
+            source,
+            targets,
         }))
     }
 
@@ -2449,7 +2443,18 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let with_options = self.parse_opt_with_options()?;
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let o = if matches!(self.peek_token(), Some(Token::RParen)) {
+                vec![]
+            } else {
+                self.parse_comma_separated(Parser::parse_index_option)?
+            };
+            self.expect_token(&Token::RParen)?;
+            o
+        } else {
+            vec![]
+        };
 
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
@@ -2461,7 +2466,19 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_raw_ident(&mut self) -> Result<RawIdent, ParserError> {
+    fn parse_index_option_name(&mut self) -> Result<IndexOptionName, ParserError> {
+        self.expect_keywords(&[LOGICAL, COMPACTION, WINDOW])?;
+        Ok(IndexOptionName::LogicalCompactionWindow)
+    }
+
+    fn parse_index_option(&mut self) -> Result<IndexOption<Raw>, ParserError> {
+        let name = self.parse_index_option_name()?;
+        let _ = self.consume_token(&Token::Eq);
+        let value = self.parse_opt_with_option_value(false)?;
+        Ok(IndexOption { name, value })
+    }
+
+    fn parse_raw_ident(&mut self) -> Result<RawClusterName, ParserError> {
         if self.consume_token(&Token::LBracket) {
             let id = match self.next_token() {
                 Some(Token::Ident(id)) => id,
@@ -2469,13 +2486,13 @@ impl<'a> Parser<'a> {
                 _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
             };
             self.expect_token(&Token::RBracket)?;
-            Ok(RawIdent::Resolved(id))
+            Ok(RawClusterName::Resolved(id))
         } else {
-            Ok(RawIdent::Unresolved(self.parse_identifier()?))
+            Ok(RawClusterName::Unresolved(self.parse_identifier()?))
         }
     }
 
-    fn parse_optional_in_cluster(&mut self) -> Result<Option<RawIdent>, ParserError> {
+    fn parse_optional_in_cluster(&mut self) -> Result<Option<RawClusterName>, ParserError> {
         if self.parse_keywords(&[IN, CLUSTER]) {
             Ok(Some(self.parse_raw_ident()?))
         } else {
@@ -2564,72 +2581,67 @@ impl<'a> Parser<'a> {
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_identifier()?;
 
-        let replicas = if self.peek_keyword(REPLICA) {
-            self.parse_comma_separated(Parser::parse_inline_replica)?
-        } else {
-            vec![]
-        };
-
-        let _ = self.parse_keyword(WITH);
         let options = if matches!(self.peek_token(), Some(Token::Semicolon) | None) {
             vec![]
         } else {
             self.parse_comma_separated(Parser::parse_cluster_option)?
         };
+
         Ok(Statement::CreateCluster(CreateClusterStatement {
             name,
-            replicas,
             options,
         }))
     }
 
-    fn parse_inline_replica(&mut self) -> Result<ReplicaDefinition<Raw>, ParserError> {
-        self.expect_keyword(REPLICA)?;
-        let name = self.parse_identifier()?;
-        self.expect_token(&Token::LParen)?;
-        let options = self.parse_comma_separated(Parser::parse_replica_option)?;
-        self.expect_token(&Token::RParen)?;
-        Ok(ReplicaDefinition { name, options })
-    }
-
     fn parse_replica_option(&mut self) -> Result<ReplicaOption<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
+        let name = match self.expect_one_of_keywords(&[AVAILABILITY, REMOTE, SIZE])? {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ReplicaOption::AvailabilityZone(
-                    self.parse_with_option_value()?,
-                ))
+                ReplicaOptionName::AvailabilityZone
             }
-            REMOTE => {
-                self.expect_token(&Token::LParen)?;
-                let hosts = self.parse_comma_separated(Self::parse_with_option_value)?;
-                self.expect_token(&Token::RParen)?;
-                Ok(ReplicaOption::Remote { hosts })
-            }
-            SIZE => {
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ReplicaOption::Size(self.parse_with_option_value()?))
-            }
+            REMOTE => ReplicaOptionName::Remote,
+            SIZE => ReplicaOptionName::Size,
             _ => unreachable!(),
-        }
+        };
+        let value = self.parse_opt_with_option_value(false)?;
+        Ok(ReplicaOption { name, value })
     }
 
     fn parse_cluster_option(&mut self) -> Result<ClusterOption<Raw>, ParserError> {
-        self.expect_keyword(INTROSPECTION)?;
-        match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
-            DEBUGGING => {
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ClusterOption::IntrospectionDebugging(
-                    self.parse_with_option_value()?,
-                ))
+        match self.expect_one_of_keywords(&[REPLICAS, INTROSPECTION])? {
+            REPLICAS => {
+                self.expect_token(&Token::LParen)?;
+
+                let replicas = if self.peek_token() == Some(Token::RParen) {
+                    vec![]
+                } else {
+                    self.parse_comma_separated(|parser| {
+                        let name = parser.parse_identifier()?;
+                        parser.expect_token(&Token::LParen)?;
+                        let options = parser.parse_comma_separated(Parser::parse_replica_option)?;
+                        parser.expect_token(&Token::RParen)?;
+                        Ok(ReplicaDefinition { name, options })
+                    })?
+                };
+
+                self.expect_token(&Token::RParen)?;
+                Ok(ClusterOption::Replicas(replicas))
             }
-            GRANULARITY => {
-                let _ = self.consume_token(&Token::Eq);
-                Ok(ClusterOption::IntrospectionGranularity(
-                    self.parse_with_option_value()?,
-                ))
-            }
+            INTROSPECTION => match self.expect_one_of_keywords(&[DEBUGGING, GRANULARITY])? {
+                DEBUGGING => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionDebugging(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                GRANULARITY => {
+                    let _ = self.consume_token(&Token::Eq);
+                    Ok(ClusterOption::IntrospectionGranularity(
+                        self.parse_with_option_value()?,
+                    ))
+                }
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         }
     }
@@ -2706,11 +2718,11 @@ impl<'a> Parser<'a> {
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
-        let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
-            CONNECTOR,
-        ]) {
-            Some(DATABASE) => {
+        let object_type = match self.expect_one_of_keywords(&[
+            CONNECTION, CLUSTER, DATABASE, INDEX, ROLE, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE,
+            USER, VIEW,
+        ])? {
+            DATABASE => {
                 let if_exists = self.parse_if_exists()?;
                 let name = self.parse_database_name()?;
                 let restrict = matches!(
@@ -2723,7 +2735,7 @@ impl<'a> Parser<'a> {
                     restrict,
                 }));
             }
-            Some(SCHEMA) => {
+            SCHEMA => {
                 let if_exists = self.parse_if_exists()?;
                 let name = self.parse_schema_name()?;
                 let cascade = matches!(
@@ -2736,7 +2748,7 @@ impl<'a> Parser<'a> {
                     cascade,
                 }));
             }
-            Some(ROLE) | Some(USER) => {
+            ROLE | USER => {
                 let if_exists = self.parse_if_exists()?;
                 let names = self.parse_comma_separated(Parser::parse_object_name)?;
                 return Ok(Statement::DropRoles(DropRolesStatement {
@@ -2744,21 +2756,21 @@ impl<'a> Parser<'a> {
                     names,
                 }));
             }
-            Some(CLUSTER) => {
+            CLUSTER => {
                 return if self.peek_keyword(REPLICA) {
                     self.parse_drop_cluster_replicas()
                 } else {
                     self.parse_drop_clusters()
                 };
             }
-            Some(INDEX) => ObjectType::Index,
-            Some(SINK) => ObjectType::Sink,
-            Some(SOURCE) => ObjectType::Source,
-            Some(TABLE) => ObjectType::Table,
-            Some(TYPE) => ObjectType::Type,
-            Some(VIEW) => ObjectType::View,
-            Some(SECRET) => ObjectType::Secret,
-            Some(CONNECTOR) => ObjectType::Connector,
+            INDEX => ObjectType::Index,
+            SINK => ObjectType::Sink,
+            SOURCE => ObjectType::Source,
+            TABLE => ObjectType::Table,
+            TYPE => ObjectType::Type,
+            VIEW => ObjectType::View,
+            SECRET => ObjectType::Secret,
+            CONNECTION => ObjectType::Connection,
             _ => {
                 return self.expected(
                     self.peek_pos(),
@@ -2770,7 +2782,7 @@ impl<'a> Parser<'a> {
         };
 
         let if_exists = self.parse_if_exists()?;
-        let names = self.parse_comma_separated(Parser::parse_raw_name)?;
+        let names = self.parse_comma_separated(Parser::parse_object_name)?;
         let cascade = matches!(
             self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
             Some(CASCADE),
@@ -2992,6 +3004,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_kw_options<T, F>(&mut self, f: F) -> Result<Vec<T>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
+        Ok(if self.parse_keyword(WITH) {
+            let expect_rparen = self.consume_token(&Token::LParen);
+            let o = self.parse_comma_separated(f)?;
+            if expect_rparen {
+                self.expect_token(&Token::RParen)?;
+            }
+            o
+        } else {
+            vec![]
+        })
+    }
+
     fn parse_opt_with_options(&mut self) -> Result<Vec<WithOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_with_options(true)
@@ -3015,28 +3043,50 @@ impl<'a> Parser<'a> {
     /// `KEY`. If require_equals is false, additionally support `KEY VALUE` (but still the others).
     fn parse_with_option(&mut self, require_equals: bool) -> Result<WithOption<Raw>, ParserError> {
         let key = self.parse_identifier()?;
-        let has_eq = self.consume_token(&Token::Eq);
-        // No = was encountered and require_equals is false, so the next token might be
-        // a value and might not. The only valid things that indicate no value would
-        // be `)` for end-of-options or `,` for another-option. Either of those means
-        // there's no value, anything else means we expect a valid value.
-        let has_value = !matches!(self.peek_token(), Some(Token::RParen) | Some(Token::Comma));
-        if has_value && !has_eq && require_equals {
-            return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
-        }
-        let value = if has_value {
-            Some(self.parse_with_option_value()?)
-        } else {
-            None
-        };
+        let value = self.parse_opt_with_option_value(require_equals)?;
         Ok(WithOption { key, value })
     }
 
+    fn parse_opt_with_option_value(
+        &mut self,
+        require_equals: bool,
+    ) -> Result<Option<WithOptionValue<Raw>>, ParserError> {
+        let has_eq = self.consume_token(&Token::Eq);
+        // No = was encountered and require_equals is false, so the next token
+        // might be a value and might not. The only valid things that indicate
+        // no value would be `)` for end-of-options , `,` for another-option, or
+        // ';'/nothing for end-of-statement. Either of those means there's no
+        // value, anything else means we expect a valid value.
+        let has_value = !matches!(
+            self.peek_token(),
+            Some(Token::RParen) | Some(Token::Comma) | Some(Token::Semicolon) | None
+        );
+        if has_value && !has_eq && require_equals {
+            return self.expected(self.peek_pos(), Token::Eq, self.peek_token());
+        }
+        Ok(if has_value {
+            Some(self.parse_with_option_value()?)
+        } else {
+            None
+        })
+    }
+
     fn parse_with_option_value(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
-        if let Some(value) = self.maybe_parse(Parser::parse_value) {
+        if self.parse_keyword(SECRET) {
+            // HACK(benesch): temporarily allow secret references of the form
+            // `KEY = SECRET db.schema.item`. `KEY = SECRET` is still allowed
+            // for backwards copmatibility and parses as the ident `secret`.
+            // Once we have connections with explicit fields for secret
+            // references, we can remove this hack.
+            if let Some(secret) = self.maybe_parse(Parser::parse_raw_name) {
+                Ok(WithOptionValue::Secret(secret))
+            } else {
+                Ok(WithOptionValue::Ident(Ident::new("secret")))
+            }
+        } else if let Some(value) = self.maybe_parse(Parser::parse_value) {
             Ok(WithOptionValue::Value(value))
-        } else if let Some(object_name) = self.maybe_parse(Parser::parse_object_name) {
-            Ok(WithOptionValue::ObjectName(object_name))
+        } else if let Some(ident) = self.maybe_parse(Parser::parse_identifier) {
+            Ok(WithOptionValue::Ident(ident))
         } else {
             return self.expected(self.peek_pos(), "option value", self.peek_token());
         }
@@ -3055,7 +3105,7 @@ impl<'a> Parser<'a> {
             };
 
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         self.expect_keywords(&[RENAME, TO])?;
         let to_item_name = self.parse_identifier()?;
@@ -3070,12 +3120,12 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         Ok(match self.expect_one_of_keywords(&[RESET, SET, RENAME])? {
             RESET => {
                 self.expect_token(&Token::LParen)?;
-                let reset_options = self.parse_comma_separated(Parser::parse_identifier)?;
+                let reset_options = self.parse_comma_separated(Parser::parse_index_option_name)?;
                 self.expect_token(&Token::RParen)?;
 
                 Statement::AlterIndex(AlterIndexStatement {
@@ -3085,7 +3135,9 @@ impl<'a> Parser<'a> {
                 })
             }
             SET => {
-                let set_options = self.parse_with_options(true)?;
+                self.expect_token(&Token::LParen)?;
+                let set_options = self.parse_comma_separated(Parser::parse_index_option)?;
+                self.expect_token(&Token::RParen)?;
                 Statement::AlterIndex(AlterIndexStatement {
                     index_name: name,
                     if_exists,
@@ -3109,7 +3161,7 @@ impl<'a> Parser<'a> {
 
     fn parse_alter_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_exists = self.parse_if_exists()?;
-        let name = self.parse_raw_name()?;
+        let name = self.parse_object_name()?;
 
         Ok(match self.expect_one_of_keywords(&[AS, RENAME])? {
             AS => {
@@ -3170,7 +3222,6 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         };
-        let mut options = vec![];
         // WITH must be followed by LParen. The WITH in COPY is optional for backward
         // compat with Postgres but is required elsewhere, which is why we don't use
         // parse_with_options here.
@@ -3180,16 +3231,35 @@ impl<'a> Parser<'a> {
         } else {
             self.consume_token(&Token::LParen)
         };
-        if has_options {
-            self.prev_token();
-            options = self.parse_with_options(false)?;
-        }
+        let options = if has_options {
+            let o = self.parse_comma_separated(Parser::parse_copy_options)?;
+            self.expect_token(&Token::RParen)?;
+            o
+        } else {
+            vec![]
+        };
         Ok(Statement::Copy(CopyStatement {
             relation,
             direction,
             target,
             options,
         }))
+    }
+
+    fn parse_copy_options(&mut self) -> Result<CopyOption<Raw>, ParserError> {
+        let name =
+            match self.expect_one_of_keywords(&[FORMAT, DELIMITER, NULL, ESCAPE, QUOTE, HEADER])? {
+                FORMAT => CopyOptionName::Format,
+                DELIMITER => CopyOptionName::Delimiter,
+                NULL => CopyOptionName::Null,
+                ESCAPE => CopyOptionName::Escape,
+                QUOTE => CopyOptionName::Quote,
+                HEADER => CopyOptionName::Header,
+                _ => unreachable!(),
+            };
+        let _ = self.consume_token(&Token::Eq);
+        let value = self.parse_opt_with_option_value(false)?;
+        Ok(CopyOption { name, value })
     }
 
     /// Parse a literal value (numbers, strings, date/time, booleans)
@@ -3343,8 +3413,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<UnresolvedDataType, ParserError> {
-        let other = |name: &str| UnresolvedDataType::Other {
+    fn parse_data_type(&mut self) -> Result<RawDataType, ParserError> {
+        let other = |name: &str| RawDataType::Other {
             name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
@@ -3358,16 +3428,16 @@ impl<'a> Parser<'a> {
                     } else {
                         "bpchar"
                     };
-                    UnresolvedDataType::Other {
+                    RawDataType::Other {
                         name: RawObjectName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
-                BPCHAR => UnresolvedDataType::Other {
+                BPCHAR => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("bpchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
-                VARCHAR => UnresolvedDataType::Other {
+                VARCHAR => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -3376,7 +3446,7 @@ impl<'a> Parser<'a> {
                 // Number-like types
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
-                DEC | DECIMAL => UnresolvedDataType::Other {
+                DEC | DECIMAL => RawDataType::Other {
                     name: RawObjectName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
@@ -3432,7 +3502,7 @@ impl<'a> Parser<'a> {
                 JSON => other("jsonb"),
                 _ => {
                     self.prev_token();
-                    UnresolvedDataType::Other {
+                    RawDataType::Other {
                         name: RawObjectName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
@@ -3440,7 +3510,7 @@ impl<'a> Parser<'a> {
             },
             Some(Token::Ident(_) | Token::LBracket) => {
                 self.prev_token();
-                UnresolvedDataType::Other {
+                RawDataType::Other {
                     name: self.parse_raw_name()?,
                     typ_mod: self.parse_typ_mod()?,
                 }
@@ -3452,7 +3522,7 @@ impl<'a> Parser<'a> {
             match self.peek_token() {
                 Some(Token::Keyword(LIST)) => {
                     self.next_token();
-                    data_type = UnresolvedDataType::List(Box::new(data_type));
+                    data_type = RawDataType::List(Box::new(data_type));
                 }
                 Some(Token::LBracket) => {
                     // Handle array suffixes. Note that `int[]`, `int[][][]`,
@@ -3460,8 +3530,8 @@ impl<'a> Parser<'a> {
                     self.next_token();
                     let _ = self.maybe_parse(|parser| parser.parse_number_value());
                     self.expect_token(&Token::RBracket)?;
-                    if !matches!(data_type, UnresolvedDataType::Array(_)) {
-                        data_type = UnresolvedDataType::Array(Box::new(data_type));
+                    if !matches!(data_type, RawDataType::Array(_)) {
+                        data_type = RawDataType::Array(Box::new(data_type));
                     }
                 }
                 _ => break,
@@ -3684,13 +3754,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<UnresolvedDataType, ParserError> {
+    fn parse_map(&mut self) -> Result<RawDataType, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
         let value_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::RBracket)?;
-        Ok(UnresolvedDataType::Map {
+        Ok(RawDataType::Map {
             key_type,
             value_type,
         })
@@ -4051,6 +4121,7 @@ impl<'a> Parser<'a> {
             let token = self.peek_token();
             let value = match (self.parse_value(), token) {
                 (Ok(value), _) => SetVariableValue::Literal(value),
+                (Err(_), Some(Token::Keyword(DEFAULT))) => SetVariableValue::Default,
                 (Err(_), Some(Token::Keyword(kw))) => SetVariableValue::Ident(kw.into_ident()),
                 (Err(_), Some(Token::Ident(id))) => SetVariableValue::Ident(Ident::new(id)),
                 (Err(_), other) => self.expected(self.peek_pos(), "variable value", other)?,
@@ -4077,6 +4148,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_reset(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let variable = self.parse_identifier()?;
+        Ok(Statement::ResetVariable(ResetVariableStatement {
+            variable,
+        }))
+    }
+
     fn parse_show(&mut self) -> Result<Statement<Raw>, ParserError> {
         if self.parse_keyword(DATABASES) {
             return Ok(Statement::ShowDatabases(ShowDatabasesStatement {
@@ -4087,7 +4165,16 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                COLUMNS, CONNECTORS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
+                COLUMNS,
+                CONNECTIONS,
+                FULL,
+                INDEX,
+                INDEXES,
+                KEYS,
+                OBJECTS,
+                SCHEMAS,
+                TABLES,
+                TYPES,
             ])?;
             self.prev_token();
         }
@@ -4099,7 +4186,7 @@ impl<'a> Parser<'a> {
             } else {
                 self.expect_one_of_keywords(&[
                     COLUMNS,
-                    CONNECTORS,
+                    CONNECTIONS,
                     MATERIALIZED,
                     OBJECTS,
                     ROLES,
@@ -4135,8 +4222,18 @@ impl<'a> Parser<'a> {
                 filter: self.parse_show_statement_filter()?,
             }))
         } else if let Some(object_type) = self.parse_one_of_keywords(&[
-            OBJECTS, ROLES, CLUSTER, CLUSTERS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
-            SECRETS, CONNECTORS,
+            OBJECTS,
+            ROLES,
+            CLUSTER,
+            CLUSTERS,
+            SINKS,
+            SOURCES,
+            TABLES,
+            TYPES,
+            USERS,
+            VIEWS,
+            SECRETS,
+            CONNECTIONS,
         ]) {
             let object_type = match object_type {
                 OBJECTS => ObjectType::Object,
@@ -4157,7 +4254,7 @@ impl<'a> Parser<'a> {
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
                 SECRETS => ObjectType::Secret,
-                CONNECTORS => ObjectType::Connector,
+                CONNECTIONS => ObjectType::Connection,
                 _ => unreachable!(),
             };
 
@@ -4197,36 +4294,30 @@ impl<'a> Parser<'a> {
             .parse_one_of_keywords(&[INDEX, INDEXES, KEYS])
             .is_some()
         {
-            match self.parse_one_of_keywords(&[FROM, IN, ON]) {
-                Some(kw) => {
-                    let (table_name, in_cluster) = if kw == IN && self.peek_keyword(CLUSTER) {
-                        // put `IN` back
-                        self.prev_token();
-                        (None, self.parse_optional_in_cluster()?)
-                    } else {
-                        let table_name = self.parse_raw_name()?;
-                        let in_cluster = self.parse_optional_in_cluster()?;
-                        (Some(table_name), in_cluster)
-                    };
+            let kw = self.parse_one_of_keywords(&[FROM, IN, ON]);
+            let (table_name, in_cluster) = if kw == Some(IN) && self.peek_keyword(CLUSTER) {
+                // put `IN` back
+                self.prev_token();
+                (None, self.parse_optional_in_cluster()?)
+            } else if kw.is_some() {
+                let table_name = self.parse_raw_name()?;
+                let in_cluster = self.parse_optional_in_cluster()?;
+                (Some(table_name), in_cluster)
+            } else {
+                (None, None)
+            };
 
-                    let filter = if self.parse_keyword(WHERE) {
-                        Some(ShowStatementFilter::Where(self.parse_expr()?))
-                    } else {
-                        None
-                    };
-                    Ok(Statement::ShowIndexes(ShowIndexesStatement {
-                        table_name,
-                        in_cluster,
-                        extended,
-                        filter,
-                    }))
-                }
-                None => self.expected(
-                    self.peek_pos(),
-                    "FROM or IN after SHOW INDEXES",
-                    self.peek_token(),
-                ),
-            }
+            let filter = if self.parse_keyword(WHERE) {
+                Some(ShowStatementFilter::Where(self.parse_expr()?))
+            } else {
+                None
+            };
+            Ok(Statement::ShowIndexes(ShowIndexesStatement {
+                table_name,
+                in_cluster,
+                extended,
+                filter,
+            }))
         } else if self.parse_keywords(&[CREATE, VIEW]) {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
@@ -4247,10 +4338,10 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
             }))
-        } else if self.parse_keywords(&[CREATE, CONNECTOR]) {
-            Ok(Statement::ShowCreateConnector(
-                ShowCreateConnectorStatement {
-                    connector_name: self.parse_raw_name()?,
+        } else if self.parse_keywords(&[CREATE, CONNECTION]) {
+            Ok(Statement::ShowCreateConnection(
+                ShowCreateConnectionStatement {
+                    connection_name: self.parse_raw_name()?,
                 },
             ))
         } else {
@@ -4621,7 +4712,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse an expression, optionally followed by ASC or DESC (used in ORDER BY)
+    /// Parse an expression, optionally followed by ASC or DESC,
+    /// and then `[NULLS { FIRST | LAST }]` (used in ORDER BY)
     fn parse_order_by_expr(&mut self) -> Result<OrderByExpr<Raw>, ParserError> {
         let expr = self.parse_expr()?;
 
@@ -4632,7 +4724,19 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(OrderByExpr { expr, asc })
+
+        let nulls_last = if self.parse_keyword(NULLS) {
+            let last = self.expect_one_of_keywords(&[FIRST, LAST])? == LAST;
+            Some(last)
+        } else {
+            None
+        };
+
+        Ok(OrderByExpr {
+            expr,
+            asc,
+            nulls_last,
+        })
     }
 
     fn parse_values(&mut self) -> Result<Values<Raw>, ParserError> {
@@ -4726,13 +4830,28 @@ impl<'a> Parser<'a> {
         } else {
             TailRelation::Name(self.parse_raw_name()?)
         };
-        let options = self.parse_opt_with_options()?;
+        let options = self.parse_kw_options(Parser::parse_tail_options)?;
         let as_of = self.parse_optional_as_of()?;
         Ok(Statement::Tail(TailStatement {
             relation,
             options,
             as_of,
         }))
+    }
+
+    fn parse_tail_options(&mut self) -> Result<TailOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[PROGRESS, SNAPSHOT])? {
+            PROGRESS => TailOptionName::Progress,
+            SNAPSHOT => TailOptionName::Snapshot,
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+
+        Ok(TailOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
@@ -4905,12 +5024,21 @@ impl<'a> Parser<'a> {
         };
         let _ = self.parse_keyword(FROM);
         let name = self.parse_identifier()?;
-        let options = self.parse_opt_with_options()?;
+        let options = self.parse_kw_options(Parser::parse_fetch_option)?;
         Ok(Statement::Fetch(FetchStatement {
             name,
             count,
             options,
         }))
+    }
+
+    fn parse_fetch_option(&mut self) -> Result<FetchOption<Raw>, ParserError> {
+        self.expect_keyword(TIMEOUT)?;
+        let _ = self.consume_token(&Token::Eq);
+        Ok(FetchOption {
+            name: FetchOptionName::Timeout,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     /// Parse a `RAISE` statement, assuming that the `RAISE` token

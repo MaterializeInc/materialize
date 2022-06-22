@@ -10,7 +10,7 @@
 # Build a cross-compiling toolchain that targets the oldest version of Linux
 # that we support.
 
-FROM ubuntu:jammy-20220428 AS crosstool
+FROM ubuntu:jammy-20220531 AS crosstool
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -65,7 +65,7 @@ RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
 # Import the cross-compiling toolchain into a fresh image, omitting the
 # dependencies that we needed to actually build the toolchain.
 
-FROM ubuntu:jammy-20220428
+FROM ubuntu:jammy-20220531
 ARG ARCH_GCC
 ARG ARCH_GO
 
@@ -235,6 +235,9 @@ ENV MZ_DEV_CI_BUILDER=1
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
+
+# Ensure any Rust binaries that crash print a backtrace.
+ENV RUST_BACKTRACE=1
 
 # Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +

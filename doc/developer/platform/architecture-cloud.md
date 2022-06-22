@@ -37,20 +37,20 @@ All ports created by the orchestrator have names.
 The Kubernetes orchestrator installs the following labels on all services and
 pods that it creates:
 
-  * `materialized.materialize.cloud/namespace`: the orchestrator "subnamespace"
+  * `environmentd.materialize.cloud/namespace`: the orchestrator "subnamespace"
     in which the service is created. Either `storage` or `compute` at present.
 
-  * `materialized.materialize.cloud/service-id`: the namespace-provided
+  * `environmentd.materialize.cloud/service-id`: the namespace-provided
     identifier for the service, like "cluster-0" or "runtime".
 
-  * `materialized.materialize.cloud/port-PORT=true`: A label for each named port
+  * `environmentd.materialize.cloud/port-PORT=true`: A label for each named port
     exposed by the service.
 
-  * `NAMESPACE.materialized.materialize.cloud/KEY`: arbitrary labels assigned
+  * `NAMESPACE.environmentd.materialize.cloud/KEY`: arbitrary labels assigned
     at service creation time, prefixed with the `NamespacedOrchestrator`
     that created the label.
 
-Additionally, the service that invokes `materialized` can pass
+Additionally, the service that invokes `environmentd` can pass
 `--orchestrator-service-label` to specify additional labels that should be
 attached to *all* pods and services created by the Kubernetes orchestrator.
 
@@ -62,13 +62,14 @@ See the [secret design doc](../design/20220303_secrets.md).
 
 There are presently three binaries involved in Materialize Platform:
 
-  * `materialized`, which hosts the controller
+  * `environmentd`, which hosts the storage controller, compute controller,
+    and adapter layers
   * `storaged`, which hosts a storage runtime
   * `computed`, which hosts a compute runtime
 
 There are three separate network protocols:
 
-  * The **controller** protocol, which is how `materialized` communicates with
+  * The **controller** protocol, which is how `environmentd` communicates with
     `storaged` and `computed`. This protocol is conventionally hosted on port
     2100.
 

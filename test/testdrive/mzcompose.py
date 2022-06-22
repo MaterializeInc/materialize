@@ -9,13 +9,12 @@
 
 from pathlib import Path
 
-from materialize import ci_util, spawn, ui
+from materialize import ci_util, ui
 from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Kafka,
     Localstack,
     Materialized,
-    Postgres,
     Redpanda,
     SchemaRegistry,
     Testdrive,
@@ -29,7 +28,6 @@ SERVICES = [
     SchemaRegistry(),
     Redpanda(),
     Localstack(),
-    Postgres(),
     Materialized(),
     Testdrive(),
 ]
@@ -51,11 +49,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=int,
         metavar="N",
         help="set the default number of kafka partitions per topic",
-    )
-    parser.add_argument(
-        "--persistent-user-tables",
-        action="store_true",
-        help="enable the --persistent-user-tables materialized option",
     )
     parser.add_argument(
         "files",
@@ -81,14 +74,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.aws_region is None:
         dependencies += ["localstack"]
 
-    options = ["--catalog-postgres-stash", "postgres://postgres:postgres@postgres"]
-    if args.persistent_user_tables:
-        options.append("--persistent-user-tables")
-
-    materialized = Materialized(
-        options=options,
-    )
-
     testdrive = Testdrive(
         forward_buildkite_shard=True,
         kafka_default_partitions=args.kafka_default_partitions,
@@ -96,11 +81,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_postgres_stash=True,
     )
 
-    postgres = Postgres(image="postgres:13.6")
-
-    with c.override(materialized, testdrive, postgres):
-        c.up("postgres")
-        c.wait_for_postgres()
+    with c.override(testdrive):
         c.start_and_wait_for_tcp(services=dependencies)
         c.wait_for_materialized("materialized")
         try:

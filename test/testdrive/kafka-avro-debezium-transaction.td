@@ -182,20 +182,22 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 #
 > CREATE MATERIALIZED SOURCE data_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata, tx_metadata_collection_name = 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
+  ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data-${testdrive.seed}')
+  )
 
 > CREATE MATERIALIZED SOURCE data2_schema_inline
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data2-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata, tx_metadata_collection_name = 'testdrive-data2-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
+  ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data2-${testdrive.seed}')
+  )
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 4, "b": 5}}, "source": {"file": "binlog", "pos": 1, "row": 1, "snapshot": {"boolean": false}}, "transaction": {"total_order": null, "id": "1"}}
 
-# Note that this should still work even if data2 (which shares the tx_metadata topic) isn't able to progress!
+# Note that this should still work even if data2 (which shares the transaction metadata source) isn't able to progress!
 > SELECT a, b FROM data_schema_inline
 a  b
 -----
@@ -248,9 +250,10 @@ $ file-append path=data-schema.json
 
 > CREATE MATERIALIZED SOURCE data_schema_file
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata, tx_metadata_collection_name = 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
-  ENVELOPE DEBEZIUM
+    ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (SOURCE data_txdata, COLLECTION 'testdrive-data-${testdrive.seed}')
+  )
 
 > SELECT a, b FROM data_schema_file
 a  b
@@ -382,14 +385,19 @@ $ kafka-ingest format=avro topic=data-txdata-bad-schema schema=${txschema-bad-sc
 
 ! CREATE MATERIALIZED SOURCE data_schema_inline_with_bad_schema_tx_metadata
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-bad-schema-${testdrive.seed}'
-  WITH(tx_metadata = data_txdata_bad_schema, tx_metadata_collection_name = 'testdrive-data-bad-schema-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
+  ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (
+          SOURCE data_txdata_bad_schema,
+          COLLECTION 'testdrive-data-bad-schema-${testdrive.seed}'
+      )
+  )
 contains:'id' column must be of type non-nullable string
 
 ! CREATE MATERIALIZED SOURCE data_schema_inline_with_sink
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH(tx_metadata = data_sink, tx_metadata_collection_name = 'testdrive-data-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
-contains:tx_metadata must refer to a source
+  ENVELOPE DEBEZIUM (
+      TRANSACTION METADATA (SOURCE data_sink, COLLECTION 'testdrive-data-${testdrive.seed}')
+  )
+contains:provided TRANSACTION METADATA SOURCE materialize.public.data_sink is not a source

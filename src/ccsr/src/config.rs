@@ -15,14 +15,14 @@ use url::Url;
 use crate::client::Client;
 use crate::tls::{Certificate, Identity};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Auth {
     pub username: String,
     pub password: Option<String>,
 }
 
 /// Configuration for a `Client`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ClientConfig {
     url: Url,
     root_certs: Vec<Certificate>,

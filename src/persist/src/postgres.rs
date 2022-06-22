@@ -9,15 +9,17 @@
 
 //! Implementation of [Consensus] backed by Postgres.
 
-use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use bytes::Bytes;
+use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
+use postgres_openssl::MakeTlsConnector;
 use tokio::task::JoinHandle;
+use tokio_postgres::config::SslMode;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
-use tokio_postgres::{Client as PostgresClient, NoTls};
+use tokio_postgres::Client as PostgresClient;
 
 use mz_ore::task;
 
@@ -25,8 +27,6 @@ use crate::error::Error;
 use crate::location::{Consensus, ExternalError, SeqNo, VersionedData};
 
 const SCHEMA: &str = "
-SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
     sequence_number bigint NOT NULL,
@@ -116,7 +116,7 @@ impl PostgresConsensusConfig {
 /// Implementation of [Consensus] over a Postgres database.
 #[derive(Debug)]
 pub struct PostgresConsensus {
-    client: Arc<Mutex<PostgresClient>>,
+    client: PostgresClient,
     _handle: JoinHandle<()>,
 }
 
@@ -124,10 +124,11 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
-        // TODO: reconsider opening with NoTLS. Perhaps we actually want to,
-        // especially given the fact that its not entirely known what data
-        // will actually be stored in Consensus.
-        let (mut client, conn) = tokio_postgres::connect(&config.url, NoTls).await?;
+        let pg_config: tokio_postgres::Config = config.url.parse()?;
+        let tls = make_tls(&pg_config)?;
+        let (mut client, conn) = tokio_postgres::connect(&config.url, tls)
+            .await
+            .with_context(|| format!("error connecting to postgres"))?;
         let handle = task::spawn(|| "pg_consensus_client", async move {
             if let Err(e) = conn.await {
                 tracing::error!("connection error: {}", e);
@@ -136,13 +137,90 @@ impl PostgresConsensus {
         });
 
         let tx = client.transaction().await?;
+        tx.batch_execute("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .await?;
+        let version: String = tx.query_one("SELECT version()", &[]).await?.get(0);
+        // Only get the advisory lock on Postgres (but not Cockroach which doesn't
+        // support this function and (we suspect) doesn't have this bug anyway). Use
+        // this construction (not cockroach instead of yes postgres) to avoid
+        // accidentally not executing in Postgres.
+        if !version.starts_with("CockroachDB") {
+            // Obtain an advisory lock before attempting to create the schema. This is
+            // necessary to work around concurrency bugs in `CREATE TABLE IF NOT EXISTS`
+            // in PostgreSQL.
+            //
+            // See: https://github.com/MaterializeInc/materialize/issues/12560
+            // See: https://www.postgresql.org/message-id/CA%2BTgmoZAdYVtwBfp1FL2sMZbiHCWT4UPrzRLNnX1Nb30Ku3-gg%40mail.gmail.com
+            // See: https://stackoverflow.com/a/29908840
+            //
+            // The lock ID was randomly generated.
+            tx.batch_execute("SELECT pg_advisory_xact_lock(135664303235462630);")
+                .await?;
+        }
         tx.batch_execute(SCHEMA).await?;
         tx.commit().await?;
         Ok(PostgresConsensus {
-            client: Arc::new(Mutex::new(client)),
+            client,
             _handle: handle,
         })
     }
+}
+
+// This function is copied from mz-postgres-util because of a cyclic dependency
+// difficulty that we don't want to deal with now.
+// TODO: Untangle that and remove this copy.
+fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, anyhow::Error> {
+    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
+    // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
+    // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
+    //
+    // For more details, check out Table 33.1. SSL Mode Descriptions in
+    // https://postgresql.org/docs/current/libpq-ssl.html#LIBPQ-SSL-PROTECTION.
+    let (verify_mode, verify_hostname) = match config.get_ssl_mode() {
+        SslMode::Disable | SslMode::Prefer => (SslVerifyMode::NONE, false),
+        SslMode::Require => match config.get_ssl_root_cert() {
+            // If a root CA file exists, the behavior of sslmode=require will be the same as
+            // that of verify-ca, meaning the server certificate is validated against the CA.
+            //
+            // For more details, check out the note about backwards compatibility in
+            // https://postgresql.org/docs/current/libpq-ssl.html#LIBQ-SSL-CERTIFICATES.
+            Some(_) => (SslVerifyMode::PEER, false),
+            None => (SslVerifyMode::NONE, false),
+        },
+        SslMode::VerifyCa => (SslVerifyMode::PEER, false),
+        SslMode::VerifyFull => (SslVerifyMode::PEER, true),
+        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+    };
+
+    // Configure peer verification
+    builder.set_verify(verify_mode);
+
+    // Configure certificates
+    match (config.get_ssl_cert(), config.get_ssl_key()) {
+        (Some(ssl_cert), Some(ssl_key)) => {
+            builder.set_certificate_file(ssl_cert, SslFiletype::PEM)?;
+            builder.set_private_key_file(ssl_key, SslFiletype::PEM)?;
+        }
+        (None, Some(_)) => bail!("must provide both sslcert and sslkey, but only provided sslkey"),
+        (Some(_), None) => bail!("must provide both sslcert and sslkey, but only provided sslcert"),
+        _ => {}
+    }
+    if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
+        builder.set_ca_file(ssl_root_cert)?
+    }
+
+    let mut tls_connector = MakeTlsConnector::new(builder.build());
+
+    // Configure hostname verification
+    match (verify_mode, verify_hostname) {
+        (SslVerifyMode::PEER, false) => tls_connector.set_callback(|connect, _| {
+            connect.set_verify_hostname(false);
+            Ok(())
+        }),
+        _ => {}
+    }
+
+    Ok(tls_connector)
 }
 
 #[async_trait]
@@ -156,8 +234,7 @@ impl Consensus for PostgresConsensus {
 
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
-        let client = self.client.lock().await;
-        let row = client.query_opt(&*q, &[&key]).await?;
+        let row = self.client.query_opt(&*q, &[&key]).await?;
         let row = match row {
             None => return Ok(None),
             Some(row) => row,
@@ -166,7 +243,10 @@ impl Consensus for PostgresConsensus {
         let seqno: SeqNo = row.try_get("sequence_number")?;
 
         let data: Vec<u8> = row.try_get("data")?;
-        Ok(Some(VersionedData { seqno, data }))
+        Ok(Some(VersionedData {
+            seqno,
+            data: Bytes::from(data),
+        }))
     }
 
     async fn compare_and_set(
@@ -204,11 +284,8 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1 AND sequence_number > $4
                      )
                      ON CONFLICT DO NOTHING";
-
-            let client = self.client.lock().await;
-
-            client
-                .execute(&*q, &[&key, &new.seqno, &new.data, &expected])
+            self.client
+                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref(), &expected])
                 .await?
         } else {
             // Insert the new row as long as no other row exists for the same shard.
@@ -217,8 +294,9 @@ impl Consensus for PostgresConsensus {
                          SELECT * FROM consensus WHERE shard = $1
                      )
                      ON CONFLICT DO NOTHING";
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &new.seqno, &new.data]).await?
+            self.client
+                .execute(&*q, &[&key, &new.seqno, &new.data.as_ref()])
+                .await?
         };
 
         if result == 1 {
@@ -246,14 +324,16 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number";
-        let client = self.client.lock().await;
-        let rows = client.query(&*q, &[&key, &from]).await?;
+        let rows = self.client.query(&*q, &[&key, &from]).await?;
         let mut results = vec![];
 
         for row in rows {
             let seqno: SeqNo = row.try_get("sequence_number")?;
             let data: Vec<u8> = row.try_get("data")?;
-            results.push(VersionedData { seqno, data });
+            results.push(VersionedData {
+                seqno,
+                data: Bytes::from(data),
+            });
         }
 
         if results.is_empty() {
@@ -278,10 +358,7 @@ impl Consensus for PostgresConsensus {
                     SELECT * FROM consensus WHERE shard = $1 AND sequence_number >= $2
                 )";
 
-        let result = {
-            let client = self.client.lock().await;
-            client.execute(&*q, &[&key, &seqno]).await?
-        };
+        let result = { self.client.execute(&*q, &[&key, &seqno]).await? };
         if result == 0 {
             // We weren't able to successfully truncate any rows inspect head to
             // determine whether the request was valid and there were no records in
@@ -327,7 +404,6 @@ mod tests {
             }
         };
 
-        consensus_impl_test(|| futures_executor::block_on(PostgresConsensus::open(config.clone())))
-            .await
+        consensus_impl_test(|| PostgresConsensus::open(config.clone())).await
     }
 }

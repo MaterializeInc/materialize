@@ -19,13 +19,13 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT NULL FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6, ten AS a7
 
-> SELECT COUNT(*) = 10000000 FROM v1;
-true
+> SELECT COUNT(*) FROM v1;
+10000000
 
 > CREATE MATERIALIZED VIEW v2 AS SELECT a1.f1 FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6, ten AS a7
 
-> SELECT COUNT(*) = 10000000 FROM v2;
-true
+> SELECT COUNT(*) FROM v2;
+10000000
 
 > BEGIN
 

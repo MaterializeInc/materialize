@@ -15,5 +15,5 @@ pre-image:
       protobuf-src:
         install: protobuf-install
   - type: cargo-build
-    bin: [storaged, computed, materialized]
+    bin: [storaged, computed, environmentd]
   - type: cargo-test

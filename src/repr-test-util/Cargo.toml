@@ -3,16 +3,15 @@ name = "mz-repr-test-util"
 description = "Utilities for creating objects in the repr crate for testing"
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
-lazy_static = "1.4.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-proc-macro2 = "1.0.37"
+proc-macro2 = "1.0.40"
 
 [dev-dependencies]
 datadriven = "0.6.0"

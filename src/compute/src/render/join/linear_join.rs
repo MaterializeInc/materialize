@@ -15,8 +15,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::operators::join::JoinCore;
-use differential_dataflow::trace::BatchReader;
-use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
@@ -261,8 +259,6 @@ where
         Tr2: TraceReader<Key = Row, Val = Row, Time = G::Timestamp, R = mz_repr::Diff>
             + Clone
             + 'static,
-        Tr2::Batch: BatchReader<Row, Tr2::Val, G::Timestamp, mz_repr::Diff> + 'static,
-        Tr2::Cursor: Cursor<Row, Tr2::Val, G::Timestamp, mz_repr::Diff> + 'static,
     {
         use differential_dataflow::AsCollection;
         use timely::dataflow::operators::OkErr;

@@ -46,21 +46,21 @@ fn main() -> Result<()> {
         let mut buf = CodegenBuf::new();
 
         buf.writeln("#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]");
-        buf.start_block("pub enum Keyword");
-        for kw in &keywords {
-            buf.writeln(format!("{},", kw));
-        }
-        buf.end_block();
+        buf.write_block("pub enum Keyword", |buf| {
+            for kw in &keywords {
+                buf.writeln(format!("{},", kw));
+            }
+        });
 
-        buf.start_block("impl Keyword");
-        buf.start_block("pub fn as_str(&self) -> &'static str");
-        buf.start_block("match self");
-        for kw in &keywords {
-            buf.writeln(format!("Keyword::{} => {:?},", kw, kw.to_uppercase()));
-        }
-        buf.end_block();
-        buf.end_block();
-        buf.end_block();
+        buf.write_block("impl Keyword", |buf| {
+            buf.write_block("pub fn as_str(&self) -> &'static str", |buf| {
+                buf.write_block("match self", |buf| {
+                    for kw in &keywords {
+                        buf.writeln(format!("Keyword::{} => {:?},", kw, kw.to_uppercase()));
+                    }
+                });
+            });
+        });
 
         for kw in &keywords {
             buf.writeln(format!(

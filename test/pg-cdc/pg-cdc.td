@@ -85,6 +85,22 @@ INSERT INTO conflict_schema.conflict_table VALUES ('234');
 CREATE TABLE "space table" ("space column" INTEGER);
 
 #
+# Test that slots created for replication sources are deleted on DROP
+#
+$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
+
+> CREATE MATERIALIZED SOURCE "test_slot_source"
+  FROM POSTGRES
+    CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source';
+
+$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
+
+> DROP SOURCE test_slot_source
+
+$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
+
+#
 # Error checking
 #
 
@@ -343,23 +359,6 @@ true
 true
 
 #
-# Test that slots created for replication sources are deleted on DROP
-#
-$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=test_slot active=false
-
-> CREATE MATERIALIZED SOURCE "test_slot_source"
-  FROM POSTGRES
-    CONNECTION 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    SLOT 'test_slot';
-
-$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=test_slot active=true
-
-> DROP SOURCE test_slot_source
-
-$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=test_slot active=false
-
-#
 # Remove all data on the Postgres side
 #
 
@@ -379,38 +378,38 @@ DELETE FROM conflict_schema.conflict_table;
 # Check that all data sources empty out on the Materialize side
 #
 
-> SELECT COUNT(*) = 0 FROM pk_table;
-true
+> SELECT COUNT(*) FROM pk_table;
+0
 
-> SELECT COUNT(*) = 0 FROM nonpk_table;
-true
+> SELECT COUNT(*) FROM nonpk_table;
+0
 
-> SELECT COUNT(*) = 0 FROM large_text;
-true
+> SELECT COUNT(*) FROM large_text;
+0
 
-> SELECT COUNT(*) = 0 FROM trailing_space_nopk;
-true
+> SELECT COUNT(*) FROM trailing_space_nopk;
+0
 
-> SELECT COUNT(*) = 0 FROM trailing_space_pk;
-true
+> SELECT COUNT(*) FROM trailing_space_pk;
+0
 
-> SELECT COUNT(*) = 0 FROM multipart_pk;
-true
+> SELECT COUNT(*) FROM multipart_pk;
+0
 
-> SELECT COUNT(*) = 0 FROM nulls_table;
-true
+> SELECT COUNT(*) FROM nulls_table;
+0
 
-> SELECT COUNT(*) = 0 FROM utf8_table;
-true
+> SELECT COUNT(*) FROM utf8_table;
+0
 
-> SELECT COUNT(*) = 0 FROM join_view;
-true
+> SELECT COUNT(*) FROM join_view;
+0
 
-> SELECT COUNT(*) = 0 FROM "таблица";
-true
+> SELECT COUNT(*) FROM "таблица";
+0
 
-> SELECT COUNT(*) = 0 FROM conflict_table;
-true
+> SELECT COUNT(*) FROM conflict_table;
+0
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION mz_source;

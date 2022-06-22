@@ -79,6 +79,59 @@ SHOW extra_float_digits
 ----
 1
 
+# Test resetting a variable.
+
+statement ok
+SET extra_float_digits=42
+
+statement ok
+SET extra_float_digits=DEFAULT
+
+query T
+SHOW extra_float_digits
+----
+3
+
+statement ok
+SET extra_float_digits=42
+
+simple
+SET LOCAL extra_float_digits=DEFAULT;
+SHOW extra_float_digits;
+----
+COMPLETE 0
+3
+COMPLETE 1
+
+query T
+SHOW extra_float_digits
+----
+42
+
+statement ok
+RESET extra_float_digits
+
+query T
+SHOW extra_float_digits
+----
+3
+
+# Test that resetting a read-only variable succeeds.
+
+statement ok
+SET server_version=DEFAULT
+
+statement ok
+RESET server_version
+
+# Test that resetting an unknown variable fails.
+
+statement error unrecognized configuration parameter
+SET does_not_exist = DEFAULT
+
+statement error unrecognized configuration parameter
+RESET does_not_exist
+
 # Test that a failed transaction will not commit var changes.
 
 statement ok

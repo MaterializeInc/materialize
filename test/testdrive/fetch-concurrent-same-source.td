@@ -28,8 +28,8 @@ $ kafka-ingest format=avro topic=fetch-concurrent-same-source schema=${int} time
 {"f1": 234}
 {"f1": 345}
 
-> SELECT COUNT(*) = 3 FROM fetch_concurrent_same_source;
-true
+> SELECT COUNT(*) FROM fetch_concurrent_same_source;
+3
 
 > BEGIN
 

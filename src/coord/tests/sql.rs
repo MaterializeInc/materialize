@@ -20,17 +20,13 @@
 
 use std::sync::Arc;
 
-use tempfile::TempDir;
-
 use mz_coord::catalog::{Catalog, CatalogItem, Op, Table, SYSTEM_CONN_ID};
 use mz_coord::session::{Session, DEFAULT_DATABASE_NAME};
 use mz_ore::now::NOW_ZERO;
 use mz_repr::RelationDesc;
 use mz_sql::ast::{Expr, Statement};
 use mz_sql::catalog::CatalogDatabase;
-use mz_sql::names::{
-    resolve_names, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier,
-};
+use mz_sql::names::{self, ObjectQualifiers, QualifiedObjectName, ResolvedDatabaseSpecifier};
 use mz_sql::plan::{PlanContext, QueryContext, QueryLifetime, StatementContext};
 use mz_sql::DEFAULT_SCHEMA;
 use tokio::sync::Mutex;
@@ -41,7 +37,6 @@ use tokio::sync::Mutex;
 #[tokio::test]
 async fn datadriven() {
     datadriven::walk_async("tests/testdata", |mut f| async {
-        let data_dir = TempDir::new().unwrap();
         // The datadriven API takes an `FnMut` closure, and can't express to Rust that
         // it will finish polling each returned future before calling the closure
         // again, so we have to wrap the catalog in a share-able type. Datadriven
@@ -50,9 +45,7 @@ async fn datadriven() {
         // Context. This is just a test, so the performance hit of this doesn't matter
         // (and in practice there will be no contention).
         let catalog = Arc::new(Mutex::new(
-            Catalog::open_debug_sqlite(data_dir.path(), NOW_ZERO.clone())
-                .await
-                .unwrap(),
+            Catalog::open_debug_sqlite(NOW_ZERO.clone()).await.unwrap(),
         ));
         f.run_async(|test_case| {
             let catalog = Arc::clone(&catalog);
@@ -78,6 +71,7 @@ async fn datadriven() {
                             .clone();
                         catalog
                             .transact(
+                                None,
                                 vec![Op::CreateItem {
                                     id,
                                     oid,
@@ -109,16 +103,16 @@ async fn datadriven() {
                         let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
                         let pcx = &PlanContext::zero();
                         let scx = StatementContext::new(Some(pcx), &catalog);
-                        let mut qcx =
+                        let qcx =
                             QueryContext::root(&scx, QueryLifetime::OneShot(scx.pcx().unwrap()));
                         let q = parsed[0].clone();
                         let q = match q {
                             Statement::Select(s) => s.query,
                             _ => unreachable!(),
                         };
-                        let resolved = resolve_names(&mut qcx, q);
+                        let resolved = names::resolve(qcx.scx.catalog, q);
                         match resolved {
-                            Ok(q) => format!("{}\n", q),
+                            Ok((q, _depends_on)) => format!("{}\n", q),
                             Err(e) => format!("error: {}\n", e),
                         }
                     }

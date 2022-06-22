@@ -7,17 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-pub mod port_metadata_file;
-
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use chrono::Utc;
+use futures::stream::BoxStream;
 use itertools::Itertools;
 use scopeguard::defer;
 use sysinfo::{ProcessExt, ProcessStatus, SystemExt};
@@ -26,10 +28,16 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Duration};
 use tracing::{error, info};
 
-use crate::port_metadata_file::PortMetadataFile;
-use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, Service, ServiceConfig};
+use mz_orchestrator::{
+    NamespacedOrchestrator, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
+    ServiceStatus,
+};
 use mz_ore::id_gen::PortAllocator;
 use mz_pid_file::PidFile;
+
+use crate::port_metadata_file::PortMetadataFile;
+
+pub mod port_metadata_file;
 
 /// Configures a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
@@ -41,11 +49,11 @@ pub struct ProcessOrchestratorConfig {
     pub port_allocator: Arc<PortAllocator>,
     /// Whether to supress output from spawned subprocesses.
     pub suppress_output: bool,
-    /// The host spawned subprocesses bind to.
-    pub process_listen_host: Option<String>,
     /// The directory in which the orchestrator should look for process
     /// lock files.
     pub data_dir: PathBuf,
+    /// A command to wrap the child command invocation
+    pub command_wrapper: Vec<String>,
 }
 
 /// An orchestrator backed by processes on the local machine.
@@ -53,26 +61,29 @@ pub struct ProcessOrchestratorConfig {
 /// **This orchestrator is for development only.** Due to limitations in the
 /// Unix process API, it does not exactly conform to the documented semantics
 /// of `Orchestrator`.
+///
+/// Processes launched by this orchestrator must support a `--pid-file-location`
+/// command line flag which causes a PID file to be emitted at the specified
+/// path.
 #[derive(Debug)]
 pub struct ProcessOrchestrator {
     image_dir: PathBuf,
     port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
     namespaces: Mutex<HashMap<String, Arc<dyn NamespacedOrchestrator>>>,
-    process_listen_host: String,
     data_dir: PathBuf,
+    command_wrapper: Vec<String>,
 }
 
 impl ProcessOrchestrator {
-    const DEFAULT_LISTEN_HOST: &'static str = "127.0.0.1";
     /// Creates a new process orchestrator from the provided configuration.
     pub async fn new(
         ProcessOrchestratorConfig {
             image_dir,
             port_allocator,
             suppress_output,
-            process_listen_host,
             data_dir,
+            command_wrapper,
         }: ProcessOrchestratorConfig,
     ) -> Result<ProcessOrchestrator, anyhow::Error> {
         Ok(ProcessOrchestrator {
@@ -80,17 +91,13 @@ impl ProcessOrchestrator {
             port_allocator,
             suppress_output,
             namespaces: Mutex::new(HashMap::new()),
-            process_listen_host: process_listen_host
-                .unwrap_or_else(|| ProcessOrchestrator::DEFAULT_LISTEN_HOST.to_string()),
             data_dir: fs::canonicalize(data_dir)?,
+            command_wrapper,
         })
     }
 }
 
 impl Orchestrator for ProcessOrchestrator {
-    fn listen_host(&self) -> &str {
-        &self.process_listen_host
-    }
     fn namespace(&self, namespace: &str) -> Arc<dyn NamespacedOrchestrator> {
         let mut namespaces = self.namespaces.lock().expect("lock poisoned");
         Arc::clone(namespaces.entry(namespace.into()).or_insert_with(|| {
@@ -99,8 +106,9 @@ impl Orchestrator for ProcessOrchestrator {
                 image_dir: self.image_dir.clone(),
                 port_allocator: Arc::clone(&self.port_allocator),
                 suppress_output: self.suppress_output,
-                supervisors: Mutex::new(HashMap::new()),
+                supervisors: Arc::new(Mutex::new(HashMap::new())),
                 data_dir: self.data_dir.clone(),
+                command_wrapper: self.command_wrapper.clone(),
             })
         }))
     }
@@ -112,8 +120,9 @@ struct NamespacedProcessOrchestrator {
     image_dir: PathBuf,
     port_allocator: Arc<PortAllocator>,
     suppress_output: bool,
-    supervisors: Mutex<HashMap<String, Vec<AbortOnDrop>>>,
+    supervisors: Arc<Mutex<HashMap<String, Vec<AbortOnDrop>>>>,
     data_dir: PathBuf,
+    command_wrapper: Vec<String>,
 }
 
 #[async_trait]
@@ -202,24 +211,39 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         }
 
         // Now create all the processes that weren't detected as being still alive
-        let hosts_ports = processes
+        let peers = processes
             .iter()
             .map(|ports| ("localhost".to_string(), ports.clone()))
             .collect::<Vec<_>>();
         for i in 0..(scale_in.get()) {
             if !processes_exist[i] {
-                let mut args = args(&hosts_ports, &processes[i], Some(i));
+                let mut args = args(&ServiceAssignments {
+                    listen_host: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    ports: &peers[i].1,
+                    index: Some(i),
+                    peers: &peers,
+                });
                 args.push(format!(
                     "--pid-file-location={}",
                     pid_file_locations[i].as_ref().unwrap().display()
                 ));
+                args.push(format!(
+                    "--secrets-path={}",
+                    // TODO(benesch): avoid hardcoding this path. The
+                    // integration between the orchestrator and secrets
+                    // controller is about to change substantially, so I don't
+                    // want to do this now.
+                    self.data_dir.join("secrets").display()
+                ));
 
+                let command_wrapper = self.command_wrapper.clone();
                 handles.push(AbortOnDrop(Box::new(mz_ore::task::spawn(
                     || format!("service-supervisor: {full_id}"),
                     supervise(
                         full_id.clone(),
                         path.clone(),
                         args.clone(),
+                        command_wrapper,
                         Arc::clone(&self.port_allocator),
                         processes[i].clone(),
                         self.suppress_output,
@@ -242,17 +266,64 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let supervisors = self.supervisors.lock().expect("lock poisoned");
         Ok(supervisors.keys().cloned().collect())
     }
+
+    fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
+        // The process orchestrator currently doesn't provide good support for
+        // tracking service status, so we punt and always return an "unknown"
+        // status instead. We can still report the existence of individual
+        // processes though.
+
+        let supervisors = Arc::clone(&self.supervisors);
+        let stream = async_stream::stream! {
+            let mut events = Vec::new();
+            loop {
+                {
+                    let supervisors = supervisors.lock().expect("lock poisoned");
+                    for (service, processes) in supervisors.iter() {
+                        for process_idx in 0..processes.len() {
+                            events.push(ServiceEvent {
+                                service_id: service.to_string(),
+                                process_id: process_idx as i64,
+                                status: ServiceStatus::Unknown,
+                                time: Utc::now(),
+                            });
+                        }
+                    }
+                }
+
+                for event in events.drain(..) {
+                    yield Ok(event);
+                }
+
+                time::sleep(Duration::from_secs(5)).await;
+            }
+        };
+        Box::pin(stream)
+    }
 }
 
 async fn supervise(
     full_id: String,
-    path: PathBuf,
-    args: Vec<String>,
+    path: impl AsRef<OsStr>,
+    args: Vec<impl AsRef<OsStr>>,
+    command_wrapper: Vec<String>,
     port_allocator: Arc<PortAllocator>,
     ports: HashMap<String, u16>,
     suppress_output: bool,
     port_metadata_file_location: PathBuf,
 ) {
+    fn interpolate_command(
+        command_part: &str,
+        full_id: &str,
+        ports: &HashMap<String, u16>,
+    ) -> String {
+        let mut command_part = command_part.replace("%N", full_id);
+        for (endpoint, port) in ports {
+            command_part = command_part.replace(&format!("%P:{endpoint}"), &format!("{port}"));
+        }
+        command_part
+    }
+
     defer! {
         for port in ports.values() {
             port_allocator.free(*port);
@@ -266,14 +337,30 @@ async fn supervise(
             )
         });
     loop {
+        let mut cmd = if command_wrapper.is_empty() {
+            let mut cmd = Command::new(&path);
+            cmd.args(&args);
+            cmd
+        } else {
+            let mut cmd = Command::new(&command_wrapper[0]);
+            let path = path.as_ref();
+            cmd.args(
+                command_wrapper[1..]
+                    .iter()
+                    .map(|part| interpolate_command(part, &full_id, &ports)),
+            );
+            cmd.arg(path);
+            cmd.args(args.iter().map(AsRef::as_ref));
+            cmd
+        };
         info!(
-            "Launching {}: {} {}...",
+            "Launching {}: {}...",
             full_id,
-            path.display(),
-            args.iter().join(" ")
+            cmd.as_std()
+                .get_args()
+                .map(|arg| arg.to_string_lossy())
+                .join(" ")
         );
-        let mut cmd = Command::new(&path);
-        cmd.args(&args);
         if suppress_output {
             cmd.stdout(Stdio::null());
             cmd.stderr(Stdio::null());

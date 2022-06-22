@@ -18,6 +18,7 @@ use chrono::Utc;
 use time::Instant;
 use walkdir::WalkDir;
 
+use mz_ore::cli::{self, CliConfig};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
 use mz_sqllogictest::util;
 
@@ -43,9 +44,10 @@ struct Args {
     /// Generate a JUnit-compatible XML report to the specified file.
     #[clap(long, value_name = "FILE")]
     junit_report: Option<PathBuf>,
-    /// Run with N materialized workers.
-    #[clap(long, value_name = "N", default_value = "3")]
-    workers: usize,
+    /// PostgreSQL connection URL to use for `persist` consensus and the catalog
+    /// stash.
+    #[clap(long)]
+    postgres_url: String,
     /// Path to sqllogictest script to run.
     #[clap(value_name = "PATH", required = true)]
     paths: Vec<String>,
@@ -59,13 +61,13 @@ async fn main() {
     mz_ore::panic::set_abort_on_panic();
     mz_ore::test::init_logging_default("warn");
 
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
         verbosity: args.verbosity,
-        workers: args.workers,
+        postgres_url: args.postgres_url.clone(),
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
     };

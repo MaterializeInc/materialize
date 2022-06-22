@@ -1,5 +1,5 @@
 ---
-title: "encode and decode Functions"
+title: "encode and decode functions"
 description: "Converts binary data to and from textual representations"
 menu:
   main:

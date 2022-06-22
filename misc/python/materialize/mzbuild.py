@@ -86,6 +86,19 @@ class RepositoryDetails:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
 
+    def rewrite_builder_path_for_host(self, path: Path) -> Path:
+        """Rewrite a path that is relative to the target directory inside the
+        builder to a path that is relative to the target directory on the host.
+
+        If path does is not relative to the target directory inside the builder,
+        it is returned unchanged.
+        """
+        builder_target_dir = Path("/mnt/build") / xcompile.target(self.arch)
+        try:
+            return self.cargo_target_dir() / path.relative_to(builder_target_dir)
+        except ValueError:
+            return path
+
 
 def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
@@ -210,6 +223,8 @@ class CargoBuild(CargoPreImage):
         super().__init__(rd, path)
         bin = config.pop("bin", [])
         self.bins = bin if isinstance(bin, list) else [bin]
+        example = config.pop("example", [])
+        self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
         self.rustflags = config.pop("rustflags", [])
@@ -224,7 +239,7 @@ class CargoBuild(CargoPreImage):
                 "-Clink-arg=-Wl,--warn-unresolved-symbols",
             ]
             self.channel = "nightly"
-        if len(self.bins) == 0:
+        if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
 
     def build(self) -> None:
@@ -234,14 +249,19 @@ class CargoBuild(CargoPreImage):
 
         for bin in self.bins:
             cargo_build.extend(["--bin", bin])
+        for example in self.examples:
+            cargo_build.extend(["--example", example])
 
         if self.rd.release_mode:
             cargo_build.append("--release")
         spawn.runv(cargo_build, cwd=self.rd.root)
         cargo_profile = "release" if self.rd.release_mode else "debug"
 
-        for bin in self.bins:
-            shutil.copy(self.rd.cargo_target_dir() / cargo_profile / bin, self.path)
+        def copy(exe: Path) -> None:
+            (self.path / exe).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(
+                self.rd.cargo_target_dir() / cargo_profile / exe, self.path / exe
+            )
 
             if self.strip:
                 # NOTE(benesch): the debug information is large enough that it slows
@@ -249,7 +269,7 @@ class CargoBuild(CargoPreImage):
                 # images and shipping them around. A bit unfortunate, since it'd be
                 # nice to have useful backtraces if the binary crashes.
                 spawn.runv(
-                    [*self.rd.tool("strip"), "--strip-debug", self.path / bin],
+                    [*self.rd.tool("strip"), "--strip-debug", self.path / exe],
                     cwd=self.rd.root,
                 )
             else:
@@ -268,47 +288,57 @@ class CargoBuild(CargoPreImage):
                         ".debug_pubnames",
                         "-R",
                         ".debug_pubtypes",
-                        self.path / bin,
+                        self.path / exe,
                     ],
                     cwd=self.rd.root,
                 )
+
+        for bin in self.bins:
+            copy(Path(bin))
+        for example in self.examples:
+            copy(Path("examples") / example)
+
         if self.extract:
             output = spawn.capture(
                 cargo_build + ["--message-format=json"],
                 cwd=self.rd.root,
             )
-            target_dir = str(self.rd.cargo_target_dir().absolute())
-            ci_builder_target_dir = "/mnt/build/" + xcompile.target(self.rd.arch)
+            target_dir = self.rd.cargo_target_dir()
             for line in output.split("\n"):
                 if line.strip() == "" or not line.startswith("{"):
                     continue
                 message = json.loads(line)
                 if message["reason"] != "build-script-executed":
                     continue
-                out_dir = message["out_dir"]
-                if out_dir.startswith(ci_builder_target_dir):
-                    out_dir = target_dir + out_dir[len(ci_builder_target_dir) :]
-                if not out_dir.startswith(target_dir):
+                out_dir = self.rd.rewrite_builder_path_for_host(
+                    Path(message["out_dir"])
+                )
+                if not out_dir.is_relative_to(target_dir):
                     # Some crates are built for both the host and the target.
                     # Ignore the built-for-host out dir.
                     continue
                 package = message["package_id"].split()[0]
                 for src, dst in self.extract.get(package, {}).items():
-                    spawn.runv(["cp", "-R", Path(out_dir) / src, self.path / dst])
+                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
     def run(self) -> None:
         super().run()
         self.build()
 
     def inputs(self) -> Set[str]:
-        inputs = super().inputs()
+        deps = set()
 
         for bin in self.bins:
             crate = self.rd.cargo_workspace.crate_for_bin(bin)
-            deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
-            inputs |= set(inp for dep in deps for inp in dep.inputs())
+            deps |= self.rd.cargo_workspace.transitive_path_dependencies(crate)
 
-        return inputs
+        for example in self.examples:
+            crate = self.rd.cargo_workspace.crate_for_example(example)
+            deps |= self.rd.cargo_workspace.transitive_path_dependencies(
+                crate, dev=True
+            )
+
+        return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
 
 
 # TODO(benesch): make this less hardcoded and custom.
@@ -359,7 +389,10 @@ class CargoTest(CargoPreImage):
                 crate_path = Path(crate_path_match.group(1)).relative_to(
                     self.rd.root.resolve()
                 )
-                tests.append((message["executable"], slug, crate_path))
+                executable = self.rd.rewrite_builder_path_for_host(
+                    Path(message["executable"])
+                )
+                tests.append((executable, slug, crate_path))
 
         os.makedirs(self.path / "tests" / "examples")
         with open(self.path / "tests" / "manifest", "w") as manifest:
@@ -371,8 +404,6 @@ class CargoTest(CargoPreImage):
                 )
                 package = slug.replace(".", "::")
                 manifest.write(f"{slug} {package} {crate_path}\n")
-        shutil.move(str(self.path / "materialized"), self.path / "tests")
-        shutil.move(str(self.path / "testdrive"), self.path / "tests")
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
     def inputs(self) -> Set[str]:
@@ -516,6 +547,7 @@ class ResolvedImage:
             *(f"--build-arg={k}={v}" for k, v in build_args.items()),
             "-t",
             self.spec(),
+            f"--platform=linux/{self.image.rd.arch.go_str()}",
             str(self.image.path),
         ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
@@ -790,6 +822,13 @@ class Repository:
             help="whether to enable code coverage compilation flags",
             action="store_true",
         )
+        parser.add_argument(
+            "--arch",
+            default=Arch.X86_64,
+            help="the CPU architecture to build for",
+            type=Arch,
+            choices=Arch,
+        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -798,7 +837,9 @@ class Repository:
         The provided namespace must contain the options installed by
         `Repository.install_arguments`.
         """
-        return cls(root, release_mode=args.release, coverage=args.coverage)
+        return cls(
+            root, release_mode=args.release, coverage=args.coverage, arch=args.arch
+        )
 
     @property
     def root(self) -> Path:

@@ -1,11 +1,12 @@
 ---
 title: "CREATE SOURCE: Kinesis Data Streams"
 description: "Connecting Materialize to a Kinesis data stream"
-menu:
-  main:
-    parent: 'create-source'
-    name: Kinesis
-    weight: 40
+draft: true
+#menu:
+#  main:
+#    parent: 'create-source'
+#    name: Kinesis Data Streams
+#    weight: 40
 aliases:
     - /sql/create-source/kinesis-source
     - /sql/create-source/json-kinesis
@@ -14,10 +15,12 @@ aliases:
     - /sql/create-source/csv-kinesis
 ---
 
+[//]: # "NOTE(morsapaes) Once we're ready to bring the KDS source back, check #12991 to restore the previous docs state."
+
 {{< beta />}}
 
 {{% create-source/intro %}}
-This page details how to connect Materialize to Kinesis Data Streams to read data from individual streams.
+This page describes how to connect Materialize to Kinesis Data Streams to read data from individual streams.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -47,12 +50,12 @@ Field                                | Value     | Description
 
 ## Supported formats
 
-|<div style="width:290px">Format</div> | Append-only envelope | Upsert envelope | Debezium envelope |
----------------------------------------|:--------------------:|:---------------:|:-----------------:|
-| JSON                                 | ✓                    |                 |                   |
-| Protobuf                             | ✓                    |                 |                   |
-| Text/bytes                           | ✓                    |                 |                   |
-| CSV                                  | ✓                    |                 |                   |
+|<div style="width:290px">Format</div> | [Append-only envelope] | [Upsert envelope] | [Debezium envelope] |
+---------------------------------------|:----------------------:|:-----------------:|:-------------------:|
+| [JSON]                               | ✓                      |                   |                     |
+| [Protobuf]                           | ✓                      |                   |                     |
+| [Text/bytes]                         | ✓                      |                   |                     |
+| [CSV]                                | ✓                      |                   |                     |
 
 ## Features
 
@@ -134,10 +137,21 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 
 ## Known limitations
 
-- **Resharding:** adjusting the number of shards in the source stream is not supported {{% gh 8776 %}}. If you reshard the stream, you'll need to drop and recreate the source.
+##### Resharding
+
+Adjusting the number of shards in the source stream is not supported {{% gh 8776 %}}. If you reshard the stream, you'll need to drop and recreate the source.
 
 ## Related pages
 
 - [`CREATE SOURCE`](../)
 - [`CREATE MATERIALIZED VIEW`](../../create-view)
 - [`SELECT`](../../select)
+
+[JSON]: /sql/create-source/#json
+[Protobuf]: /sql/create-source/#protobuf
+[Text/bytes]: /sql/create-source/#textbytes
+[CSV]: /sql/create-source/#csv
+
+[Append-only envelope]: /sql/create-source/#append-only-envelope
+[Upsert envelope]: /sql/create-source/#upsert-envelope
+[Debezium envelope]: /sql/create-source/#debezium-envelope

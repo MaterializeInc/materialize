@@ -4,16 +4,16 @@ description = "Authentication interfaces to Frontegg."
 version = "0.0.0"
 edition = "2021"
 publish = false
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 base64 = "0.13.0"
 derivative = "2.2.0"
-jsonwebtoken = "8.1.0"
+jsonwebtoken = "8.1.1"
 mz-ore = { path = "../ore" }
-reqwest = "0.11.10"
+reqwest = "0.11.11"
 serde = { version = "1.0.137", features = ["derive"] }
 thiserror = "1.0.31"
-tokio = "1.16.1"
-uuid = "0.8.2"
+tokio = "1.19.2"
+uuid = "1.1.2"

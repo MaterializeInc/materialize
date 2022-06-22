@@ -136,7 +136,6 @@ done
 
 for i in kafka kafka1 kafka2 schema-registry
 do
-
     create_cert $i "ca" $i
     create_cert "materialized-$i" "ca-selective" "materialized"
 
@@ -178,7 +177,9 @@ done
 
 echo $SSL_SECRET > secrets/cert_creds
 
-# Ensure files are readable for any user
+# Ensure files are readable for any user.
 chmod -R a+r secrets/
-# Keys are only user-accessible
-chmod -R og-rwx secrets/*.key
+# The PostgreSQL key must be only user accessible to satisfy PostgreSQL's
+# security checks.
+cp secrets/postgres.key secrets/postgres-world-readable.key
+chmod -R og-rwx secrets/postgres.key

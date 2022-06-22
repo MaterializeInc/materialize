@@ -53,6 +53,7 @@ impl Retry {
         RetryStream {
             cfg: self,
             rng,
+            attempt: 0,
             backoff,
         }
     }
@@ -63,10 +64,16 @@ impl Retry {
 pub struct RetryStream {
     cfg: Retry,
     rng: SmallRng,
+    attempt: usize,
     backoff: Duration,
 }
 
 impl RetryStream {
+    /// How many times [Self::sleep] has been called.
+    pub fn attempt(&self) -> usize {
+        self.attempt
+    }
+
     /// The next sleep (without jitter for easy printing in logs).
     pub fn next_sleep(&self) -> Duration {
         self.backoff
@@ -81,6 +88,7 @@ impl RetryStream {
         let jitter = self.rng.gen_range(0.9..=1.1);
         let sleep = self.backoff.mul_f64(jitter);
         tokio::time::sleep(sleep).await;
+        self.attempt += 1;
         self.backoff = std::cmp::min(self.backoff * 2, self.cfg.clamp_backoff);
         self
     }

@@ -43,6 +43,16 @@ pub trait Fold<> {
         fold_function(self, node)
     }
 }
+pub trait FoldNode<> {
+    type Folded;
+    fn fold<F: Fold<>>(self, folder: &mut F) -> Self::Folded;
+}
+impl<> FoldNode<> for BinOp {
+    type Folded = BinOp;
+    fn fold<F: Fold<>>(self, folder: &mut F) -> Self::Folded {
+        folder.fold_bin_op(self)
+    }
+}
 pub fn fold_bin_op<F, >(folder: &mut F, node: BinOp) -> BinOp
 where
     F: Fold<> + ?Sized,
@@ -58,6 +68,12 @@ where
             BinOp::Sub {
             }
         }
+    }
+}
+impl<> FoldNode<> for Expr {
+    type Folded = Expr;
+    fn fold<F: Fold<>>(self, folder: &mut F) -> Self::Folded {
+        folder.fold_expr(self)
     }
 }
 pub fn fold_expr<F, >(folder: &mut F, node: Expr) -> Expr
@@ -85,6 +101,12 @@ where
         }
     }
 }
+impl<> FoldNode<> for Function {
+    type Folded = Function;
+    fn fold<F: Fold<>>(self, folder: &mut F) -> Self::Folded {
+        folder.fold_function(self)
+    }
+}
 pub fn fold_function<F, >(folder: &mut F, node: Function) -> Function
 where
     F: Fold<> + ?Sized,
@@ -108,6 +130,16 @@ pub trait Fold<T: Foo, T2: Foo, U: Bar, U2: Bar, > {
     }
     fn fold_table_name(&mut self, node: T::TableName) -> T2::TableName;
     fn fold_object_name(&mut self, node: U::ObjectName) -> U2::ObjectName;
+}
+pub trait FoldNode<T: Foo, T2: Foo, U: Bar, U2: Bar, > {
+    type Folded;
+    fn fold<F: Fold<T, T2, U, U2, >>(self, folder: &mut F) -> Self::Folded;
+}
+impl<T: Foo, T2: Foo, U: Bar, U2: Bar, > FoldNode<T, T2, U, U2, > for Function<T, U> {
+    type Folded = Function<T2, U2>;
+    fn fold<F: Fold<T, T2, U, U2, >>(self, folder: &mut F) -> Self::Folded {
+        folder.fold_function(self)
+    }
 }
 pub fn fold_function<F, T: Foo, T2: Foo, U: Bar, U2: Bar, >(folder: &mut F, node: Function<T, U>) -> Function<T2, U2>
 where

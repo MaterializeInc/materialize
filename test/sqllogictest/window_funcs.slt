@@ -118,7 +118,7 @@ ORDER BY row_number, x
 | Map row_number() over (#0) order by (#0)
 | Project (#2, #0)
 
-Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#0 asc nulls_last, #1 asc nulls_last) limit=none offset=0 project=(#0, #1)
 
 EOF
 
@@ -148,7 +148,7 @@ ORDER BY row_number, x
 | Project (#0, #1, #3)
 | Project (#2, #0)
 
-Finish order_by=(#0 asc, #1 asc) limit=none offset=0 project=(#0, #1)
+Finish order_by=(#0 asc nulls_last, #1 asc nulls_last) limit=none offset=0 project=(#0, #1)
 
 EOF
 

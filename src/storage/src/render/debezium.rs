@@ -15,7 +15,7 @@ use std::str::FromStr;
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
 use differential_dataflow::{Collection, Hashable};
-use mz_dataflow_types::sources::DebeziumTransactionMetadata;
+use mz_dataflow_types::sources::{DebeziumTransactionMetadata, MzOffset};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Capability, OkErr, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
@@ -62,7 +62,10 @@ where
                                 }
                             };
                             let value = match result.value {
-                                Some(Ok(value)) => value,
+                                Some(Ok((value, 1))) => value,
+                                Some(Ok(_)) => unreachable!(
+                                    "Debezium should only be used with sources with no explicit diff"
+                                ),
                                 Some(Err(err)) => {
                                     session.give((Err(err.into()), cap.time().clone(), 1));
                                     continue;
@@ -178,13 +181,21 @@ where
     };
 
     let data_dist = move |result: &DecodeResult| {
+        let value = match &result.value {
+            Some(Ok((v, 1))) => Some(Ok(v)),
+            Some(Ok(_)) => {
+                unreachable!("Debezium should only be used with sources with no explicit diff")
+            }
+            Some(Err(e)) => Some(Err(e)),
+            None => None,
+        };
         // If we can't pull out the transaction_id, it doesn't matter which worker we end up on.  Use
         // value as that's how we distribute decoding dbz messages.
-        let default_hash = result.value.hashed();
+        let default_hash = value.hashed();
 
         // The logic below mirrors inline decoding of the data.  The shape of the value is validated
         // when constructing the source.
-        let value = match result.value.as_ref() {
+        let value = match value {
             Some(Ok(v)) => v,
             _ => return default_hash,
         };
@@ -304,7 +315,10 @@ where
                                 }
                             };
                             let value = match result.value.clone() {
-                                Some(Ok(value)) => value,
+                                Some(Ok((value, 1))) => value,
+                                Some(Ok(_)) => unreachable!(
+                                    "Debezium should only be used with sources with no explicit diff"
+                                ),
                                 Some(Err(err)) => {
                                     output.session(&data_cap).give((
                                         Err(err.into()),
@@ -444,14 +458,14 @@ where
 /// highest-ever seen binlog offset.
 #[derive(Debug)]
 struct DebeziumDeduplicationState {
-    /// Last recorded binlog position and connector offset
+    /// Last recorded binlog position and connection offset
     ///
     /// [`DebeziumEnvelope`] determines whether messages that are not ahead
     /// of the last recorded position will be skipped.
-    last_position_and_offset: Option<(RowCoordinates, i64)>,
+    last_position_and_offset: Option<(RowCoordinates, MzOffset)>,
     /// Whether or not to track every message we've ever seen
     full: Option<TrackFull>,
-    messages_processed: u64,
+    messages_processed: MzOffset,
     // TODO(petrosagg): This is only used when unpacking MySQL row coordinates. The logic was
     // transferred as-is from the previous avro-debezium code. Find a better place to put this or
     // avoid it completely.
@@ -617,7 +631,7 @@ impl DebeziumDeduplicationState {
         Some(DebeziumDeduplicationState {
             last_position_and_offset: None,
             full,
-            messages_processed: 0,
+            messages_processed: 0.into(),
             filenames_to_indices: HashMap::new(),
             projection,
         })
@@ -745,7 +759,7 @@ impl DebeziumDeduplicationState {
         &mut self,
         key: Option<Row>,
         value: &Row,
-        connector_offset: i64,
+        connection_offset: MzOffset,
         upstream_time_millis: Option<i64>,
         debug_name: &str,
     ) -> Result<bool, DataflowError> {
@@ -770,7 +784,7 @@ impl DebeziumDeduplicationState {
                     }
                 }
                 None => {
-                    self.last_position_and_offset = Some((position.clone(), connector_offset));
+                    self.last_position_and_offset = Some((position.clone(), connection_offset));
                     None
                 }
             },
@@ -854,7 +868,7 @@ impl DebeziumDeduplicationState {
 
                     log_duplication_info(
                         position,
-                        connector_offset,
+                        connection_offset,
                         upstream_time_millis,
                         debug_name,
                         is_new,
@@ -900,12 +914,12 @@ impl DebeziumDeduplicationState {
 /// Helper to track information for logging on deduplication
 struct SkipInfo {
     old_position: RowCoordinates,
-    old_offset: i64,
+    old_offset: MzOffset,
 }
 
 fn log_duplication_info(
     position: RowCoordinates,
-    connector_offset: i64,
+    connection_offset: MzOffset,
     upstream_time_millis: Option<i64>,
     debug_name: &str,
     is_new: bool,
@@ -924,12 +938,12 @@ fn log_duplication_info(
             // that label is omitted from this log message
             warn!(
                 "Created a new record behind the highest point in source={} \
-                 new deduplication position: {:?}, new connector offset: {}, \
+                 new deduplication position: {:?}, new connection offset: {}, \
                  old deduplication position: {:?} \
                  message_time={} max_seen_time={}",
                 debug_name,
                 position,
-                connector_offset,
+                connection_offset,
                 skipinfo.old_position,
                 fmt_timestamp(upstream_time_millis),
                 fmt_timestamp(*max_seen_time),
@@ -940,7 +954,7 @@ fn log_duplication_info(
             debug!(
                 "already ingested source={} new deduplication position: {:?}, \
                  old deduplication position: {:?}\
-                 connector offset={} message_time={} message_first_seen={} max_seen_time={}",
+                 connection offset={} message_time={} message_first_seen={} max_seen_time={}",
                 debug_name,
                 position,
                 skipinfo.old_position,
@@ -957,10 +971,10 @@ fn log_duplication_info(
         (false, None) => {
             error!(
                 "We surprisingly are seeing a duplicate record that \
-                    is beyond the highest record we've ever seen. {:?} connector offset={} \
+                    is beyond the highest record we've ever seen. {:?} connection offset={} \
                     message_time={} message_first_seen={} max_seen_time={}",
                 position,
-                connector_offset,
+                connection_offset,
                 fmt_timestamp(upstream_time_millis),
                 fmt_timestamp(*original_time),
                 fmt_timestamp(*max_seen_time),

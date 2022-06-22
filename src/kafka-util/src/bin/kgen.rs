@@ -26,7 +26,6 @@ use rdkafka::error::KafkaError;
 use rdkafka::producer::{BaseRecord, Producer, ThreadedProducer};
 use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::util::Timeout;
-use rdkafka::ClientConfig;
 use serde_json::Map;
 use url::Url;
 
@@ -34,6 +33,7 @@ use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
 use mz_ore::cast::CastFrom;
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::retry::Retry;
 
 trait Generator<R>: FnMut(&mut ThreadRng) -> R + Send + Sync {
@@ -584,7 +584,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     let value_gen = match args.value_format {
         ValueFormat::Bytes => {
@@ -695,7 +695,7 @@ async fn main() -> anyhow::Result<()> {
             let mut key_gen = key_gen.clone();
             let mut value_gen = value_gen.clone();
             let producer: ThreadedProducer<mz_kafka_util::client::MzClientContext> =
-                ClientConfig::new()
+                mz_kafka_util::client::create_new_client_config_simple()
                     .set("bootstrap.servers", args.bootstrap_server.to_string())
                     .create_with_context(mz_kafka_util::client::MzClientContext)
                     .unwrap();

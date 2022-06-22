@@ -94,7 +94,7 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
 
     pub fn indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
         self.catalog
-            .get_indexes_on(id)
+            .get_indexes_on(id, self.compute.instance_id())
             .filter(|(idx_id, _idx)| self.compute.collection(*idx_id).is_ok())
     }
 }

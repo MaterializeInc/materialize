@@ -23,7 +23,7 @@ mod tests {
     use mz_expr::{Id, MirRelationExpr};
     use mz_expr_test_util::{
         build_rel, generate_explanation, json_to_spec, MirRelationExprDeserializeContext,
-        TestCatalog, RTI,
+        TestCatalog,
     };
     use mz_lowertest::{deserialize, tokenize};
     use mz_ore::str::separated;
@@ -296,7 +296,6 @@ mod tests {
                     let rel: MirRelationExpr = deserialize(
                         &mut inner_iter,
                         "MirRelationExpr",
-                        &RTI,
                         &mut MirRelationExprDeserializeContext::new(cat),
                     )?;
                     let id = cat.insert(&name, rel.typ(), true)?;

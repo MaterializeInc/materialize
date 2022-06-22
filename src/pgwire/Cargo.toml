@@ -3,28 +3,27 @@ name = "mz-pgwire"
 description = "A server for the PostgreSQL wire protocol."
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.60.0"
+rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
-async-trait = "0.1.53"
+anyhow = "1.0.58"
+async-trait = "0.1.56"
 byteorder = "1.4.3"
 bytes = "1.1.0"
 futures = "0.3.21"
 itertools = "0.10.3"
 mz-coord = { path = "../coord" }
-mz-dataflow-types = { path = "../dataflow-types" }
 mz-expr = { path = "../expr" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["tracing_"] }
 mz-pgcopy = { path = "../pgcopy" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
-openssl = { version = "0.10.38", features = ["vendored"] }
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
-tokio = "1.17.0"
+openssl = { version = "0.10.40", features = ["vendored"] }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio = "1.19.2"
 tokio-openssl = "0.6.3"
-tokio-util = { version = "0.7.1", features = ["codec"] }
-tracing = "0.1.34"
+tokio-util = { version = "0.7.3", features = ["codec"] }
+tracing = "0.1.35"

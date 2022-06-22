@@ -128,7 +128,7 @@ destroy without actually destroyin them.
 
 ### Grafana integration
 
-The `materialized` process always exposes metrics at its primary port's HTTP server on the
+The `environmentd` process always exposes metrics at its primary port's HTTP server on the
 prometheus-standard `/metrics` path, but the scratch instance needs to be configured correctly for
 our Prometheus server to actually scrape the metrics and thereby expose them to Grafana.
 

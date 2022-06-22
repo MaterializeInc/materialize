@@ -1,5 +1,5 @@
 ---
-title: "date_part Function"
+title: "date_part function"
 description: "Returns a specified time component from a time-based value"
 menu:
   main:

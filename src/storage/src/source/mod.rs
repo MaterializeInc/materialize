@@ -10,61 +10,59 @@
 //! Types related to the creation of dataflow raw sources.
 //!
 //! Raw sources are streams (currently, Timely streams) of data directly produced by the
-//! upstream service. The main exports of this module are [`create_raw_source`]
-//! and [`create_raw_source_simple`], which turns [`RawSourceCreationConfig`]'s,
-//! [`ExternalSourceConnector`]'s, and [`SourceReader`]/[`SimpleSource`]
-//! implementations into the aforementioned streams.
+//! upstream service. The main export of this module is [`create_raw_source`],
+//! which turns [`RawSourceCreationConfig`]s, [`ExternalSourceConnection`]s,
+//! and [`SourceReader`] implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the actual object
 //! created by a `CREATE SOURCE` statement, is created by composing
-//! [`create_raw_source`] or [`create_raw_source_simple`] with
+//! [`create_raw_source`] with
 //! decoding, `SourceEnvelope` rendering, and more.
-//! See the doc comment on [`rendering`](`crate::render::sources::render_source`)
-//! for more details.
 
 // https://github.com/tokio-rs/prost/issues/237
 #![allow(missing_docs)]
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::fmt::{self, Debug};
-use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use differential_dataflow::Hashable;
-use futures::Stream;
+use futures::stream::LocalBoxStream;
+use futures::{Stream, StreamExt as _};
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::{Capability, CapabilitySet, Event};
+use timely::dataflow::operators::{Capability, Event};
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
+use timely::scheduling::ActivateOnDrop;
 use timely::Data;
-use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
+use tokio::time::MissedTickBehavior;
 use tracing::error;
 
 use mz_avro::types::Value;
+use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{AwsExternalId, ExternalSourceConnector, MzOffset};
+use mz_dataflow_types::sources::{ExternalSourceConnection, MzOffset};
 use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{CounterVecExt, DeleteOnDropCounter, DeleteOnDropGauge, GaugeVecExt};
 use mz_ore::now::NowFn;
-use mz_ore::task;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_timely_util::operator::StreamExt;
+use mz_timely_util::operator::StreamExt as _;
 
 use crate::source::metrics::SourceBaseMetrics;
-use crate::source::timestamp::TimestampBindingRc;
+use crate::source::reclock::ReclockOperator;
 use crate::source::util::source;
 
 mod kafka;
@@ -73,10 +71,9 @@ pub mod metrics;
 pub mod persist_source;
 mod postgres;
 mod pubnub;
+mod reclock;
 mod s3;
 pub mod util;
-
-pub mod timestamp;
 
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
@@ -106,10 +103,6 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub worker_id: usize,
     /// The total count of workers
     pub worker_count: usize,
-    // Timestamping fields.
-    /// Data-timestamping updates: information about (timestamp, source offset)
-    pub timestamp_histories: Option<TimestampBindingRc>,
-    /// Source Type
     /// Timestamp Frequency: frequency at which timestamps should be closed (and capabilities
     /// downgraded)
     pub timestamp_frequency: Duration,
@@ -121,13 +114,15 @@ pub struct RawSourceCreationConfig<'a, G> {
     pub now: NowFn,
     /// The metrics & registry that each source instantiates.
     pub base_metrics: &'a SourceBaseMetrics,
-    /// An external ID to use for all AWS AssumeRole operations.
-    pub aws_external_id: AwsExternalId,
+    /// Storage Metadata
+    pub storage_metadata: CollectionMetadata,
+    /// As Of
+    pub as_of: Antichain<Timestamp>,
 }
 
 /// A record produced by a source
 #[derive(Clone, Serialize, Debug, Deserialize)]
-pub struct SourceOutput<K, V>
+pub struct SourceOutput<K, V, D>
 where
     K: Data,
     V: Data,
@@ -139,7 +134,7 @@ where
     /// The position in the partition described by the `partition` in the source
     /// (e.g., Kafka offset, file line number, monotonic increasing
     /// number, etc.)
-    pub position: i64,
+    pub position: MzOffset,
     /// The time the record was created in the upstream system, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition of this message, present iff the partition comes from Kafka
@@ -147,18 +142,23 @@ where
     /// Headers, if the source is configured to pass them along. If it is, but there are none, it
     /// passes `Some([])`
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+
+    /// Indicator for what the differential `diff` value
+    /// for this decoded message should be
+    pub diff: D,
 }
 
 /// A wrapper that converts a delimited source reader that only provides
 /// values into a key/value reader whose key is always None
 pub struct DelimitedValueSource<S>(S);
 
-impl<S> SourceReader for DelimitedValueSource<S>
+impl<S, D: timely::Data> SourceReader for DelimitedValueSource<S>
 where
-    S: SourceReader<Key = (), Value = Option<Vec<u8>>>,
+    S: SourceReader<Key = (), Value = Option<Vec<u8>>, Diff = D>,
 {
     type Key = Option<Vec<u8>>;
     type Value = Option<Vec<u8>>;
+    type Diff = D;
 
     fn new(
         source_name: String,
@@ -166,11 +166,11 @@ where
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        aws_external_id: AwsExternalId,
+        connection: ExternalSourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         S::new(
             source_name,
@@ -178,34 +178,57 @@ where
             worker_id,
             worker_count,
             consumer_activator,
-            connector,
-            aws_external_id,
+            connection,
             restored_offsets,
             encoding,
             metrics,
+            connection_context,
         )
         .map(Self)
     }
 
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         match self.0.get_next_message()? {
-            NextMessage::Ready(SourceMessage {
+            NextMessage::Ready(SourceMessageType::Finalized(SourceMessage {
                 key: _,
                 value,
                 partition,
                 offset,
                 upstream_time_millis,
                 headers,
-            }) => Ok(NextMessage::Ready(SourceMessage {
-                key: None,
+                specific_diff,
+            })) => Ok(NextMessage::Ready(SourceMessageType::Finalized(
+                SourceMessage {
+                    key: None,
+                    value,
+                    partition,
+                    offset,
+                    upstream_time_millis,
+                    headers,
+                    specific_diff,
+                },
+            ))),
+            NextMessage::Ready(SourceMessageType::InProgress(SourceMessage {
+                key: _,
                 value,
                 partition,
                 offset,
                 upstream_time_millis,
                 headers,
-            })),
+                specific_diff,
+            })) => Ok(NextMessage::Ready(SourceMessageType::InProgress(
+                SourceMessage {
+                    key: None,
+                    value,
+                    partition,
+                    offset,
+                    upstream_time_millis,
+                    headers,
+                    specific_diff,
+                },
+            ))),
             NextMessage::Pending => Ok(NextMessage::Pending),
             NextMessage::TransientDelay => Ok(NextMessage::TransientDelay),
             NextMessage::Finished => Ok(NextMessage::Finished),
@@ -218,10 +241,12 @@ where
 pub struct DecodeResult {
     /// The decoded key
     pub key: Option<Result<Row, DecodeError>>,
-    /// The decoded value
-    pub value: Option<Result<Row, DecodeError>>,
+    /// The decoded value, as well as the the
+    /// differential `diff` value for this value, if the value
+    /// is present and not and error.
+    pub value: Option<Result<(Row, Diff), DecodeError>>,
     /// The index of the decoded value in the stream
-    pub position: i64,
+    pub position: MzOffset,
     /// The time the record was created in the upstream system, as milliseconds since the epoch
     pub upstream_time_millis: Option<i64>,
     /// The partition this record came from
@@ -243,7 +268,7 @@ pub struct KafkaMetadata {
     pub timestamp: i64,
 }
 
-impl<K, V> SourceOutput<K, V>
+impl<K, V, D> SourceOutput<K, V, D>
 where
     K: Data,
     V: Data,
@@ -252,11 +277,12 @@ where
     pub fn new(
         key: K,
         value: V,
-        position: i64,
+        position: MzOffset,
         upstream_time_millis: Option<i64>,
         partition: PartitionId,
         headers: Option<Vec<(String, Option<Vec<u8>>)>>,
-    ) -> SourceOutput<K, V> {
+        diff: D,
+    ) -> SourceOutput<K, V, D> {
         SourceOutput {
             key,
             value,
@@ -264,13 +290,15 @@ where
             upstream_time_millis,
             partition,
             headers,
+            diff,
         }
     }
 }
-impl<K, V> SourceOutput<K, V>
+impl<K, V, D> SourceOutput<K, V, D>
 where
     K: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
     V: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
+    D: Data + Serialize + for<'a> Deserialize<'a> + Send + Sync,
 {
     /// A parallelization contract that hashes by positions (if available)
     /// and otherwise falls back to hashing by value. Values can be just as
@@ -285,25 +313,15 @@ where
     }
 }
 
-// TODO(guswynn): consider moving back to non-thread-safe `RC`'s if
-// we end up with a boundary-per-worker
-// TODO(guswynn): consider just using `SyncActivateOnDrop` if merged into timely
-/// A `SourceToken` manages interest in a source, and is thread-safe.
+/// A `SourceToken` manages interest in a source.
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    pub activator: Arc<SyncActivator>,
-}
-
-impl Drop for SourceToken {
-    fn drop(&mut self) {
-        // Best effort: sync activation
-        // failures are ignored
-        let _ = self.activator.activate();
-    }
+    _activator: Rc<ActivateOnDrop<()>>,
 }
 
 /// The status of a source.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum SourceStatus {
     /// The source is still alive.
     Alive,
@@ -373,6 +391,7 @@ impl From<anyhow::Error> for SourceReaderError {
 pub trait SourceReader {
     type Key: timely::Data + MaybeLength;
     type Value: timely::Data + MaybeLength;
+    type Diff: timely::Data;
 
     /// Create a new source reader.
     ///
@@ -385,11 +404,11 @@ pub trait SourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        aws_external_id: AwsExternalId,
+        connection: ExternalSourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
+        connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
@@ -401,7 +420,8 @@ pub trait SourceReader {
     async fn next(
         &mut self,
         timestamp_frequency: Duration,
-    ) -> Option<Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>> {
+    ) -> Option<Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>>
+    {
         // Compatiblity implementation that delegates to the deprecated [Self::get_next_method]
         // call. Once all source implementations have been transitioned to implement
         // [SourceReader::next] directly this provided implementation should be removed and the
@@ -431,38 +451,53 @@ pub trait SourceReader {
     /// Source implementation should implement the async [SourceReader::next] method instead.
     fn get_next_message(
         &mut self,
-    ) -> Result<NextMessage<Self::Key, Self::Value>, SourceReaderError> {
+    ) -> Result<NextMessage<Self::Key, Self::Value, Self::Diff>, SourceReaderError> {
         Ok(NextMessage::Pending)
     }
 
     /// Returns an adapter that treats the source as a stream.
     ///
     /// The stream produces the messages that would be produced by repeated calls to `next`.
-    fn into_stream(
+    fn into_stream<'a>(
         mut self,
         timestamp_frequency: Duration,
-    ) -> Pin<Box<dyn Stream<Item = Result<SourceMessage<Self::Key, Self::Value>, SourceReaderError>>>>
+    ) -> LocalBoxStream<
+        'a,
+        Result<SourceMessageType<Self::Key, Self::Value, Self::Diff>, SourceReaderError>,
+    >
     where
-        Self: Sized + 'static,
+        Self: Sized + 'a,
     {
-        Box::pin(async_stream::stream! {
+        Box::pin(async_stream::stream!({
             while let Some(msg) = self.next(timestamp_frequency).await {
                 yield msg;
             }
-        })
+        }))
     }
 }
 
-pub enum NextMessage<Key, Value> {
-    Ready(SourceMessage<Key, Value>),
+pub enum NextMessage<Key, Value, Diff> {
+    Ready(SourceMessageType<Key, Value, Diff>),
     Pending,
     TransientDelay,
     Finished,
 }
 
+/// A wrapper around [`SourceMessage`] that allows
+/// [`SourceReader`]'s to communicate if a message
+/// if the final message a specific offset
+pub enum SourceMessageType<Key, Value, Diff> {
+    /// Communicate that this [`SourceMessage`] is the final
+    /// message its its offset.
+    Finalized(SourceMessage<Key, Value, Diff>),
+    /// Communicate that more [`SourceMessage`]'s
+    /// will come later at the same offset as this one.
+    InProgress(SourceMessage<Key, Value, Diff>),
+}
+
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage<Key, Value> {
+pub struct SourceMessage<Key, Value, Diff> {
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -478,9 +513,15 @@ pub struct SourceMessage<Key, Value> {
     /// Headers, if the source is configured to pass them along. If it is, but there are none, it
     /// passes `Some([])`
     pub headers: Option<Vec<(String, Option<Vec<u8>>)>>,
+
+    /// Allow sources to optionally output a specific differential
+    /// `diff` value. Defaults to `+1`.
+    ///
+    /// Only supported with `SourceEnvelope::None`
+    pub specific_diff: Diff,
 }
 
-impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>> {
+impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>, ()> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
@@ -490,7 +531,7 @@ impl fmt::Debug for SourceMessage<(), Option<Vec<u8>>> {
     }
 }
 
-impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>> {
+impl fmt::Debug for SourceMessage<Option<Vec<u8>>, Option<Vec<u8>>, ()> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
@@ -508,31 +549,10 @@ pub fn responsible_for(
     source_id: &GlobalId,
     worker_id: usize,
     worker_count: usize,
-    pid: &PartitionId,
+    _pid: &PartitionId,
 ) -> bool {
-    match pid {
-        PartitionId::None => {
-            // All workers are responsible for reading in Kafka sources. Other sources
-            // support single-threaded ingestion only. Note that in all cases we want all
-            // readers of the same source or same partition to reside on the same worker,
-            // and only load-balance responsibility across distinct sources.
-            (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
-        }
-        PartitionId::Kafka(p) => {
-            // We want to distribute partitions across workers evenly, such that
-            // - different partitions for the same source are uniformly distributed across workers
-            // - the same partition id across different sources are uniformly distributed across workers
-            // - the same partition id across different instances of the same source is sent to
-            //   the same worker.
-            // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
-            // that to offset distributing partitions round robin across workers.
-
-            // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
-            // overflow.
-            let hash = (source_id.hashed() >> 32) + *p as u64;
-            (hash % worker_count as u64) == worker_id as u64
-        }
-    }
+    // In the future, load balancing will depend on persist shard ids but currently we write everything to a single shard
+    (usize::cast_from(source_id.hashed()) % worker_count) == worker_id
 }
 
 /// Source-specific Prometheus metrics
@@ -611,14 +631,14 @@ impl SourceMetrics {
 /// Partition-specific metrics, recorded to both Prometheus and a system table
 pub struct PartitionMetrics {
     /// Highest offset that has been received by the source and timestamped
-    offset_ingested: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    offset_ingested: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Highest offset that has been received by the source
-    offset_received: DeleteOnDropGauge<'static, AtomicI64, Vec<String>>,
+    offset_received: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Value of the highest timestamp that is closed (for which all messages have been ingested)
     closed_ts: DeleteOnDropGauge<'static, AtomicU64, Vec<String>>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64, Vec<String>>,
-    last_offset: i64,
+    last_offset: u64,
     last_timestamp: i64,
 }
 
@@ -629,7 +649,7 @@ impl PartitionMetrics {
         _source_name: &str,
         _source_id: GlobalId,
         _partition_id: &PartitionId,
-        offset: i64,
+        offset: u64,
         timestamp: i64,
     ) {
         self.offset_received.set(offset);
@@ -668,259 +688,9 @@ impl PartitionMetrics {
     }
 }
 
-type EventSender =
-    mpsc::Sender<Event<Option<Timestamp>, Result<(Row, Timestamp, Diff), SourceError>>>;
-
-/// An active transaction at a particular point in time. An instance of this struct is provided to
-/// a source when calling start_tx() on its timestamper. This has the effect of freezing the
-/// timestamper clock while the data for the transaction is sent.
-///
-/// The transaction is automatically committed on Drop at which point the timestamper will continue
-/// ticking its internal clock.
-pub struct SourceTransaction<'a> {
-    timestamp: RwLockReadGuard<'a, Timestamp>,
-    sender: &'a EventSender,
-}
-
-impl SourceTransaction<'_> {
-    /// Record an insertion of a row in the current transaction
-    pub async fn insert(&self, row: Row) -> anyhow::Result<()> {
-        let msg = Ok((row, *self.timestamp, 1));
-        self.sender
-            .send(Event::Message(*self.timestamp, msg))
-            .await
-            .or_else(|_| Err(anyhow!("channel closed")))
-    }
-
-    /// Record a deletion of a row in the current transaction
-    pub async fn delete(&self, row: Row) -> anyhow::Result<()> {
-        let msg = Ok((row, *self.timestamp, -1));
-        self.sender
-            .send(Event::Message(*self.timestamp, msg))
-            .await
-            .or_else(|_| Err(anyhow!("channel closed")))
-    }
-}
-
-/// A thread-safe transaction manager that is responsible for assigning timestamps to the
-/// transactions submitted to the system. Rows can be inserted individually using the
-/// [insert](Timestamper::insert) and [delete](Timestamper::delete) methods or as part of a bigger
-/// transaction.
-///
-/// When a transaction is started using [start_tx](Timestamper::start_tx) the internal clock will be
-/// frozen and any subsequent rows will be timestamped with the exact same timestamp. The
-/// transaction is committed automatically as soon as the transaction object gets dropped.
-pub struct Timestamper {
-    inner: Arc<RwLock<Timestamp>>,
-    sender: EventSender,
-    tick_duration: Duration,
-    now: NowFn,
-}
-
-impl Timestamper {
-    fn new(sender: EventSender, tick_duration: Duration, now: NowFn) -> Self {
-        let ts = now();
-        Self {
-            inner: Arc::new(RwLock::new(ts)),
-            sender,
-            tick_duration,
-            now,
-        }
-    }
-
-    /// Start a transaction at a particular point in time. The timestamper will freeze its internal
-    /// clock while a transaction is active.
-    pub async fn start_tx<'a>(&'a self) -> SourceTransaction<'a> {
-        SourceTransaction {
-            timestamp: self.inner.read().await,
-            sender: &self.sender,
-        }
-    }
-
-    /// Record an insertion of a row
-    pub async fn insert(&self, row: Row) -> anyhow::Result<()> {
-        self.start_tx().await.insert(row).await
-    }
-
-    /// Record a deletion of a row
-    // Possibly used by no `SimpleSource` implementors
-    #[allow(unused)]
-    pub async fn delete(&self, row: Row) -> anyhow::Result<()> {
-        self.start_tx().await.delete(row).await
-    }
-
-    /// Records an error. After this method is called the source will permanently be in an errored
-    /// state
-    async fn error(&self, err: SourceError) -> anyhow::Result<()> {
-        let timestamp = self.inner.read().await;
-        self.sender
-            .send(Event::Message(*timestamp, Err(err)))
-            .await
-            .or_else(|_| Err(anyhow!("channel closed")))
-    }
-
-    /// Attempts to monotonically increase the current timestamp and provides a Progress message to
-    /// timely.
-    ///
-    /// This method will wait for all current transactions to commit before advancing the clock and
-    /// will cause any new requests for transactions to wait for the tick to complete before
-    /// starting.  This is due to the write-preferring behaviour of the tokio RwLock.
-    async fn tick(&self) -> anyhow::Result<()> {
-        tokio::time::sleep(self.tick_duration).await;
-        let mut timestamp = self.inner.write().await;
-        let mut now: u128 = (self.now)().into();
-
-        // Round to the next greatest self.tick_duration increment.
-        // This is to guarantee that different workers downgrade (without coordination) to the
-        // "same" next time
-        now += self.tick_duration.as_millis() - (now % self.tick_duration.as_millis());
-
-        let now: u64 = now
-            .try_into()
-            .expect("materialize has existed for more than 500M years");
-
-        if *timestamp < now {
-            *timestamp = now;
-            self.sender
-                .send(Event::Progress(Some(*timestamp)))
-                .await
-                .or_else(|_| Err(anyhow!("channel closed")))?;
-        }
-        Ok(())
-    }
-}
-
-/// Simple sources must implement this trait. Raw source streams will then get created as part of the
-/// [`create_raw_source_simple`] function.
-///
-/// Each simple source is given access to a timestamper instance that can be used to insert or
-/// retract rows for this source. See the API of the [Timestamper](Timestamper) for more details.
-#[async_trait]
-pub trait SimpleSource {
-    /// Consumes the instance of this SimpleSource and converts it into an async state machine that
-    /// submits rows using the provided timestamper.
-    ///
-    /// Implementors should return an Err(_) if an unrecoverable error is encountered or Ok(()) when
-    /// they have finished consuming the upstream data.
-    async fn start(self, timestamper: &Timestamper) -> Result<(), SourceError>;
-}
-
-/// Creates a raw source dataflow operator from a connector that has a corresponding [`SimpleSource`]
-/// implentation. The type of ExternalSourceConnector determines the type of
-/// connector that _should_ be created.
-///
-/// See the [`module` docs](self) for more details about how
-/// raw sources are used.
-pub fn create_raw_source_simple<G, C>(
-    config: RawSourceCreationConfig<G>,
-    connector: C,
-) -> (
-    (
-        timely::dataflow::Stream<G, (Row, Timestamp, Diff)>,
-        timely::dataflow::Stream<G, SourceError>,
-    ),
-    Option<SourceToken>,
-)
-where
-    G: Scope<Timestamp = Timestamp>,
-    C: SimpleSource + Send + 'static,
-{
-    let RawSourceCreationConfig {
-        id,
-        name,
-        upstream_name,
-        scope,
-        active,
-        worker_id,
-        timestamp_frequency,
-        now,
-        base_metrics,
-        ..
-    } = config;
-
-    let (tx, mut rx) = mpsc::channel(64);
-
-    if active {
-        task::spawn(|| format!("source_simple_timestamper:{}", id), async move {
-            let timestamper = Timestamper::new(tx, timestamp_frequency, now);
-            let source = connector.start(&timestamper);
-            tokio::pin!(source);
-
-            loop {
-                tokio::select! {
-                    res = timestamper.tick() => {
-                        if res.is_err() {
-                            break;
-                        }
-                    }
-                    res = &mut source => {
-                        if let Err(err) = res {
-                            let _ = timestamper.error(err).await;
-                        }
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    let (stream, capability) = source(scope, name.clone(), move |info| {
-        let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
-
-        let metrics_name = upstream_name.unwrap_or(name);
-        let mut metrics =
-            SourceMetrics::new(&base_metrics, &metrics_name, id, &worker_id.to_string());
-
-        move |cap, durability_cap: &mut CapabilitySet<Timestamp>, output| {
-            if !active {
-                return SourceStatus::Done;
-            }
-
-            durability_cap.downgrade(Vec::<Timestamp>::new());
-
-            let waker = futures::task::waker_ref(&activator);
-            let mut context = Context::from_waker(&waker);
-
-            while let Poll::Ready(item) = rx.poll_recv(&mut context) {
-                match item {
-                    Some(Event::Progress(None)) => unreachable!(),
-                    Some(Event::Progress(Some(time))) => {
-                        let mut metric_updates = HashMap::new();
-                        metric_updates.insert(
-                            PartitionId::None,
-                            (
-                                MzOffset {
-                                    offset: time as i64,
-                                },
-                                time,
-                                1,
-                            ),
-                        );
-                        metrics.record_partition_offsets(metric_updates);
-                        cap.downgrade(&time);
-                    }
-                    Some(Event::Message(time, data)) => {
-                        output.session(&cap.delayed(&time)).give(data);
-                    }
-                    None => {
-                        return SourceStatus::Done;
-                    }
-                }
-            }
-
-            return SourceStatus::Alive;
-        }
-    });
-
-    (
-        stream.map_fallible("SimpleSourceErrorDemux", |r| r),
-        Some(capability),
-    )
-}
-
-/// Creates a raw source dataflow operator from a connector that has a corresponding [`SourceReader`]
-/// implentation. The type of ExternalSourceConnector determines the type of
-/// connector that _should_ be created.
+/// Creates a raw source dataflow operator from a connection that has a corresponding [`SourceReader`]
+/// implentation. The type of ExternalSourceConnection determines the type of
+/// connection that _should_ be created.
 ///
 /// This is also the place where _reclocking_
 /// (<https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md>)
@@ -930,11 +700,11 @@ where
 /// raw sources are used.
 pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
-    source_connector: &ExternalSourceConnector,
-    aws_external_id: AwsExternalId,
+    source_connection: &ExternalSourceConnection,
+    connection_context: ConnectionContext,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value>>,
+        timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
@@ -948,162 +718,227 @@ where
         upstream_name,
         id,
         scope,
-        mut timestamp_histories,
         worker_id,
         worker_count,
         active,
         timestamp_frequency,
         encoding,
+        storage_metadata,
+        as_of,
         base_metrics,
+        now,
         ..
     } = config;
 
     let bytes_read_counter = base_metrics.bytes_read.clone();
 
     let (stream, capability) = source(scope, name.clone(), move |info| {
-        // Create activator for source
-        let activator = scope.activator_for(&info.address[..]);
         let waker_activator = Arc::new(scope.sync_activator_for(&info.address[..]));
         let waker = futures::task::waker(waker_activator);
-
-        // This source will need to be activated when the durability frontier changes.
-        if let Some(wrapper) = timestamp_histories.as_mut() {
-            let durability_activator = scope.activator_for(&info.address[..]);
-            wrapper
-                .wrapper
-                .borrow_mut()
-                .activators
-                .push(durability_activator);
-        }
 
         let metrics_name = upstream_name.unwrap_or_else(|| name.clone());
         let mut source_metrics =
             SourceMetrics::new(base_metrics, &metrics_name, id, &worker_id.to_string());
-        let restored_offsets = timestamp_histories
-            .as_mut()
-            .map(|ts| ts.partitions())
-            .unwrap_or_default();
-        let mut partition_cursors: HashMap<_, _> = restored_offsets
-            .iter()
-            .cloned()
-            .flat_map(|(pid, offset)| Some((pid, offset?)))
-            .collect();
 
-        let mut source_reader = if !active {
-            None
-        } else {
-            match S::new(
+        let sync_activator = scope.sync_activator_for(&info.address[..]);
+        let base_metrics = base_metrics.clone();
+        let source_connection = source_connection.clone();
+        let mut source_reader = Box::pin(async_stream::stream!({
+            let mut timestamper = match ReclockOperator::new(
+                name.clone(),
+                storage_metadata,
+                now,
+                timestamp_frequency.clone(),
+                as_of.clone(),
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    error!("Failed to create source {} timestamper: {:#}", name, e);
+                    return;
+                }
+            };
+
+            // TODO: Use the persisted partition offsets to skip forward
+            let start_offsets = vec![];
+
+            let source_reader = S::new(
                 name.clone(),
                 id,
                 worker_id,
                 worker_count,
-                scope.sync_activator_for(&info.address[..]),
-                source_connector.clone(),
-                aws_external_id.clone(),
-                restored_offsets,
+                sync_activator,
+                source_connection.clone(),
+                start_offsets,
                 encoding,
-                base_metrics.clone(),
-            ) {
-                Ok(source_reader) => Some(source_reader.into_stream(timestamp_frequency)),
+                base_metrics,
+                connection_context.clone(),
+            );
+            let source_stream = match source_reader {
+                Ok(s) => s.into_stream(timestamp_frequency).fuse(),
                 Err(e) => {
                     error!("Failed to create source: {}", e);
-                    None
+                    return;
+                }
+            };
+
+            tokio::pin!(source_stream);
+
+            let mut timestamp_interval = tokio::time::interval(timestamp_frequency);
+            timestamp_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut untimestamped_messages = HashMap::<_, Vec<_>>::new();
+            let mut pending_messages = vec![];
+            loop {
+                // TODO(guswyn): move lots of this out of the macro so rustfmt works better
+                tokio::select! {
+                    // N.B. This branch is cancel-safe because `next` only borrows the underlying stream.
+                    item = source_stream.next() => {
+                        match item {
+                            Some(Ok(message)) => match message {
+                                // Note that this
+                                // 1. Requires that sources that produce `InProgress` messages
+                                //    ALWAYS produce a `Finalized` for the final message.
+                                // 2. Requires that sources that produce `InProgress` messages
+                                //    NEVER produces messages at offsets below the most recent
+                                //    `Finalized` message.
+                                // 3. Buffers EVERY message associated with a single offset. This
+                                //    can be improved, tracked in
+                                //    <https://github.com/MaterializeInc/materialize/issues/12557>
+                                SourceMessageType::Finalized(message) => {
+                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
+                                        &message.partition
+                                    ) {
+                                        pending_messages.extend(untimestamped_messages.drain(..));
+                                    }
+                                    pending_messages.push(Ok(message));
+                                }
+                                SourceMessageType::InProgress(message) => {
+                                    // this extra if-statement is just here to avoid a clone in
+                                    // case we have expensive partition id's someday
+                                    if let Some(untimestamped_messages) = untimestamped_messages.get_mut(
+                                        &message.partition
+                                    ) {
+                                        untimestamped_messages.push(Ok(message))
+                                    } else {
+                                        untimestamped_messages
+                                            .entry(message.partition.clone())
+                                            .or_default()
+                                            .push(Ok(message))
+                                    }
+                                }
+                            }
+                            // TODO: make errors definite
+                            Some(Err(e)) => pending_messages.push(Err(e)),
+                            None => {},
+                        }
+                    }
+                    // It's time to timestamp a batch
+                    _ = timestamp_interval.tick() => {
+                        let mut max_offsets = HashMap::new();
+                        for message in pending_messages.iter().filter_map(|m| m.as_ref().ok()) {
+                            let entry = max_offsets.entry(message.partition.clone()).or_default();
+                            *entry = std::cmp::max(*entry, message.offset);
+                        }
+                        let (bindings, progress) = match timestamper.timestamp_offsets(&max_offsets).await {
+                            Ok((bindings, progress)) => (bindings, progress),
+                            Err(e) => {
+                                error!("Error timestamping offsets: {}", e);
+                                return;
+                            }
+                        };
+
+                        for msg in pending_messages.drain(..) {
+                            match msg{
+                                Ok(message) => {
+                                    let ts = bindings.get(&message.partition).expect("timestamper didn't return partition").0;
+                                    yield Event::Message(ts, Ok(message));
+                                },
+                                Err(e) => {
+                                    // TODO: make errors definite
+                                    yield Event::Message(0, Err(e));
+                                },
+                            }
+                        }
+                        let progress_some = progress.as_option().is_some();
+                        yield Event::Progress(progress.into_option());
+                        if source_stream.is_done() {
+                            // We just emitted the last piece of data that needed to be timestamped
+                            if progress_some {
+                                yield Event::Progress(None);
+                            }
+                            break;
+                        }
+                    }
                 }
             }
-        };
+        }));
 
-        move |cap, durability_cap, output| {
-            // First check that the source was successfully created
-            let source_reader = match &mut source_reader {
-                Some(source_reader) => source_reader,
-                None => {
-                    return SourceStatus::Done;
-                }
-            };
+        let activator = scope.activator_for(&info.address[..]);
+        move |cap, output| {
+            if !active {
+                return SourceStatus::Done;
+            }
 
-            // Check that we have a valid list of timestamp bindings.
-            let timestamp_histories = match &mut timestamp_histories {
-                Some(histories) => histories,
-                None => {
-                    error!("Source missing list of timestamp bindings");
-                    return SourceStatus::Done;
-                }
-            };
-
-            // Maintain a capability set that tracks the durability frontier.
-            durability_cap.downgrade(timestamp_histories.durability_frontier());
-
-            // Bound execution of operator to prevent a single operator from hogging
-            // the CPU if there are many messages to process
-            let timer = Instant::now();
             // Accumulate updates to bytes_read for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
             let mut metric_updates = HashMap::new();
-
             // Record operator has been scheduled
             source_metrics.operator_scheduled_counter.inc();
 
             let mut context = Context::from_waker(&waker);
             let mut source_status = SourceStatus::Alive;
-            while let Poll::Ready(item) = source_reader.as_mut().poll_next(&mut context) {
-                match item {
-                    Some(Ok(message)) => {
-                        partition_cursors.insert(message.partition.clone(), message.offset + 1);
-                        handle_message::<S>(
+
+            let timer = Instant::now();
+
+            while let Poll::Ready(Some(event)) = source_reader.as_mut().poll_next(&mut context) {
+                match event {
+                    Event::Progress(upper) => {
+                        let ts = upper.unwrap_or(Timestamp::MAX);
+                        for partition_metrics in source_metrics.partition_metrics.values_mut() {
+                            partition_metrics.closed_ts.set(ts);
+                        }
+                        // TODO(petrosagg): `cap` should become a CapabilitySet to allow
+                        // downgrading it to the empty frontier. For now setting SourceStatus to
+                        // Done achieves the same effect
+                        cap.downgrade(&ts);
+                        if upper.is_none() {
+                            source_status = SourceStatus::Done;
+                        }
+                    }
+                    Event::Message(ts, message) => match message {
+                        Ok(message) => handle_message::<S>(
                             message,
                             &mut bytes_read,
                             &cap,
                             output,
                             &mut metric_updates,
-                            &timestamp_histories,
-                        );
-                    }
-                    Some(Err(e)) => {
-                        output.session(&cap).give(Err(SourceError {
-                            source_id: id,
-                            error: e.inner,
-                        }));
-                        source_status = SourceStatus::Done;
-                        break;
-                    }
-                    None => {
-                        source_status = SourceStatus::Done;
-                        break;
-                    }
+                            ts,
+                        ),
+                        // TODO: make errors definite
+                        Err(e) => {
+                            output.session(&cap).give(Err(SourceError {
+                                source_id: id,
+                                error: e.inner,
+                            }));
+                        }
+                    },
                 }
                 if timer.elapsed() > YIELD_INTERVAL {
-                    // We didn't drain the entire queue, so indicate that we
-                    // should run again but yield the CPU to other operators.
-                    activator.activate();
+                    let _ = activator.activate();
                     break;
                 }
             }
 
             bytes_read_counter.inc_by(bytes_read as u64);
             source_metrics.record_partition_offsets(metric_updates);
-
-            // Attempt to update the timestamp and finalize the currently pending bindings
-            let cur_ts = timestamp_histories.upper();
-            timestamp_histories.update_timestamp();
-            if timestamp_histories.upper() > cur_ts {
-                for (_, partition_metrics) in source_metrics.partition_metrics.iter_mut() {
-                    partition_metrics.closed_ts.set(cur_ts);
-                }
-            }
-
-            // Downgrade capability (if possible) before exiting
-            timestamp_histories.downgrade(cap, &partition_cursors);
             source_metrics.capability.set(*cap.time());
-            // Downgrade compaction frontier to track the current time.
-            timestamp_histories.set_compaction_frontier(Antichain::from_elem(*cap.time()).borrow());
 
             source_status
         }
     });
-
     let (ok_stream, err_stream) = stream.map_fallible("SourceErrorDemux", |r| r);
-
     if active {
         ((ok_stream, err_stream), Some(capability))
     } else {
@@ -1118,22 +953,20 @@ where
 /// TODO: This function is a bit of a mess rn but hopefully this function makes the
 /// existing mess more obvious and points towards ways to improve it.
 fn handle_message<S: SourceReader>(
-    message: SourceMessage<S::Key, S::Value>,
+    message: SourceMessage<S::Key, S::Value, S::Diff>,
     bytes_read: &mut usize,
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<S::Key, S::Value>, SourceError>,
-        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value>, SourceError>>,
+        Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>,
+        Tee<Timestamp, Result<SourceOutput<S::Key, S::Value, S::Diff>, SourceError>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp, i64)>,
-    timestamp_bindings: &TimestampBindingRc,
+    ts: Timestamp,
 ) {
     let partition = message.partition.clone();
     let offset = message.offset;
 
-    // Determine the timestamp to which we need to assign this message
-    let ts = timestamp_bindings.get_or_propose_binding(&partition, offset);
     // Note: empty and null payload/keys are currently
     // treated as the same thing.
     let key = message.key;
@@ -1148,16 +981,15 @@ fn handle_message<S: SourceReader>(
         *bytes_read += len;
     }
     let ts_cap = cap.delayed(&ts);
-
     output.session(&ts_cap).give(Ok(SourceOutput::new(
         key,
         out,
-        offset.offset,
+        offset,
         message.upstream_time_millis,
         message.partition,
         message.headers,
+        message.specific_diff,
     )));
-
     match metric_updates.entry(partition) {
         Entry::Occupied(mut entry) => {
             entry.insert((offset, ts, entry.get().2 + 1));

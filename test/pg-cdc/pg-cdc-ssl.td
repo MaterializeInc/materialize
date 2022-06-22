@@ -250,7 +250,7 @@ contains:db error: FATAL: connection requires a valid client certificate
 
 # server: certuser, client: verify-ca (wrong cert) => ERROR
 ! CREATE MATERIALIZED SOURCE "mz_source"
-  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser dbname=postgres sslmode=verify-ca sslcert=/share/secrets/postgres.crt sslkey=/share/secrets/postgres.key sslrootcert=/share/secrets/ca.crt'
+  FROM POSTGRES CONNECTION 'host=postgres port=5432 user=certuser dbname=postgres sslmode=verify-ca sslcert=/share/secrets/postgres.crt sslkey=/share/secrets/postgres-world-readable.key sslrootcert=/share/secrets/ca.crt'
   PUBLICATION 'mz_source'
 contains:db error: FATAL: certificate authentication failed for user "certuser"
 

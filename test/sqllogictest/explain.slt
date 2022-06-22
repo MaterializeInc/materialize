@@ -248,12 +248,12 @@ EXPLAIN RAW PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
 %0 =
 | Get materialize.public.ordered (u2)
 
-Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+Finish order_by=(#1 asc nulls_last, #0 desc nulls_first) limit=5 offset=0 project=(#0, #1)
 
 EOF
 
 query T multiline
-EXPLAIN DECORRELATED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT 5
+EXPLAIN DECORRELATED PLAN FOR SELECT * FROM ordered ORDER BY y asc nulls first, x desc nulls last LIMIT 5
 ----
 %0 = Let l0 =
 | Constant ()
@@ -265,7 +265,7 @@ EXPLAIN DECORRELATED PLAN FOR SELECT * FROM ordered ORDER BY y asc, x desc LIMIT
 | Join %0 %1
 | | implementation = Unimplemented
 
-Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+Finish order_by=(#1 asc nulls_first, #0 desc nulls_last) limit=5 offset=0 project=(#0, #1)
 
 EOF
 
@@ -281,7 +281,7 @@ Query:
 | | types = (integer?, text?)
 | | keys = ()
 
-Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+Finish order_by=(#1 asc nulls_last, #0 desc nulls_first) limit=5 offset=0 project=(#0, #1)
 
 EOF
 
@@ -299,7 +299,7 @@ Query:
 | Get materialize.public.ordered (u2)
 | | types = (integer?, text?)
 | | keys = ()
-| TopK group=() order=(#1 asc, #0 desc) limit=5 offset=0
+| TopK group=() order=(#1 asc nulls_last, #0 desc nulls_first) limit=5 offset=0
 | | types = (integer?, text?)
 | | keys = ()
 
@@ -411,11 +411,13 @@ Query:
         "order_key": [
           {
             "column": 1,
-            "desc": false
+            "desc": false,
+            "nulls_last": true
           },
           {
             "column": 0,
-            "desc": true
+            "desc": true,
+            "nulls_last": false
           }
         ],
         "limit": 5,
@@ -463,11 +465,13 @@ Query:
         "order_key": [
           {
             "column": 1,
-            "desc": false
+            "desc": false,
+            "nulls_last": true
           },
           {
             "column": 0,
-            "desc": true
+            "desc": true,
+            "nulls_last": false
           }
         ],
         "limit": 5,
@@ -508,7 +512,7 @@ Query:
   }
 }
 
-Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+Finish order_by=(#1 asc nulls_last, #0 desc nulls_first) limit=5 offset=0 project=(#0, #1)
 
 EOF
 
@@ -540,6 +544,6 @@ Query:
   }
 }
 
-Finish order_by=(#1 asc, #0 desc) limit=5 offset=0 project=(#0, #1)
+Finish order_by=(#1 asc nulls_last, #0 desc nulls_first) limit=5 offset=0 project=(#0, #1)
 
 EOF

@@ -34,12 +34,9 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} publish=true repeat
 > SELECT COUNT(*) FROM a_view;
 10
 
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
-10
-
 # Verify that we cannot create multiple materializations of a persisted source.
-! CREATE MATERIALIZED VIEW a_view_second_materialization AS SELECT * FROM re_created;
-contains:Cannot re-materialize source re_created
+#! CREATE MATERIALIZED VIEW a_view_second_materialization AS SELECT * FROM re_created;
+# contains:Cannot re-materialize source re_created
 
 > DROP VIEW a_view;
 
@@ -47,10 +44,6 @@ contains:Cannot re-materialize source re_created
 
 > SELECT COUNT(*) FROM a_view;
 10
-
-# Re-creating the source should result in no messages being read from Kafka, because we still have the persisted data and offsets.
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
-0
 
 # Same with DROP INDEX
 
@@ -60,6 +53,3 @@ contains:Cannot re-materialize source re_created
 
 > SELECT COUNT(*) FROM a_view;
 10
-
-> SELECT SUM(CAST(statistics->'topics'->'testdrive-re-created-${testdrive.seed}'->'partitions'->'0'->'msgs' AS INT)) FROM mz_kafka_source_statistics;
-0

@@ -94,7 +94,7 @@ $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messa
 
 # Use $ postgresql-execute and ${testdrive.materialize_addr}
 
-$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 CREATE TABLE postgres_execute (f1 INTEGER);
 INSERT INTO postgres_execute VALUES (123);
 
@@ -163,8 +163,8 @@ $ kafka-ingest format=avro topic=kafka-ingest-no-partition key-format=avro key-s
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE NONE
 
-> SELECT COUNT(*) = 8 FROM kafka_ingest_no_partition;
-true
+> SELECT COUNT(*) FROM kafka_ingest_no_partition;
+8
 
 # kafka-verify with regexp (the set-regexp from above is used)
 
@@ -182,19 +182,19 @@ $ kafka-verify format=avro sink=materialize.public.kafka_verify_regexp_sink sort
 
 > CREATE TABLE postgres_connect (f1 INTEGER);
 
-$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialized-addr}
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 
 $ postgres-execute connection=conn1
 BEGIN;
 INSERT INTO postgres_connect VALUES (1);
 
 # Table is still empty, the transaction we just started is not committed yet
-> SELECT COUNT(*) = 0 FROM postgres_connect;
-true
+> SELECT COUNT(*) FROM postgres_connect;
+0
 
 $ postgres-execute connection=conn1
 INSERT INTO postgres_connect VALUES (2);
 COMMIT;
 
-> SELECT COUNT(*) = 2 FROM postgres_connect;
-true
+> SELECT COUNT(*) FROM postgres_connect;
+2

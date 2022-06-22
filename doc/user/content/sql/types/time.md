@@ -1,5 +1,5 @@
 ---
-title: "time Data Type"
+title: "time type"
 description: "Expresses a time without a specific date"
 menu:
   main:

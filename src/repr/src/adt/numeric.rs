@@ -17,14 +17,14 @@ use std::fmt;
 
 use anyhow::bail;
 use dec::{Context, Decimal};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 
-use crate::proto::{ProtoRepr, TryFromProtoError};
+use crate::proto::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
 
@@ -52,30 +52,32 @@ pub const NUMERIC_AGG_MAX_PRECISION: u8 = NUMERIC_AGG_WIDTH * 3;
 /// A double-width version of [`Numeric`] for use in aggregations.
 pub type NumericAgg = Decimal<NUMERIC_AGG_WIDTH_USIZE>;
 
-lazy_static! {
-    static ref CX_DATUM: Context<Numeric> = {
-        let mut cx = Context::<Numeric>::default();
-        cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1)).unwrap();
-        cx.set_min_exponent(-isize::from(NUMERIC_DATUM_MAX_PRECISION)).unwrap();
-        cx
-    };
-    static ref CX_AGG: Context<NumericAgg> = {
-        let mut cx = Context::<NumericAgg>::default();
-        cx.set_max_exponent(isize::from(NUMERIC_AGG_MAX_PRECISION - 1)).unwrap();
-        cx.set_min_exponent(-isize::from(NUMERIC_AGG_MAX_PRECISION)).unwrap();
-        cx
-    };
-    static ref U128_SPLITTER_DATUM: Numeric = {
-        let mut cx = Numeric::context();
-        // 1 << 128
-        cx.parse("340282366920938463463374607431768211456").unwrap()
-    };
-    static ref U128_SPLITTER_AGG: NumericAgg = {
-        let mut cx = NumericAgg::context();
-        // 1 << 128
-        cx.parse("340282366920938463463374607431768211456").unwrap()
-    };
-}
+static CX_DATUM: Lazy<Context<Numeric>> = Lazy::new(|| {
+    let mut cx = Context::<Numeric>::default();
+    cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1))
+        .unwrap();
+    cx.set_min_exponent(-isize::from(NUMERIC_DATUM_MAX_PRECISION))
+        .unwrap();
+    cx
+});
+static CX_AGG: Lazy<Context<NumericAgg>> = Lazy::new(|| {
+    let mut cx = Context::<NumericAgg>::default();
+    cx.set_max_exponent(isize::from(NUMERIC_AGG_MAX_PRECISION - 1))
+        .unwrap();
+    cx.set_min_exponent(-isize::from(NUMERIC_AGG_MAX_PRECISION))
+        .unwrap();
+    cx
+});
+static U128_SPLITTER_DATUM: Lazy<Numeric> = Lazy::new(|| {
+    let mut cx = Numeric::context();
+    // 1 << 128
+    cx.parse("340282366920938463463374607431768211456").unwrap()
+});
+static U128_SPLITTER_AGG: Lazy<NumericAgg> = Lazy::new(|| {
+    let mut cx = NumericAgg::context();
+    // 1 << 128
+    cx.parse("340282366920938463463374607431768211456").unwrap()
+});
 
 /// The `max_scale` of a [`ScalarType::Numeric`].
 ///
@@ -129,38 +131,27 @@ impl TryFrom<usize> for NumericMaxScale {
     }
 }
 
-impl From<&NumericMaxScale> for ProtoNumericMaxScale {
-    fn from(max_scale: &NumericMaxScale) -> Self {
+impl RustType<ProtoNumericMaxScale> for NumericMaxScale {
+    fn into_proto(&self) -> ProtoNumericMaxScale {
         ProtoNumericMaxScale {
-            value: max_scale.0.into_proto(),
+            value: self.0.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoNumericMaxScale> for NumericMaxScale {
-    type Error = TryFromProtoError;
-
-    fn try_from(max_scale: ProtoNumericMaxScale) -> Result<Self, Self::Error> {
-        Ok(NumericMaxScale(u8::from_proto(max_scale.value)?))
+    fn from_proto(max_scale: ProtoNumericMaxScale) -> Result<Self, TryFromProtoError> {
+        Ok(NumericMaxScale(max_scale.value.into_rust()?))
     }
 }
 
-impl From<&Option<NumericMaxScale>> for ProtoOptionalNumericMaxScale {
-    fn from(max_scale: &Option<NumericMaxScale>) -> Self {
+impl RustType<ProtoOptionalNumericMaxScale> for Option<NumericMaxScale> {
+    fn into_proto(&self) -> ProtoOptionalNumericMaxScale {
         ProtoOptionalNumericMaxScale {
-            value: max_scale.as_ref().map(From::from),
+            value: self.into_proto(),
         }
     }
-}
 
-impl TryFrom<ProtoOptionalNumericMaxScale> for Option<NumericMaxScale> {
-    type Error = TryFromProtoError;
-
-    fn try_from(max_scale: ProtoOptionalNumericMaxScale) -> Result<Self, Self::Error> {
-        match max_scale.value {
-            Some(value) => Ok(Some(value.try_into()?)),
-            None => Ok(None),
-        }
+    fn from_proto(max_scale: ProtoOptionalNumericMaxScale) -> Result<Self, TryFromProtoError> {
+        max_scale.value.into_rust()
     }
 }
 

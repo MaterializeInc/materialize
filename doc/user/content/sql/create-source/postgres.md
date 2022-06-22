@@ -4,7 +4,8 @@ description: "Connecting Materialize to a PostgreSQL database"
 menu:
   main:
     parent: 'create-source'
-    name: Postgres
+    identifier: cs_postgres
+    name: PostgreSQL
     weight: 20
 aliases:
   - /sql/create-source/postgresql
@@ -12,10 +13,8 @@ aliases:
 
 {{< beta />}}
 
-{{< version-added v0.8.0 />}}
-
 {{% create-source/intro %}}
-This page details how to connect Materialize to a PostgreSQL (10+) database to create and efficiently maintain real-time materialized views on top of a replication stream.
+This page describes how to connect Materialize to a PostgreSQL (10+) database to create and efficiently maintain real-time materialized views on top of a replication stream.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -138,9 +137,17 @@ For PostgreSQL 13+, it is recommended that you set a reasonable value for [`max_
 
 ## Known limitations
 
- **Schema changes:** Materialize does not support changes to schemas for existing publications, and will set the source into an error state if a breaking DDL change is detected upstream. To handle schema changes, you need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
-- **Supported data types:** Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types will fail with an error.
-- **Truncation:** Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is recreated.
+##### Schema changes
+
+Materialize does not support changes to schemas for existing publications, and will set the source into an error state if a breaking DDL change is detected upstream. To handle schema changes, you need to drop the existing sources and then recreate them after creating new publications for the updated schemas.
+
+##### Supported types
+
+Sources can only be created from publications that use [data types](/sql/types/) supported by Materialize. Attempts to create sources from publications which contain unsupported data types will fail with an error.
+
+##### Truncation
+
+Tables replicated into Materialize should not be truncated. If a table is truncated while replicated, the whole source becomes inaccessible and will not produce any data until it is recreated.
 
 ## Related pages
 

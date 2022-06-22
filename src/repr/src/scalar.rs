@@ -16,7 +16,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::proto::{TryFromProtoError, TryIntoIfSome};
+use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -113,8 +113,12 @@ pub enum Datum<'a> {
     // TODO(benesch): get rid of this variant. With a more capable optimizer, I
     // don't think there would be any need for dummy datums.
     Dummy,
-    // Keep `Null` last so that it sorts last, to match the default sort order
-    // in PostgreSQL.
+    // Keep `Null` last so that calling `<` on Datums sorts nulls last, to
+    // match the default in PostgreSQL. Note that this doesn't have an effect
+    // on ORDER BY, because that is handled by compare_columns. The only
+    // situation it has an effect is array comparisons, e.g.,
+    // `SELECT ARRAY[1] < ARRAY[NULL]::int[]`. In such a situation, we end up
+    // calling `<` on Datums (see `fn lt` in scalar/func.rs).
     /// An unknown value.
     Null,
 }
@@ -984,41 +988,33 @@ pub enum ScalarType {
     Int2Vector,
 }
 
-impl From<&(ColumnName, ColumnType)> for ProtoRecordField {
-    fn from(x: &(ColumnName, ColumnType)) -> Self {
+impl RustType<ProtoRecordField> for (ColumnName, ColumnType) {
+    fn into_proto(&self) -> ProtoRecordField {
         ProtoRecordField {
-            column_name: Some((&x.0).into()),
-            column_type: Some((&x.1).into()),
+            column_name: Some(self.0.into_proto()),
+            column_type: Some(self.1.into_proto()),
         }
     }
-}
 
-impl TryFrom<ProtoRecordField> for (ColumnName, ColumnType) {
-    type Error = TryFromProtoError;
-
-    fn try_from(x: ProtoRecordField) -> Result<Self, Self::Error> {
+    fn from_proto(proto: ProtoRecordField) -> Result<Self, TryFromProtoError> {
         Ok((
-            x.column_name
-                .try_into_if_some("ProtoRecordField::column_name")?,
-            x.column_type
-                .try_into_if_some("ProtoRecordField::column_type")?,
+            proto
+                .column_name
+                .into_rust_if_some("ProtoRecordField::column_name")?,
+            proto
+                .column_type
+                .into_rust_if_some("ProtoRecordField::column_type")?,
         ))
     }
 }
 
-impl From<&ScalarType> for Box<ProtoScalarType> {
-    fn from(value: &ScalarType) -> Self {
-        Box::new(value.into())
-    }
-}
-
-impl From<&ScalarType> for ProtoScalarType {
-    fn from(value: &ScalarType) -> Self {
+impl RustType<ProtoScalarType> for ScalarType {
+    fn into_proto(&self) -> ProtoScalarType {
         use crate::relation_and_scalar::proto_scalar_type::Kind::*;
         use crate::relation_and_scalar::proto_scalar_type::*;
 
         ProtoScalarType {
-            kind: Some(match value {
+            kind: Some(match self {
                 ScalarType::Bool => Bool(()),
                 ScalarType::Int16 => Int16(()),
                 ScalarType::Int32 => Int32(()),
@@ -1041,45 +1037,41 @@ impl From<&ScalarType> for ProtoScalarType {
                 ScalarType::RegClass => RegClass(()),
                 ScalarType::Int2Vector => Int2Vector(()),
 
-                ScalarType::Numeric { max_scale } => Numeric(max_scale.into()),
+                ScalarType::Numeric { max_scale } => Numeric(max_scale.into_proto()),
                 ScalarType::Char { length } => Char(ProtoChar {
-                    length: length.as_ref().map(Into::into),
+                    length: length.into_proto(),
                 }),
                 ScalarType::VarChar { max_length } => VarChar(ProtoVarChar {
-                    max_length: max_length.as_ref().map(Into::into),
+                    max_length: max_length.into_proto(),
                 }),
 
                 ScalarType::List {
                     element_type,
                     custom_id,
                 } => List(Box::new(ProtoList {
-                    element_type: Some(element_type.as_ref().into()),
-                    custom_id: custom_id.map(|id| (&id).into()),
+                    element_type: Some(element_type.into_proto()),
+                    custom_id: custom_id.map(|id| id.into_proto()),
                 })),
                 ScalarType::Record { custom_id, fields } => Record(ProtoRecord {
-                    custom_id: custom_id.map(|id| (&id).into()),
-                    fields: fields.into_iter().map(Into::into).collect(),
+                    custom_id: custom_id.map(|id| id.into_proto()),
+                    fields: fields.into_proto(),
                 }),
-                ScalarType::Array(typ) => Array(typ.as_ref().into()),
+                ScalarType::Array(typ) => Array(typ.into_proto()),
                 ScalarType::Map {
                     value_type,
                     custom_id,
                 } => Map(Box::new(ProtoMap {
-                    value_type: Some(value_type.as_ref().into()),
-                    custom_id: custom_id.map(|id| (&id).into()),
+                    value_type: Some(value_type.into_proto()),
+                    custom_id: custom_id.map(|id| id.into_proto()),
                 })),
             }),
         }
     }
-}
 
-impl TryFrom<ProtoScalarType> for ScalarType {
-    type Error = TryFromProtoError;
-
-    fn try_from(value: ProtoScalarType) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoScalarType) -> Result<Self, TryFromProtoError> {
         use crate::relation_and_scalar::proto_scalar_type::Kind::*;
 
-        let kind = value
+        let kind = proto
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoScalarType::Kind"))?;
 
@@ -1107,42 +1099,38 @@ impl TryFrom<ProtoScalarType> for ScalarType {
             Int2Vector(()) => Ok(ScalarType::Int2Vector),
 
             Numeric(x) => Ok(ScalarType::Numeric {
-                max_scale: x.try_into()?,
+                max_scale: x.into_rust()?,
             }),
             Char(x) => Ok(ScalarType::Char {
-                length: x.length.map(TryInto::try_into).transpose()?,
+                length: x.length.into_rust()?,
             }),
 
             VarChar(x) => Ok(ScalarType::VarChar {
-                max_length: x.max_length.map(TryInto::try_into).transpose()?,
+                max_length: x.max_length.into_rust()?,
             }),
             Array(x) => Ok(ScalarType::Array({
-                let st: ScalarType = (*x).try_into()?;
+                let st: ScalarType = (*x).into_rust()?;
                 st.into()
             })),
             List(x) => Ok(ScalarType::List {
                 element_type: Box::new(
                     x.element_type
                         .map(|x| *x)
-                        .try_into_if_some("ProtoList::element_type")?,
+                        .into_rust_if_some("ProtoList::element_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
             Record(x) => Ok(ScalarType::Record {
-                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
-                fields: x
-                    .fields
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<_, _>>()?,
+                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
+                fields: x.fields.into_rust()?,
             }),
             Map(x) => Ok(ScalarType::Map {
                 value_type: Box::new(
                     x.value_type
                         .map(|x| *x)
-                        .try_into_if_some("ProtoMap::value_type")?,
+                        .into_rust_if_some("ProtoMap::value_type")?,
                 ),
-                custom_id: x.custom_id.map(|id| id.try_into().unwrap()),
+                custom_id: x.custom_id.map(|id| id.into_rust().unwrap()),
             }),
         }
     }
@@ -2047,20 +2035,18 @@ impl Arbitrary for ScalarType {
     }
 }
 
-lazy_static! {
-    static ref EMPTY_ARRAY_ROW: Row = {
-        let mut row = Row::default();
-        row.packer()
-            .push_array(&[], iter::empty::<Datum>())
-            .expect("array known to be valid");
-        row
-    };
-    static ref EMPTY_LIST_ROW: Row = {
-        let mut row = Row::default();
-        row.packer().push_list(iter::empty::<Datum>());
-        row
-    };
-}
+static EMPTY_ARRAY_ROW: Lazy<Row> = Lazy::new(|| {
+    let mut row = Row::default();
+    row.packer()
+        .push_array(&[], iter::empty::<Datum>())
+        .expect("array known to be valid");
+    row
+});
+static EMPTY_LIST_ROW: Lazy<Row> = Lazy::new(|| {
+    let mut row = Row::default();
+    row.packer().push_list(iter::empty::<Datum>());
+    row
+});
 
 impl Datum<'_> {
     pub fn empty_array() -> Datum<'static> {
@@ -2239,10 +2225,10 @@ fn arb_numeric() -> BoxedStrategy<Numeric> {
         .boxed()
 }
 
-impl<'a> Into<Datum<'a>> for &'a PropDatum {
-    fn into(self) -> Datum<'a> {
+impl<'a> From<&'a PropDatum> for Datum<'a> {
+    fn from(pd: &'a PropDatum) -> Self {
         use PropDatum::*;
-        match self {
+        match pd {
             Null => Datum::Null,
             Bool(b) => Datum::from(*b),
             Int16(i) => Datum::from(*i),

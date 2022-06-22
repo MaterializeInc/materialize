@@ -32,6 +32,7 @@ use rand::Rng;
 use tracing::info;
 use tracing_subscriber::filter::EnvFilter;
 
+use mz_ore::cli::{self, CliConfig};
 use mz_ore::task;
 use mz_test_util::mz_client;
 
@@ -48,7 +49,7 @@ async fn main() {
 
 async fn run() -> Result<(), anyhow::Error> {
     let timer = std::time::Instant::now();
-    let args: Args = mz_ore::cli::parse_args();
+    let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()
         .with_env_filter(args.log_filter)

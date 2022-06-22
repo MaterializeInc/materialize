@@ -6,8 +6,6 @@ menu:
     parent: commands
 ---
 
-{{< version-added v0.7.0 />}}
-
 `CREATE ROLE` creates a new role.
 
 ## Conceptual framework

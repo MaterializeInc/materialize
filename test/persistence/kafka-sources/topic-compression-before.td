@@ -33,5 +33,5 @@ $ kafka-ingest format=avro topic=topic-compression key-format=avro key-schema=${
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT;
 
-> SELECT COUNT(*) = 1000 FROM topic_compression;
-true
+> SELECT COUNT(*) FROM topic_compression;
+1000

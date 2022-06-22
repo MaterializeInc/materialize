@@ -16,7 +16,7 @@ tail operation computes how a relation *changes* over time.
 
 Fundamentally, `TAIL` produces a sequence of updates. An update describes either
 the insertion or deletion of a row to the relation at a specific time. Taken
-together, the updates describes the complete set of changes to a relation, in
+together, the updates describe the complete set of changes to a relation, in
 order, while the `TAIL` is active.
 
 You can use `TAIL` to:

@@ -75,14 +75,17 @@ impl CodegenBuf {
         self.write("\n");
     }
 
-    /// Starts a new indented block.
+    /// Writes a new indented block.
     ///
     /// Specifically, if `s` is empty, the method writes the line `{` into the
     /// buffer; otherwise writes the line `s {` into the buffer at the current
-    /// indentation level. Then it increments the buffer's indentation level.
-    pub fn start_block<S>(&mut self, s: S)
+    /// indentation level. Then it increments the buffer's indentation level,
+    /// runs the provided function, then decrements the indentation level and writes
+    /// a closing `}`.
+    pub fn write_block<S, F>(&mut self, s: S, f: F)
     where
         S: AsRef<str>,
+        F: FnOnce(&mut Self),
     {
         self.start_line();
         self.write(s.as_ref());
@@ -91,6 +94,9 @@ impl CodegenBuf {
         }
         self.write("{\n");
         self.level += 1;
+        f(self);
+        self.level -= 1;
+        self.writeln("}");
     }
 
     /// Closes the current indented block and starts a new one at the same
@@ -112,18 +118,5 @@ impl CodegenBuf {
         self.write(s.as_ref());
         self.write(" {\n");
         self.level += 1;
-    }
-
-    /// Ends the current indented block.
-    ///
-    /// Specifically, the method decrements the current indentation level, then
-    /// writes a line containing `}` into the buffer.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the current indentation level is zero.
-    pub fn end_block(&mut self) {
-        self.level -= 1;
-        self.writeln("}");
     }
 }
