@@ -101,7 +101,8 @@ async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
     PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await
 }
 
-async fn create_file_pg_client() -> Result<Option<(PersistClient, TempDir)>, ExternalError> {
+async fn create_file_pg_client(
+) -> Result<Option<(Arc<PostgresConsensus>, PersistClient, TempDir)>, ExternalError> {
     let pg = match PostgresConsensusConfig::new_for_test().await? {
         Some(x) => x,
         None => return Ok(None),
@@ -110,14 +111,15 @@ async fn create_file_pg_client() -> Result<Option<(PersistClient, TempDir)>, Ext
     let file = FileBlobConfig::from(dir.path());
 
     let blob = Arc::new(FileBlobMulti::open(file).await?) as Arc<dyn BlobMulti + Send + Sync>;
-    let consensus =
-        Arc::new(PostgresConsensus::open(pg).await?) as Arc<dyn Consensus + Send + Sync>;
+    let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
+    let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
-    Ok(Some((client, dir)))
+    Ok(Some((postgres_consensus, client, dir)))
 }
 
-async fn create_s3_pg_client() -> Result<Option<PersistClient>, ExternalError> {
+async fn create_s3_pg_client(
+) -> Result<Option<(Arc<PostgresConsensus>, PersistClient)>, ExternalError> {
     let s3 = match S3BlobConfig::new_for_test().await? {
         Some(x) => x,
         None => return Ok(None),
@@ -128,11 +130,11 @@ async fn create_s3_pg_client() -> Result<Option<PersistClient>, ExternalError> {
     };
 
     let blob = Arc::new(S3BlobMulti::open(s3).await?) as Arc<dyn BlobMulti + Send + Sync>;
-    let consensus =
-        Arc::new(PostgresConsensus::open(pg).await?) as Arc<dyn Consensus + Send + Sync>;
+    let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
+    let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     let client = PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await?;
-    Ok(Some(client))
+    Ok(Some((postgres_consensus, client)))
 }
 
 fn bench_all_clients<BenchClientFn>(
@@ -156,22 +158,28 @@ fn bench_all_clients<BenchClientFn>(
 
     // Create a directory that will automatically be dropped after the test
     // finishes.
-    if let Some((client, tempdir)) = runtime
+    if let Some((postgres_consensus, client, tempdir)) = runtime
         .block_on(create_file_pg_client())
         .expect("failed to create file_pg client")
     {
         g.bench_function(BenchmarkId::new("file_pg", data.goodput_pretty()), |b| {
+            runtime
+                .block_on(postgres_consensus.drop_and_recreate())
+                .expect("failed to drop and recreate postgres consensus");
             bench_client_fn(b, &client);
         });
         drop(tempdir);
     }
 
     // Only run S3+Postgres benchmarks if the magic env vars are set.
-    if let Some(client) = runtime
+    if let Some((postgres_consensus, client)) = runtime
         .block_on(create_s3_pg_client())
         .expect("failed to create s3_pg client")
     {
         g.bench_function(BenchmarkId::new("s3_pg", data.goodput_pretty()), |b| {
+            runtime
+                .block_on(postgres_consensus.drop_and_recreate())
+                .expect("failed to drop and recreate postgres consensus");
             bench_client_fn(b, &client);
         });
     }
@@ -250,9 +258,15 @@ fn bench_all_consensus<BenchConsensusFn>(
         let postgres_consensus = runtime
             .block_on(PostgresConsensus::open(config))
             .expect("failed to create postgres consensus");
-        let postgres_consensus = Arc::new(postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
+        let postgres_consensus = Arc::new(postgres_consensus);
         g.bench_function(BenchmarkId::new("postgres", data.goodput_pretty()), |b| {
-            bench_consensus_fn(b, &postgres_consensus);
+            runtime
+                .block_on(postgres_consensus.drop_and_recreate())
+                .expect("failed to drop and recreate postgres consensus");
+            bench_consensus_fn(
+                b,
+                &(Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>),
+            );
         });
     }
 }
