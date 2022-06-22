@@ -116,7 +116,6 @@ use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
 use mz_repr::adt::interval::Interval;
-use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
     Datum, Diff, GlobalId, RelationDesc, RelationType, Row, RowArena, ScalarType, Timestamp,
 };
@@ -4687,19 +4686,12 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let ts = self.get_local_read_ts();
-        let ts = MirScalarExpr::literal_ok(
-            Datum::from(Numeric::from(ts)),
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            },
-        );
         let peek_response = match self
             .sequence_peek(
                 &mut session,
                 PeekPlan {
                     source: selection,
-                    when: QueryWhen::AtTimestamp(ts),
+                    when: QueryWhen::Immediately,
                     finishing,
                     copy_to: None,
                 },

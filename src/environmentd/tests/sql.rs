@@ -1218,3 +1218,26 @@ fn test_tail_outlive_cluster() {
         0
     );
 }
+
+#[test]
+// Tests github issue #13221
+fn test_read_then_write_compaction_window_zero() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default().logical_compaction_window(Duration::from_millis(0));
+    let server = util::start_server(config).unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t1(f1 int)").unwrap();
+    client.batch_execute("INSERT INTO t1 VALUES (42)").unwrap();
+    client
+        .batch_execute("INSERT INTO t1 SELECT * FROM t1")
+        .unwrap();
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM t1", &[])
+            .unwrap()
+            .get::<_, i64>(0),
+        2
+    );
+}
