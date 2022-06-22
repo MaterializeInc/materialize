@@ -39,7 +39,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::scheduling::Activator;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use mz_avro::types::Value;
 use mz_dataflow_types::sinks::{
@@ -628,7 +628,7 @@ impl KafkaSinkState {
         // Consider a retriable error that's hit our max backoff to be fatal.
         if shutdown.get() {
             self.shutdown_flag.store(true, Ordering::SeqCst);
-            info!("shutting down kafka sink: {}", &self.name);
+            panic!("shutting down kafka sink: {}", &self.name);
         }
         Err(last_error)
     }
@@ -665,12 +665,10 @@ impl KafkaSinkState {
                         continue;
                     } else {
                         // We've received an error that is not transient
-                        error!(
+                        panic!(
                             "unable to produce message in {}: {}. Shutting down sink.",
                             self.name, last_error
                         );
-                        self.shutdown_flag.store(true, Ordering::SeqCst);
-                        break;
                     }
                 }
             }
