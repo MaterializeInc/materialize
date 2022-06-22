@@ -32,6 +32,10 @@ Transformations in the compile-time lifecycle of a SQL statement.
     * If the SQL query is a one-off, the outermost `TopK` is converted to a
       RowSetFinishing at this point.
     * `EXPLAIN RAW` returns the result of transformations up to this point.
+* [`HIR ⇒ HIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/lowering.rs#L149-L150)
+    * Predecorrelation rewrites:
+        * [Split out subquery conditions out as a separate predicate.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/transform_expr.rs#L54)
+        * [Try to rewrite other types of subqueries into EXISTS subqueries.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/transform_expr.rs#L156)
 * [`HIR ⇒ MIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/lowering.rs).
     * Decorrelation:
         * Correlated queries are rewritten as graphs with join and distinct.
