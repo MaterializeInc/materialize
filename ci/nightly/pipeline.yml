@@ -250,7 +250,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources]
+          args: [--scenario=KafkaSources, --actions=1000]
 
   - id: secrets
     label: "Secrets"
