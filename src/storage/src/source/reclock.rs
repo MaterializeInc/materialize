@@ -10,12 +10,14 @@
 //! Timestamper using persistent collection
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context as _};
 use differential_dataflow::lattice::Lattice;
 use futures::{Stream, StreamExt};
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+use mz_persist_client::cache::PersistClientCache;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::PartialOrder;
 
@@ -26,6 +28,7 @@ use mz_persist_client::read::ListenEvent;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::Upper;
 use mz_repr::Timestamp;
+use tokio::sync::Mutex;
 use tracing::{error, info};
 
 pub struct ReclockOperator {
@@ -57,9 +60,12 @@ impl ReclockOperator {
         now: NowFn,
         update_interval: Duration,
         mut as_of: Antichain<Timestamp>,
+        persist_clients: Arc<Mutex<PersistClientCache>>,
     ) -> anyhow::Result<Self> {
-        let persist_client = persist_location
-            .open()
+        let persist_client = persist_clients
+            .lock()
+            .await
+            .open(persist_location)
             .await
             .with_context(|| "error creating persist client")?;
 
