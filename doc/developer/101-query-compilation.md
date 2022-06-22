@@ -48,8 +48,9 @@ Transformations in the compile-time lifecycle of a SQL statement.
     * [Construct a dataflow for the query](https://github.com/MaterializeInc/materialize/blob/main/src/coord/src/coord/dataflow_builder.rs):
         * If the query depends on not-materialized views, the definitions of the
           not-materialized views get inlined.
-        * Import all indexes belonging to a materialized view that the query
-          depends on.
+        * For each materialized view that a query depends on, import all of its
+          materializations. (This corresponds to all indexes on that view, which
+          you can see if you call `SHOW INDEXES IN <view>`).
     * Run optimizations against the dataflow:
         * [Per-view logical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/lib.rs#L282-L337).
         * [Cross-view logical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/dataflow.rs#L31-L60).
