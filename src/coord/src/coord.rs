@@ -896,42 +896,16 @@ impl<S: Append + 'static> Coordinator<S> {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        {
-            // An explicit SELECT or INSERT on a table will bump the table's timestamps,
-            // but there are cases where timestamps are not bumped but we expect the closed
-            // timestamps to advance (`AS OF X`, TAILing views over RT sources and
-            // tables). To address these, spawn a task that forces table timestamps to
-            // close on a regular interval. This roughly tracks the behavior of realtime
-            // sources that close off timestamps on an interval.
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut interval = tokio::time::interval(self.catalog.config().timestamp_frequency);
-            task::spawn(|| "coordinator_advance_local_inputs", async move {
-                loop {
-                    interval.tick().await;
-                    // If sending fails, the main thread has shutdown.
-                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        // Spawn a watcher task that listens for compute service status changes and
-        // reports them to the coordinator.
-        task::spawn(|| "compute_service_watcher", {
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut events = self.dataflow_client.watch_compute_services();
-            async move {
-                while let Some(event) = events.next().await {
-                    if internal_cmd_tx
-                        .send(Message::ComputeInstanceStatus(event))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        });
+        // An explicit SELECT or INSERT on a table will bump the table's timestamps,
+        // but there are cases where timestamps are not bumped but we expect the closed
+        // timestamps to advance (`AS OF X`, TAILing views over RT sources and
+        // tables). To address these, spawn a task that forces table timestamps to
+        // close on a regular interval. This roughly tracks the behavior of realtime
+        // sources that close off timestamps on an interval.
+        let mut advance_local_inputs_interval =
+            tokio::time::interval(self.catalog.config().timestamp_frequency);
+        // Watcher that listens for and reports compute service status changes.
+        let mut compute_events = self.dataflow_client.watch_compute_services();
 
         loop {
             let msg = select! {
@@ -940,6 +914,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 biased;
 
                 Some(m) = internal_cmd_rx.recv() => m,
+                Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
+                _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
                 m = self.dataflow_client.ready() => {
                     let () = m.unwrap();
                     Message::ControllerReady
