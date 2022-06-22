@@ -616,8 +616,7 @@ impl CatalogState {
         &self,
         event: &VersionedEvent,
     ) -> Result<BuiltinTableUpdate, Error> {
-        let (id, event_type, object_type, event_details, user, occurred_at): (
-            uuid::Uuid,
+        let (event_type, object_type, event_details, user, occurred_at): (
             &EventType,
             &ObjectType,
             &EventDetails,
@@ -625,7 +624,6 @@ impl CatalogState {
             u64,
         ) = match event {
             VersionedEvent::V1(ev) => (
-                ev.uuid,
                 &ev.event_type,
                 &ev.object_type,
                 &ev.event_details,
@@ -643,13 +641,19 @@ impl CatalogState {
             .into_row();
         let event_details = event_details.iter().next().unwrap();
         let dt = NaiveDateTime::from_timestamp(
-            (occurred_at / 1_000_000_000).try_into().expect("must fit"),
-            (occurred_at % 1_000_000_000).try_into().expect("must fit"),
+            (occurred_at / 1_000).try_into().expect("must fit"),
+            (occurred_at % 1_000).try_into().expect("must fit"),
         );
+        let id = i64::try_from(event.sortable_id()).map_err(|e| {
+            Error::new(ErrorKind::Unstructured(format!(
+                "exceeded event id space: {}",
+                e
+            )))
+        })?;
         Ok(BuiltinTableUpdate {
             id: self.resolve_builtin_table(&MZ_AUDIT_EVENTS),
             row: Row::pack_slice(&[
-                Datum::Uuid(id),
+                Datum::Int64(id),
                 Datum::String(&format!("{}", event_type)),
                 Datum::String(&format!("{}", object_type)),
                 event_details,

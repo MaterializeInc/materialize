@@ -2914,10 +2914,10 @@ name = "mz-audit-log"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-ore",
  "serde",
  "serde_json",
  "serde_plain",
- "uuid 1.1.2",
 ]
 
 [[package]]
