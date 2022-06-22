@@ -395,6 +395,16 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: zippy-kafka-sources-short
+    label: "Short Zippy"
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: zippy
+          args: [--scenario=KafkaSources, --actions=200]
+
   - id: kafka-exactly-once
     label: Kafka exactly-once tests
     depends_on: build-x86_64

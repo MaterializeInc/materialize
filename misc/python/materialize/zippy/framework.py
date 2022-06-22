@@ -85,18 +85,18 @@ class Scenario:
 class Test:
     """A Zippy test, consisting of a sequence of actions."""
 
-    def __init__(self, scenario: Scenario, max_actions: int = 20) -> None:
+    def __init__(self, scenario: Scenario, actions: int) -> None:
         """Generate a new Zippy test.
 
         Args:
             scenario: The Scenario to pick actions from.
-            max_actions: The number of actions to generate.
+            actions: The number of actions to generate.
         """
         self._scenario = scenario
         self._actions: List[Action] = []
         self._capabilities = Capabilities()
 
-        for i in range(0, max_actions):
+        for i in range(0, actions):
             action_class = self._pick_action_class()
             action = action_class(capabilities=self._capabilities)
             self._actions.append(action)
