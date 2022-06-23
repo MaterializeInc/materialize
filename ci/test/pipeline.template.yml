@@ -397,6 +397,7 @@ steps:
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
+    depends_on: build-x86_64
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64
