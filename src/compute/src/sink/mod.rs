@@ -7,10 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-mod kafka;
 mod metrics;
 mod persist_sink;
 mod tail;
 
-pub(crate) use metrics::KafkaBaseMetrics;
 pub use metrics::SinkBaseMetrics;

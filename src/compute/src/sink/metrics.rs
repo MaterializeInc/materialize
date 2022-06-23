@@ -9,58 +9,17 @@
 
 //! Metrics that sinks report.
 
-use mz_ore::{
-    metric,
-    metrics::{IntCounterVec, MetricsRegistry, UIntGaugeVec},
-};
-
-/// Metrics reported by each kafka sink.
-#[derive(Clone)]
-pub struct KafkaBaseMetrics {
-    pub(crate) messages_sent_counter: IntCounterVec,
-    pub(crate) message_send_errors_counter: IntCounterVec,
-    pub(crate) message_delivery_errors_counter: IntCounterVec,
-    pub(crate) rows_queued: UIntGaugeVec,
-}
-
-impl KafkaBaseMetrics {
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
-        Self {
-            messages_sent_counter: registry.register(metric!(
-                name: "mz_kafka_messages_sent_total",
-                help: "The number of messages the Kafka producer successfully sent for this sink",
-                var_labels: ["topic", "sink_id", "worker_id"],
-            )),
-            message_send_errors_counter: registry.register(metric!(
-                name: "mz_kafka_message_send_errors_total",
-                help: "The number of times the Kafka producer encountered an error on send",
-                var_labels: ["topic", "sink_id", "worker_id"],
-            )),
-            message_delivery_errors_counter: registry.register(metric!(
-                name: "mz_kafka_message_delivery_errors_total",
-                help: "The number of messages that the Kafka producer could not deliver to the topic",
-                var_labels: ["topic", "sink_id", "worker_id"],
-            )),
-            rows_queued: registry.register(metric!(
-                name: "mz_kafka_sink_rows_queued",
-                help: "The current number of rows queued by the Kafka sink operator (note that one row can generate multiple Kafka messages)",
-                var_labels: ["topic", "sink_id", "worker_id"],
-            )),
-        }
-    }
-}
+use mz_ore::metrics::MetricsRegistry;
 
 /// TODO(undocumented)
 #[derive(Clone)]
 pub struct SinkBaseMetrics {
-    pub(crate) kafka: KafkaBaseMetrics,
+    // TODO(teskje): Collect metrics for persist sinks.
 }
 
 impl SinkBaseMetrics {
     /// TODO(undocumented)
-    pub fn register_with(registry: &MetricsRegistry) -> Self {
-        Self {
-            kafka: KafkaBaseMetrics::register_with(registry),
-        }
+    pub fn register_with(_registry: &MetricsRegistry) -> Self {
+        Self {}
     }
 }

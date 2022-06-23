@@ -31,24 +31,12 @@ impl<G> SinkRender<G> for PersistSinkConnection
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn uses_keys(&self) -> bool {
-        false
-    }
-
-    fn get_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
-    fn get_relation_key_indices(&self) -> Option<&[usize]> {
-        None
-    }
-
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
         _sink: &SinkDesc,
         sink_id: GlobalId,
-        sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
+        sinked_collection: Collection<G, Row, Diff>,
     ) -> Option<Rc<dyn Any>>
     where
         G: Scope<Timestamp = Timestamp>,
@@ -109,7 +97,7 @@ where
                     .open()
                     .await
                     .expect("could not open persist client")
-                    .open_writer::<Row, Row, Timestamp, Diff>(shard_id)
+                    .open_writer::<(), Row, Timestamp, Diff>(shard_id)
                     .await
                     .expect("could not open persist shard");
 
@@ -126,10 +114,8 @@ where
                     input.for_each(|_cap, data| {
                         data.swap(&mut buffer);
 
-                        for ((key, value), ts, diff) in buffer.drain(..) {
-                            let key = key.unwrap_or_default();
-                            let value = value.unwrap_or_default();
-                            stash.entry(ts).or_default().push(((key, value), ts, diff));
+                        for (row, ts, diff) in buffer.drain(..) {
+                            stash.entry(ts).or_default().push((((), row), ts, diff));
                         }
                     });
 
