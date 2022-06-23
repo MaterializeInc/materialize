@@ -68,9 +68,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+use std::fmt::Formatter;
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
+use std::{fmt, thread};
 
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
@@ -216,7 +217,7 @@ pub struct CreateSourceStatementReady {
 /// An operation that is deferred while waiting for a lock.
 enum Deferred {
     Plan(DeferredPlan),
-    GroupCommit,
+    GroupCommit(WriteTimestamp),
 }
 
 /// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
@@ -353,6 +354,16 @@ pub struct WriteTimestamp {
     timestamp: Timestamp,
     /// Timestamp to advance the appended table to.
     advance_to: Timestamp,
+}
+
+impl fmt::Display for WriteTimestamp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "timestamp:{}, advance_to:{}",
+            self.timestamp, self.advance_to
+        )
+    }
 }
 
 /// State provided to a catalog transaction closure.
@@ -1027,7 +1038,9 @@ impl<S: Append + 'static> Coordinator<S> {
                                 self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                                     .await;
                             }
-                            Deferred::GroupCommit => self.group_commit().await,
+                            Deferred::GroupCommit(write_timestamp) => {
+                                self.group_commit(write_timestamp).await
+                            }
                         }
                     }
                     // N.B. if no deferred plans, write lock is released by drop
@@ -1110,11 +1123,17 @@ impl<S: Append + 'static> Coordinator<S> {
             });
         } else {
             match Arc::clone(&self.write_lock).try_lock_owned() {
-                Ok(_guard) => self.group_commit(WriteTimestamp {
+                Ok(_guard) => {
+                    self.group_commit(WriteTimestamp {
+                        timestamp,
+                        advance_to,
+                    })
+                    .await
+                }
+                Err(_) => self.defer_write(Deferred::GroupCommit(WriteTimestamp {
                     timestamp,
                     advance_to,
-                }).await,
-                Err(_) => self.defer_write(Deferred::GroupCommit),
+                })),
             };
         }
     }
@@ -5686,7 +5705,7 @@ impl<S: Append + 'static> Coordinator<S> {
     fn defer_write(&mut self, deferred: Deferred) {
         let id = match &deferred {
             Deferred::Plan(plan) => plan.session.conn_id().to_string(),
-            Deferred::GroupCommit => "group_commit".to_string(),
+            Deferred::GroupCommit(write_timestamp) => format!("group_commit{write_timestamp}"),
         };
         self.write_lock_wait_group.push_back(deferred);
 
