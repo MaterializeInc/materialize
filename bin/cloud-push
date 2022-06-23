@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 if [[ $# -ne 1 ]]; then
-    die "usage: stage-cloud DOCKER-HUB-USERNAME"
+    die "usage: $0 DOCKER-HUB-USERNAME"
 fi
 username=$1
 
