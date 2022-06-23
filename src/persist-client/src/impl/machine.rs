@@ -223,7 +223,7 @@ where
                             "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
                             self.shard_id(),
                             as_of,
-                            upper,
+                            upper.elements(),
                             retry.next_sleep()
                         );
                     } else {
@@ -498,6 +498,7 @@ where
         self.update_state(current).await;
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn update_state(&mut self, current: Option<VersionedData>) {
         let current = match current {
             Some(x) => x,
