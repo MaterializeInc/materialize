@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# cluster-psql — connect to materialized in Minikube (as deployed by cluster-dev).
+# cluster-psql — connect to environmentd in Minikube (as deployed by cluster-dev).
 
 kubectl apply --context=minikube -f - <<EOF
 apiVersion: v1
@@ -24,4 +24,4 @@ spec:
     command: [sleep, "1000000000"]
 EOF
 kubectl wait --for=condition=ready pod psql
-kubectl exec -it psql -- psql postgres://materialize:materialize@materialized.default.svc.cluster.local:6875/materialize
+kubectl exec -it psql -- psql postgres://materialize:materialize@environmentd.default.svc.cluster.local:6875/materialize
