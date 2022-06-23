@@ -384,7 +384,7 @@ class Composition:
         ports = self.compose["services"][service]["ports"]
         if not ports:
             raise UIError(f"service f{service!r} does not expose any ports")
-        private_port = str(ports[0]).split(":")[0]
+        private_port = str(ports[0]).split(":")[-1]
         return self.port(service, private_port)
 
     def workflow(self, name: str, *args: str) -> None:
