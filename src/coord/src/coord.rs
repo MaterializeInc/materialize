@@ -381,7 +381,9 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
         self.work.extend(ids);
     }
 
-    // Returns the set of tables to advance. Blocks forever if there are none.
+    /// Returns the set of tables to advance. Blocks forever if there are none.
+    ///
+    /// This method is cancel-safe because there are no await points when the set is non-empty.
     async fn recv(&mut self) -> AdvanceLocalInput<T> {
         if self.set.is_empty() {
             futures::future::pending::<()>().await;
@@ -896,54 +898,43 @@ impl<S: Append + 'static> Coordinator<S> {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        {
-            // An explicit SELECT or INSERT on a table will bump the table's timestamps,
-            // but there are cases where timestamps are not bumped but we expect the closed
-            // timestamps to advance (`AS OF X`, TAILing views over RT sources and
-            // tables). To address these, spawn a task that forces table timestamps to
-            // close on a regular interval. This roughly tracks the behavior of realtime
-            // sources that close off timestamps on an interval.
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut interval = tokio::time::interval(self.catalog.config().timestamp_frequency);
-            task::spawn(|| "coordinator_advance_local_inputs", async move {
-                loop {
-                    interval.tick().await;
-                    // If sending fails, the main thread has shutdown.
-                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        // Spawn a watcher task that listens for compute service status changes and
-        // reports them to the coordinator.
-        task::spawn(|| "compute_service_watcher", {
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut events = self.dataflow_client.watch_compute_services();
-            async move {
-                while let Some(event) = events.next().await {
-                    if internal_cmd_tx
-                        .send(Message::ComputeInstanceStatus(event))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        });
+        // An explicit SELECT or INSERT on a table will bump the table's timestamps,
+        // but there are cases where timestamps are not bumped but we expect the closed
+        // timestamps to advance (`AS OF X`, TAILing views over RT sources and
+        // tables). To address these, spawn a task that forces table timestamps to
+        // close on a regular interval. This roughly tracks the behavior of realtime
+        // sources that close off timestamps on an interval.
+        let mut advance_local_inputs_interval =
+            tokio::time::interval(self.catalog.config().timestamp_frequency);
+        // Watcher that listens for and reports compute service status changes.
+        let mut compute_events = self.dataflow_client.watch_compute_services();
 
         loop {
+            // Before adding a branch to this select loop, please ensure that the branch is
+            // cancellation safe and add a comment explaining why. You can refer here for more
+            // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
             let msg = select! {
                 // Order matters here. We want to process internal commands
                 // before processing external commands.
                 biased;
 
+                // `recv()` on `UnboundedReceiver` is cancel-safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 Some(m) = internal_cmd_rx.recv() => m,
+                // `next()` on any stream is cancel-safe:
+                // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
+                Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
+                // `tick()` on `Interval` is cancel-safe:
+                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
+                // See [`mz_dataflow_types::client::controller::Controller::ready`] for notes
+                // on why this is cancel-safe.
                 m = self.dataflow_client.ready() => {
                     let () = m.unwrap();
                     Message::ControllerReady
                 }
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 m = cmd_rx.recv() => match m {
                     None => break,
                     Some(m) => Message::Command(m),
@@ -956,6 +947,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // advance_tables is fully emptied, this allows us to replace an old request
                 // with a new one, avoiding duplication of work, which wouldn't be possible if
                 // we had already sent all AdvanceLocalInput messages on a channel.
+                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
                 inputs = self.advance_tables.recv() => {
                     Message::AdvanceLocalInput(inputs)
                 },
