@@ -390,6 +390,40 @@ $ set-regex match=u\d+ replacement=UID
 
 As the `EXPLAIN` output contains parts that change between invocations, a `$ set-regex` is required to produce a stable test.
 
+## Executing a statement that returns a JSON using Jq
+
+It is possible to use the Jq library to operate on any SQL statement that returns a JSON and assert against the result. The result
+needs to be JSON itself. For example:
+
+```
+* EXPLAIN PHYSICAL PLAN AS JSON FOR SELECT MIN(f1) FROM physical_plan;
+..|.Hierarchical?
+{
+"Bucketed": {
+   "aggr_funcs": [
+      "MinInt32"
+   ]
+   }
+}
+```
+
+The first line of the command is the SQL statement to run. The second line is the Jq expression and the rest of the output is the
+expected JSON result from that expression.
+
+The two JSON values don't have to be exactly equal. The "actual" value is only required to be "contained" inside "expected".
+
+Some Jq commands also return empty lines, those are filtered out before processing.
+
+Jq is also a command line tool that can be used to obtain the expected JSON output:
+
+```
+echo "EXPLAIN PHYSICAL PLAN AS JSON FOR SELECT MIN(f1) FROM physical_plan;" | \
+psql -p 6875 -h 127.0.0.1 -U materialize -t -qAtX | \
+jq '..|.Hierarchical?' | \
+grep -v ^$ | \
+grep -v null
+```
+
 # Using Variables
 
 > :warning: **all testdrive variables are initialized to their ultimate value at the start of the test**

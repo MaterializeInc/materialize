@@ -186,6 +186,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "assert-json-diff"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e4f2b81832e72834d7518d8487a0396a28cc408186a2e8854c0f98011faf12"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "assert_cmd"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2467,6 +2477,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "jq-rs"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9cfaeae42ef96b227ab787558cc7bbd5f1dfe96b4df7c63f92853017751b0e4"
+dependencies = [
+ "jq-sys",
+]
+
+[[package]]
+name = "jq-src"
+version = "0.4.1"
+source = "git+https://github.com/philip-stoev/jq-src#867a2677ac8faefa09170949e5c5f80e94e5d7f8"
+dependencies = [
+ "autotools",
+]
+
+[[package]]
+name = "jq-sys"
+version = "0.2.2"
+source = "git+https://github.com/philip-stoev/jq-sys#64e881fd8605adef9c4d3b75c355a5fcbf65c372"
+dependencies = [
+ "jq-src",
+ "pkg-config",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4272,6 +4308,7 @@ name = "mz-testdrive"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert-json-diff",
  "async-compression",
  "async-trait",
  "atty",
@@ -4291,6 +4328,8 @@ dependencies = [
  "globset",
  "http",
  "itertools",
+ "jq-rs",
+ "jq-sys",
  "junit-report",
  "maplit",
  "md-5",

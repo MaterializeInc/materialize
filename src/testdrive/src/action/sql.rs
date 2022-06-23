@@ -33,7 +33,7 @@ use mz_sql_parser::ast::{
 };
 
 use crate::action::{Action, ControlFlow, State};
-use crate::parser::{FailSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
+use crate::parser::{FailSqlCommand, JqSqlCommand, SqlCommand, SqlExpectedError, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
@@ -367,6 +367,96 @@ impl SqlAction {
                         Ok(())
                     }
                 }
+            }
+        }
+    }
+}
+
+pub struct JqSqlAction {
+    query: String,
+    jq_string: String,
+    expected_json: serde_json::Value,
+}
+
+pub fn build_jq_sql(cmd: JqSqlCommand) -> Result<JqSqlAction, anyhow::Error> {
+    let stmts = mz_sql_parser::parser::parse_statements(&cmd.query)
+        .with_context(|| format!("unable to parse SQL: {}", cmd.query))?;
+    if stmts.len() != 1 {
+        bail!("expected one statement, but got {}", stmts.len());
+    }
+
+    match serde_json::from_str(&cmd.expected_output) {
+        Err(e) => {
+            bail!("jq JSON is not valid: {e}")
+        }
+        Ok(expected_output) => Ok(JqSqlAction {
+            query: cmd.query,
+            jq_string: cmd.jq_string,
+            expected_json: expected_output,
+        }),
+    }
+}
+
+#[async_trait]
+impl Action for JqSqlAction {
+    async fn undo(&self, _state: &mut State) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
+        let query = &self.query;
+        print_query(&query);
+
+        let stmt = state
+            .pgclient
+            .prepare(query)
+            .await
+            .context("preparing SQL query for jq failed")?;
+        let result: Vec<_> = state
+            .pgclient
+            .query(&stmt, &[])
+            .await
+            .context("executing SQL query for jq failed")?
+            .into_iter()
+            .map(|row| decode_row(state, row))
+            .collect::<Result<_, _>>()?;
+
+        if result.len() != 1 {
+            bail!("expected one row, but got {}", result.len());
+        }
+
+        let row = &result[0];
+
+        if row.len() != 1 {
+            bail!("expected one column, but got {}", row.len());
+        }
+
+        let jq_result = match jq_rs::run(&self.jq_string, &row[0]) {
+            Err(e) => {
+                bail!("jq error: {}", e);
+            }
+
+            Ok(o) => o.replace("null", ""),
+        };
+
+        let actual_json = match serde_json::from_str::<serde_json::Value>(&jq_result) {
+            Err(e) => {
+                bail!("actual output is not a JSON: {} output: {}", e, jq_result);
+            }
+            Ok(actual_json) => actual_json,
+        };
+
+        match assert_json_diff::assert_json_matches_no_panic(
+            &actual_json,
+            &self.expected_json,
+            assert_json_diff::Config::new(assert_json_diff::CompareMode::Inclusive),
+        ) {
+            Err(e) => {
+                bail!("Actual and expected JSONs do not match: {e}")
+            }
+            Ok(_) => {
+                println!("jq output matches.");
+                Ok(ControlFlow::Continue)
             }
         }
     }

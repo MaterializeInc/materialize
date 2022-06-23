@@ -206,3 +206,13 @@ COMMIT;
 
 > SELECT COUNT(*) FROM postgres_connect;
 2
+
+# jq expressions
+> CREATE TABLE physical_plan (f1 INTEGER);
+
+* EXPLAIN PHYSICAL PLAN AS JSON FOR SELECT MIN(f1) FROM physical_plan;
+..|.Hierarchical?
+{
+"Bucketed": {
+   }
+}

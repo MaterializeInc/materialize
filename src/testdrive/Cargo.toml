@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.65"
+assert-json-diff = "2.0.2"
 async-compression = { version = "0.3.14", features = ["tokio", "gzip"] }
 async-trait = "0.1.57"
 atty = "0.2.0"
@@ -28,6 +29,8 @@ globset = "0.4.9"
 http = "0.2.8"
 itertools = "0.10.4"
 junit-report = "0.7.1"
+jq-rs = "0.4.1"
+jq-sys = { version = "0.2.2", features = ["bundled"] }
 once_cell = "1.14.0"
 maplit = "1.0.2"
 md-5 = "0.10.4"

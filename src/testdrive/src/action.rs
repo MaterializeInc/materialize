@@ -658,6 +658,11 @@ pub(crate) async fn build(
                 }
                 Box::new(sql::build_sql(sql).map_err(wrap_err)?)
             }
+            Command::JqSql(mut sql) => {
+                sql.query = subst(&sql.query)?;
+                sql.expected_output = subst(&sql.expected_output)?;
+                Box::new(sql::build_jq_sql(sql).map_err(wrap_err)?)
+            }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
                 sql.expected_error = match &sql.expected_error {

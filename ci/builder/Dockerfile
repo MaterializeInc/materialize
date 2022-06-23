@@ -78,6 +78,8 @@ COPY --from=crosstool /opt/x-tools /opt/x-tools
 # Install dependencies needed by any CI job. Not all of these are available in
 # the Ubuntu repositories.
 RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    autoconf \
+    automake \
     bsdmainutils \
     ca-certificates \
     cmake \
@@ -88,6 +90,7 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     git \
     gnupg2 \
     jq \
+    libtool \
     libpq-dev \
     lld \
     make \

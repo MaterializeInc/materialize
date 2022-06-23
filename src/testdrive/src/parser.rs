@@ -29,6 +29,7 @@ pub struct PosCommand {
 pub enum Command {
     Builtin(BuiltinCommand),
     Sql(SqlCommand),
+    JqSql(JqSqlCommand),
     FailSql(FailSqlCommand),
 }
 
@@ -57,6 +58,13 @@ pub struct SqlCommand {
 }
 
 #[derive(Debug, Clone)]
+pub struct JqSqlCommand {
+    pub query: String,
+    pub jq_string: String,
+    pub expected_output: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct FailSqlCommand {
     pub query: String,
     pub expected_error: SqlExpectedError,
@@ -78,6 +86,7 @@ pub(crate) fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, Pos
             Some('$') => Command::Builtin(parse_builtin(line_reader)?),
             Some('>') => Command::Sql(parse_sql(line_reader)?),
             Some('?') => Command::Sql(parse_explain_sql(line_reader)?),
+            Some('*') => Command::JqSql(parse_jq_sql(line_reader)?),
             Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
             Some('#') => {
                 // Comment line.
@@ -228,6 +237,36 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
     })
 }
 
+fn parse_jq_sql(line_reader: &mut LineReader) -> Result<JqSqlCommand, PosError> {
+    let (pos, line1) = line_reader.next().unwrap();
+    let query = line1[1..].trim().to_string();
+
+    let line2 = slurp_one(line_reader);
+    let jq_string = match line2 {
+        Some((_, line2)) => line2,
+        None => {
+            return Err(PosError {
+                pos: Some(pos),
+                source: anyhow!("jq SQL command is missing jq string"),
+            });
+        }
+    };
+
+    let expected_output: String = line_reader
+        .inner
+        .lines()
+        .take_while(|l| !is_sigil(l.chars().next()))
+        .collect();
+
+    slurp_all(line_reader);
+
+    Ok(JqSqlCommand {
+        query,
+        jq_string,
+        expected_output,
+    })
+}
+
 fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, PosError> {
     let (pos, line1) = line_reader.next().unwrap();
     let line2 = slurp_one(line_reader);
@@ -325,7 +364,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') | Some('?') => return None,
+            Some('$') | Some('>') | Some('!') | Some('?') | Some('*') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -425,7 +464,7 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn is_sigil(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!') | Some('?'))
+    matches!(c, Some('$') | Some('>') | Some('!') | Some('?') | Some('*'))
 }
 
 struct BuiltinReader<'a> {
