@@ -30,17 +30,12 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 
 use mz_build_info::{build_info, BuildInfo};
-use mz_dataflow_types::client::controller::ClusterReplicaSizeMap;
+use mz_dataflow_types::client::controller::{ClusterReplicaSizeMap, ControllerConfig};
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_frontegg_auth::FronteggAuthentication;
-use mz_orchestrator::Orchestrator;
-use mz_orchestrator_kubernetes::{KubernetesOrchestrator, KubernetesOrchestratorConfig};
-use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
-use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task;
-use mz_persist_client::PersistLocation;
 use mz_secrets::SecretsController;
 use mz_secrets_filesystem::FilesystemSecretsController;
 use mz_secrets_kubernetes::{KubernetesSecretsController, KubernetesSecretsControllerConfig};
@@ -91,12 +86,8 @@ pub struct Config {
     pub cors_allowed_origin: AllowOrigin,
 
     // === Storage options. ===
-    /// Where the persist library should store its data.
-    pub persist_location: PersistLocation,
     /// Postgres connection string for catalog's stash.
     pub catalog_postgres_stash: String,
-    /// Postgres connection string for storage's stash.
-    pub storage_postgres_stash: String,
 
     // === Connection options. ===
     /// Configuration for source and sink connections created by the storage
@@ -105,10 +96,8 @@ pub struct Config {
     pub connection_context: ConnectionContext,
 
     // === Platform options. ===
-    /// Configuration of service orchestration.
-    pub orchestrator: OrchestratorConfig,
-
-    // === Secrets Storage options. ===
+    /// Storage and compute controller configuration.
+    pub controller: ControllerConfig,
     /// Configuration for a secrets controller.
     pub secrets_controller: SecretsControllerConfig,
 
@@ -155,31 +144,6 @@ pub enum TlsMode {
         /// The path to a TLS certificate authority.
         ca: PathBuf,
     },
-}
-
-/// Configuration for the service orchestrator.
-#[derive(Debug, Clone)]
-pub struct OrchestratorConfig {
-    /// Which orchestrator backend to use.
-    pub backend: OrchestratorBackend,
-    /// The storaged image reference to use.
-    pub storaged_image: String,
-    /// The computed image reference to use.
-    pub computed_image: String,
-    /// Whether or not COMPUTE and STORAGE processes should die when their connection with the
-    /// ADAPTER is lost.
-    pub linger: bool,
-    /// A tracing configuration to inject into all created services.
-    pub tracing: TracingCliArgs,
-}
-
-/// The orchestrator itself.
-#[derive(Debug, Clone)]
-pub enum OrchestratorBackend {
-    /// A Kubernetes orchestrator.
-    Kubernetes(KubernetesOrchestratorConfig),
-    /// A local process orchestrator.
-    Process(ProcessOrchestratorConfig),
 }
 
 /// Configuration for the service orchestrator.
@@ -252,24 +216,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Load the coordinator catalog from disk.
     let coord_storage = mz_coord::catalog::storage::Connection::open(stash).await?;
 
-    // Initialize orchestrator.
-    let orchestrator: Box<dyn Orchestrator> = match config.orchestrator.backend {
-        OrchestratorBackend::Kubernetes(config) => Box::new(
-            KubernetesOrchestrator::new(config)
-                .await
-                .context("connecting to kubernetes")?,
-        ),
-        OrchestratorBackend::Process(config) => Box::new(ProcessOrchestrator::new(config).await?),
-    };
-    let orchestrator = mz_dataflow_types::client::controller::OrchestratorConfig {
-        orchestrator: Box::new(TracingOrchestrator::new(
-            orchestrator,
-            config.orchestrator.tracing,
-        )),
-        computed_image: config.orchestrator.computed_image,
-        linger: config.orchestrator.linger,
-    };
-
     // Initialize secrets controller.
     let secrets_controller = match config.secrets_controller {
         SecretsControllerConfig::LocalFileSystem(secrets_storage) => {
@@ -304,15 +250,7 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     };
 
     // Initialize dataflow controller.
-    let storage_controller = mz_dataflow_types::client::controller::storage::Controller::new(
-        config.storage_postgres_stash,
-        config.persist_location,
-        orchestrator.orchestrator.namespace("storage"),
-        config.orchestrator.storaged_image,
-    )
-    .await;
-    let dataflow_controller =
-        mz_dataflow_types::client::Controller::new(orchestrator, storage_controller);
+    let dataflow_controller = mz_dataflow_types::client::Controller::new(config.controller).await;
 
     // Initialize coordinator.
     let (coord_handle, coord_client) = mz_coord::serve(mz_coord::Config {

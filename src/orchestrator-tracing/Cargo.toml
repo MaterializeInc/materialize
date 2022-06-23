@@ -7,16 +7,16 @@ rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 async-trait = "0.1.56"
-clap = { version = "3.1.18", features = ["env", "derive"] }
+clap = { version = "3.2.5", features = ["env", "derive"] }
 futures-core = "0.3.21"
 http = "0.2.8"
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["tracing_"] }
-mz-repr = { path = "../repr" }
+mz-repr = { path = "../repr", optional = true }
 tracing-subscriber = { version = "0.3.11", default-features = false }
 opentelemetry = { version = "0.17", features = ["rt-tokio", "trace"] }
 
 [features]
-tokio-console = ["mz-ore/tokio-console"]
+tokio-console = ["mz-ore/tokio-console", "mz-repr"]

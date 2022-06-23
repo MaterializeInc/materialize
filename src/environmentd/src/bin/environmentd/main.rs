@@ -37,14 +37,16 @@ use tower_http::cors::{self, AllowOrigin};
 use url::Url;
 use uuid::Uuid;
 
+use mz_dataflow_types::client::controller::ControllerConfig;
 use mz_dataflow_types::connections::ConnectionContext;
-use mz_environmentd::{
-    OrchestratorBackend, OrchestratorConfig, SecretsControllerConfig, TlsConfig, TlsMode,
-};
+use mz_environmentd::{SecretsControllerConfig, TlsConfig, TlsMode};
 use mz_frontegg_auth::{FronteggAuthentication, FronteggConfig};
-use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, KubernetesOrchestratorConfig};
-use mz_orchestrator_process::ProcessOrchestratorConfig;
-use mz_orchestrator_tracing::TracingCliArgs;
+use mz_orchestrator::Orchestrator;
+use mz_orchestrator_kubernetes::{
+    KubernetesImagePullPolicy, KubernetesOrchestrator, KubernetesOrchestratorConfig,
+};
+use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
+use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
 use mz_ore::cgroup::{detect_memory_limit, MemoryLimit};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::id_gen::PortAllocator;
@@ -133,7 +135,7 @@ pub struct Args {
     // === Platform options. ===
     /// The service orchestrator implementation to use.
     #[structopt(long, default_value = "process", arg_enum)]
-    orchestrator: Orchestrator,
+    orchestrator: OrchestratorKind,
     /// Labels to apply to all services created by the orchestrator in the form
     /// `KEY=VALUE`.
     #[structopt(long, hide = true)]
@@ -369,12 +371,12 @@ pub struct Args {
 }
 
 #[derive(ArgEnum, Debug, Clone)]
-enum Orchestrator {
+enum OrchestratorKind {
     Kubernetes,
     Process,
 }
 
-impl Orchestrator {
+impl OrchestratorKind {
     /// Default linger value for orchestrator type.
     ///
     /// Locally it is convenient for all the processes to be cleaned up when environmentd dies
@@ -431,7 +433,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // Configure tracing to log the service name when using the process
     // orchestrator, which intermingles log output from multiple services. Other
     // orchestrators separate log output from different services.
-    args.tracing.log_prefix = if matches!(args.orchestrator, Orchestrator::Process) {
+    args.tracing.log_prefix = if matches!(args.orchestrator, OrchestratorKind::Process) {
         Some("environmentd".to_string())
     } else {
         None
@@ -513,11 +515,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         ])
     };
 
-    // Configure orchestrator.
-    let orchestrator = OrchestratorConfig {
-        backend: match args.orchestrator {
-            Orchestrator::Kubernetes => {
-                OrchestratorBackend::Kubernetes(KubernetesOrchestratorConfig {
+    // Configure storage.
+    fs::create_dir_all(&args.data_directory)
+        .with_context(|| format!("creating data directory: {}", args.data_directory.display()))?;
+    let catalog_postgres_stash = args.catalog_postgres_stash;
+
+    // Configure controller.
+    let cwd = env::current_dir().context("retrieving current working directory")?;
+    let orchestrator: Box<dyn Orchestrator> = match args.orchestrator {
+        OrchestratorKind::Kubernetes => Box::new(
+            runtime
+                .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
                     context: args.kubernetes_context.clone(),
                     service_labels: args
                         .orchestrator_service_label
@@ -532,57 +540,57 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     service_account: args.kubernetes_service_account,
                     image_pull_policy: args.kubernetes_image_pull_policy,
                     user_defined_secret: args.user_defined_secret.clone().unwrap_or_default(),
-                })
-            }
-            Orchestrator::Process => {
-                OrchestratorBackend::Process(ProcessOrchestratorConfig {
-                    // Look for binaries in the same directory as the
-                    // running binary. When running via `cargo run`, this
-                    // means that debug binaries look for other debug
-                    // binaries and release binaries look for other release
-                    // binaries.
-                    image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
-                    port_allocator: Arc::new(PortAllocator::new(
-                        args.base_service_port,
-                        args.base_service_port
-                            .checked_add(1000)
-                            .expect("Port number overflow, base-service-port too large."),
-                    )),
-                    suppress_output: false,
-                    data_dir: args.data_directory.clone(),
-                    command_wrapper: args
-                        .process_orchestrator_wrapper
-                        .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
-                })
-            }
-        },
-        storaged_image: args.storaged_image.expect("clap enforced"),
-        computed_image: args.computed_image.expect("clap enforced"),
+                }))
+                .context("creating kubernetes orchestrator")?,
+        ),
+        OrchestratorKind::Process => {
+            Box::new(
+                runtime
+                    .block_on(ProcessOrchestrator::new(ProcessOrchestratorConfig {
+                        // Look for binaries in the same directory as the
+                        // running binary. When running via `cargo run`, this
+                        // means that debug binaries look for other debug
+                        // binaries and release binaries look for other release
+                        // binaries.
+                        image_dir: env::current_exe()?.parent().unwrap().to_path_buf(),
+                        port_allocator: Arc::new(PortAllocator::new(
+                            args.base_service_port,
+                            args.base_service_port
+                                .checked_add(1000)
+                                .expect("Port number overflow, base-service-port too large."),
+                        )),
+                        suppress_output: false,
+                        data_dir: args.data_directory.clone(),
+                        command_wrapper: args
+                            .process_orchestrator_wrapper
+                            .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
+                    }))
+                    .context("creating process orchestrator")?,
+            )
+        }
+    };
+    let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+    let controller = ControllerConfig {
+        orchestrator,
         linger: args
             .orchestrator_linger
             .unwrap_or_else(|| args.orchestrator.default_linger_value()),
-        tracing: args.tracing.clone(),
-    };
-
-    // Configure storage.
-    let data_directory = args.data_directory;
-    fs::create_dir_all(&data_directory)
-        .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
-    let cwd = env::current_dir().context("retrieving current working directory")?;
-    let persist_location = PersistLocation {
-        blob_uri: match args.persist_blob_url {
-            // TODO: need to handle non-UTF-8 paths here.
-            None => format!(
-                "file://{}/{}/persist/blob",
-                cwd.display(),
-                data_directory.display()
-            ),
-            Some(blob_url) => blob_url.to_string(),
+        persist_location: PersistLocation {
+            blob_uri: match args.persist_blob_url {
+                // TODO: need to handle non-UTF-8 paths here.
+                None => format!(
+                    "file://{}/{}/persist/blob",
+                    cwd.display(),
+                    args.data_directory.display()
+                ),
+                Some(blob_url) => blob_url.to_string(),
+            },
+            consensus_uri: args.persist_consensus_url.to_string(),
         },
-        consensus_uri: args.persist_consensus_url.to_string(),
+        storage_stash_url: args.storage_postgres_stash,
+        storaged_image: args.storaged_image.expect("clap enforced"),
+        computed_image: args.computed_image.expect("clap enforced"),
     };
-    let catalog_postgres_stash = args.catalog_postgres_stash;
-    let storage_postgres_stash = args.storage_postgres_stash;
 
     // When inside a cgroup with a cpu limit,
     // the logical cpus can be lower than the physical cpus.
@@ -663,19 +671,19 @@ max log level: {max_log_level}",
     }
 
     let secrets_path = match args.orchestrator {
-        Orchestrator::Kubernetes => {
+        OrchestratorKind::Kubernetes => {
             PathBuf::from(args.user_defined_secret_mount_path.unwrap_or_default())
         }
-        Orchestrator::Process => data_directory.join("secrets"),
+        OrchestratorKind::Process => args.data_directory.join("secrets"),
     };
     let secrets_controller = match args.orchestrator {
-        Orchestrator::Kubernetes => SecretsControllerConfig::Kubernetes {
+        OrchestratorKind::Kubernetes => SecretsControllerConfig::Kubernetes {
             context: args.kubernetes_context,
             user_defined_secret: args.user_defined_secret.unwrap_or_default(),
             user_defined_secret_mount_path: secrets_path.clone(),
             refresh_pod_name: args.pod_name.unwrap_or_default(),
         },
-        Orchestrator::Process => SecretsControllerConfig::LocalFileSystem(secrets_path.clone()),
+        OrchestratorKind::Process => SecretsControllerConfig::LocalFileSystem(secrets_path.clone()),
     };
 
     let server = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
@@ -688,10 +696,8 @@ max log level: {max_log_level}",
         tls,
         frontegg,
         cors_allowed_origin,
-        persist_location,
         catalog_postgres_stash,
-        storage_postgres_stash,
-        orchestrator,
+        controller,
         secrets_controller,
         unsafe_mode: args.unsafe_mode,
         metrics_registry,

@@ -14,11 +14,11 @@ _shtab_scratch_completion_option_strings=('-h' '--help')
 
 
 
-_shtab_scratch_pos_0_choices='login create mine ssh sftp destroy push completion'
-_shtab_scratch_create___output_format_choices='table csv'
-_shtab_scratch_mine___output_format_choices='table csv'
-_shtab_scratch_destroy___output_format_choices='table csv'
-_shtab_scratch_completion_pos_0_choices='bash zsh tcsh'
+_shtab_scratch_pos_0_choices=('login' 'create' 'mine' 'ssh' 'sftp' 'destroy' 'push' 'completion')
+_shtab_scratch_create___output_format_choices=('table' 'csv')
+_shtab_scratch_mine___output_format_choices=('table' 'csv')
+_shtab_scratch_destroy___output_format_choices=('table' 'csv')
+_shtab_scratch_completion_pos_0_choices=('bash' 'zsh' 'tcsh')
 
 _shtab_scratch_pos_0_nargs=A...
 _shtab_scratch__h_nargs=0
@@ -154,8 +154,9 @@ _shtab_scratch() {
     COMPREPLY=( $(compgen -W "${current_option_strings[*]}" -- "${completing_word}") )
   else
     # use choices & compgen
-    COMPREPLY=( $(compgen -W "${current_action_choices}" -- "${completing_word}"; \
-                  [ -n "${current_action_compgen}" ] \
+    local IFS=$'\n'
+    COMPREPLY=( $(compgen -W "${current_action_choices}" -- "${completing_word}") \
+                $([ -n "${current_action_compgen}" ] \
                   && "${current_action_compgen}" "${completing_word}") )
   fi
 

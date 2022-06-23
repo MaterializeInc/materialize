@@ -2,6 +2,8 @@
 
 ## Prerequisite videos
 
+* [Materialized performance 101](https://drive.google.com/file/d/1BlCFHVJsi6-YfQQpPMaWOhDOvaQDdcWV/view?usp=sharing)
+  (skip forward to 5:13)
 * [Materialized internals 101](https://drive.google.com/file/d/1_SlM-zQR2FifNMeECnFTnwRcTc7zxRuc/view).
 * [Introduction to one-off queries](https://drive.google.com/file/d/1LsyMY1OMmDS7uQS6cT6IFmdROGiPB4Im/view?usp=sharing).
 * [Materialize Decorrelation explained in Jamie Brandon’s Blog](https://www.scattered-thoughts.net/writing/materialize-decorrelation/).
@@ -21,10 +23,19 @@ Transformations in the compile-time lifecycle of a SQL statement.
 
 * [`SQL ⇒ AST`](https://github.com/materializeinc/materialize/blob/main/src/sql-parser/src/parser.rs#L55).
     * Parsing the SQL query.
-* `AST ⇒ AST`.
-    * [Name resolution](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/names.rs#L1009-L1021).
+* [`AST ⇒ AST`](https://github.com/MaterializeInc/materialize/blob/main/src/coord/src/coord.rs#L1876)
+    * [Resolving names against the catalog.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/names.rs#L1009-L1021)
+        * [`CatalogItemType`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/catalog.rs#L336)
+            lists the kinds of objects that can be resolved against the catalog.
 * [`AST ⇒ HIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/query.rs#L90-L129).
+    * [Resolving column references, column aliases, and table aliases](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/scope.rs)
+    * If the SQL query is a one-off, the outermost `TopK` is converted to a
+      RowSetFinishing at this point.
     * `EXPLAIN RAW` returns the result of transformations up to this point.
+* [`HIR ⇒ HIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/lowering.rs#L149-L150)
+    * Predecorrelation rewrites:
+        * [Split out subquery conditions out as a separate predicate.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/transform_expr.rs#L54)
+        * [Try to rewrite other types of subqueries into EXISTS subqueries.](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/transform_expr.rs#L156)
 * [`HIR ⇒ MIR`](https://github.com/MaterializeInc/materialize/blob/main/src/sql/src/plan/lowering.rs).
     * Decorrelation:
         * Correlated queries are rewritten as graphs with join and distinct.
@@ -34,7 +45,17 @@ Transformations in the compile-time lifecycle of a SQL statement.
         * Machinery for introducing errors for `SELECT` subqueries with more than one return value.
     * `EXPLAIN DECORRELATED` returns the result of transformations up to this point.
 * [`MIR ⇒ MIR`](https://github.com/MaterializeInc/materialize/blob/main/src/transform).
-    * Optimizations:
+    * [If the query is a view
+      definition](https://github.com/MaterializeInc/materialize/blob/main/src/coord/src/catalog.rs#L3325),
+      run per-view logical optimizations against the SQL query. The catalog
+      stores the result of transformations up to this point.
+    * [Construct a dataflow for the query](https://github.com/MaterializeInc/materialize/blob/main/src/coord/src/coord/dataflow_builder.rs):
+        * If the query depends on not-materialized views, the definitions of the
+          not-materialized views get inlined.
+        * For each materialized view that a query depends on, import all of its
+          materializations. (This corresponds to all indexes on that view, which
+          you can see if you call `SHOW INDEXES IN <view>`).
+    * Run optimizations against the dataflow:
         * [Per-view logical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/lib.rs#L282-L337).
         * [Cross-view logical](https://github.com/MaterializeInc/materialize/blob/main/src/transform/src/dataflow.rs#L31-L60).
             * Propagating source information up: optimize_dataflow_monotonic

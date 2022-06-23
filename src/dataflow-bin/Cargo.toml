@@ -7,6 +7,6 @@ rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-clap = { version = "3.1.18", features = ["derive"] }
+clap = { version = "3.2.5", features = ["derive"] }
 mz-ore = { path = "../ore" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }

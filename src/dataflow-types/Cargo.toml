@@ -7,7 +7,7 @@ rust-version = "1.61.0"
 publish = false
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 async-stream = "0.3.3"
 async-trait = "0.1.56"
 aws-config = { version = "0.13.0", default-features = false, features = ["native-tls"] }
@@ -15,7 +15,7 @@ aws-smithy-http = "0.43.0"
 aws-types = { version = "0.13.0", features = ["hardcoded-credentials"] }
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.4"
+crossbeam-channel = "0.5.5"
 derivative = "2.2.0"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.21"
@@ -46,11 +46,9 @@ serde = { version = "1.0.137", features = ["derive"] }
 serde_json = "1.0.81"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.19.2"
-tokio-serde = { version = "0.8.0", features = ["bincode"] }
 tokio-stream = "0.1.9"
-tokio-util = { version = "0.7.3", features = ["codec"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-tower = "0.4.12"
+tower = "0.4.13"
 tracing = "0.1.35"
 tracing-subscriber = "0.3.11"
 url = { version = "2.2.2", features = ["serde"] }

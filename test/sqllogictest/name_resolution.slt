@@ -16,3 +16,10 @@ SELECT * FROM universe.db.schema.foo
 # over qualified types should return an error
 query error qualified name did not have between 1 and 3 components
 SELECT 'true'::universe.database.schema.bool
+
+# Secret values must refer to secrets
+statement ok
+CREATE TABLE not_a_secret (a int);
+
+statement error materialize.public.not_a_secret is not a secret
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (secret = SECRET not_a_secret);

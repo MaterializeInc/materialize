@@ -15,7 +15,7 @@ name = "strconv"
 harness = false
 
 [dependencies]
-anyhow = "1.0.57"
+anyhow = "1.0.58"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.6.1", features = ["serde", "case-insensitive"] }
@@ -31,7 +31,6 @@ mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["bytes", "smallvec"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
-mz-sql-parser = { path = "../sql-parser" }
 num-traits = "0.2.15"
 num_enum = "0.5.7"
 ordered-float = { version = "3.0.0", features = ["serde"] }

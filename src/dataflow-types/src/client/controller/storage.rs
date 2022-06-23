@@ -31,8 +31,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::TryStreamExt as _;
 use futures::stream::{FuturesUnordered, StreamExt};
-use proptest::prelude::{Arbitrary, BoxedStrategy, Just};
-use proptest::strategy::Strategy;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -52,7 +51,8 @@ use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{
-    GenericClient, StorageClient, StorageCommand, StorageResponse, StoragedRemoteClient,
+    GenericClient, ProtoStorageCommand, ProtoStorageResponse, StorageClient, StorageCommand,
+    StorageResponse, StoragedRemoteClient,
 };
 use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
 use crate::Update;
@@ -138,7 +138,7 @@ pub trait StorageController: Debug + Send {
 }
 
 /// Metadata required by a storage instance to read a storage collection
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     pub persist_location: PersistLocation,
     pub timestamp_shard_id: ShardId,
@@ -170,26 +170,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 .parse()
                 .map_err(TryFromProtoError::InvalidShardId)?,
         })
-    }
-}
-
-impl Arbitrary for CollectionMetadata {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // TODO (#12359): derive Arbitrary after CollectionMetadata
-        // gains proper protobuf support.
-        let shard_id = format!("s{}", Uuid::from_bytes([0x00; 16]));
-        Just(CollectionMetadata {
-            persist_location: PersistLocation {
-                blob_uri: "".to_string(),
-                consensus_uri: "".to_string(),
-            },
-            timestamp_shard_id: ShardId::from_str(&shard_id).unwrap(),
-            persist_shard: ShardId::new(),
-        })
-        .boxed()
     }
 }
 
@@ -318,6 +298,10 @@ where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     type Timestamp = T;
 
@@ -749,6 +733,10 @@ where
     T: Timestamp + Lattice + TotalOrder + TryInto<i64> + TryFrom<i64> + Codec64 + Unpin,
     <T as TryInto<i64>>::Error: std::fmt::Debug,
     <T as TryFrom<i64>>::Error: std::fmt::Debug,
+
+    // Required to setup grpc clients for new storaged instances.
+    StorageCommand<T>: RustType<ProtoStorageCommand>,
+    StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     /// Create a new storage controller from a client it should wrap.
     pub async fn new(

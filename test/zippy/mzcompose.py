@@ -41,6 +41,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     parser.add_argument("--seed", metavar="N", type=int, help="Random seed", default=1)
 
+    parser.add_argument(
+        "--actions",
+        metavar="N",
+        type=int,
+        help="Number of actions to run",
+        default=1000,
+    )
+
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
@@ -50,6 +58,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
 
     print("Generating test...")
-    test = Test(scenario=scenario_class(), max_actions=500)
+    test = Test(scenario=scenario_class(), actions=args.actions)
     print("Running test...")
     test.run(c)

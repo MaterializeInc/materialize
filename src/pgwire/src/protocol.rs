@@ -9,7 +9,7 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
 use std::mem;
@@ -38,7 +38,7 @@ use mz_pgcopy::CopyFormatParams;
 use mz_repr::{Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{FetchDirection, Ident, NoticeSeverity, Raw, Statement};
-use mz_sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
+use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -1622,27 +1622,9 @@ where
         &mut self,
         id: GlobalId,
         columns: Vec<usize>,
-        params: CopyParams,
+        params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
     ) -> Result<State, io::Error> {
-        if !matches!(params.format, CopyFormat::Text | CopyFormat::Csv) {
-            return self
-                .error(ErrorResponse::error(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("COPY FROM format {:?} not supported", params.format),
-                ))
-                .await;
-        }
-
-        // Ensure params are valid here so as to error before waiting to receive
-        // any data from the client.
-        let params: CopyFormatParams = match params.try_into() {
-            Ok(params) => params,
-            Err(e) => {
-                return self.error(e.into()).await;
-            }
-        };
-
         let typ = row_desc.typ();
         let column_formats = vec![mz_pgrepr::Format::Text; typ.column_types.len()];
         self.send(BackendMessage::CopyInResponse {

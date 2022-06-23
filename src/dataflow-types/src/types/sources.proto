@@ -16,10 +16,12 @@ import "repr/src/global_id.proto";
 import "repr/src/proto.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
+import "persist/src/persist.proto";
 import "dataflow-types/src/errors.proto";
 import "dataflow-types/src/types/connections/aws.proto";
 import "dataflow-types/src/types/connections.proto";
 import "dataflow-types/src/types/sources/encoding.proto";
+import "dataflow-types/src/client/controller/storage.proto";
 import "postgres-util/src/desc.proto";
 
 package mz_dataflow_types.types.sources;
@@ -254,4 +256,17 @@ message ProtoCompression {
 message ProtoSourceDesc {
     ProtoSourceConnection connection = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc desc = 2;
+}
+
+message ProtoIngestionDescription {
+    // ProtoSourceImport is taken by ProtoDataflowDescription
+    message ProtoSourceMetadataImport {
+        mz_repr.global_id.ProtoGlobalId id = 1;
+        mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 2;
+    }
+    repeated ProtoSourceMetadataImport source_imports = 1;
+    mz_repr.global_id.ProtoGlobalId id = 2;
+    ProtoSourceDesc desc = 3;
+    mz_persist.gen.persist.ProtoU64Antichain since = 4;
+    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 5;
 }

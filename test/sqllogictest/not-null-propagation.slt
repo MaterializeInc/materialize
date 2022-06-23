@@ -203,10 +203,10 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 | Map greatest(#1), greatest(#1, #1), greatest(#1, #0), greatest(#0, #0)
-| | types = (integer?, integer, integer, integer, integer, integer?)
+| | types = (integer?, integer, integer, integer, integer?, integer?)
 | | keys = ()
 | Project (#2..=#5)
-| | types = (integer, integer, integer, integer?)
+| | types = (integer, integer, integer?, integer?)
 | | keys = ()
 
 EOF
@@ -223,10 +223,10 @@ Query:
 | | types = (integer?, integer)
 | | keys = ()
 | Map least(#1), least(#1, #1), least(#1, #0), least(#0, #0)
-| | types = (integer?, integer, integer, integer, integer, integer?)
+| | types = (integer?, integer, integer, integer, integer?, integer?)
 | | keys = ()
 | Project (#2..=#5)
-| | types = (integer, integer, integer, integer?)
+| | types = (integer, integer, integer?, integer?)
 | | keys = ()
 
 EOF

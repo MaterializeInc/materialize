@@ -262,17 +262,15 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-impl RustType<proto_compute_command::ProtoCompaction> for (GlobalId, Antichain<u64>) {
-    fn into_proto(self: &Self) -> proto_compute_command::ProtoCompaction {
-        proto_compute_command::ProtoCompaction {
+impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
+    fn into_proto(self: &Self) -> ProtoCompaction {
+        ProtoCompaction {
             id: Some(self.0.into_proto()),
             frontier: Some((&self.1).into()),
         }
     }
 
-    fn from_proto(
-        proto: proto_compute_command::ProtoCompaction,
-    ) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoCompaction) -> Result<Self, TryFromProtoError> {
         Ok((
             proto.id.into_rust_if_some("ProtoCompaction::id")?,
             proto
@@ -320,18 +318,6 @@ impl Arbitrary for ComputeCommand<mz_repr::Timestamp> {
     }
 }
 
-/// Commands related to the ingress and egress of collections.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum StorageCommand<T = mz_repr::Timestamp> {
-    /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
-    /// Enable compaction in storage-managed collections.
-    ///
-    /// Each entry in the vector names a collection and provides a frontier after which
-    /// accumulations must be correct.
-    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
-}
-
 impl<T> ComputeCommand<T> {
     /// Indicates which global ids should start and cease frontier tracking.
     ///
@@ -365,6 +351,86 @@ impl<T> ComputeCommand<T> {
                 // Other commands have no known impact on frontier tracking.
             }
         }
+    }
+}
+
+/// Commands related to the ingress and egress of collections.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum StorageCommand<T = mz_repr::Timestamp> {
+    /// Create the enumerated sources, each associated with its identifier.
+    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
+    /// Enable compaction in storage-managed collections.
+    ///
+    /// Each entry in the vector names a collection and provides a frontier after which
+    /// accumulations must be correct.
+    AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
+}
+
+impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoStorageCommand {
+        use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
+        ProtoStorageCommand {
+            kind: Some(match self {
+                StorageCommand::CreateSources(ingestion_descriptions) => {
+                    CreateSources(ProtoCreateSources {
+                        ingestion_descriptions: ingestion_descriptions.into_proto(),
+                    })
+                }
+                StorageCommand::AllowCompaction(collections) => {
+                    AllowCompaction(ProtoAllowCompaction {
+                        collections: collections.into_proto(),
+                    })
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
+        use proto_storage_command::Kind::*;
+        use proto_storage_command::*;
+        match proto.kind {
+            Some(CreateSources(ProtoCreateSources {
+                ingestion_descriptions,
+            })) => Ok(StorageCommand::CreateSources(
+                ingestion_descriptions.into_rust()?,
+            )),
+            Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
+                Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
+            }
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoStorageCommand::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec(
+                any::<IngestionDescription<CollectionMetadata, mz_repr::Timestamp>>(),
+                1..4
+            )
+            .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(
+                (
+                    any::<GlobalId>(),
+                    proptest::collection::vec(any::<u64>(), 1..4)
+                ),
+                1..4
+            )
+            .prop_map(|collections| StorageCommand::AllowCompaction(
+                collections
+                    .into_iter()
+                    .map(|(id, frontier_vec)| { (id, Antichain::from(frontier_vec)) })
+                    .collect()
+            )),
+        ]
+        .boxed()
     }
 }
 
@@ -521,12 +587,54 @@ impl<T> Default for ComputeCommandHistory<T> {
 
 /// Data about timestamp bindings, sent to the coordinator, in service
 /// of a specific "linearized" read request
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct LinearizedTimestampBindingFeedback<T = mz_repr::Timestamp> {
     /// The _minimum_ viable timestamp that will produce a "linearized" read...
     pub timestamp: T,
     /// ... for this peek
     pub peek_id: Uuid,
+}
+
+impl RustType<ProtoTrace> for (GlobalId, ChangeBatch<mz_repr::Timestamp>) {
+    fn into_proto(&self) -> ProtoTrace {
+        ProtoTrace {
+            id: Some(self.0.into_proto()),
+            updates: self
+                .1
+                // Clone because the `iter()` expects
+                // `trace` to be mutable.
+                .clone()
+                .iter()
+                .map(|(t, d)| ProtoUpdate {
+                    timestamp: *t,
+                    diff: *d,
+                })
+                .collect(),
+        }
+    }
+
+    fn from_proto(proto: ProtoTrace) -> Result<Self, TryFromProtoError> {
+        let mut batch = ChangeBatch::new();
+        batch.extend(
+            proto
+                .updates
+                .into_iter()
+                .map(|update| (update.timestamp, update.diff)),
+        );
+        Ok((proto.id.into_rust_if_some("ProtoTrace::id")?, batch))
+    }
+}
+
+impl RustType<ProtoFrontierUppersKind> for Vec<(GlobalId, ChangeBatch<mz_repr::Timestamp>)> {
+    fn into_proto(&self) -> ProtoFrontierUppersKind {
+        ProtoFrontierUppersKind {
+            traces: self.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoFrontierUppersKind) -> Result<Self, TryFromProtoError> {
+        proto.traces.into_rust()
+    }
 }
 
 /// Responses that the controller can provide back to the coordinator.
@@ -563,26 +671,7 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
         use proto_compute_response::*;
         ProtoComputeResponse {
             kind: Some(match self {
-                ComputeResponse::FrontierUppers(traces) => {
-                    FrontierUppers(ProtoFrontierUppersKind {
-                        traces: traces
-                            .iter()
-                            .map(|(id, trace)| ProtoTrace {
-                                id: Some(id.into_proto()),
-                                updates: trace
-                                    // Clone because the `iter()` expects
-                                    // `trace` to be mutable.
-                                    .clone()
-                                    .iter()
-                                    .map(|(t, d)| ProtoUpdate {
-                                        timestamp: *t,
-                                        diff: *d,
-                                    })
-                                    .collect(),
-                            })
-                            .collect(),
-                    })
-                }
+                ComputeResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
                 ComputeResponse::PeekResponse(id, resp, otel_ctx) => {
                     PeekResponse(ProtoPeekResponseKind {
                         id: Some(id.into_proto()),
@@ -601,22 +690,9 @@ impl RustType<ProtoComputeResponse> for ComputeResponse<mz_repr::Timestamp> {
     fn from_proto(proto: ProtoComputeResponse) -> Result<Self, TryFromProtoError> {
         use proto_compute_response::Kind::*;
         match proto.kind {
-            Some(FrontierUppers(traces)) => Ok(ComputeResponse::FrontierUppers(
-                traces
-                    .traces
-                    .into_iter()
-                    .map(|trace| {
-                        let mut batch = ChangeBatch::new();
-                        batch.extend(
-                            trace
-                                .updates
-                                .into_iter()
-                                .map(|update| (update.timestamp, update.diff)),
-                        );
-                        Ok((trace.id.into_rust_if_some("ProtoTrace::id")?, batch))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
+            Some(FrontierUppers(traces)) => {
+                Ok(ComputeResponse::FrontierUppers(traces.into_rust()?))
+            }
             Some(PeekResponse(resp)) => Ok(ComputeResponse::PeekResponse(
                 resp.id.into_rust_if_some("ProtoPeekResponseKind::id")?,
                 resp.resp.into_rust_if_some("ProtoPeekResponseKind::resp")?,
@@ -662,7 +738,7 @@ impl Arbitrary for ComputeResponse<mz_repr::Timestamp> {
 }
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<T>)>),
@@ -670,6 +746,66 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// Data about timestamp bindings, sent to the coordinator, in service
     /// of a specific "linearized" read request
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
+}
+
+impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
+    fn into_proto(&self) -> ProtoStorageResponse {
+        use proto_storage_response::Kind::*;
+        use proto_storage_response::*;
+        ProtoStorageResponse {
+            kind: Some(match self {
+                // TODO: share this impl with `ComputeResponse`
+                StorageResponse::FrontierUppers(traces) => FrontierUppers(traces.into_proto()),
+                StorageResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
+                    timestamp,
+                    peek_id,
+                }) => LinearizedTimestamps(ProtoLinearizedTimestampBindingFeedback {
+                    timestamp: *timestamp,
+                    peek_id: Some(peek_id.into_proto()),
+                }),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
+        use proto_storage_response::Kind::*;
+        match proto.kind {
+            // TODO: share this impl with `ComputeResponse`
+            Some(FrontierUppers(traces)) => {
+                Ok(StorageResponse::FrontierUppers(traces.into_rust()?))
+            }
+            Some(LinearizedTimestamps(resp)) => Ok(StorageResponse::LinearizedTimestamps(
+                LinearizedTimestampBindingFeedback {
+                    timestamp: resp.timestamp,
+                    peek_id: resp
+                        .peek_id
+                        .into_rust_if_some("ProtoLinearizedTimestampBindingFeedback::peek_id")?,
+                },
+            )),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoStorageResponse::kind",
+            )),
+        }
+    }
+}
+
+impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            proptest::collection::vec((any::<GlobalId>(), any_change_batch()), 1..4)
+                .prop_map(StorageResponse::FrontierUppers),
+            (any::<u64>(), any_uuid()).prop_map(|(timestamp, peek_id)| {
+                StorageResponse::LinearizedTimestamps(LinearizedTimestampBindingFeedback {
+                    timestamp,
+                    peek_id,
+                })
+            }),
+        ]
+        .boxed()
+    }
 }
 
 /// A client to a running dataflow server.
@@ -832,7 +968,7 @@ pub trait FromAddr {
 
 /// A convenience type for compatibility.
 #[derive(Debug)]
-pub struct RemoteClient<C, R, G = tcp::TcpClient<C, R>>
+pub struct RemoteClient<C, R, G>
 where
     (C, R): partitioned::Partitionable<C, R>,
     C: fmt::Debug + Send,
@@ -845,7 +981,7 @@ where
 pub type ComputedRemoteClient<T> = RemoteClient<
     ComputeCommand<T>,
     ComputeResponse<T>,
-    tcp::GrpcClient<
+    grpc::GrpcClient<
         proto_compute_client::ProtoComputeClient<tonic::transport::Channel>,
         ProtoComputeCommand,
         ProtoComputeResponse,
@@ -855,7 +991,11 @@ pub type ComputedRemoteClient<T> = RemoteClient<
 pub type StoragedRemoteClient<T> = RemoteClient<
     StorageCommand<T>,
     StorageResponse<T>,
-    tcp::TcpClient<StorageCommand<T>, StorageResponse<T>>,
+    grpc::GrpcClient<
+        proto_storage_client::ProtoStorageClient<tonic::transport::Channel>,
+        ProtoStorageCommand,
+        ProtoStorageResponse,
+    >,
 >;
 
 impl<C, R, G> RemoteClient<C, R, G>
@@ -975,12 +1115,11 @@ pub mod process_local {
 }
 
 /// A client to a remote dataflow server.
-pub mod tcp {
+pub mod grpc {
     use mz_repr::proto::ProtoType;
     use mz_repr::proto::RustType;
     use std::cmp;
     use std::fmt;
-    use std::future::Future;
     use std::net::ToSocketAddrs;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -988,33 +1127,27 @@ pub mod tcp {
     use tracing::{debug, error, info, warn};
 
     use async_trait::async_trait;
-    use futures::sink::SinkExt;
     use futures::stream::StreamExt;
     use futures::Stream;
-    use serde::de::DeserializeOwned;
-    use serde::ser::Serialize;
-    use tokio::io::{self, AsyncRead, AsyncWrite};
-    use tokio::net::TcpStream;
     use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
     use tokio::sync::Mutex;
     use tokio::sync::Notify;
     use tokio::time::{self, Instant};
-    use tokio_serde::formats::Bincode;
     use tokio_stream::wrappers::UnboundedReceiverStream;
-    use tokio_util::codec::LengthDelimitedCodec;
     use tonic::transport::Server;
     use tonic::Request;
     use tonic::Response;
     use tonic::Streaming;
 
     use super::proto_compute_client::ProtoComputeClient;
+    use super::proto_storage_client::ProtoStorageClient;
     use super::FromAddr;
     use super::GenericClient;
     use super::Reconnect;
 
     /// A client to a remote dataflow server using gRPC and protobuf based communication.
     ///
-    /// The client opens a connection using the ProtoComputeClient stubs that are generated by
+    /// The client opens a connection using the proto client stubs that are generated by
     /// tonic from the service definition in `client.proto`. After creation, the client is in
     /// disconnected state. To connect it, `connect` has to be called. Once the client is
     /// connected, it will call automatically the only RPC defined in the service description,
@@ -1182,170 +1315,6 @@ pub mod tcp {
         }
     }
 
-    enum TcpConn<C, R> {
-        Disconnected,
-        Connecting(Pin<Box<dyn Future<Output = io::Result<TcpStream>> + Send>>),
-        Backoff(Instant),
-        Connected(FramedClient<TcpStream, C, R>),
-    }
-
-    impl<C, R> fmt::Debug for TcpConn<C, R> {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            f.write_str("TcpConn")
-        }
-    }
-
-    /// A client to a remote dataflow server.
-    ///
-    /// If the client experiences errors, it will return an error from the `recv` method, allowing a
-    /// bearer to re-issue commands. The reconnection happens in `reconnect()`.
-    #[derive(Debug)]
-    pub struct TcpClient<C, R> {
-        connection: TcpConn<C, R>,
-        backoff: Duration,
-        addr: String,
-    }
-
-    impl<C, R> FromAddr for TcpClient<C, R> {
-        /// Creates a new `TcpClient` initially in a disconnected state.
-        ///
-        /// Use the `reconnect()` of the Reconnect trait method to put the client into a connected state.
-        fn from_addr(addr: String) -> TcpClient<C, R> {
-            Self {
-                connection: TcpConn::Disconnected,
-                backoff: Duration::from_millis(10),
-                addr,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl<C: Send, R: Send> Reconnect for TcpClient<C, R> {
-        fn disconnect(&mut self) {
-            self.connection = TcpConn::Disconnected;
-        }
-        async fn reconnect(&mut self) {
-            // This is written in state-machine style to be cancellation safe.
-            loop {
-                match &mut self.connection {
-                    TcpConn::Disconnected => {
-                        let connecting = Box::pin(TcpStream::connect(self.addr.clone()));
-                        self.connection = TcpConn::Connecting(connecting);
-                    }
-                    TcpConn::Connecting(connecting) => match connecting.await {
-                        Ok(connection) => {
-                            tracing::info!("Reconnected to {}", self.addr);
-                            self.connection = TcpConn::Connected(framed_client(connection));
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Error connecting to {}: {e}; reconnecting in {:?}",
-                                self.addr,
-                                self.backoff,
-                            );
-                            let deadline = Instant::now() + self.backoff;
-                            self.backoff = cmp::min(self.backoff * 2, Duration::from_secs(1));
-                            self.connection = TcpConn::Backoff(deadline);
-                        }
-                    },
-                    TcpConn::Backoff(deadline) => {
-                        time::sleep_until(*deadline).await;
-                        self.connection = TcpConn::Disconnected;
-                    }
-                    TcpConn::Connected(_) => {
-                        self.backoff = Duration::from_millis(10);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    #[async_trait]
-    impl<C, R> GenericClient<C, R> for TcpClient<C, R>
-    where
-        C: Serialize + fmt::Debug + Send + Unpin,
-        R: DeserializeOwned + fmt::Debug + Send + Unpin,
-    {
-        async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
-            if let TcpConn::Connected(connection) = &mut self.connection {
-                let result = connection.send(cmd).await;
-                if result.is_err() {
-                    self.connection = TcpConn::Disconnected;
-                }
-                Ok(result?)
-            } else {
-                Err(anyhow::anyhow!("Sent into disconnected channel"))
-            }
-        }
-
-        async fn recv(&mut self) -> Result<Option<R>, anyhow::Error> {
-            if let TcpConn::Connected(connection) = &mut self.connection {
-                match connection.next().await {
-                    Some(Ok(response)) => Ok(Some(response)),
-                    other => {
-                        match other {
-                            Some(Ok(_)) => unreachable!("handled above"),
-                            None => error!("connection unexpectedly terminated cleanly"),
-                            Some(Err(e)) => error!("connection unexpectedly errored: {e}"),
-                        }
-                        self.connection = TcpConn::Disconnected;
-                        Err(anyhow::anyhow!("Connection severed"))
-                    }
-                }
-            } else {
-                Err(anyhow::anyhow!("Connection severed"))
-            }
-        }
-    }
-
-    /// A framed connection to a dataflowd server.
-    pub type Framed<C, T, U> = tokio_serde::Framed<
-        tokio_util::codec::Framed<C, LengthDelimitedCodec>,
-        T,
-        U,
-        Bincode<T, U>,
-    >;
-
-    /// A framed connection from the server's perspective.
-    pub type FramedServer<A, C, R> = Framed<A, C, R>;
-
-    /// A framed connection from the client's perspective.
-    pub type FramedClient<A, C, R> = Framed<A, R, C>;
-
-    fn length_delimited_codec() -> LengthDelimitedCodec {
-        // NOTE(benesch): using an unlimited maximum frame length is problematic
-        // because Tokio never shrinks its buffer. Sending or receiving one large
-        // message of size N means the client will hold on to a buffer of size
-        // N forever. We should investigate alternative transport protocols that
-        // do not have this limitation.
-        let mut codec = LengthDelimitedCodec::new();
-        codec.set_max_frame_length(usize::MAX);
-        codec
-    }
-
-    /// Constructs a framed connection for the server.
-    pub fn framed_server<A, C, R>(conn: A) -> FramedServer<A, C, R>
-    where
-        A: AsyncRead + AsyncWrite,
-    {
-        tokio_serde::Framed::new(
-            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
-            Bincode::default(),
-        )
-    }
-
-    /// Constructs a framed connection for the client.
-    pub fn framed_client<A, C, R>(conn: A) -> FramedClient<A, C, R>
-    where
-        A: AsyncRead + AsyncWrite,
-    {
-        tokio_serde::Framed::new(
-            tokio_util::codec::Framed::new(conn, length_delimited_codec()),
-            Bincode::default(),
-        )
-    }
-
     /// The server side gRPC implementation that will run in computed or storaged.
     ///
     /// There are two main tasks involved: The gRPC callback implementations will execute in their own tasks,
@@ -1506,6 +1475,33 @@ pub mod tcp {
         }
     }
 
+    #[tonic::async_trait]
+    impl super::proto_storage_server::ProtoStorage
+        for GrpcServer<super::ProtoStorageCommand, super::ProtoStorageResponse>
+    {
+        type CommandResponseStreamStream = ResponseStream<super::ProtoStorageResponse>;
+
+        async fn command_response_stream(
+            &self,
+            req: Request<Streaming<super::ProtoStorageCommand>>,
+        ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, tonic::Status> {
+            debug!("GrpcServer: remote client connected");
+
+            // Consistent with the ActiveReplication client, we use unbounded channels.
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            // Store channels in state
+            *self.shared.queue.lock().await = Some((req.into_inner(), resp_tx));
+            self.shared.queue_change.notify_waiters();
+
+            let receiver_stream = UnboundedReceiverStream::new(resp_rx).map(Ok);
+
+            Ok(Response::new(
+                Box::pin(receiver_stream) as Self::CommandResponseStreamStream
+            ))
+        }
+    }
+
     /// Creates a running gRPC based server that can receive `PC`
     /// and sends `PR`. Returns a a tuple of GrpcServerInterface that
     /// can be used to recv and send from. As well as a shutdown signal, which should
@@ -1594,9 +1590,33 @@ pub mod tcp {
             }
         }
     }
+    #[async_trait::async_trait]
+    impl BidiProtoClient for ProtoStorageClient<tonic::transport::Channel> {
+        type ProtoCommand = super::ProtoStorageCommand;
+        type ProtoResponse = super::ProtoStorageResponse;
+        async fn connect(addr: String) -> Result<Self, anyhow::Error>
+        where
+            Self: Sized,
+        {
+            Ok(ProtoStorageClient::connect(addr).await?)
+        }
+        async fn create_stream(
+            &mut self,
+            rx: UnboundedReceiver<Self::ProtoCommand>,
+        ) -> Result<Streaming<Self::ProtoResponse>, anyhow::Error> {
+            match self
+                .command_response_stream(UnboundedReceiverStream::new(rx))
+                .await
+            {
+                Ok(resp_rx_wrap) => Ok(resp_rx_wrap.into_inner()),
+                Err(err) => Err(err)?,
+            }
+        }
+    }
 
     // Convenient re-exports
     pub use super::proto_compute_server::ProtoComputeServer;
+    pub use super::proto_storage_server::ProtoStorageServer;
 
     // Convenience methods for serving a grpc server that is connected to a local client
 
@@ -1725,6 +1745,38 @@ mod tests {
                     }
                 } else {
                     assert_eq!(actual, ComputeResponse::FrontierUppers(expected_traces));
+                }
+            } else {
+                assert_eq!(actual, expect);
+            }
+        }
+
+        #[test]
+        fn storage_command_protobuf_roundtrip(expect in any::<StorageCommand<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoStorageCommand>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
+
+        #[test]
+        fn storage_response_protobuf_roundtrip(expect in any::<StorageResponse<mz_repr::Timestamp>>() ) {
+            let actual = protobuf_roundtrip::<_, ProtoStorageResponse>(&expect);
+            assert!(actual.is_ok());
+            let actual = actual.unwrap();
+            if let StorageResponse::FrontierUppers(expected_traces) = expect {
+                if let StorageResponse::FrontierUppers(actual_traces) = actual {
+                    assert_eq!(actual_traces.len(), expected_traces.len());
+                    for ((actual_id, mut actual_changes), (expected_id, mut expected_changes)) in actual_traces.into_iter().zip(expected_traces.into_iter()) {
+                        assert_eq!(actual_id, expected_id);
+                        // `ChangeBatch`es representing equivalent sets of
+                        // changes could have different internal
+                        // representations, so they need to be compacted before comparing.
+                        actual_changes.compact();
+                        expected_changes.compact();
+                        assert_eq!(actual_changes, expected_changes);
+                    }
+                } else {
+                    assert_eq!(actual, StorageResponse::FrontierUppers(expected_traces));
                 }
             } else {
                 assert_eq!(actual, expect);

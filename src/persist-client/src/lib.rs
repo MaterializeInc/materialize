@@ -63,7 +63,7 @@ pub use crate::r#impl::metrics::Metrics;
 ///
 /// This structure can be durably written down or transmitted for use by other
 /// processes. This location can contain any number of persist shards.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct PersistLocation {
     /// Uri string that identifies the blob store.
     pub blob_uri: String,

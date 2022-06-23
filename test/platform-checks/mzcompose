@@ -8,14 +8,7 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+#
+# mzcompose — runs Docker Compose with Materialize customizations.
 
-if [[ "$#" -ne 1 ]]; then
-    echo "usage: $0 SQL" >&2
-    exit 1
-fi
-
-while :; do
-    out=$(psql -q -U materialize -h materialized -p 6875 materialize -c '\timing' -c "$1")
-    clear
-    echo "$out"
-done
+exec "$(dirname "$0")"/../../bin/pyactivate -m materialize.cli.mzcompose "$@"
