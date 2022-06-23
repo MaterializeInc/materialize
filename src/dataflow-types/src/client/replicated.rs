@@ -29,8 +29,11 @@ use timely::progress::Antichain;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use mz_ore::tracing::OpenTelemetryContext;
+use crate::logging::LogVariant;
 use mz_repr::GlobalId;
+
+use super::controller::storage::CollectionMetadata;
+use mz_ore::tracing::OpenTelemetryContext;
 
 use super::ReplicaId;
 use super::{ComputeClient, GenericClient};
@@ -88,6 +91,12 @@ pub fn spawn_client_task<
     (cmd_tx, response_rx)
 }
 
+#[derive(Debug)]
+struct Replica<T> {
+    tx: UnboundedSender<ComputeCommand<T>>,
+    rx: UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
+    log_collections: HashMap<LogVariant, CollectionMetadata>,
+}
 /// Additional information to store with pening peeks.
 #[derive(Debug)]
 pub struct PendingPeek {
@@ -99,13 +108,7 @@ pub struct PendingPeek {
 #[derive(Debug)]
 pub struct ActiveReplication<T> {
     /// Handles to the replicas themselves.
-    replicas: HashMap<
-        ReplicaId,
-        (
-            UnboundedSender<ComputeCommand<T>>,
-            UnboundedReceiverStream<Result<ComputeResponse<T>, anyhow::Error>>,
-        ),
-    >,
+    replicas: HashMap<ReplicaId, Replica<T>>,
     /// Outstanding peek identifiers, to guide responses (and which to suppress).
     peeks: HashMap<uuid::Uuid, PendingPeek>,
     /// Reported frontier of each in-progress tail.
@@ -144,7 +147,12 @@ where
     /// Introduce a new replica, and catch it up to the commands of other replicas.
     ///
     /// It is not yet clear under which circumstances a replica can be removed.
-    pub fn add_replica<C: ComputeClient<T> + 'static>(&mut self, id: ReplicaId, client: C) {
+    pub fn add_replica<C: ComputeClient<T> + 'static>(
+        &mut self,
+        id: ReplicaId,
+        client: C,
+        log_collections: HashMap<LogVariant, CollectionMetadata>,
+    ) {
         for (_, frontiers) in self.uppers.values_mut() {
             frontiers.insert(id, {
                 let mut frontier = timely::progress::frontier::MutableAntichain::new();
@@ -152,9 +160,15 @@ where
                 frontier
             });
         }
-        let (cmd_tx, resp_rx) =
-            spawn_client_task(client, || "ActiveReplication client message pump");
-        self.replicas.insert(id, (cmd_tx, resp_rx.into()));
+        let (tx, rx) = spawn_client_task(client, || "ActiveReplication client message pump");
+        self.replicas.insert(
+            id,
+            Replica {
+                tx,
+                rx: rx.into(),
+                log_collections,
+            },
+        );
         self.hydrate_replica(id);
     }
 
@@ -185,12 +199,13 @@ where
         self.last_command_count = self.history.reduce(&self.peeks);
 
         // Replay the commands at the client, creating new dataflow identifiers.
-        let (cmd_tx, _) = self.replicas.get_mut(&replica_id).unwrap();
+        let replica = self.replicas.get_mut(&replica_id).unwrap();
         for command in self.history.iter() {
             let mut command = command.clone();
-            specialize_command(&mut command, replica_id);
+            specialize_command(&mut command, replica_id, replica);
 
-            cmd_tx
+            replica
+                .tx
                 .send(command)
                 .expect("Channel to client has gone away!")
         }
@@ -272,9 +287,9 @@ where
         }
 
         // Clone the command for each active replica.
-        for (id, (tx, _)) in self.replicas.iter_mut() {
+        for (id, replica) in self.replicas.iter_mut() {
             let mut command = cmd.clone();
-            specialize_command(&mut command, *id);
+            specialize_command(&mut command, *id, replica);
 
             // Errors are suppressed by this client, which awaits a reconnection
             // in `recv` and will rehydrate the client when that happens.
@@ -284,7 +299,7 @@ where
             // ADAPTER and COMPUTE. If this changes (e.g. awaiting responses
             // from replicas), ADAPTER needs to handle its interactions with
             // COMPUTE differently.
-            let _ = tx.send(command);
+            let _ = replica.tx.send(command);
         }
 
         Ok(())
@@ -309,7 +324,7 @@ where
                 let mut stream: tokio_stream::StreamMap<_, _> = self
                     .replicas
                     .iter_mut()
-                    .map(|(id, (_, rx))| (id.clone(), rx))
+                    .map(|(id, replica)| (id.clone(), &mut replica.rx))
                     .collect();
 
                 use futures::StreamExt;
@@ -434,9 +449,21 @@ where
 ///
 /// Most `ComputeCommand`s are independent of the target replica, but some
 /// contain replica-specific fields that must be adjusted before sending.
-fn specialize_command<T>(command: &mut ComputeCommand<T>, replica_id: ReplicaId) {
+fn specialize_command<T>(
+    command: &mut ComputeCommand<T>,
+    replica_id: ReplicaId,
+    replica: &Replica<T>,
+) {
     // Tell new instances their replica ID.
     if let ComputeCommand::CreateInstance(config) = command {
+        dbg!(replica_id);
+        // Set sink_logs
+        if let Some(logging) = &mut config.logging {
+            logging.sink_logs = replica.log_collections.clone();
+            dbg!(&logging.sink_logs);
+        };
+
+        // Set replica id
         config.replica_id = replica_id;
     }
 

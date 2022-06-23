@@ -675,7 +675,12 @@ impl<S: Append + 'static> Coordinator<S> {
                 .unwrap();
             for (replica_id, replica) in instance.replicas_by_id.clone() {
                 self.dataflow_client
-                    .add_replica_to_instance(instance.id, replica_id, replica.config)
+                    .add_replica_to_instance(
+                        instance.id,
+                        replica_id,
+                        replica.config,
+                        replica.log_collections,
+                    )
                     .await
                     .unwrap();
             }
@@ -2511,6 +2516,7 @@ impl<S: Append + 'static> Coordinator<S> {
             introspection_sources,
         }];
 
+        let mut source_ids = Vec::new();
         for (replica_name, config) in replicas {
             let logical_size = match &config {
                 ReplicaConfig::Managed { size, .. } => Some(size.clone()),
@@ -2518,26 +2524,73 @@ impl<S: Append + 'static> Coordinator<S> {
             };
             let config =
                 concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
+            let log_collections: Vec<(_, _, _)> = self
+                .catalog
+                .allocate_introspection_collections()
+                .await
+                .into_iter()
+                .map(|(log, id)| {
+                    let collection_meta = self.dataflow_client.storage().allocate_collection();
+                    (log, id, collection_meta)
+                })
+                .collect();
+            // TODO: Uncomment once we have persist sources
+            dbg!(&log_collections);
+            source_ids.extend(dbg!(log_collections.iter().map(|(_, id, _)| *id)));
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config,
                 on_cluster_name: name.clone(),
                 logical_size,
+                log_collections,
             });
         }
+
         self.catalog_transact(Some(session), ops, |_| Ok(()))
             .await?;
+
+        let source_bindings = source_ids
+            .iter()
+            .map(|&id| IngestionDescription {
+                source_imports: BTreeMap::new(),
+                id,
+                desc: self.catalog.state().source_description_for(id).unwrap(),
+                since: Antichain::from_elem(Timestamp::minimum()),
+                storage_metadata: (),
+            })
+            .collect();
+
+        dbg!("Source bindings created successfully!");
+
+        self.dataflow_client
+            .storage_mut()
+            .create_sources(source_bindings)
+            .await
+            .unwrap();
+        dbg!("here");
+        self.initialize_storage_read_policies(source_ids, self.logical_compaction_window_ms)
+            .await;
+        dbg!("here");
+        dbg!("here");
         let instance = self
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
+        dbg!("here");
         self.dataflow_client
             .create_instance(instance.id, instance.logging.clone())
             .await
             .unwrap();
+        dbg!("here");
         for (replica_id, replica) in instance.replicas_by_id.clone() {
+            dbg!("here");
             self.dataflow_client
-                .add_replica_to_instance(instance.id, replica_id, replica.config)
+                .add_replica_to_instance(
+                    instance.id,
+                    replica_id,
+                    replica.config,
+                    replica.log_collections,
+                )
                 .await
                 .unwrap();
         }
@@ -2559,22 +2612,67 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         let config =
             concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
+
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let log_collections = if instance.logging.is_some() {
+            self.catalog
+                .allocate_introspection_collections()
+                .await
+                .into_iter()
+                .map(|(log, id)| {
+                    let collection_meta = self.dataflow_client.storage().allocate_collection();
+                    (log, id, collection_meta)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let source_ids: Vec<_> = log_collections.iter().map(|(_, id, _)| *id).collect();
+
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
             on_cluster_name: of_cluster.clone(),
+            log_collections,
             logical_size,
         };
 
         self.catalog_transact(Some(session), vec![op], |_| Ok(()))
             .await?;
 
-        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
-        let replica_id = instance.replica_id_by_name[&name];
+        let source_bindings = source_ids
+            .iter()
+            .map(|&id| IngestionDescription {
+                source_imports: BTreeMap::new(),
+                id,
+                desc: self.catalog.state().source_description_for(id).unwrap(),
+                since: Antichain::from_elem(Timestamp::minimum()),
+                storage_metadata: (),
+            })
+            .collect();
+
         self.dataflow_client
-            .add_replica_to_instance(instance.id, replica_id, config)
+            .storage_mut()
+            .create_sources(source_bindings)
             .await
             .unwrap();
+        self.initialize_storage_read_policies(source_ids, self.logical_compaction_window_ms)
+            .await;
+
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
+        let replica_id = instance.replica_id_by_name[&name];
+        let replica = instance.replicas_by_id[&replica_id].clone();
+
+        self.dataflow_client
+            .add_replica_to_instance(
+                instance.id,
+                replica_id,
+                replica.config,
+                replica.log_collections,
+            )
+            .await
+            .unwrap();
+
         Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false })
     }
 

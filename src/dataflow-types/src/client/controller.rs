@@ -31,6 +31,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::stream::{BoxStream, StreamExt};
 use maplit::hashmap;
+use mz_repr::GlobalId;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -53,7 +54,7 @@ use crate::client::{
     StorageResponse,
 };
 use crate::client::{ComputedRemoteClient, GenericClient};
-use crate::logging::LoggingConfig;
+use crate::logging::{LogVariant, LoggingConfig};
 use crate::{TailBatch, TailResponse};
 
 pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
@@ -233,6 +234,7 @@ where
         instance_id: ComputeInstanceId,
         replica_id: ReplicaId,
         config: ConcreteComputeInstanceReplicaConfig,
+        log_collections: HashMap<LogVariant, GlobalId>,
     ) -> Result<(), anyhow::Error> {
         assert!(
             self.compute.contains_key(&instance_id),
@@ -245,7 +247,7 @@ where
                 let mut compute_instance = self.compute_mut(instance_id).unwrap();
                 let client = ComputedRemoteClient::new(&replicas.into_iter().collect::<Vec<_>>());
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                compute_instance.add_replica(replica_id, client);
+                compute_instance.add_replica(replica_id, client, log_collections)
             }
             ConcreteComputeInstanceReplicaConfig::Managed {
                 size_config,
@@ -318,9 +320,11 @@ where
                     .await?;
                 let client = ComputedRemoteClient::new(&service.addresses("controller"));
                 let client: Box<dyn ComputeClient<T>> = Box::new(client);
-                self.compute_mut(instance_id)
-                    .unwrap()
-                    .add_replica(replica_id, client);
+                self.compute_mut(instance_id).unwrap().add_replica(
+                    replica_id,
+                    client,
+                    log_collections,
+                )
             }
         }
 

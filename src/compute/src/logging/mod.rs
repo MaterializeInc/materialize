@@ -11,6 +11,7 @@
 
 pub mod differential;
 pub mod materialized;
+pub mod persist;
 pub mod reachability;
 pub mod timely;
 

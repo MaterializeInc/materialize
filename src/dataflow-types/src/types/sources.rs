@@ -1506,6 +1506,7 @@ impl SourceConnection {
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExternalSourceConnection {
+    Introspection(IntrospectionSourceConnection),
     Kafka(KafkaSourceConnection),
     Kinesis(KinesisSourceConnection),
     S3(S3SourceConnection),
@@ -1525,6 +1526,9 @@ impl RustType<ProtoExternalSourceConnection> for ExternalSourceConnection {
                     Kind::Postgres(postgres.into_proto())
                 }
                 ExternalSourceConnection::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
+                ExternalSourceConnection::Introspection(intro) => {
+                    Kind::Introspection(intro.into_proto())
+                }
             }),
         }
     }
@@ -1540,6 +1544,9 @@ impl RustType<ProtoExternalSourceConnection> for ExternalSourceConnection {
             Kind::S3(s3) => ExternalSourceConnection::S3(s3.into_rust()?),
             Kind::Postgres(postgres) => ExternalSourceConnection::Postgres(postgres.into_rust()?),
             Kind::Pubnub(pubnub) => ExternalSourceConnection::PubNub(pubnub.into_rust()?),
+            Kind::Introspection(intro) => {
+                ExternalSourceConnection::Introspection(intro.into_rust()?)
+            }
         })
     }
 }
@@ -1625,6 +1632,7 @@ impl ExternalSourceConnection {
             }
             Self::Postgres(_) => vec![],
             Self::PubNub(_) => vec![],
+            Self::Introspection(_) => vec![],
         }
     }
 
@@ -1636,6 +1644,7 @@ impl ExternalSourceConnection {
             ExternalSourceConnection::S3(_) => Some("mz_record"),
             ExternalSourceConnection::Postgres(_) => None,
             ExternalSourceConnection::PubNub(_) => None,
+            ExternalSourceConnection::Introspection(_) => None,
         }
     }
 
@@ -1678,9 +1687,9 @@ impl ExternalSourceConnection {
                     Vec::new()
                 }
             }
-            ExternalSourceConnection::Postgres(_) | ExternalSourceConnection::PubNub(_) => {
-                Vec::new()
-            }
+            ExternalSourceConnection::Postgres(_)
+            | ExternalSourceConnection::PubNub(_)
+            | ExternalSourceConnection::Introspection(_) => Vec::new(),
         }
     }
 
@@ -1692,6 +1701,7 @@ impl ExternalSourceConnection {
             ExternalSourceConnection::S3(_) => "s3",
             ExternalSourceConnection::Postgres(_) => "postgres",
             ExternalSourceConnection::PubNub(_) => "pubnub",
+            ExternalSourceConnection::Introspection(_) => "introspection",
         }
     }
 
@@ -1709,6 +1719,7 @@ impl ExternalSourceConnection {
             ExternalSourceConnection::S3(_) => None,
             ExternalSourceConnection::Postgres(_) => None,
             ExternalSourceConnection::PubNub(_) => None,
+            ExternalSourceConnection::Introspection(_) => None,
         }
     }
 
@@ -1719,6 +1730,7 @@ impl ExternalSourceConnection {
             ExternalSourceConnection::Kafka(_)
             | ExternalSourceConnection::Kinesis(_)
             | ExternalSourceConnection::Postgres(_)
+            | ExternalSourceConnection::Introspection(_)
             | ExternalSourceConnection::PubNub(_) => false,
         }
     }
@@ -1997,5 +2009,18 @@ impl Codec for SourceData {
     fn decode(buf: &[u8]) -> Result<Self, String> {
         let proto = ProtoSourceData::decode(buf).map_err(|err| err.to_string())?;
         proto.into_rust().map_err(|err| err.to_string())
+    }
+}
+
+#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct IntrospectionSourceConnection {}
+
+impl RustType<ProtoIntrospectionSourceConnection> for IntrospectionSourceConnection {
+    fn into_proto(&self) -> ProtoIntrospectionSourceConnection {
+        ProtoIntrospectionSourceConnection {}
+    }
+
+    fn from_proto(_proto: ProtoIntrospectionSourceConnection) -> Result<Self, TryFromProtoError> {
+        Ok(Self {})
     }
 }
