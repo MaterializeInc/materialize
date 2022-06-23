@@ -220,9 +220,10 @@ where
                     // external thing to arrive.
                     if retry.next_sleep() >= Duration::from_millis(64) {
                         info!(
-                            "snapshot as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            self.shard_id(),
                             as_of,
-                            upper,
+                            upper.elements(),
                             retry.next_sleep()
                         );
                     } else {
@@ -404,7 +405,8 @@ where
                     }
                     Err(current) => {
                         debug!(
-                            "apply_unbatched_cmd {} lost the CaS race, retrying: {} vs {:?}",
+                            "apply_unbatched_cmd {} {} lost the CaS race, retrying: {} vs {:?}",
+                            self.shard_id(),
                             cmd.name,
                             self.state.seqno(),
                             current.as_ref().map(|x| x.seqno)
@@ -499,6 +501,7 @@ where
         self.update_state(current).await;
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn update_state(&mut self, current: Option<VersionedData>) {
         let current = match current {
             Some(x) => x,
