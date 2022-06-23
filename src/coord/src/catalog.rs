@@ -272,6 +272,10 @@ impl CatalogState {
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
+        if !self.entry_by_id.contains_key(id) {
+            eprintln!("Key {id} not found in entry_by_id!");
+        };
+
         &self.entry_by_id[id]
     }
 
@@ -521,37 +525,54 @@ impl CatalogState {
     ) {
         let mut log_collections_by_variant = HashMap::new();
         for (log, source_id, _collection_meta) in log_collections {
-            let _oid = self.allocate_oid().expect("cannot return error here");
-            let _log_id = self.resolve_builtin_log(&log);
-            let _source_name = QualifiedObjectName {
+            let oid = self.allocate_oid().expect("cannot return error here");
+            let log_id = self.resolve_builtin_log(&log);
+            let source_name = QualifiedObjectName {
                 qualifiers: ObjectQualifiers {
                     database_spec: ResolvedDatabaseSpecifier::Ambient,
                     schema_spec: SchemaSpecifier::Id(self.get_mz_catalog_schema_id().clone()),
                 },
                 item: format!("{}_{}", log.name, replica_id),
             };
-            let _desc = log.variant.desc();
+            let desc = log.variant.desc();
             // TODO(LH): Bring back when persist sources are back
+            self.insert_item(
+                source_id,
+                oid,
+                source_name,
+                CatalogItem::Source(Source {
+                    create_sql: "TODO".into(),
+                    connection: SourceConnection::External {
+                        connection: ExternalSourceConnection::IntrospectionSourceConnection(
+                            IntrospectionSourceConnection {
+                                consensus_uri: collection_meta.persist_location.consensus_uri,
+                                blob_uri: collection_meta.persist_location.blob_uri,
+                                shard_id: collection_meta.persist_shard,
+                            },
+                        ),
+                        encoding: SourceDataEncoding::Single(DataEncoding::RowCodec(desc.clone())),
+                        envelope: SourceEnvelope::DifferentialRow,
+                        metadata_columns: Vec::new(),
+                        ts_frequency: self.config.timestamp_frequency,
+                        timeline: Timeline::EpochMilliseconds,
+                    },
+                    desc,
+                    depends_on: vec![log_id],
+                }),
+            );
+
+            // // TODO(LH): And remove this (creates a temporary source such that the rest of the code
+            // // works)
             // self.insert_item(
             //     source_id,
             //     oid,
             //     source_name,
-            //     CatalogItem::Source(Source {
+            //     CatalogItem::Table(Table {
             //         create_sql: "TODO".into(),
-            //         connection: SourceConnection::External {
-            //             connection: ExternalSourceConnection::Persist(PersistSourceConnector {
-            //                 consensus_uri: collection_meta.persist_location.consensus_uri,
-            //                 blob_uri: collection_meta.persist_location.blob_uri,
-            //                 shard_id: collection_meta.persist_shard,
-            //             }),
-            //             encoding: SourceDataEncoding::Single(DataEncoding::RowCodec(desc.clone())),
-            //             envelope: SourceEnvelope::DifferentialRow,
-            //             metadata_columns: Vec::new(),
-            //             ts_frequency: self.config.timestamp_frequency,
-            //             timeline: Timeline::EpochMilliseconds,
-            //         },
             //         desc,
-            //         depends_on: vec![log_id],
+            //         defaults: vec![],
+            //         conn_id: None,
+            //         depends_on: vec![],
             //     }),
             // );
 

@@ -2514,7 +2514,9 @@ impl<S: Append + 'static> Coordinator<S> {
                     (log, id, collection_meta)
                 })
                 .collect();
-            source_ids.extend(log_collections.iter().map(|(_, id, _)| *id));
+            // TODO: Uncomment once we have persist sources
+            dbg!(&log_collections);
+            source_ids.extend(dbg!(log_collections.iter().map(|(_, id, _)| *id)));
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config,
@@ -2523,6 +2525,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 log_collections,
             });
         }
+
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?;
 
         let source_bindings = source_ids
             .iter()
@@ -2535,24 +2540,30 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .collect();
 
+        dbg!("Source bindings created successfully!");
+
         self.dataflow_client
             .storage_mut()
             .create_sources(source_bindings)
             .await
             .unwrap();
+        dbg!("here");
         self.initialize_storage_read_policies(source_ids, self.logical_compaction_window_ms)
             .await;
-        self.catalog_transact(Some(session), ops, |_| Ok(()))
-            .await?;
+        dbg!("here");
+        dbg!("here");
         let instance = self
             .catalog
             .resolve_compute_instance(&name)
             .expect("compute instance must exist after creation");
+        dbg!("here");
         self.dataflow_client
             .create_instance(instance.id, instance.logging.clone())
             .await
             .unwrap();
+        dbg!("here");
         for (replica_id, replica) in instance.replicas_by_id.clone() {
+            dbg!("here");
             self.dataflow_client
                 .add_replica_to_instance(
                     instance.id,

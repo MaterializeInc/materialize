@@ -338,11 +338,11 @@ where
     }
 
     fn allocate_collection(&self) -> CollectionMetadata {
-        todo!();
-        //CollectionMetadata {
-        //    persist_location: self.persist_location.clone(),
-        //    shard_id: Some(ShardId::new()),
-        //}
+        dbg!(CollectionMetadata {
+            persist_location: self.persist_location.clone(),
+            timestamp_shard_id: ShardId::new(),
+            persist_shard: ShardId::new(),
+        })
     }
 
     fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, StorageError> {
@@ -358,6 +358,7 @@ where
         &mut self,
         mut ingestions: Vec<IngestionDescription<(), T>>,
     ) -> Result<(), StorageError> {
+        dbg!("HERE");
         // Validate first, to avoid corrupting state.
         // 1. create a dropped source identifier, or
         // 2. create an existing source identifier with a new description.

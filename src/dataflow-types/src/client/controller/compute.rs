@@ -229,6 +229,7 @@ where
         client: Box<dyn ComputeClient<T>>,
         log_collections: HashMap<LogVariant, GlobalId>,
     ) {
+        dbg!(&log_collections);
         let log_collections = log_collections
             .into_iter()
             .map(|(variant, id)| {
