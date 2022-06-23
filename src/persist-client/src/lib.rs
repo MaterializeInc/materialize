@@ -211,10 +211,7 @@ impl Default for PersistConfig {
     fn default() -> Self {
         // Use an env var to enable compaction so it's easier to experiment with
         // in cloud.
-        // let compaction_enabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_ENABLED");
-        // WIP(aljoscha): Force-enable compaction to see if this solves CI
-        // timeouts.
-        let compaction_enabled = true;
+        let compaction_enabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_ENABLED");
         const MB: usize = 1024 * 1024;
         Self {
             blob_target_size: 128 * MB,
