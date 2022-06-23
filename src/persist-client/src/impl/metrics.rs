@@ -37,6 +37,8 @@ pub struct Metrics {
     pub cmds: CmdsMetrics,
     /// Metrics for each retry loop.
     pub retries: RetriesMetrics,
+    /// Metrics for various encodings and decodings.
+    pub codec: CodecMetrics,
 }
 
 impl Metrics {
@@ -48,6 +50,7 @@ impl Metrics {
             consensus: vecs.consensus_metrics(),
             cmds: vecs.cmds_metrics(),
             retries: vecs.retries_metrics(),
+            codec: CodecMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -56,6 +59,7 @@ impl Metrics {
 #[derive(Debug)]
 struct MetricsVecs {
     cmd_started: IntCounterVec,
+    cmd_cas_mismatch: IntCounterVec,
     cmd_succeeded: IntCounterVec,
     cmd_failed: IntCounterVec,
     cmd_seconds: CounterVec,
@@ -78,6 +82,11 @@ impl MetricsVecs {
             cmd_started: registry.register(metric!(
                 name: "mz_persist_cmd_started_count",
                 help: "count of commands started",
+                var_labels: ["cmd"],
+            )),
+            cmd_cas_mismatch: registry.register(metric!(
+                name: "mz_persist_cmd_cas_mismatch_count",
+                help: "count of command retries from CaS mismatch",
                 var_labels: ["cmd"],
             )),
             cmd_succeeded: registry.register(metric!(
@@ -161,6 +170,7 @@ impl MetricsVecs {
             name: cmd.to_owned(),
             started: self.cmd_started.with_label_values(&[cmd]),
             succeeded: self.cmd_succeeded.with_label_values(&[cmd]),
+            cas_mismatch: self.cmd_cas_mismatch.with_label_values(&[cmd]),
             failed: self.cmd_failed.with_label_values(&[cmd]),
             seconds: self.cmd_seconds.with_label_values(&[cmd]),
         }
@@ -229,9 +239,13 @@ impl MetricsVecs {
 }
 
 #[derive(Debug)]
+pub struct CmdCasMismatchMetric(pub(crate) IntCounter);
+
+#[derive(Debug)]
 pub struct CmdMetrics {
     pub(crate) name: String,
     pub(crate) started: IntCounter,
+    pub(crate) cas_mismatch: IntCounter,
     pub(crate) succeeded: IntCounter,
     pub(crate) failed: IntCounter,
     pub(crate) seconds: Counter,
@@ -241,11 +255,11 @@ impl CmdMetrics {
     pub async fn run_cmd<R, E, F, CmdFn>(&self, cmd_fn: CmdFn) -> Result<R, E>
     where
         F: std::future::Future<Output = Result<R, E>>,
-        CmdFn: FnOnce() -> F,
+        CmdFn: FnOnce(CmdCasMismatchMetric) -> F,
     {
         self.started.inc();
         let start = Instant::now();
-        let res = cmd_fn().await;
+        let res = cmd_fn(CmdCasMismatchMetric(self.cas_mismatch.clone())).await;
         self.seconds.inc_by(start.elapsed().as_secs_f64());
         match res.as_ref() {
             Ok(_) => self.succeeded.inc(),
@@ -359,6 +373,38 @@ impl MetricsRetryStream {
             retries: self.retries,
             sleep_seconds: self.sleep_seconds,
             _finished: self._finished,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CodecMetrics {
+    pub(crate) state_encode_count: IntCounter,
+    pub(crate) state_encode_seconds: Counter,
+    pub(crate) state_decode_count: IntCounter,
+    pub(crate) state_decode_seconds: Counter,
+    // Maybe {key,val}_{encode,decode} too. Probably not time or diff.
+}
+
+impl CodecMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        CodecMetrics {
+            state_encode_count: registry.register(metric!(
+                name: "mz_persist_state_encode_count",
+                help: "count of state encodes",
+            )),
+            state_encode_seconds: registry.register(metric!(
+                name: "mz_persist_state_encode_seconds",
+                help: "time spent in of state encodes",
+            )),
+            state_decode_count: registry.register(metric!(
+                name: "mz_persist_state_decode_count",
+                help: "count of state decodes",
+            )),
+            state_decode_seconds: registry.register(metric!(
+                name: "mz_persist_state_decode_seconds",
+                help: "time spent in of state decodes",
+            )),
         }
     }
 }
