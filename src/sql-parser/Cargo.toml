@@ -11,10 +11,6 @@ publish = false
 anyhow = "1.0.58"
 itertools = "0.10.3"
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-# TODO(aljoscha): persist/storage sinks should have a human-readable
-# collection name and STORAGE needs to keep track of which shard IDs they map
-# to. Then we don't need this dependency here.
-mz-persist-client = { path = "../persist-client" }
 phf = { version = "0.10.1", features = ["uncased"] }
 tracing = "0.1.35"
 uncased = "0.9.7"

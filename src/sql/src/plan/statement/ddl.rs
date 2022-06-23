@@ -2052,9 +2052,6 @@ fn get_kafka_sink_consistency_config(
 fn persist_sink_builder(
     format: Option<Format<Aug>>,
     envelope: SinkEnvelope,
-    blob_uri: String,
-    consensus_uri: String,
-    shard_id: String,
     value_desc: RelationDesc,
 ) -> Result<SinkConnectionBuilder, anyhow::Error> {
     if format.is_some() {
@@ -2066,12 +2063,7 @@ fn persist_sink_builder(
     }
 
     Ok(SinkConnectionBuilder::Persist(
-        PersistSinkConnectionBuilder {
-            consensus_uri,
-            blob_uri,
-            shard_id: shard_id.parse().map_err(anyhow::Error::msg)?,
-            value_desc,
-        },
+        PersistSinkConnectionBuilder { value_desc },
     ))
 }
 
@@ -2110,10 +2102,7 @@ pub fn plan_create_sink(
 
     let envelope = match envelope {
         // The persist sink only works with its own special envelope, so make that the default.
-        None if matches!(connection, CreateSinkConnection::Persist { .. }) => {
-            SinkEnvelope::DifferentialRow
-        }
-        Some(Envelope::DifferentialRow) => unreachable!("not expressable in SQL"),
+        None if connection == CreateSinkConnection::Persist => SinkEnvelope::DifferentialRow,
         // Other sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
         None => SinkEnvelope::Debezium,
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain { tx_metadata })) => {
@@ -2128,6 +2117,7 @@ pub fn plan_create_sink(
             bail_unsupported!("UPSERT doesn't make sense for sinks")
         }
         Some(Envelope::None) => bail_unsupported!("\"ENVELOPE NONE\" sinks"),
+        Some(Envelope::DifferentialRow) => unreachable!("not expressable in SQL"),
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name)?)?;
     let from = scx.get_item_by_resolved_name(&from)?;
@@ -2186,7 +2176,7 @@ pub fn plan_create_sink(
                 None
             }
         }
-        CreateSinkConnection::Persist { .. } => None,
+        CreateSinkConnection::Persist => None,
     };
 
     // pick the first valid natural relation key, if any
@@ -2233,18 +2223,7 @@ pub fn plan_create_sink(
             suffix_nonce,
             &root_user_dependencies,
         )?,
-        CreateSinkConnection::Persist {
-            consensus_uri,
-            blob_uri,
-            shard_id,
-        } => persist_sink_builder(
-            format,
-            envelope,
-            blob_uri,
-            consensus_uri,
-            shard_id,
-            desc.into_owned(),
-        )?,
+        CreateSinkConnection::Persist => persist_sink_builder(format, envelope, desc.into_owned())?,
     };
 
     normalize::ensure_empty_options(&with_options, "CREATE SINK")?;

@@ -136,7 +136,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 drop(valid_indexes);
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
-                    CatalogItem::Table(_) => {
+                    CatalogItem::Table(_) | CatalogItem::Sink(_) => {
                         let source_description = self.catalog.source_description_for(*id).unwrap();
                         dataflow.import_source(*id, source_description);
                     }
@@ -248,7 +248,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &mut self,
         name: String,
         id: GlobalId,
-        sink_description: SinkDesc,
+        sink_description: SinkDesc<()>,
     ) -> Result<DataflowDesc, CoordError> {
         let mut dataflow = DataflowDesc::new(name);
         self.build_sink_dataflow_into(&mut dataflow, id, sink_description)?;
@@ -261,7 +261,7 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
         &mut self,
         dataflow: &mut DataflowDesc,
         id: GlobalId,
-        sink_description: SinkDesc,
+        sink_description: SinkDesc<()>,
     ) -> Result<(), CoordError> {
         dataflow.set_as_of(sink_description.as_of.frontier.clone());
         self.import_into_dataflow(&sink_description.from, dataflow)?;

@@ -28,7 +28,7 @@ pub async fn build(
     builder: SinkConnectionBuilder,
     id: GlobalId,
     connector_context: ConnectionContext,
-) -> Result<SinkConnection, CoordError> {
+) -> Result<SinkConnection<()>, CoordError> {
     match builder {
         SinkConnectionBuilder::Kafka(k) => build_kafka(k, id, connector_context).await,
         SinkConnectionBuilder::Persist(p) => build_persist_sink(p, id),
@@ -206,7 +206,7 @@ async fn build_kafka(
     builder: KafkaSinkConnectionBuilder,
     id: GlobalId,
     connector_context: ConnectionContext,
-) -> Result<SinkConnection, CoordError> {
+) -> Result<SinkConnection<()>, CoordError> {
     let maybe_append_nonce = {
         let reuse_topic = builder.reuse_topic;
         let topic_suffix_nonce = builder.topic_suffix_nonce;
@@ -340,11 +340,9 @@ async fn build_kafka(
 fn build_persist_sink(
     builder: PersistSinkConnectionBuilder,
     _id: GlobalId,
-) -> Result<SinkConnection, CoordError> {
+) -> Result<SinkConnection<()>, CoordError> {
     Ok(SinkConnection::Persist(PersistSinkConnection {
-        consensus_uri: builder.consensus_uri,
-        blob_uri: builder.blob_uri,
-        shard_id: builder.shard_id,
         value_desc: builder.value_desc,
+        storage_metadata: (),
     }))
 }

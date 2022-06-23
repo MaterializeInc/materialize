@@ -239,7 +239,7 @@ pub struct SinkConnectionReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
-    pub result: Result<SinkConnection, CoordError>,
+    pub result: Result<SinkConnection<()>, CoordError>,
     pub compute_instance: ComputeInstanceId,
 }
 
@@ -2037,7 +2037,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         id: GlobalId,
         oid: u32,
-        connection: SinkConnection,
+        connection: SinkConnection<()>,
         compute_instance: ComputeInstanceId,
         session: Option<&Session>,
     ) -> Result<(), CoordError> {
@@ -2914,7 +2914,29 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .await;
         match transact_result {
-            Ok(()) => (),
+            Ok(()) => {
+                if let Some(desc) = self.catalog.state().source_description_for(id) {
+                    let ingestion = IngestionDescription {
+                        id,
+                        desc,
+                        since: Antichain::from_elem(0), // TODO
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                    };
+
+                    self.dataflow_client
+                        .storage_mut()
+                        .create_sources(vec![ingestion])
+                        .await
+                        .unwrap();
+
+                    self.initialize_storage_read_policies(
+                        vec![id],
+                        self.logical_compaction_window_ms,
+                    )
+                    .await;
+                }
+            }
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..

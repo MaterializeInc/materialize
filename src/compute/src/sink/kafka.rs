@@ -22,6 +22,7 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::executor::block_on;
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_interchange::json::JsonEncoder;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
@@ -88,7 +89,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        sink: &SinkDesc,
+        sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     ) -> Option<Rc<dyn Any>>

@@ -11,12 +11,13 @@ use std::collections::BTreeSet;
 
 use mz_dataflow_types::client::controller::ComputeController;
 use mz_dataflow_types::client::ComputeInstanceId;
+use mz_dataflow_types::sinks::SinkConnection;
 use mz_expr::MirScalarExpr;
 use mz_repr::GlobalId;
 use mz_stash::Append;
 use mz_transform::IndexOracle;
 
-use crate::catalog::{CatalogItem, CatalogState, Index};
+use crate::catalog::{CatalogItem, CatalogState, Index, SinkConnectionState};
 use crate::coord::dataflow_builder::DataflowBuilder;
 use crate::coord::{CollectionIdBundle, CoordTimestamp, Coordinator};
 
@@ -80,6 +81,13 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
                         // Unmaterialized source or table. Record that we are
                         // missing at least one index.
                         id_bundle.storage_ids.insert(id);
+                    }
+                    CatalogItem::Sink(sink) => {
+                        if let SinkConnectionState::Ready(SinkConnection::Persist(_)) =
+                            sink.connection
+                        {
+                            id_bundle.storage_ids.insert(id);
+                        }
                     }
                     _ => {
                         // Non-indexable thing; no work to do.
