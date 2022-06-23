@@ -4183,6 +4183,7 @@ dependencies = [
  "mz-repr",
  "proc-macro2",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
