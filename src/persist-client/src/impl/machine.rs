@@ -66,7 +66,11 @@ where
         let state = metrics
             .cmds
             .init_state
-            .run_cmd(|| Self::maybe_init_state(consensus.as_ref(), &metrics.retries, shard_id))
+            .run_cmd(|_cas_mismatch_metric| {
+                // No cas_mismatch retries because we just use the returned
+                // state on a mismatch.
+                Self::maybe_init_state(consensus.as_ref(), &metrics.retries, shard_id)
+            })
             .await?;
         Ok(Machine {
             consensus,
@@ -91,7 +95,7 @@ where
     pub async fn register(&mut self, reader_id: &ReaderId) -> (Upper<T>, ReadCapability<T>) {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap)) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, &metrics, |seqno, state| {
                 state.register(seqno, reader_id)
             })
             .await;
@@ -102,7 +106,7 @@ where
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, read_cap) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, |seqno, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.clone_reader, &metrics, |seqno, state| {
                 state.clone_reader(seqno, new_reader_id)
             })
             .await;
@@ -118,7 +122,7 @@ where
         let metrics = Arc::clone(&self.metrics);
         loop {
             let (seqno, res) = self
-                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, |_, state| {
+                .apply_unbatched_cmd(&metrics.cmds.compare_and_append, &metrics, |_, state| {
                     state.compare_and_append(keys, desc)
                 })
                 .await?;
@@ -159,7 +163,7 @@ where
         new_since: &Antichain<T>,
     ) -> (SeqNo, Since<T>) {
         let metrics = Arc::clone(&self.metrics);
-        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |_, state| {
+        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, &metrics, |_, state| {
             state.downgrade_since(reader_id, new_since)
         })
         .await
@@ -168,7 +172,7 @@ where
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {
         let metrics = Arc::clone(&self.metrics);
         let (seqno, _existed) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, |_, state| {
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.expire_reader, &metrics, |_, state| {
                 state.expire_reader(reader_id)
             })
             .await;
@@ -279,6 +283,7 @@ where
     >(
         &mut self,
         cmd: &CmdMetrics,
+        metrics: &Metrics,
         mut work_fn: WorkFn,
     ) -> (SeqNo, R) {
         let mut retry = self
@@ -287,7 +292,7 @@ where
             .idempotent_cmd
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         loop {
-            match self.apply_unbatched_cmd(cmd, &mut work_fn).await {
+            match self.apply_unbatched_cmd(cmd, metrics, &mut work_fn).await {
                 Ok((seqno, x)) => match x {
                     Ok(x) => return (seqno, x),
                     Err(infallible) => match infallible {},
@@ -312,9 +317,10 @@ where
     >(
         &mut self,
         cmd: &CmdMetrics,
+        metrics: &Metrics,
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>), Indeterminate> {
-        cmd.run_cmd(|| async {
+        cmd.run_cmd(|cas_mismatch_metric| async move {
             let path = self.shard_id().to_string();
 
             loop {
@@ -329,7 +335,14 @@ where
                     new_state
                 );
 
+                let start = Instant::now();
                 let new = VersionedData::from((new_state.seqno(), &new_state));
+                metrics.codec.state_encode_count.inc();
+                metrics
+                    .codec
+                    .state_encode_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
+
                 // SUBTLE! Unlike the other consensus and blob uses, we can't
                 // automatically retry indeterminate ExternalErrors here. However,
                 // if the state change itself is _idempotent_, then we're free to
@@ -386,6 +399,7 @@ where
                             self.state.seqno(),
                             current.as_ref().map(|x| x.seqno)
                         );
+                        cas_mismatch_metric.0.inc();
                         self.update_state(current).await;
 
                         // Intentionally don't backoff here. It would only make
@@ -486,10 +500,16 @@ where
                 panic!("internal error: missing state {}", self.state.shard_id());
             }
         };
+        let start = Instant::now();
         let current_state = State::decode(&current.data)
             // We received a State with different declared codecs than a
             // previous SeqNo of the same State. Fail loudly.
             .expect("internal error: new durable state disagreed with old durable state");
+        self.metrics.codec.state_decode_count.inc();
+        self.metrics
+            .codec
+            .state_decode_seconds
+            .inc_by(start.elapsed().as_secs_f64());
         debug_assert_eq!(current.seqno, current_state.seqno());
         debug_assert!(self.state.seqno() <= current.seqno);
         self.state = current_state;
