@@ -66,7 +66,11 @@ where
         let state = metrics
             .cmds
             .init_state
-            .run_cmd(|| Self::maybe_init_state(consensus.as_ref(), &metrics.retries, shard_id))
+            .run_cmd(|_cas_mismatch_metric| {
+                // No cas_mismatch retries because we just use the returned
+                // state on a mismatch.
+                Self::maybe_init_state(consensus.as_ref(), &metrics.retries, shard_id)
+            })
             .await?;
         Ok(Machine {
             consensus,
@@ -314,7 +318,7 @@ where
         cmd: &CmdMetrics,
         mut work_fn: WorkFn,
     ) -> Result<(SeqNo, Result<R, E>), Indeterminate> {
-        cmd.run_cmd(|| async {
+        cmd.run_cmd(|cas_mismatch_metric| async move {
             let path = self.shard_id().to_string();
 
             loop {
@@ -329,7 +333,12 @@ where
                     new_state
                 );
 
-                let new = VersionedData::from((new_state.seqno(), &new_state));
+                let new = self
+                    .metrics
+                    .codecs
+                    .state
+                    .encode(|| VersionedData::from((new_state.seqno(), &new_state)));
+
                 // SUBTLE! Unlike the other consensus and blob uses, we can't
                 // automatically retry indeterminate ExternalErrors here. However,
                 // if the state change itself is _idempotent_, then we're free to
@@ -386,6 +395,7 @@ where
                             self.state.seqno(),
                             current.as_ref().map(|x| x.seqno)
                         );
+                        cas_mismatch_metric.0.inc();
                         self.update_state(current).await;
 
                         // Intentionally don't backoff here. It would only make
@@ -486,7 +496,11 @@ where
                 panic!("internal error: missing state {}", self.state.shard_id());
             }
         };
-        let current_state = State::decode(&current.data)
+        let current_state = self
+            .metrics
+            .codecs
+            .state
+            .decode(|| State::decode(&current.data))
             // We received a State with different declared codecs than a
             // previous SeqNo of the same State. Fail loudly.
             .expect("internal error: new durable state disagreed with old durable state");
