@@ -46,7 +46,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     /// [Description] of updates contained in this batch.
-    desc: Description<T>,
+    pub(crate) desc: Description<T>,
 
     shard_id: ShardId,
 
@@ -476,6 +476,23 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
         keys
     }
+}
+
+pub(crate) fn truncate_batch<T: Timestamp>(
+    batch: &Description<T>,
+    truncate: &Description<T>,
+) -> Result<(), InvalidUsage<T>> {
+    if !PartialOrder::less_equal(batch.lower(), truncate.lower())
+        || PartialOrder::less_than(batch.upper(), truncate.upper())
+    {
+        return Err(InvalidUsage::InvalidBatchBounds {
+            batch_lower: batch.lower().clone(),
+            batch_upper: batch.upper().clone(),
+            append_lower: truncate.lower().clone(),
+            append_upper: truncate.upper().clone(),
+        });
+    }
+    return Ok(());
 }
 
 #[cfg(test)]

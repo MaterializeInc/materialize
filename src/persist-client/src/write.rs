@@ -24,7 +24,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 use tracing::{debug, info, instrument, trace};
 
-use crate::batch::{Batch, BatchBuilder};
+use crate::batch::{truncate_batch, Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::r#impl::compact::{CompactReq, Compactor};
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
@@ -386,15 +386,8 @@ where
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(lower, upper, since);
 
-        if !PartialOrder::less_equal(batch.lower(), desc.lower())
-            || PartialOrder::less_than(batch.upper(), desc.upper())
-        {
-            return Ok(Err(InvalidUsage::InvalidBatchBounds {
-                batch_lower: batch.lower().clone(),
-                batch_upper: batch.upper().clone(),
-                append_lower: desc.lower().clone(),
-                append_upper: desc.upper().clone(),
-            }));
+        if let Err(err) = truncate_batch(&batch.desc, &desc) {
+            return Ok(Err(err));
         }
 
         let res = self

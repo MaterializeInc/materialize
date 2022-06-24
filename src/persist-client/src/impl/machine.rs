@@ -613,12 +613,216 @@ where
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::cast::CastFrom;
+    use std::collections::HashMap;
 
+    use mz_ore::cast::CastFrom;
+    use tokio::runtime::Handle;
+    use tokio::sync::Mutex;
+
+    use crate::batch::{truncate_batch, BatchBuilder};
+    use crate::r#impl::compact::{CompactReq, Compactor};
+    use crate::read::fetch_batch_part;
     use crate::tests::new_test_client;
-    use crate::ShardId;
+    use crate::{PersistConfig, ShardId};
 
     use super::*;
+
+    #[tokio::test]
+    async fn machine_datadriven() {
+        fn get_arg<'a>(args: &'a HashMap<String, Vec<String>>, name: &str) -> Option<&'a str> {
+            args.get(name).map(|vals| {
+                if vals.len() != 1 {
+                    panic!("unexpected values for {}: {:?}", name, vals);
+                }
+                vals[0].as_ref()
+            })
+        }
+        fn get_u64<'a>(args: &'a HashMap<String, Vec<String>>, name: &str) -> Option<u64> {
+            get_arg(args, name).map(|x| {
+                x.parse::<u64>()
+                    .unwrap_or_else(|_| panic!("invalid {}: {}", name, x))
+            })
+        }
+
+        datadriven::walk_async("tests/machine", |mut f| async {
+            let shard_id = ShardId::new();
+            let mut client = new_test_client().await;
+            // Reset blob_target_size. Individual batch writes and compactions
+            // can override it with an arg.
+            client.cfg.blob_target_size = PersistConfig::default().blob_target_size;
+
+            let batches = Arc::new(Mutex::new(HashMap::new()));
+
+            f.run_async(move |tc| {
+                let shard_id = shard_id.clone();
+                let client = client.clone();
+                let batches = Arc::clone(&batches);
+                async move {
+                    match tc.directive.as_str() {
+                        "write-batch" => {
+                            let output = get_arg(&tc.args, "output").expect("missing output");
+                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
+                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
+                            let target_size = get_arg(&tc.args, "target_size")
+                                .map(|x| x.parse::<usize>().expect("invalid target_size"));
+
+                            let updates = tc
+                                .input
+                                .trim()
+                                .split('\n')
+                                .filter(|x| !x.is_empty())
+                                .map(|x| {
+                                    let parts = x.split(' ').collect::<Vec<_>>();
+                                    if parts.len() != 3 {
+                                        panic!("unexpected update: {}", x);
+                                    }
+                                    let (key, ts, diff) = (parts[0], parts[1], parts[2]);
+                                    let ts = ts.parse::<u64>().expect("invalid ts");
+                                    let diff = diff.parse::<i64>().expect("invalid diff");
+                                    (key.to_owned(), ts, diff)
+                                })
+                                .collect::<Vec<_>>();
+
+                            let mut cfg = client.cfg.clone();
+                            if let Some(target_size) = target_size {
+                                cfg.blob_target_size = target_size;
+                            };
+                            let mut builder = BatchBuilder::new(
+                                cfg,
+                                Arc::clone(&client.metrics),
+                                0,
+                                Antichain::from_elem(lower),
+                                Arc::clone(&client.blob),
+                                shard_id.clone(),
+                            );
+                            for (k, t, d) in updates {
+                                builder.add(&k, &(), &t, &d).await.expect("invalid batch");
+                            }
+                            let batch = builder
+                                .finish(Antichain::from_elem(upper))
+                                .await
+                                .expect("invalid batch")
+                                .into_hollow_batch();
+                            batches
+                                .lock()
+                                .await
+                                .insert(output.to_owned(), batch.clone());
+                            format!("parts={} len={}\n", batch.keys.len(), batch.len)
+                        }
+                        "fetch-batch" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let batch = batches
+                                .lock()
+                                .await
+                                .get(input)
+                                .expect("unknown batch")
+                                .clone();
+
+                            let mut s = String::new();
+                            for (idx, key) in batch.keys.iter().enumerate() {
+                                s.push_str(&format!("<part {}>\n", idx));
+                                fetch_batch_part(
+                                    client.blob.as_ref(),
+                                    client.metrics.as_ref(),
+                                    key,
+                                    &batch.desc,
+                                    |k, _v, t, d| {
+                                        let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
+                                        s.push_str(&format!("{} {} {}\n", k, t, d));
+                                    },
+                                )
+                                .await
+                            }
+                            if s.is_empty() {
+                                s.push_str("<empty>\n");
+                            }
+                            s
+                        }
+                        "truncate-batch-desc" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let output = get_arg(&tc.args, "output").expect("missing output");
+                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
+                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
+
+                            let mut batch = batches
+                                .lock()
+                                .await
+                                .get(input)
+                                .expect("unknown batch")
+                                .clone();
+                            let truncated_desc = Description::new(
+                                Antichain::from_elem(lower),
+                                Antichain::from_elem(upper),
+                                batch.desc.since().clone(),
+                            );
+                            match truncate_batch(&batch.desc, &truncated_desc) {
+                                Ok(()) => {
+                                    batch.desc = truncated_desc;
+                                    batches
+                                        .lock()
+                                        .await
+                                        .insert(output.to_owned(), batch.clone());
+                                    format!("parts={} len={}\n", batch.keys.len(), batch.len)
+                                }
+                                Err(err) => format!("error: {}\n", err),
+                            }
+                        }
+                        "compact" => {
+                            let mut batches = batches.lock().await;
+                            let output = get_arg(&tc.args, "output").expect("missing output");
+                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
+                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
+                            let since = get_u64(&tc.args, "since").expect("missing since");
+                            let target_size = get_arg(&tc.args, "target_size")
+                                .map(|x| x.parse::<usize>().expect("invalid target_size"));
+
+                            let mut inputs = Vec::new();
+                            for input in tc.args.get("inputs").expect("missing inputs") {
+                                inputs.push(batches.get(input).expect("unknown batch").clone());
+                            }
+
+                            let mut cfg = client.cfg.clone();
+                            if let Some(target_size) = target_size {
+                                cfg.blob_target_size = target_size;
+                            };
+                            let req = CompactReq {
+                                shard_id,
+                                desc: Description::new(
+                                    Antichain::from_elem(lower),
+                                    Antichain::from_elem(upper),
+                                    Antichain::from_elem(since),
+                                ),
+                                inputs,
+                            };
+                            let res = Compactor::compact::<u64, i64>(
+                                cfg,
+                                Handle::current(),
+                                Arc::clone(&client.blob),
+                                Arc::clone(&client.metrics),
+                                req,
+                            )
+                            .await;
+                            match res {
+                                Ok(res) => {
+                                    batches.insert(output.to_owned(), res.output.clone());
+                                    format!(
+                                        "parts={} len={}\n",
+                                        res.output.keys.len(),
+                                        res.output.len
+                                    )
+                                }
+                                Err(err) => format!("error: {}\n", err),
+                            }
+                        }
+                        _ => panic!("unknown directive {:?}", tc),
+                    }
+                }
+            })
+            .await;
+            f
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn apply_unbatched_cmd_truncate() {

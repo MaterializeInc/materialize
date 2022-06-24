@@ -23,6 +23,7 @@ use futures::Stream;
 use mz_ore::task::RuntimeExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument};
 use uuid::Uuid;
@@ -640,15 +641,21 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
         // Drop the encoded representation as soon as we can to reclaim memory.
         drop(value);
 
+        // WIP this is really subtle and possibly wrong, justify!
+        let has_original_timestamps = PartialOrder::less_equal(desc.since(), desc.lower());
+
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {
                 let t = T::decode(t);
+
                 // WIP this is really subtle and possibly wrong, justify!
-                if desc.since().less_equal(&t) && !desc.lower().less_equal(&t) {
-                    continue;
-                }
-                if desc.since().less_equal(&t) && desc.upper().less_equal(&t) {
-                    continue;
+                if has_original_timestamps {
+                    if !desc.lower().less_equal(&t) {
+                        continue;
+                    }
+                    if desc.upper().less_equal(&t) {
+                        continue;
+                    }
                 }
                 update_fn(k, v, t, d);
             }

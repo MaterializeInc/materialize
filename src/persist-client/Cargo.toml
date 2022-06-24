@@ -58,7 +58,7 @@ async-trait = "0.1.56"
 axum = "0.5.9"
 clap = { version = "3.2.6", features = ["derive", "env"] }
 criterion = { git = "https://github.com/MaterializeInc/criterion.rs.git", features = ["html_reports"] }
-datadriven = "0.6.0"
+datadriven = { version = "0.6.0", features = ["async"] }
 futures-task = "0.3.21"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
