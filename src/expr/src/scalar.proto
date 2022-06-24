@@ -89,6 +89,7 @@ message ProtoUnmaterializableFunc {
         google.protobuf.Empty pg_backend_pid = 11;
         google.protobuf.Empty pg_postmaster_start_time = 12;
         google.protobuf.Empty version = 13;
+        google.protobuf.Empty mz_version_num = 14;
     }
 }
 

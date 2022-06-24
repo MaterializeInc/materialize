@@ -675,6 +675,9 @@
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
     unmaterializable: true
+  - signature: 'mz_version_num() -> int'
+    description: Returns the server's version as an integer having the format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version.
+    unmaterializable: true
   - signature: 'current_database() -> text'
     description: >-
       Returns the name of the current database.

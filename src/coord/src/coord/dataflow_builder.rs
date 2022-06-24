@@ -442,6 +442,9 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzVersion => {
             pack(Datum::from(&*state.config().build_info.human_version()))
         }
+        UnmaterializableFunc::MzVersionNum => {
+            pack(Datum::Int32(state.config().build_info.version_num()))
+        }
         UnmaterializableFunc::PgBackendPid => pack(Datum::Int32(session.conn_id() as i32)),
         UnmaterializableFunc::PgPostmasterStartTime => pack(Datum::from(state.config().start_time)),
         UnmaterializableFunc::Version => {
