@@ -140,9 +140,9 @@ use mz_sql::plan::{
     CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
     DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
     ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
-    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    StatementDesc, TailFrom, TailPlan, View,
+    LogicalCompactionWindow, MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen,
+    RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_transform::Optimizer;
@@ -440,8 +440,6 @@ pub struct Coordinator<S> {
     view_optimizer: Optimizer,
     catalog: Catalog<S>,
 
-    /// Delta from leading edge of an arrangement from which we allow compaction.
-    logical_compaction_window_ms: Option<Timestamp>,
     /// Channel to manage internal commands from the coordinator to itself.
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
 
@@ -4877,9 +4875,9 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut options = Vec::with_capacity(plan.options.len());
         for o in plan.options {
             options.push(match o {
-                IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
-                    self.logical_compaction_window_ms.map(Duration::from_millis),
-                ),
+                IndexOptionName::LogicalCompactionWindow => {
+                    IndexOption::LogicalCompactionWindow(LogicalCompactionWindow::Default)
+                }
             });
         }
 
@@ -5185,10 +5183,14 @@ impl<S: Append + 'static> Coordinator<S> {
                         .index()
                         .expect("setting options on index")
                         .compute_instance;
-                    let window = window.map(duration_to_timestamp_millis);
                     let policy = match window {
-                        Some(time) => ReadPolicy::lag_writes_by(time),
-                        None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
+                        LogicalCompactionWindow::Default => ReadPolicy::PreviousUpper,
+                        LogicalCompactionWindow::Duration(duration) => {
+                            ReadPolicy::lag_writes_by(duration_to_timestamp_millis(duration))
+                        }
+                        LogicalCompactionWindow::None => {
+                            ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()))
+                        }
                     };
                     needs.base_policy = policy;
                     self.dataflow_client
@@ -5426,7 +5428,7 @@ pub async fn serve<S: Append + 'static>(
         dataflow_client,
         storage,
         timestamp_frequency,
-        logical_compaction_window,
+        logical_compaction_window: _,
         unsafe_mode,
         build_info,
         metrics_registry,
@@ -5471,8 +5473,6 @@ pub async fn serve<S: Append + 'static>(
                 dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
-                logical_compaction_window_ms: logical_compaction_window
-                    .map(duration_to_timestamp_millis),
                 internal_cmd_tx,
                 global_timeline: timeline::TimestampOracle::new(now(), move || (&*now)()),
                 advance_tables: AdvanceTables::new(),

@@ -599,9 +599,15 @@ pub enum ExecuteTimeout {
 
 #[derive(Clone, Debug)]
 pub enum IndexOption {
-    /// Configures the logical compaction window for an index. `None` disables
-    /// logical compaction entirely.
-    LogicalCompactionWindow(Option<Duration>),
+    /// Configures the logical compaction window for an index.
+    LogicalCompactionWindow(LogicalCompactionWindow),
+}
+
+#[derive(Clone, Debug)]
+pub enum LogicalCompactionWindow {
+    Default,
+    Duration(Duration),
+    None,
 }
 
 /// A vector of values to which parameter references should be bound.

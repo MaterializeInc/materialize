@@ -91,8 +91,8 @@ use crate::plan::{
     CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
     CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, ReplicaConfig, Secret, Sink,
-    Source, Table, Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, LogicalCompactionWindow, Params, Plan, RecordedView,
+    ReplicaConfig, Secret, Sink, Source, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -3276,7 +3276,10 @@ fn plan_index_options(
 
     if let Some(OptionalInterval(lcw)) = logical_compaction_window {
         out.push(crate::plan::IndexOption::LogicalCompactionWindow(
-            lcw.map(|interval| interval.duration()).transpose()?,
+            match lcw {
+                Some(interval) => LogicalCompactionWindow::Duration(interval.duration()?),
+                None => LogicalCompactionWindow::None,
+            },
         ))
     }
 

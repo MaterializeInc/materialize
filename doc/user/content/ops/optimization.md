@@ -37,10 +37,11 @@ window into the state at the start of the window.
 (T-shirts, 3:14pm, +497)
 ```
 
-Materialize will only perform this compaction on data that falls outside the
-logical compaction window. The default compaction window is 1 millisecond behind
-the current time, but the window can be adjusted via the
-[`--logical-compaction-window`](/cli/#compaction-window) option.
+Materialize will only perform this compaction on data that falls outside
+the logical compaction window. The default compaction behavior is to
+preserve data from the most recently updated timestamp. It can be adjusted
+on each index via the [`logical_compaction_window`](/sql/alter-index)
+option.
 
 Adjusting the compaction window involves making a tradeoff between historical
 detail and resource usage. A larger compaction window retains more historical
