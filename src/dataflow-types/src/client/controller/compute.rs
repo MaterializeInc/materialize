@@ -519,7 +519,10 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
+                let mut new_read_capability = policy.frontier(
+                    collection.write_frontier.frontier(),
+                    collection.write_frontier.frontier(),
+                );
 
                 if <_ as timely::order::PartialOrder>::less_equal(
                     &collection.implied_capability,
@@ -583,17 +586,21 @@ where
     ) -> Result<(), ComputeError> {
         let mut read_capability_changes = BTreeMap::default();
         for (id, changes) in updates.iter() {
+            let mut changes = changes.clone();
+            if changes.is_empty() {
+                continue;
+            }
             let collection = self
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
-            collection
-                .write_frontier
-                .update_iter(changes.clone().drain());
+            let old_write_frontier = collection.write_frontier.frontier().to_owned();
+            collection.write_frontier.update_iter(changes.drain());
 
-            let mut new_read_capability = collection
-                .read_policy
-                .frontier(collection.write_frontier.frontier());
+            let mut new_read_capability = collection.read_policy.frontier(
+                collection.write_frontier.frontier(),
+                old_write_frontier.borrow(),
+            );
             if <_ as timely::order::PartialOrder>::less_equal(
                 &collection.implied_capability,
                 &new_read_capability,

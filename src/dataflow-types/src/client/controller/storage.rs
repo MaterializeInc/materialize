@@ -559,7 +559,10 @@ where
         let mut read_capability_changes = BTreeMap::default();
         for (id, policy) in policies.into_iter() {
             if let Ok(collection) = self.collection_mut(id) {
-                let mut new_read_capability = policy.frontier(collection.write_frontier.frontier());
+                let mut new_read_capability = policy.frontier(
+                    collection.write_frontier.frontier(),
+                    collection.write_frontier.frontier(),
+                );
 
                 if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                     let mut update = ChangeBatch::new();
@@ -594,13 +597,15 @@ where
                 .collection_mut(*id)
                 .expect("Reference to absent collection");
 
+            let old_write_frontier = collection.write_frontier.frontier().to_owned();
             collection
                 .write_frontier
                 .update_iter(changes.clone().drain());
 
-            let mut new_read_capability = collection
-                .read_policy
-                .frontier(collection.write_frontier.frontier());
+            let mut new_read_capability = collection.read_policy.frontier(
+                collection.write_frontier.frontier(),
+                old_write_frontier.borrow(),
+            );
             if PartialOrder::less_equal(&collection.implied_capability, &new_read_capability) {
                 // TODO: reuse change batch above?
                 let mut update = ChangeBatch::new();

@@ -600,6 +600,7 @@ pub enum ReadPolicy<T> {
     LagWriteFrontier(
         #[derivative(Debug = "ignore")] Arc<dyn Fn(AntichainRef<T>) -> Antichain<T> + Send + Sync>,
     ),
+    PreviousUpper,
     /// Allows one to express multiple read policies, taking the least of
     /// the resulting frontiers.
     Multiple(Vec<ReadPolicy<T>>),
@@ -628,14 +629,22 @@ impl ReadPolicy<mz_repr::Timestamp> {
 }
 
 impl<T: Timestamp> ReadPolicy<T> {
-    pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
+    pub fn frontier(
+        &self,
+        new_write_frontier: AntichainRef<T>,
+        old_write_frontier: AntichainRef<T>,
+    ) -> Antichain<T> {
         match self {
             ReadPolicy::ValidFrom(frontier) => frontier.clone(),
-            ReadPolicy::LagWriteFrontier(logic) => logic(write_frontier),
+            ReadPolicy::LagWriteFrontier(logic) => logic(new_write_frontier),
+            ReadPolicy::PreviousUpper => old_write_frontier.to_owned(),
             ReadPolicy::Multiple(policies) => {
                 let mut frontier = Antichain::new();
                 for policy in policies.iter() {
-                    for time in policy.frontier(write_frontier).iter() {
+                    for time in policy
+                        .frontier(new_write_frontier, old_write_frontier)
+                        .iter()
+                    {
                         frontier.insert(time.clone());
                     }
                 }
@@ -653,6 +662,9 @@ mod tests {
     fn lag_writes_by_zero() {
         let policy = ReadPolicy::lag_writes_by(0);
         let write_frontier = Antichain::from_elem(5);
-        assert_eq!(policy.frontier(write_frontier.borrow()), write_frontier);
+        assert_eq!(
+            policy.frontier(write_frontier.borrow(), write_frontier.borrow()),
+            write_frontier
+        );
     }
 }

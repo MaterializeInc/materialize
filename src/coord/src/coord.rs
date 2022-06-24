@@ -617,17 +617,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// This should be called only after a storage collection is created, and
     /// ideally very soon afterwards. The collection is otherwise initialized
     /// with a read policy that allows no compaction.
-    async fn initialize_storage_read_policies(
-        &mut self,
-        ids: Vec<GlobalId>,
-        compaction_window_ms: Option<Timestamp>,
-    ) {
+    async fn initialize_storage_read_policies(&mut self, ids: Vec<GlobalId>) {
         let mut policy_updates = Vec::new();
         for id in ids.into_iter() {
-            let policy = match compaction_window_ms {
-                Some(time) => ReadPolicy::lag_writes_by(time),
-                None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-            };
+            let policy = ReadPolicy::PreviousUpper;
             self.read_capability.insert(id, policy.clone().into());
             policy_updates.push((id, self.read_capability[&id].policy()));
         }
@@ -647,14 +640,10 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         ids: Vec<GlobalId>,
         instance: mz_dataflow_types::client::ComputeInstanceId,
-        compaction_window_ms: Option<Timestamp>,
     ) {
         let mut policy_updates = Vec::new();
         for id in ids.into_iter() {
-            let policy = match compaction_window_ms {
-                Some(time) => ReadPolicy::lag_writes_by(time),
-                None => ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum())),
-            };
+            let policy = ReadPolicy::PreviousUpper;
             self.read_capability.insert(id, policy.clone().into());
             policy_updates.push((id, self.read_capability[&id].policy()));
         }
@@ -738,11 +727,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         .create_sources(vec![ingestion])
                         .await
                         .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    self.initialize_storage_read_policies(vec![entry.id()])
+                        .await;
                 }
                 CatalogItem::Table(_) => {
                     let since_ts = self.get_local_write_ts();
@@ -773,11 +759,8 @@ impl<S: Append + 'static> Coordinator<S> {
                         .create_sources(vec![ingestion])
                         .await
                         .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![entry.id()],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    self.initialize_storage_read_policies(vec![entry.id()])
+                        .await;
                 }
                 CatalogItem::Index(idx) => {
                     if logs.contains(&idx.on) {
@@ -785,7 +768,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         self.initialize_compute_read_policies(
                             vec![entry.id()],
                             idx.compute_instance,
-                            self.logical_compaction_window_ms,
                         )
                         .await;
                     } else {
@@ -812,11 +794,8 @@ impl<S: Append + 'static> Coordinator<S> {
                             .create_sources(vec![ingestion])
                             .await
                             .unwrap();
-                        self.initialize_storage_read_policies(
-                            vec![entry.id()],
-                            self.logical_compaction_window_ms,
-                        )
-                        .await;
+                        self.initialize_storage_read_policies(vec![entry.id()])
+                            .await;
                     }
 
                     // Re-create the sink on the compute instance.
@@ -2742,11 +2721,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![table_id],
-                    self.logical_compaction_window_ms,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![table_id]).await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -2858,11 +2833,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .await
                     .unwrap();
 
-                self.initialize_storage_read_policies(
-                    vec![source_id],
-                    self.logical_compaction_window_ms,
-                )
-                .await;
+                self.initialize_storage_read_policies(vec![source_id]).await;
                 if let Some((df, compute_instance)) = df {
                     self.ship_dataflow(df, compute_instance).await;
                 }
@@ -2977,11 +2948,7 @@ impl<S: Append + 'static> Coordinator<S> {
                         .create_sources(vec![ingestion])
                         .await
                         .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![id],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    self.initialize_storage_read_policies(vec![id]).await;
                 }
             }
             Err(CoordError::Catalog(catalog::Error {
@@ -5270,12 +5237,8 @@ impl<S: Append + 'static> Coordinator<S> {
             .create_dataflows(dataflow_plans)
             .await
             .unwrap();
-        self.initialize_compute_read_policies(
-            output_ids,
-            instance,
-            self.logical_compaction_window_ms,
-        )
-        .await;
+        self.initialize_compute_read_policies(output_ids, instance)
+            .await;
     }
 
     /// Finalizes a dataflow.
@@ -5882,12 +5845,8 @@ pub mod fast_path_peek {
                         .create_dataflows(vec![dataflow])
                         .await
                         .unwrap();
-                    self.initialize_compute_read_policies(
-                        output_ids,
-                        compute_instance,
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
+                    self.initialize_compute_read_policies(output_ids, compute_instance)
+                        .await;
 
                     // Create an identity MFP operator.
                     let mut map_filter_project = mz_expr::MapFilterProject::new(source_arity);
