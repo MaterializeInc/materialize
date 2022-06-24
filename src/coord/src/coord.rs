@@ -666,6 +666,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn bootstrap(
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
@@ -1576,6 +1577,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
         self.catalog_transact(
             None,
@@ -4905,6 +4907,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
@@ -5035,6 +5038,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(result)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes are not batched in a group commit. This is mostly due to the complexity
