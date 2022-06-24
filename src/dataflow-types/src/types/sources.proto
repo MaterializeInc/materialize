@@ -161,7 +161,6 @@ message ProtoDebeziumSourceProjection {
 }
 
 message ProtoKafkaSourceConnection {
-    mz_dataflow_types.types.connections.ProtoKafkaConnection connection = 1;
     string topic = 2;
     map<int32, ProtoMzOffset> start_offsets = 3;
     optional string group_id_prefix = 4;
@@ -171,6 +170,7 @@ message ProtoKafkaSourceConnection {
     ProtoIncludedColumnPos include_topic = 8;
     ProtoIncludedColumnPos include_offset = 9;
     ProtoIncludedColumnPos include_headers = 10;
+    map<string, mz_dataflow_types.types.connections.ProtoStringOrSecret> options = 11;
 }
 
 message ProtoSourceConnection {

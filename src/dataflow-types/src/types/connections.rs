@@ -9,7 +9,6 @@
 
 //! Connection types.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
@@ -18,7 +17,6 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use mz_ccsr::tls::{Certificate, Identity};
-use mz_kafka_util::KafkaAddrs;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
 use mz_repr::GlobalId;
@@ -89,6 +87,12 @@ impl RustType<ProtoStringOrSecret> for StringOrSecret {
     }
 }
 
+impl<V: std::fmt::Display> From<V> for StringOrSecret {
+    fn from(v: V) -> StringOrSecret {
+        StringOrSecret::String(format!("{}", v))
+    }
+}
+
 /// Extra context to pass through when instantiating a connection for a source
 /// or sink.
 ///
@@ -139,40 +143,141 @@ impl Default for ConnectionContext {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Connection {
     Kafka(KafkaConnection),
     Csr(CsrConnection),
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SslConfig {
+    pub key: GlobalId,
+    pub key_password: GlobalId,
+    pub certificate: StringOrSecret,
+    pub certificate_authority: StringOrSecret,
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct SaslConfig {
+    pub mechanisms: String,
+    pub username: StringOrSecret,
+    pub password: GlobalId,
+    pub certificate_authority: StringOrSecret,
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum Security {
+    Ssl(SslConfig),
+    Sasl(SaslConfig),
+}
+
+impl From<SslConfig> for Security {
+    fn from(c: SslConfig) -> Self {
+        Security::Ssl(c)
+    }
+}
+
+impl From<SaslConfig> for Security {
+    fn from(c: SaslConfig) -> Self {
+        Security::Sasl(c)
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection {
-    pub broker: KafkaAddrs,
-    pub options: BTreeMap<String, StringOrSecret>,
+    pub brokers: Vec<String>,
+    pub security: Option<Security>,
+}
+
+impl RustType<ProtoKafkaConnectionSslConfig> for SslConfig {
+    fn into_proto(&self) -> ProtoKafkaConnectionSslConfig {
+        ProtoKafkaConnectionSslConfig {
+            key: Some(self.key.into_proto()),
+            key_password: Some(self.key_password.into_proto()),
+            certificate: Some(self.certificate.into_proto()),
+            certificate_authority: Some(self.certificate_authority.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaConnectionSslConfig) -> Result<Self, TryFromProtoError> {
+        Ok(SslConfig {
+            key: proto
+                .key
+                .into_rust_if_some("ProtoKafkaConnectionSslConfig::key")?,
+            key_password: proto
+                .key_password
+                .into_rust_if_some("ProtoKafkaConnectionSslConfig::key_password")?,
+            certificate: proto
+                .certificate
+                .into_rust_if_some("ProtoKafkaConnectionSslConfig::certificate")?,
+            certificate_authority: proto
+                .certificate_authority
+                .into_rust_if_some("ProtoKafkaConnectionSslConfig::certificate_authority")?,
+        })
+    }
+}
+
+impl RustType<ProtoKafkaConnectionSaslConfig> for SaslConfig {
+    fn into_proto(&self) -> ProtoKafkaConnectionSaslConfig {
+        ProtoKafkaConnectionSaslConfig {
+            mechanisms: self.mechanisms.into_proto(),
+            username: Some(self.username.into_proto()),
+            password: Some(self.password.into_proto()),
+            certificate_authority: Some(self.certificate_authority.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaConnectionSaslConfig) -> Result<Self, TryFromProtoError> {
+        Ok(SaslConfig {
+            mechanisms: proto.mechanisms,
+            username: proto
+                .username
+                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
+            password: proto
+                .password
+                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::password")?,
+            certificate_authority: proto
+                .certificate_authority
+                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::certificate_authority")?,
+        })
+    }
+}
+
+impl RustType<ProtoKafkaConnectionSecurity> for Security {
+    fn into_proto(&self) -> ProtoKafkaConnectionSecurity {
+        use proto_kafka_connection_security::Kind;
+        ProtoKafkaConnectionSecurity {
+            kind: Some(match self {
+                Security::Ssl(config) => Kind::Ssl(config.into_proto()),
+                Security::Sasl(config) => Kind::Sasl(config.into_proto()),
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoKafkaConnectionSecurity) -> Result<Self, TryFromProtoError> {
+        use proto_kafka_connection_security::Kind;
+        let kind = proto.kind.ok_or_else(|| {
+            TryFromProtoError::missing_field("ProtoKafkaConnectionSecurity::kind")
+        })?;
+        Ok(match kind {
+            Kind::Ssl(s) => Security::Ssl(SslConfig::from_proto(s)?),
+            Kind::Sasl(s) => Security::Sasl(SaslConfig::from_proto(s)?),
+        })
+    }
 }
 
 impl RustType<ProtoKafkaConnection> for KafkaConnection {
     fn into_proto(&self) -> ProtoKafkaConnection {
         ProtoKafkaConnection {
-            broker: Some(self.broker.into_proto()),
-            options: self
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
+            brokers: self.brokers.into_proto(),
+            security: self.security.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
         Ok(KafkaConnection {
-            broker: proto
-                .broker
-                .into_rust_if_some("ProtoKafkaConnection::broker")?,
-            options: proto
-                .options
-                .into_iter()
-                .map(|(k, v)| Ok((k, StringOrSecret::from_proto(v)?)))
-                .collect::<Result<_, TryFromProtoError>>()?,
+            brokers: proto.brokers,
+            security: proto.security.into_rust()?,
         })
     }
 }

@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -21,11 +22,14 @@ use aws_arn::ARN;
 use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use mz_kafka_util::KafkaAddrs;
 use prost::Message;
 use regex::Regex;
 use tracing::{debug, warn};
 
-use mz_dataflow_types::connections::{Connection, KafkaConnection};
+use mz_dataflow_types::connections::{
+    Connection, KafkaConnection, SaslConfig, Security, SslConfig, StringOrSecret,
+};
 use mz_dataflow_types::sinks::{
     KafkaSinkConnectionBuilder, KafkaSinkConnectionRetention, KafkaSinkFormat,
     PersistSinkConnectionBuilder, SinkConnectionBuilder, SinkEnvelope,
@@ -65,12 +69,12 @@ use crate::ast::{
     CsrConnection, CsrConnectionAvro, CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
     CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
-    KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
-    ReplicaOption, ReplicaOptionName, Select, SelectItem, SetExpr, SourceIncludeMetadata,
-    SourceIncludeMetadataType, Statement, SubscriptPosition, TableConstraint, TableFactor,
-    TableWithJoins, UnresolvedDatabaseName, UnresolvedObjectName, Value, ViewDefinition,
-    WithOptionValue,
+    Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConnectionOption,
+    KafkaConnectionOptionName, KafkaConsistency, KeyConstraint, ObjectType, Op, ProtobufSchema,
+    QualifiedReplica, Query, ReplicaDefinition, ReplicaOption, ReplicaOptionName, Select,
+    SelectItem, SetExpr, SourceIncludeMetadata, SourceIncludeMetadataType, Statement,
+    SubscriptPosition, TableConstraint, TableFactor, TableWithJoins, UnresolvedDatabaseName,
+    UnresolvedObjectName, Value, ViewDefinition, WithOptionValue,
 };
 use crate::catalog::{CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails};
 use crate::kafka_util;
@@ -83,7 +87,7 @@ use crate::normalize::{self, SqlValueOrSecret};
 use crate::plan::error::PlanError;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::with_options::{OptionalInterval, TryFromValue};
+use crate::plan::with_options::{self, OptionalInterval, TryFromValue};
 use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
@@ -342,17 +346,16 @@ pub fn plan_create_source(
 
     let (external_connection, encoding) = match connection {
         CreateSourceConnection::Kafka(kafka) => {
-            let kafka_connection = match &kafka.connection {
-                mz_sql_parser::ast::KafkaConnection::Inline { broker } => KafkaConnection {
-                    broker: broker.parse()?,
-                    options: kafka_util::extract_config(&mut with_options)?,
-                },
-                mz_sql_parser::ast::KafkaConnection::Reference { connection, .. } => {
-                    let item = scx.get_item_by_resolved_name(&connection)?;
-                    match item.connection()? {
-                        Connection::Kafka(connection) => connection.clone(),
-                        _ => bail!("{} is not a kafka connection", item.name()),
-                    }
+            let mut options = kafka_util::extract_config(&mut with_options)?;
+            match &kafka.connection {
+                mz_sql_parser::ast::KafkaConnection::Inline { broker } => {
+                    options.insert(
+                        "bootstrap.servers".into(),
+                        KafkaAddrs::from_str(broker)?.to_string().into(),
+                    );
+                }
+                mz_sql_parser::ast::KafkaConnection::Reference { connection: _, .. } => {
+                    todo!()
                 }
             };
 
@@ -363,10 +366,11 @@ pub fn plan_create_source(
             };
 
             let parse_offset = |s: &str| match s.parse::<i64>() {
-                // we parse an i64 here, because we don't yet support u64's in sql,
-                // but put it into an internal MzOffset that holds a u64
-                // TODO: make this an native u64 when https://github.com/MaterializeInc/materialize/issues/7629
-                // is resolved.
+                // we parse an i64 here, because we don't yet support u64's in
+                // sql, but put it into an internal MzOffset that holds a u64
+                // TODO: make this an native u64 when
+                // https://github.com/MaterializeInc/materialize/issues/7629 is
+                // resolved.
                 Ok(n) if n >= 0 => Ok(MzOffset {
                     offset: n.try_into().unwrap(),
                 }),
@@ -397,7 +401,7 @@ pub fn plan_create_source(
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
 
             let mut connection = KafkaSourceConnection {
-                connection: kafka_connection,
+                options,
                 topic: kafka.topic.clone(),
                 start_offsets,
                 group_id_prefix,
@@ -1226,6 +1230,7 @@ fn get_encoding_inner(
                 } => {
                     let AvroSchemaOptionExtracted {
                         confluent_wire_format,
+                        ..
                     } = with_options.clone().try_into()?;
 
                     Schema {
@@ -1832,7 +1837,12 @@ fn kafka_sink_builder(
         None => false,
         Some(_) => bail!("reuse_topic must be a boolean"),
     };
-    let config_options = kafka_util::extract_config(with_options)?;
+    let mut config_options = kafka_util::extract_config(with_options)?;
+    config_options.insert(
+        "bootstrap.servers".into(),
+        // Normalize broker address
+        KafkaAddrs::from_str(&broker)?.to_string().into(),
+    );
 
     let avro_key_fullname = match with_options.remove("avro_key_fullname") {
         Some(SqlValueOrSecret::Value(Value::String(s))) => Some(s),
@@ -1908,8 +1918,6 @@ fn kafka_sink_builder(
         consistency,
         consistency_topic,
     )?;
-
-    let broker_addrs = broker.parse()?;
 
     let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {
@@ -1987,10 +1995,7 @@ fn kafka_sink_builder(
     let consistency_format = consistency_config.map(|config| config.1);
 
     Ok(SinkConnectionBuilder::Kafka(KafkaSinkConnectionBuilder {
-        connection: KafkaConnection {
-            broker: broker_addrs,
-            options: config_options,
-        },
+        options: config_options,
         format,
         topic_prefix,
         consistency_topic_prefix: consistency_topic,
@@ -2782,6 +2787,7 @@ fn plan_replica_config(
         availability_zone,
         size,
         remote,
+        ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
     if remote.is_some() {
@@ -2884,6 +2890,125 @@ pub fn describe_create_connection(
     Ok(StatementDesc::new(None))
 }
 
+generate_extracted_config!(
+    KafkaConnectionOption,
+    (Broker, String),
+    (Brokers, Vec<String>),
+    (SslKey, with_options::Secret),
+    (SslKeyPassword, with_options::Secret),
+    (SslCertificate, StringOrSecret),
+    (SslCertificateAuthority, StringOrSecret),
+    (SaslMechanisms, String),
+    (SaslUsername, StringOrSecret),
+    (SaslPassword, with_options::Secret)
+);
+
+impl KafkaConnectionOptionExtracted {
+    pub fn get_brokers(&self) -> Result<Vec<String>, anyhow::Error> {
+        let mut brokers = match (&self.broker, &self.brokers) {
+            (Some(_), Some(_)) => bail!("invalid CONNECTION: cannot set BROKER and BROKERS"),
+            (None, None) => bail!("invalid CONNECTION: must set either BROKER or BROKERS"),
+            (Some(v), None) => vec![v.to_string()],
+            (None, Some(v)) => v.to_vec(),
+        };
+
+        for broker in &mut brokers {
+            // Normalize Kafka addresses
+            *broker = KafkaAddrs::from_str(broker)?.to_string();
+        }
+
+        Ok(brokers)
+    }
+    pub fn ssl_config(&self) -> HashSet<KafkaConnectionOptionName> {
+        use KafkaConnectionOptionName::*;
+        HashSet::from([
+            SslKey,
+            SslKeyPassword,
+            SslCertificate,
+            SslCertificateAuthority,
+        ])
+    }
+    pub fn sasl_config(&self) -> HashSet<KafkaConnectionOptionName> {
+        use KafkaConnectionOptionName::*;
+        HashSet::from([
+            SaslMechanisms,
+            SaslUsername,
+            SaslPassword,
+            SslCertificateAuthority,
+        ])
+    }
+}
+
+impl From<&KafkaConnectionOptionExtracted> for Option<SslConfig> {
+    fn from(k: &KafkaConnectionOptionExtracted) -> Self {
+        if k.ssl_config().iter().all(|config| k.seen.contains(config)) {
+            Some(SslConfig {
+                key: k.ssl_key.unwrap().into(),
+                key_password: k.ssl_key_password.unwrap().into(),
+                certificate: k.ssl_certificate.clone().unwrap(),
+                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl From<&KafkaConnectionOptionExtracted> for Option<SaslConfig> {
+    fn from(k: &KafkaConnectionOptionExtracted) -> Self {
+        if k.sasl_config().iter().all(|config| k.seen.contains(config)) {
+            Some(SaslConfig {
+                mechanisms: k.sasl_mechanisms.clone().unwrap(),
+                username: k.sasl_username.clone().unwrap(),
+                password: k.sasl_password.unwrap().into(),
+                certificate_authority: k.ssl_certificate_authority.clone().unwrap(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl TryFrom<&KafkaConnectionOptionExtracted> for Option<Security> {
+    type Error = anyhow::Error;
+    fn try_from(value: &KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        let ssl_config = Option::<SslConfig>::from(value).map(Security::from);
+        let sasl_config = Option::<SaslConfig>::from(value).map(Security::from);
+
+        let mut security_iter = vec![ssl_config, sasl_config].into_iter();
+        let res = match security_iter.find(|v| v.is_some()) {
+            Some(config) => {
+                if security_iter.find(|v| v.is_some()).is_some() {
+                    bail!("invalid CONNECTION: cannot specify multiple security protocols");
+                }
+                config
+            }
+            None => None,
+        };
+
+        if res.is_none()
+            && [value.sasl_config(), value.ssl_config()]
+                .iter()
+                .flatten()
+                .any(|c| value.seen.contains(c))
+        {
+            bail!("invalid CONNECTION: under-specified security configuration");
+        }
+
+        Ok(res)
+    }
+}
+
+impl TryFrom<KafkaConnectionOptionExtracted> for KafkaConnection {
+    type Error = anyhow::Error;
+    fn try_from(value: KafkaConnectionOptionExtracted) -> Result<Self, Self::Error> {
+        Ok(KafkaConnection {
+            brokers: value.get_brokers()?,
+            security: (&value).try_into()?,
+        })
+    }
+}
+
 pub fn plan_create_connection(
     scx: &StatementContext,
     stmt: CreateConnectionStatement<Aug>,
@@ -2897,15 +3022,9 @@ pub fn plan_create_connection(
         if_not_exists,
     } = stmt;
     let connection = match connection {
-        CreateConnection::Kafka {
-            broker,
-            with_options,
-        } => {
-            let mut with_options = normalize::options(&with_options)?;
-            Connection::Kafka(KafkaConnection {
-                broker: broker.parse()?,
-                options: kafka_util::extract_config(&mut with_options)?,
-            })
+        CreateConnection::Kafka { with_options } => {
+            let k = KafkaConnectionOptionExtracted::try_from(with_options)?;
+            Connection::Kafka(KafkaConnection::try_from(k)?)
         }
         CreateConnection::Csr { url, with_options } => {
             let connection = kafka_util::generate_ccsr_connection(
@@ -3273,6 +3392,7 @@ fn plan_index_options(
 ) -> Result<Vec<crate::plan::IndexOption>, anyhow::Error> {
     let IndexOptionExtracted {
         logical_compaction_window,
+        ..
     }: IndexOptionExtracted = with_opts.try_into()?;
 
     let mut out = Vec::with_capacity(1);
