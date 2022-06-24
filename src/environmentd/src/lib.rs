@@ -52,18 +52,6 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 #[derive(Debug, Clone)]
 pub struct Config {
     // === Performance tuning options. ===
-    /// The historical window in which distinctions are maintained for
-    /// arrangements.
-    ///
-    /// As arrangements accept new timestamps they may optionally collapse prior
-    /// timestamps to the same value, retaining their effect but removing their
-    /// distinction. A large value or `None` results in a large amount of
-    /// historical detail for arrangements; this increases the logical times at
-    /// which they can be accurately queried, but consumes more memory. A low
-    /// value reduces the amount of memory required but also risks not being
-    /// able to use the arrangement in a query that has other constraints on the
-    /// timestamps used (e.g. when joined with other arrangements).
-    pub logical_compaction_window: Option<Duration>,
     /// The interval at which sources should be timestamped.
     pub timestamp_frequency: Duration,
 
@@ -256,7 +244,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
         dataflow_client: dataflow_controller,
         storage: coord_storage,
         timestamp_frequency: config.timestamp_frequency,
-        logical_compaction_window: config.logical_compaction_window,
         unsafe_mode: config.unsafe_mode,
         build_info: &BUILD_INFO,
         metrics_registry: config.metrics_registry.clone(),

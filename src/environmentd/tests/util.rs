@@ -53,7 +53,6 @@ pub struct Config {
     frontegg: Option<FronteggAuthentication>,
     unsafe_mode: bool,
     workers: usize,
-    logical_compaction_window: Option<Duration>,
     now: NowFn,
     seed: u32,
 }
@@ -67,7 +66,6 @@ impl Default for Config {
             frontegg: None,
             unsafe_mode: false,
             workers: 1,
-            logical_compaction_window: None,
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
         }
@@ -106,11 +104,6 @@ impl Config {
 
     pub fn workers(mut self, workers: usize) -> Self {
         self.workers = workers;
-        self
-    }
-
-    pub fn logical_compaction_window(mut self, logical_compaction_window: Duration) -> Self {
-        self.logical_compaction_window = Some(logical_compaction_window);
         self
     }
 
@@ -173,7 +166,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
     let persist_clients = Arc::new(Mutex::new(persist_clients));
     let inner = runtime.block_on(mz_environmentd::serve(mz_environmentd::Config {
         timestamp_frequency: Duration::from_secs(1),
-        logical_compaction_window: config.logical_compaction_window,
         catalog_postgres_stash,
         controller: ControllerConfig {
             orchestrator: Arc::new(orchestrator),

@@ -601,7 +601,6 @@ impl Runner {
         let persist_clients = Arc::new(Mutex::new(persist_clients));
         let server_config = mz_environmentd::Config {
             timestamp_frequency: Duration::from_secs(1),
-            logical_compaction_window: None,
             catalog_postgres_stash,
             controller: ControllerConfig {
                 orchestrator: Arc::new(orchestrator),
