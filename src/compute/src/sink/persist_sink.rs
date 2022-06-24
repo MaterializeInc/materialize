@@ -23,6 +23,7 @@ use timely::PartialOrder;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sinks::{PersistSinkConnection, SinkDesc};
+use mz_dataflow_types::sources::SourceData;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
@@ -59,6 +60,10 @@ where
         let persist_clients = Arc::clone(&compute_state.persist_clients);
         let persist_location = self.storage_metadata.persist_location.clone();
         let shard_id = self.storage_metadata.persist_shard;
+
+        // Log the shard ID so we know which shard to read for testing.
+        // TODO(teskje): Remove once we have a built-in way for reading back sinked data.
+        tracing::info!("persist_sink shard ID: {shard_id}");
 
         let operator_name = format!("persist_sink({})", shard_id);
         let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
@@ -111,7 +116,7 @@ where
                     .open(persist_location)
                     .await
                     .expect("could not open persist client")
-                    .open_writer::<Row, Row, Timestamp, Diff>(shard_id)
+                    .open_writer::<SourceData, (), Timestamp, Diff>(shard_id)
                     .await
                     .expect("could not open persist shard");
 
@@ -129,9 +134,13 @@ where
                         data.swap(&mut buffer);
 
                         for ((key, value), ts, diff) in buffer.drain(..) {
-                            let key = key.unwrap_or_default();
-                            let value = value.unwrap_or_default();
-                            stash.entry(ts).or_default().push(((key, value), ts, diff));
+                            assert!(key.is_none(), "persist_source does not support keys");
+                            let row = value.expect("persist_source must have values");
+                            stash.entry(ts).or_default().push((
+                                (SourceData(Ok(row)), ()),
+                                ts,
+                                diff,
+                            ));
                         }
                     });
 
