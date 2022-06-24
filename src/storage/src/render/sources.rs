@@ -167,6 +167,7 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
+                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::Delimited(ok), err), cap)
                 }
@@ -176,6 +177,7 @@ where
                             base_source_config,
                             &connection,
                             storage_state.connection_context.clone(),
+                            Arc::clone(&storage_state.persist_clients),
                         );
                     ((SourceType::Delimited(ok), err), cap)
                 }
@@ -184,6 +186,7 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
+                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::ByteStream(ok), err), cap)
                 }
@@ -192,6 +195,7 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
+                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::AppendRow(ok), err), cap)
                 }
@@ -200,6 +204,7 @@ where
                         base_source_config,
                         &connection,
                         storage_state.connection_context.clone(),
+                        Arc::clone(&storage_state.persist_clients),
                     );
                     ((SourceType::Row(ok), err), cap)
                 }
