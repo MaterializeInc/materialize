@@ -218,11 +218,11 @@ where
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
         trace!("Listen::next");
 
-        let (batch_keys, desc) = self.machine.next_listen_batch(&self.frontier).await;
+        let batch = self.machine.next_listen_batch(&self.frontier).await;
         let mut updates = Vec::new();
-        for key in batch_keys.iter() {
+        for key in batch.keys.iter() {
             let mut updates_part =
-                fetch_batch_part(self.blob.as_ref(), &self.metrics, key, &desc, |t| {
+                fetch_batch_part(self.blob.as_ref(), &self.metrics, key, &batch.desc, |t| {
                     // This would get covered by a snapshot started at the same as_of.
                     self.as_of.less_than(&t)
                 })
@@ -233,8 +233,8 @@ where
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
         }
-        ret.push(ListenEvent::Progress(desc.upper().clone()));
-        self.frontier = desc.upper().clone();
+        ret.push(ListenEvent::Progress(batch.desc.upper().clone()));
+        self.frontier = batch.desc.upper().clone();
         ret
     }
 

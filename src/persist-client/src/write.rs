@@ -28,7 +28,7 @@ use crate::batch::{Batch, BatchBuilder};
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
-use crate::r#impl::state::Upper;
+use crate::r#impl::state::{HollowBatch, Upper};
 use crate::PersistConfig;
 
 /// A "capability" granting the ability to apply updates to some shard at times
@@ -397,7 +397,11 @@ where
 
         let res = self
             .machine
-            .compare_and_append(&batch.blob_keys, &desc)
+            .compare_and_append(&HollowBatch {
+                desc: desc.clone(),
+                keys: batch.blob_keys.clone(),
+                len: batch.num_updates,
+            })
             .await?;
 
         match res {

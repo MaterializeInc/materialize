@@ -53,6 +53,9 @@ where
     /// Keys to blobs that make up this batch of updates.
     pub(crate) blob_keys: Vec<String>,
 
+    /// The number of updates in this batch.
+    pub(crate) num_updates: usize,
+
     /// Handle to the [Blob] that the blobs of this batch were uploaded to.
     _blob: Arc<dyn Blob + Send + Sync>,
 
@@ -86,6 +89,7 @@ where
     pub(crate) fn new(
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
+        num_updates: usize,
         desc: Description<T>,
         blob_keys: Vec<String>,
     ) -> Self {
@@ -93,6 +97,7 @@ where
             desc,
             blob_keys,
             shard_id,
+            num_updates,
             _blob: blob,
             _phantom: PhantomData,
         }
@@ -158,6 +163,7 @@ where
     blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
 
+    num_updates: usize,
     parts: BatchParts<T>,
 
     key_buf: Vec<u8>,
@@ -197,6 +203,7 @@ where
             records: ColumnarRecordsVecBuilder::new_with_len(cfg.blob_target_size),
             blob,
             metrics,
+            num_updates: 0,
             parts,
             shard_id,
             key_buf: Vec::new(),
@@ -241,7 +248,13 @@ where
 
         let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(self.lower, upper, since);
-        let batch = Batch::new(self.blob, self.shard_id.clone(), desc, keys);
+        let batch = Batch::new(
+            self.blob,
+            self.shard_id.clone(),
+            self.num_updates,
+            desc,
+            keys,
+        );
 
         Ok(batch)
     }
@@ -282,6 +295,7 @@ where
                 .reserve(additional, self.key_buf.len(), self.val_buf.len());
         }
         self.records.push(((&self.key_buf, &self.val_buf), t, d));
+        self.num_updates += 1;
 
         // If we've filled up a chunk of ColumnarRecords, flush it out now to
         // blob storage to keep our memory usage capped.

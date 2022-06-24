@@ -7,6 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! An append-only collection of compactable update batches. The Spine below is
+//! a fork of Differential Dataflow's [Spine] with minimal modifications.
+
 use std::fmt::Debug;
 
 use differential_dataflow::lattice::Lattice;
@@ -15,6 +18,73 @@ use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::r#impl::state::HollowBatch;
+
+/// An append-only collection of compactable update batches.
+///
+/// In an effort to keep our fork of Spine as close as possible to the original,
+/// we push as many changes as possible into this wrapper.
+#[derive(Debug, Clone)]
+pub struct Trace<T> {
+    spine: Spine<T>,
+}
+
+impl<T: Timestamp + Lattice> Default for Trace<T> {
+    fn default() -> Self {
+        Self {
+            spine: Spine::new(),
+        }
+    }
+}
+
+impl<T: Timestamp + Lattice> Trace<T> {
+    pub fn since(&self) -> &Antichain<T> {
+        &self.spine.since
+    }
+
+    pub fn upper(&self) -> &Antichain<T> {
+        &self.spine.upper
+    }
+
+    pub fn downgrade_since(&mut self, since: Antichain<T>) {
+        self.spine.since = since;
+    }
+
+    pub fn push_batch(&mut self, batch: HollowBatch<T>) {
+        self.spine.insert(SpineBatch::Merged(batch));
+    }
+
+    pub fn map_batches<F: FnMut(&HollowBatch<T>)>(&self, mut f: F) {
+        self.spine.map_batches(move |b| match b {
+            SpineBatch::Merged(b) => f(b),
+            SpineBatch::Fueled { parts, .. } => {
+                for b in parts.iter() {
+                    f(b);
+                }
+            }
+        })
+    }
+
+    #[cfg(test)]
+    pub fn num_spine_batches(&self) -> usize {
+        let mut ret = 0;
+        self.spine.map_batches(|_| ret += 1);
+        ret
+    }
+
+    #[cfg(test)]
+    pub fn num_hollow_batches(&self) -> usize {
+        let mut ret = 0;
+        self.map_batches(|_| ret += 1);
+        ret
+    }
+
+    #[cfg(test)]
+    pub fn num_updates(&self) -> usize {
+        let mut ret = 0;
+        self.map_batches(|b| ret += b.len);
+        ret
+    }
+}
 
 #[derive(Debug, Clone)]
 enum SpineBatch<T> {
@@ -62,7 +132,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
         FuelingMerge {
             b1: b1.clone(),
             b2: b2.clone(),
-            since: since.to_owned(),
+            since,
             progress: 0,
         }
     }
@@ -83,6 +153,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     /// should call `done` to extract the merged results.
     fn work(&mut self, _: &SpineBatch<T>, _: &SpineBatch<T>, fuel: &mut isize) {
         let remaining = self.b1.len() + self.b2.len() - self.progress;
+        #[allow(clippy::cast_sign_loss)]
         let used = std::cmp::min(*fuel as usize, remaining);
         self.progress += used;
         *fuel -= used as isize;
@@ -94,6 +165,15 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     /// not brought `fuel` to zero. Otherwise, the merge is still in progress.
     fn done(self) -> SpineBatch<T> {
         let desc = Description::new(self.b1.lower().clone(), self.b2.upper().clone(), self.since);
+
+        // Special case empty batches.
+        if self.b1.len() == 0 && self.b2.len() == 0 {
+            return SpineBatch::Merged(HollowBatch {
+                desc,
+                keys: Vec::new(),
+                len: 0,
+            });
+        }
 
         let mut merged_parts = Vec::new();
         let mut append_parts = |b| match b {
@@ -192,6 +272,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
 /// low layers: they should still extract fuel from new updates even though they
 /// have completed, at least until they have paid back any "debt" to higher
 /// layers by continuing to provide fuel as updates arrive.
+#[derive(Debug, Clone)]
 struct Spine<T> {
     effort: usize,
     since: Antichain<T>,
@@ -249,6 +330,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// The units of effort are updates, and the method should be thought of as
     /// analogous to inserting as many empty updates, where the trace is
     /// permitted to perform proportionate work.
+    #[allow(dead_code)]
     pub fn exert(&mut self, effort: &mut isize) {
         // If there is work to be done, ...
         self.tidy_layers();
@@ -262,6 +344,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             else {
                 // Introduce an empty batch with roughly *effort number of
                 // virtual updates.
+                #[allow(clippy::cast_sign_loss)]
                 let level = (*effort as usize).next_power_of_two().trailing_zeros() as usize;
                 self.introduce_batch(None, level);
             }
@@ -579,6 +662,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
 ///
 /// A layer can be empty, contain a single batch, or contain a pair of batches
 /// that are in the process of merging into a batch for the next layer.
+#[derive(Debug, Clone)]
 enum MergeState<T> {
     /// An empty layer, containing no updates.
     Vacant,
@@ -702,6 +786,7 @@ impl<T: Timestamp + Lattice> MergeState<T> {
     }
 }
 
+#[derive(Debug, Clone)]
 enum MergeVariant<T> {
     /// Describes an actual in-progress merge between two non-trivial batches.
     InProgress(SpineBatch<T>, SpineBatch<T>, FuelingMerge<T>),
@@ -741,5 +826,97 @@ impl<T: Timestamp + Lattice> MergeVariant<T> {
         } else {
             *self = variant;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_datadriven() {
+        fn parse_batch(x: &str) -> HollowBatch<u64> {
+            let parts = x.split(' ').collect::<Vec<_>>();
+            assert!(
+                parts.len() >= 3,
+                "usage: insert <lower> <upper> <len> <keys>"
+            );
+            let (lower, upper, since, len, keys) =
+                (parts[0], parts[1], parts[2], parts[3], &parts[4..]);
+            let lower = lower.parse().expect("invalid lower");
+            let upper = upper.parse().expect("invalid upper");
+            let since = since.parse().expect("invalid since");
+            let len = len.parse().expect("invalid len");
+            HollowBatch {
+                desc: Description::new(
+                    Antichain::from_elem(lower),
+                    Antichain::from_elem(upper),
+                    Antichain::from_elem(since),
+                ),
+                len,
+                keys: keys.iter().map(|x| (*x).to_owned()).collect(),
+            }
+        }
+
+        datadriven::walk("tests/trace", |f| {
+            let mut trace = Trace::default();
+
+            f.run(move |tc| -> String {
+                match tc.directive.as_str() {
+                    "since-upper" => {
+                        assert!(tc.input.is_empty());
+                        format!(
+                            "{:?}{:?}\n",
+                            trace.since().elements(),
+                            trace.upper().elements()
+                        )
+                    }
+                    "batches" => {
+                        assert!(tc.input.is_empty());
+                        let mut s = String::new();
+                        trace.spine.map_batches(|b| {
+                            let b = match b {
+                                SpineBatch::Merged(HollowBatch { desc, len, keys }) => format!(
+                                    "{:?}{:?}{:?} {} {}\n",
+                                    desc.lower().elements(),
+                                    desc.upper().elements(),
+                                    desc.since().elements(),
+                                    len,
+                                    keys.join(" "),
+                                ),
+                                SpineBatch::Fueled { desc, parts } => format!(
+                                    "{:?}{:?}{:?} {}/{} {}\n",
+                                    desc.lower().elements(),
+                                    desc.upper().elements(),
+                                    desc.since().elements(),
+                                    parts.len(),
+                                    parts.iter().map(|x| x.len).sum::<usize>(),
+                                    parts
+                                        .iter()
+                                        .flat_map(|x| x.keys.iter())
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join(" ")
+                                ),
+                            };
+                            s.push_str(&b);
+                        });
+                        s
+                    }
+                    "insert" => {
+                        for x in tc.input.trim().split('\n') {
+                            trace.push_batch(parse_batch(x));
+                        }
+                        "ok\n".to_owned()
+                    }
+                    "downgrade-since" => {
+                        let since = tc.input.trim().parse().expect("invalid since");
+                        trace.downgrade_since(Antichain::from_elem(since));
+                        "ok\n".to_owned()
+                    }
+                    _ => panic!("unknown directive {:?}", tc),
+                }
+            })
+        });
     }
 }
