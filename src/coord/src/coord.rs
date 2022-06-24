@@ -5404,7 +5404,7 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let thread = thread::Builder::new()
-        // The Coordinator thread tends to keep a lot of data on it's stack. To
+        // The Coordinator thread tends to keep a lot of data on its stack. To
         // prevent a stack overflow we allocate a stack twice as big as the default
         // stack.
         .stack_size(2 * stack::STACK_SIZE)
