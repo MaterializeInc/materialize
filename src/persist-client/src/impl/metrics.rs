@@ -37,6 +37,9 @@ pub struct Metrics {
     pub cmds: CmdsMetrics,
     /// Metrics for each retry loop.
     pub retries: RetriesMetrics,
+    /// Metrics for batches written directly on behalf of a user (BatchBuilder
+    /// or one of the sugar methods that use it).
+    pub user: BatchWriteMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
 }
@@ -51,7 +54,23 @@ impl Metrics {
             cmds: vecs.cmds_metrics(),
             retries: vecs.retries_metrics(),
             codecs: vecs.codecs_metrics(),
+            user: BatchWriteMetrics::new(registry, "user"),
             _vecs: vecs,
+        }
+    }
+
+    /// Returns the current lifetime write amplification reflected in these
+    /// metrics.
+    ///
+    /// Only exposed for tests, persistcli, and benchmarks.
+    pub fn write_amplification(&self) -> f64 {
+        // This intentionally uses "bytes" for total and "goodbytes" for user so
+        // that the overhead of our blob format is included.
+        let total_written = self.blob.set.bytes.get();
+        let user_written = self.user.goodbytes.get();
+        #[allow(clippy::cast_precision_loss)]
+        {
+            total_written as f64 / user_written as f64
         }
     }
 }
@@ -365,6 +384,30 @@ pub struct RetriesMetrics {
     pub(crate) idempotent_cmd: RetryMetrics,
     pub(crate) next_listen_batch: RetryMetrics,
     pub(crate) snapshot: RetryMetrics,
+}
+
+// This one is Clone in contrast to the others because it has to get moved into
+// a task.
+#[derive(Debug, Clone)]
+pub struct BatchWriteMetrics {
+    pub(crate) bytes: IntCounter,
+    pub(crate) goodbytes: IntCounter,
+}
+
+impl BatchWriteMetrics {
+    fn new(registry: &MetricsRegistry, name: &str) -> Self {
+        // WIP should this be another CounterVec with the name as a label?
+        BatchWriteMetrics {
+            bytes: registry.register(metric!(
+                name: format!("mz_persist_{}_bytes", name),
+                help: format!("total size represented by {} writes", name),
+            )),
+            goodbytes: registry.register(metric!(
+                name: format!("mz_persist_{}_goodbytes", name),
+                help: format!("total goodbytes size represented by {} writes", name),
+            )),
+        }
+    }
 }
 
 struct IncOnDrop(IntCounter);

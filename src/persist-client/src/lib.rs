@@ -188,6 +188,8 @@ pub struct PersistConfig {
     /// will pipeline before back-pressuring [crate::batch::BatchBuilder::add]
     /// calls on previous ones finishing.
     pub batch_builder_max_outstanding_parts: usize,
+    /// Whether to physically and logically compact batches in blob storage.
+    pub compaction_enabled: bool,
 }
 
 // Tuning inputs:
@@ -217,10 +219,14 @@ pub struct PersistConfig {
 //   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
 impl Default for PersistConfig {
     fn default() -> Self {
+        // Use an env var to enable compaction so it's easier to experiment with
+        // in cloud.
+        let compaction_enabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_ENABLED");
         const MB: usize = 1024 * 1024;
         Self {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
+            compaction_enabled,
         }
     }
 }
@@ -395,6 +401,13 @@ impl PersistClient {
     {
         self.open(shard_id).await.expect("codec mismatch")
     }
+
+    /// Return the metrics being used by this client.
+    ///
+    /// Only exposed for tests, persistcli, and benchmarks.
+    pub fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
 }
 
 #[cfg(test)]
@@ -426,6 +439,9 @@ mod tests {
         let mut cache = PersistClientCache::new_no_metrics();
         cache.cfg.blob_target_size = 10;
         cache.cfg.batch_builder_max_outstanding_parts = 1;
+
+        // WIP
+        cache.cfg.compaction_enabled = true;
 
         cache
             .open(PersistLocation {

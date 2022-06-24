@@ -26,7 +26,7 @@ use tracing::{debug, error, info, info_span, trace, Instrument};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::workload::DataGenerator;
-use mz_persist_client::{PersistLocation, ShardId};
+use mz_persist_client::{Metrics, PersistLocation, ShardId};
 
 use crate::open_loop::api::{BenchmarkReader, BenchmarkWriter};
 
@@ -134,6 +134,7 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         None => ShardId::new(),
     };
 
+    let metrics = Arc::clone(persist.metrics());
     let (writers, readers) = match args.benchmark_type.clone() {
         BenchmarkType::RawWriter => {
             raw_persist_benchmark::setup_raw_persist(
@@ -147,12 +148,13 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         BenchmarkType::MzSourceModel => panic!("source model"),
     };
 
-    run_benchmark(args, metrics_registry, writers, readers).await
+    run_benchmark(args, metrics_registry, metrics, writers, readers).await
 }
 
 async fn run_benchmark<W, R>(
     args: Args,
     metrics_registry: MetricsRegistry,
+    metrics: Arc<Metrics>,
     writers: Vec<W>,
     readers: Vec<R>,
 ) -> Result<(), anyhow::Error>
@@ -431,6 +433,7 @@ where
         encoder.encode(&metrics_registry.gather(), &mut file)?;
         file.sync_all()?;
     }
+    eprintln!("write amp: {}", metrics.write_amplification());
 
     Ok(())
 }
