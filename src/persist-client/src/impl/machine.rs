@@ -29,6 +29,7 @@ use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
 use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::ShardId;
 
@@ -117,7 +118,10 @@ where
     pub async fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
-    ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
+    ) -> Result<
+        Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>>,
+        Indeterminate,
+    > {
         let metrics = Arc::clone(&self.metrics);
         loop {
             let (seqno, res) = self
@@ -127,8 +131,8 @@ where
                 .await?;
 
             match res {
-                Ok(()) => {
-                    return Ok(Ok(Ok(seqno)));
+                Ok(merge_reqs) => {
+                    return Ok(Ok(Ok((seqno, merge_reqs))));
                 }
                 Err(Ok(_current_upper)) => {
                     // If the state machine thinks that the shard upper is not
@@ -154,6 +158,16 @@ where
                 }
             }
         }
+    }
+
+    pub async fn merge_res(&mut self, res: FueledMergeRes<T>) -> bool {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, applied) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
+                state.apply_merge_res(&res)
+            })
+            .await;
+        applied
     }
 
     pub async fn downgrade_since(
@@ -206,14 +220,16 @@ where
                     // external thing to arrive.
                     if retry.next_sleep() >= Duration::from_millis(64) {
                         info!(
-                            "snapshot as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            self.shard_id(),
                             as_of,
                             upper,
                             retry.next_sleep()
                         );
                     } else {
                         debug!(
-                            "snapshot as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            self.shard_id(),
                             as_of,
                             upper,
                             retry.next_sleep()
@@ -386,7 +402,8 @@ where
                     }
                     Err(current) => {
                         debug!(
-                            "apply_unbatched_cmd {} lost the CaS race, retrying: {} vs {:?}",
+                            "apply_unbatched_cmd {} {} lost the CaS race, retrying: {} vs {:?}",
+                            self.shard_id(),
                             cmd.name,
                             self.state.seqno(),
                             current.as_ref().map(|x| x.seqno)

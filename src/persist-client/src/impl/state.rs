@@ -21,7 +21,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
-use crate::r#impl::trace::Trace;
+use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::ShardId;
 
@@ -82,7 +82,7 @@ where
     pub fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
-    ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, ()> {
+    ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, Vec<FueledMergeReq<T>>> {
         if PartialOrder::less_than(batch.desc.upper(), batch.desc.lower()) {
             return Break(Err(InvalidUsage::InvalidBounds {
                 lower: batch.desc.lower().clone(),
@@ -110,7 +110,12 @@ where
         }
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
 
-        Continue(())
+        Continue(self.trace.take_merge_reqs())
+    }
+
+    pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ControlFlow<Infallible, bool> {
+        let applied = self.trace.apply_merge_res(res);
+        Continue(applied)
     }
 
     pub fn downgrade_since(
@@ -529,6 +534,7 @@ mod codec_impls {
                 // TODO: Can we rehydrate the Spine more directly?
                 ret.push_batch(batch);
             }
+            let _ = ret.take_merge_reqs();
             ret
         }
     }

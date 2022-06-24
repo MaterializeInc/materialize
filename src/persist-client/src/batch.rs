@@ -145,6 +145,17 @@ where
         // }
         self.blob_keys.clear();
     }
+
+    #[cfg(test)]
+    pub fn into_hollow_batch(mut self) -> crate::r#impl::state::HollowBatch<T> {
+        let ret = crate::r#impl::state::HollowBatch {
+            desc: self.desc.clone(),
+            keys: self.blob_keys.clone(),
+            len: self.num_updates,
+        };
+        self.mark_consumed();
+        ret
+    }
 }
 
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
@@ -241,13 +252,13 @@ where
         // entirely if an append only has a frontier update (which is the
         // overwhelming common case in practice). The assert is a safety net in
         // case we accidentally break this behavior in ColumnarRecords.
+        let since = Antichain::from_elem(T::minimum());
         for part in self.records.finish() {
             assert!(part.len() > 0);
-            self.parts.write(part, upper.clone()).await;
+            self.parts.write(part, upper.clone(), since.clone()).await;
         }
         let keys = self.parts.finish().await;
 
-        let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(self.lower, upper, since);
         let batch = Batch::new(
             self.blob,
@@ -308,7 +319,8 @@ where
             // to make a tighter bound, possibly by changing the part
             // description to be an _inclusive_ upper.
             let upper = Antichain::new();
-            self.parts.write(part, upper).await;
+            let since = Antichain::from_elem(T::minimum());
+            self.parts.write(part, upper, since).await;
         }
 
         Ok(())
@@ -350,8 +362,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) async fn write(&mut self, updates: ColumnarRecords, upper: Antichain<T>) {
-        let since = Antichain::from_elem(T::minimum());
+    pub(crate) async fn write(
+        &mut self,
+        updates: ColumnarRecords,
+        upper: Antichain<T>,
+        since: Antichain<T>,
+    ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let metrics = Arc::clone(&self.metrics);
         let blob = Arc::clone(&self.blob);

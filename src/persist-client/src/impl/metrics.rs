@@ -40,6 +40,8 @@ pub struct Metrics {
     /// Metrics for batches written directly on behalf of a user (BatchBuilder
     /// or one of the sugar methods that use it).
     pub user: BatchWriteMetrics,
+    /// Metrics for compaction.
+    pub compaction: CompactionMetrics,
     /// Metrics for various encodings and decodings.
     pub codecs: CodecsMetrics,
 }
@@ -55,6 +57,7 @@ impl Metrics {
             retries: vecs.retries_metrics(),
             codecs: vecs.codecs_metrics(),
             user: BatchWriteMetrics::new(registry, "user"),
+            compaction: CompactionMetrics::new(registry),
             _vecs: vecs,
         }
     }
@@ -207,6 +210,7 @@ impl MetricsVecs {
             compare_and_append: self.cmd_metrics("compare_and_append"),
             downgrade_since: self.cmd_metrics("downgrade_since"),
             expire_reader: self.cmd_metrics("expire_reader"),
+            merge_res: self.cmd_metrics("merge_res"),
         }
     }
 
@@ -340,6 +344,7 @@ pub struct CmdsMetrics {
     pub(crate) compare_and_append: CmdMetrics,
     pub(crate) downgrade_since: CmdMetrics,
     pub(crate) expire_reader: CmdMetrics,
+    pub(crate) merge_res: CmdMetrics,
 }
 
 #[derive(Debug)]
@@ -406,6 +411,45 @@ impl BatchWriteMetrics {
                 name: format!("mz_persist_{}_goodbytes", name),
                 help: format!("total goodbytes size represented by {} writes", name),
             )),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CompactionMetrics {
+    pub(crate) started: IntCounter,
+    pub(crate) applied: IntCounter,
+    pub(crate) failed: IntCounter,
+    pub(crate) noop: IntCounter,
+    pub(crate) seconds: Counter,
+
+    pub(crate) batch: BatchWriteMetrics,
+}
+
+impl CompactionMetrics {
+    fn new(registry: &MetricsRegistry) -> Self {
+        CompactionMetrics {
+            started: registry.register(metric!(
+                name: "mz_persist_compaction_started",
+                help: "count of compactions started",
+            )),
+            failed: registry.register(metric!(
+                name: "mz_persist_compaction_failed",
+                help: "count of compactions failed",
+            )),
+            applied: registry.register(metric!(
+                name: "mz_persist_compaction_applied",
+                help: "count of compactions applied to state",
+            )),
+            noop: registry.register(metric!(
+                name: "mz_persist_compaction_noop",
+                help: "count of compactions discarded (obsolete)",
+            )),
+            seconds: registry.register(metric!(
+                name: "mz_persist_compaction_seconds",
+                help: "time spent in compaction",
+            )),
+            batch: BatchWriteMetrics::new(registry, "compaction"),
         }
     }
 }

@@ -35,6 +35,7 @@ use tracing::{debug, instrument, trace};
 use uuid::Uuid;
 
 use crate::error::InvalidUsage;
+use crate::r#impl::compact::Compactor;
 use crate::r#impl::machine::{retry_external, Machine};
 use crate::read::{ReadHandle, ReaderId};
 use crate::write::WriteHandle;
@@ -49,6 +50,7 @@ pub use crate::r#impl::state::{Since, Upper};
 
 /// An implementation of the public crate interface.
 pub(crate) mod r#impl {
+    pub mod compact;
     pub mod machine;
     pub mod metrics;
     pub mod state;
@@ -219,14 +221,13 @@ pub struct PersistConfig {
 //   (hopefully a fair assumption), 2 is a little extra slop on top of 1.
 impl Default for PersistConfig {
     fn default() -> Self {
-        // Use an env var to enable compaction so it's easier to experiment with
-        // in cloud.
-        let compaction_enabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_ENABLED");
+        // Escape hatch in case we need to disable compaction.
+        let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         const MB: usize = 1024 * 1024;
         Self {
             blob_target_size: 128 * MB,
             batch_builder_max_outstanding_parts: 2,
-            compaction_enabled,
+            compaction_enabled: !compaction_disabled,
         }
     }
 }
@@ -309,12 +310,20 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         )
         .await?;
+        let compactor = self.cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                self.cfg.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+            )
+        });
         let reader_id = ReaderId::new();
         let (shard_upper, read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             machine: machine.clone(),
+            compactor,
             blob: Arc::clone(&self.blob),
             upper: shard_upper.0,
         };
@@ -375,11 +384,19 @@ impl PersistClient {
             Arc::clone(&self.metrics),
         )
         .await?;
+        let compactor = self.cfg.compaction_enabled.then(|| {
+            Compactor::new(
+                self.cfg.clone(),
+                Arc::clone(&self.blob),
+                Arc::clone(&self.metrics),
+            )
+        });
         let shard_upper = machine.fetch_upper().await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
             machine,
+            compactor,
             blob: Arc::clone(&self.blob),
             upper: shard_upper,
         };
@@ -417,8 +434,11 @@ mod tests {
     use std::pin::Pin;
     use std::str::FromStr;
     use std::task::Context;
+    use std::time::{Duration, Instant};
 
+    use differential_dataflow::consolidation::consolidate_updates;
     use futures_task::noop_waker;
+    use mz_persist::indexed::encoding::BlobTraceBatchPart;
     use mz_persist::workload::DataGenerator;
     use mz_proto::protobuf_roundtrip;
     use timely::progress::Antichain;
@@ -457,20 +477,52 @@ mod tests {
         as_of: T,
     ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
     where
-        K: Clone + 'a,
-        V: Clone + 'a,
-        T: Lattice + Clone + 'a,
-        D: Clone + 'a,
+        K: Ord + Clone + 'a,
+        V: Ord + Clone + 'a,
+        T: Timestamp + Lattice + Clone + 'a,
+        D: Semigroup + Clone + 'a,
         I: IntoIterator<Item = &'a ((K, V), T, D)>,
     {
         let as_of = Antichain::from_elem(as_of);
-        iter.into_iter()
+        let mut ret = iter
+            .into_iter()
             .map(|((k, v), t, d)| {
                 let mut t = t.clone();
                 t.advance_by(as_of.borrow());
                 ((Ok(k.clone()), Ok(v.clone())), t, d.clone())
             })
-            .collect()
+            .collect();
+        consolidate_updates(&mut ret);
+        ret
+    }
+
+    pub async fn expect_fetch_part<K, V, T, D>(
+        blob: &(dyn Blob + Send + Sync),
+        key: &str,
+    ) -> (
+        BlobTraceBatchPart,
+        Vec<((Result<K, String>, Result<V, String>), T, D)>,
+    )
+    where
+        K: Codec,
+        V: Codec,
+        T: Codec64,
+        D: Codec64,
+    {
+        let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
+        let value = blob
+            .get(deadline, key)
+            .await
+            .expect("failed to fetch part")
+            .expect("missing part");
+        let part = BlobTraceBatchPart::decode(&value).expect("failed to decode part");
+        let mut updates = Vec::new();
+        for chunk in part.updates.iter() {
+            for ((k, v), t, d) in chunk.iter() {
+                updates.push(((K::decode(k), V::decode(v)), T::decode(t), D::decode(d)));
+            }
+        }
+        (part, updates)
     }
 
     #[tokio::test]

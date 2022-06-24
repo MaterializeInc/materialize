@@ -643,10 +643,11 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {
                 let t = T::decode(t);
-                if !desc.lower().less_equal(&t) {
+                // WIP this is really subtle and possibly wrong, justify!
+                if desc.since().less_equal(&t) && !desc.lower().less_equal(&t) {
                     continue;
                 }
-                if desc.upper().less_equal(&t) {
+                if desc.since().less_equal(&t) && desc.upper().less_equal(&t) {
                     continue;
                 }
                 update_fn(k, v, t, d);

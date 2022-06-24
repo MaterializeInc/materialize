@@ -26,6 +26,7 @@ use tracing::{debug, info, instrument, trace};
 
 use crate::batch::{Batch, BatchBuilder};
 use crate::error::InvalidUsage;
+use crate::r#impl::compact::{CompactReq, Compactor};
 use crate::r#impl::machine::{Machine, INFO_MIN_ATTEMPTS};
 use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{HollowBatch, Upper};
@@ -54,6 +55,7 @@ where
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
+    pub(crate) compactor: Option<Compactor>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) upper: Antichain<T>,
@@ -404,20 +406,34 @@ where
             })
             .await?;
 
-        match res {
-            Ok(Ok(_seqno)) => {
+        let merge_reqs = match res {
+            Ok(Ok((_seqno, merge_reqs))) => {
                 self.upper = desc.upper().clone();
                 batch.mark_consumed();
-                Ok(Ok(Ok(())))
+                merge_reqs
             }
             Ok(Err(current_upper)) => {
                 // We tried to to a compare_and_append with the wrong expected upper, that
                 // won't work. Update the cached upper to the current upper.
                 self.upper = current_upper.0.clone();
-                Ok(Ok(Err(current_upper)))
+                return Ok(Ok(Err(current_upper)));
             }
-            Err(err) => Ok(Err(err)),
+            Err(err) => return Ok(Err(err)),
+        };
+
+        // If the compactor isn't enabled, just ignore the requests.
+        if let Some(compactor) = self.compactor.as_ref() {
+            for req in merge_reqs {
+                let req = CompactReq {
+                    shard_id: self.machine.shard_id(),
+                    desc: req.desc,
+                    inputs: req.inputs,
+                };
+                compactor.compact_and_apply(&self.machine, req);
+            }
         }
+
+        Ok(Ok(Ok(())))
     }
 
     /// Returns a [BatchBuilder] that can be used to write a batch of updates to
@@ -516,6 +532,24 @@ where
         .expect("external durability failed")
         .expect("invalid usage")
         .expect("unexpected upper")
+    }
+
+    /// Test helper for an [Self::append] call that is expected to succeed.
+    #[cfg(test)]
+    #[track_caller]
+    pub async fn expect_batch(
+        &mut self,
+        updates: &[((K, V), T, D)],
+        lower: T,
+        upper: T,
+    ) -> Batch<K, V, T, D> {
+        self.batch(
+            updates.iter(),
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+        )
+        .await
+        .expect("invalid usage")
     }
 }
 
