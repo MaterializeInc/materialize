@@ -126,14 +126,24 @@ where
                 None => return None,
             };
 
-            let updates = fetch_batch_part(self.blob.as_ref(), &self.metrics, &key, &desc, |t| {
-                // This would get covered by a listen started at the same as_of.
-                let keep = !self.as_of.less_than(&t);
-                if keep {
+            let mut updates = Vec::new();
+            fetch_batch_part(
+                self.blob.as_ref(),
+                &self.metrics,
+                &key,
+                &desc,
+                |k, v, mut t, d| {
+                    // This would get covered by a listen started at the same as_of.
+                    if self.as_of.less_than(&t) {
+                        return;
+                    }
                     t.advance_by(self.as_of.borrow());
-                }
-                keep
-            })
+                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
+                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
+                    let d = D::decode(d);
+                    updates.push(((k, v), t, d));
+                },
+            )
             .await;
             if updates.is_empty() {
                 // We might have filtered everything.
@@ -218,23 +228,33 @@ where
     pub async fn next(&mut self) -> Vec<ListenEvent<K, V, T, D>> {
         trace!("Listen::next");
 
-        let (batch_keys, desc) = self.machine.next_listen_batch(&self.frontier).await;
+        let batch = self.machine.next_listen_batch(&self.frontier).await;
         let mut updates = Vec::new();
-        for key in batch_keys.iter() {
-            let mut updates_part =
-                fetch_batch_part(self.blob.as_ref(), &self.metrics, key, &desc, |t| {
+        for key in batch.keys.iter() {
+            fetch_batch_part(
+                self.blob.as_ref(),
+                &self.metrics,
+                key,
+                &batch.desc,
+                |k, v, t, d| {
                     // This would get covered by a snapshot started at the same as_of.
-                    self.as_of.less_than(&t)
-                })
-                .await;
-            updates.append(&mut updates_part);
+                    if !self.as_of.less_than(&t) {
+                        return;
+                    }
+                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
+                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
+                    let d = D::decode(d);
+                    updates.push(((k, v), t, d));
+                },
+            )
+            .await;
         }
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
             ret.push(ListenEvent::Updates(updates));
         }
-        ret.push(ListenEvent::Progress(desc.upper().clone()));
-        self.frontier = desc.upper().clone();
+        ret.push(ListenEvent::Progress(batch.desc.upper().clone()));
+        self.frontier = batch.desc.upper().clone();
         ret
     }
 
@@ -564,19 +584,15 @@ where
     }
 }
 
-async fn fetch_batch_part<K, V, T, D, TFn>(
+pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     key: &str,
     desc: &Description<T>,
-    mut t_fn: TFn,
-) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    mut update_fn: UpdateFn,
+) where
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
-    TFn: FnMut(&mut T) -> bool,
+    UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
 {
     let mut retry = metrics
         .retries
@@ -624,31 +640,18 @@ where
         // Drop the encoded representation as soon as we can to reclaim memory.
         drop(value);
 
-        let mut ret = Vec::new();
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {
-                let mut t = T::decode(t);
+                let t = T::decode(t);
                 if !desc.lower().less_equal(&t) {
                     continue;
                 }
                 if desc.upper().less_equal(&t) {
                     continue;
                 }
-                // NB: t_fn might mutate t (i.e. a snapshots will forward it to the
-                // as_of), but the desc checks above only make sense if it hasn't be
-                // mutated yet.
-                let keep = t_fn(&mut t);
-                if !keep {
-                    continue;
-                }
-
-                let k = metrics.codecs.key.decode(|| K::decode(k));
-                let v = metrics.codecs.val.decode(|| V::decode(v));
-                let d = D::decode(d);
-                ret.push(((k, v), t, d));
+                update_fn(k, v, t, d);
             }
         }
-        ret
     })
 }
 

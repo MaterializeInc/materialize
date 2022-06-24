@@ -103,6 +103,12 @@ impl ColumnarRecords {
         self.len
     }
 
+    /// The number of logical bytes in the represented data, excluding offsets
+    /// and lengths.
+    pub fn goodbytes(&self) -> usize {
+        self.key_data.len() + self.val_data.len() + 8 * self.timestamps.len() + 8 * self.diffs.len()
+    }
+
     /// Read the record at `idx`, if there is one.
     ///
     /// Returns None if `idx >= self.len()`.
