@@ -246,7 +246,7 @@ steps:
 
   - id: zippy-kafka-sources
     label: "Zippy"
-    timeout_in_minutes: 30
+    timeout_in_minutes: 120
     agents:
       queue: linux-x86_64
     plugins:
