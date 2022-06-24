@@ -21,7 +21,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
 
 use crate::error::{Determinacy, InvalidUsage};
-use crate::r#impl::trace::Trace;
+use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes, Trace};
 use crate::read::ReaderId;
 use crate::ShardId;
 
@@ -31,11 +31,17 @@ pub struct ReadCapability<T> {
     pub since: Antichain<T>,
 }
 
+/// A [Batch] but with the updates themselves stored externally.
+///
+/// [Batch]: differential_dataflow::trace::BatchReader
 #[derive(Clone, Debug, PartialEq)]
 pub struct HollowBatch<T> {
-    pub(crate) desc: Description<T>,
-    pub(crate) keys: Vec<String>,
-    pub(crate) len: usize,
+    /// Describes the times of the updates in the batch.
+    pub desc: Description<T>,
+    /// Pointers usable to retrieve the updates.
+    pub keys: Vec<String>,
+    /// The number of updates in the batch.
+    pub len: usize,
 }
 
 // TODO: Document invariants.
@@ -82,7 +88,7 @@ where
     pub fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
-    ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, ()> {
+    ) -> ControlFlow<Result<Upper<T>, InvalidUsage<T>>, Vec<FueledMergeReq<T>>> {
         if PartialOrder::less_than(batch.desc.upper(), batch.desc.lower()) {
             return Break(Err(InvalidUsage::InvalidBounds {
                 lower: batch.desc.lower().clone(),
@@ -110,7 +116,12 @@ where
         }
         debug_assert_eq!(self.trace.upper(), batch.desc.upper());
 
-        Continue(())
+        Continue(self.trace.take_merge_reqs())
+    }
+
+    pub fn apply_merge_res(&mut self, res: &FueledMergeRes<T>) -> ControlFlow<Infallible, bool> {
+        let applied = self.trace.apply_merge_res(res);
+        Continue(applied)
     }
 
     pub fn downgrade_since(
@@ -260,7 +271,7 @@ where
     pub fn snapshot(
         &self,
         as_of: &Antichain<T>,
-    ) -> Result<Result<Vec<(String, Description<T>)>, Upper<T>>, Since<T>> {
+    ) -> Result<Result<Vec<HollowBatch<T>>, Upper<T>>, Since<T>> {
         if PartialOrder::less_than(as_of, self.collections.trace.since()) {
             return Err(Since(self.collections.trace.since().clone()));
         }
@@ -274,9 +285,7 @@ where
             if PartialOrder::less_than(as_of, b.desc.lower()) {
                 return;
             }
-            for key in b.keys.iter() {
-                batches.push((key.clone(), b.desc.clone()))
-            }
+            batches.push(b.clone());
         });
         Ok(Ok(batches))
     }
@@ -329,31 +338,31 @@ impl<T> Determinacy for Upper<T> {
     const DETERMINANT: bool = true;
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct AntichainMeta(Vec<[u8; 8]>);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct DescriptionMeta {
     lower: AntichainMeta,
     upper: AntichainMeta,
     since: AntichainMeta,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct BatchMeta {
     desc: DescriptionMeta,
     keys: Vec<String>,
     len: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct TraceMeta {
     since: AntichainMeta,
     // TODO: Should this more directly reflect the SpineBatch structure?
     spine: Vec<BatchMeta>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct StateRollupMeta {
     shard_id: ShardId,
     key_codec: String,
@@ -526,9 +535,15 @@ mod codec_impls {
                         x
                     )
                 }
-                // TODO: Can we rehydrate the Spine more directly?
+                // We could perhaps more directly serialize and rehydrate the
+                // internals of the Spine, but this is nice because it insulates
+                // us against changes in the Spine logic. The current logic has
+                // turned out to be relatively expensive in practice, but as we
+                // tune things (especially when we add inc state) the rate of
+                // this deserialization should go down. Revisit as necessary.
                 ret.push_batch(batch);
             }
+            let _ = ret.take_merge_reqs();
             ret
         }
     }
@@ -587,14 +602,6 @@ mod tests {
     use super::*;
 
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
-
-    fn desc<T: Timestamp>(lower: T, upper: T) -> Description<T> {
-        Description::new(
-            Antichain::from_elem(lower),
-            Antichain::from_elem(upper),
-            Antichain::from_elem(T::minimum()),
-        )
-    }
 
     fn hollow<T: Timestamp>(lower: T, upper: T, keys: &[&str], len: usize) -> HollowBatch<T> {
         HollowBatch {
@@ -689,59 +696,6 @@ mod tests {
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
     }
 
-    // WIP Spine already has an empty batch optimization but it's not quite as
-    // aggressive as our current one. Resolve.
-    #[test]
-    #[cfg(WIP)]
-    fn empty_batch_optimization() {
-        mz_ore::test::init_logging();
-
-        let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
-
-        // Initial empty batch should result in a padding batch.
-        assert_eq!(state.compare_and_append(&[], &desc(0, 1)), Continue(()));
-        assert_eq!(state.trace.len(), 1);
-
-        // Writing data should create a new batch, so now there's two.
-        assert_eq!(
-            state.compare_and_append(&["key1".to_owned()], &desc(1, 2)),
-            Continue(())
-        );
-        assert_eq!(state.trace.len(), 2);
-
-        // The first empty batch after one with data doesn't get squished in,
-        // instead becoming a padding batch.
-        assert_eq!(state.compare_and_append(&[], &desc(2, 3)), Continue(()));
-        assert_eq!(state.trace.len(), 3);
-
-        // More empty batches should all get squished into the existing padding
-        // batch.
-        assert_eq!(state.compare_and_append(&[], &desc(3, 4)), Continue(()));
-        assert_eq!(state.compare_and_append(&[], &desc(4, 5)), Continue(()));
-        assert_eq!(state.trace.len(), 3);
-
-        // Try it all again with a second non-empty batch, this one with 2 keys,
-        // and then some more empty batches.
-        assert_eq!(
-            state.compare_and_append(&["key2".to_owned(), "key3".to_owned()], &desc(5, 6)),
-            Continue(())
-        );
-        assert_eq!(state.trace.len(), 4);
-        assert_eq!(state.compare_and_append(&[], &desc(6, 7)), Continue(()));
-        assert_eq!(state.trace.len(), 5);
-        assert_eq!(state.compare_and_append(&[], &desc(7, 8)), Continue(()));
-        assert_eq!(state.compare_and_append(&[], &desc(8, 9)), Continue(()));
-        assert_eq!(state.trace.len(), 5);
-
-        // Confirm that we still have all the keys.
-        let actual = state
-            .trace
-            .iter()
-            .flat_map(|(keys, _)| keys.iter())
-            .collect::<Vec<_>>();
-        assert_eq!(actual, vec!["key1", "key2", "key3"]);
-    }
-
     #[test]
     fn compare_and_append() {
         mz_ore::test::init_logging();
@@ -814,13 +768,13 @@ mod tests {
         // Can take a snapshot with as_of < upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(0)),
-            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+            Ok(Ok(vec![hollow(0, 5, &["key1"], 1)]))
         );
 
         // Can take a snapshot with as_of >= shard since, as long as as_of < shard_upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(4)),
-            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+            Ok(Ok(vec![hollow(0, 5, &["key1"], 1)]))
         );
 
         // Cannot take a snapshot with as_of >= upper.
@@ -855,11 +809,10 @@ mod tests {
             .compare_and_append(&hollow(5, 10, &[], 0))
             .is_continue());
 
-        // Can still take snapshots at times < upper, but the empty batch is missing
-        // because of a performance optimization.
+        // Can still take snapshots at times < upper.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(7)),
-            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+            Ok(Ok(vec![hollow(0, 5, &["key1"], 1), hollow(5, 10, &[], 0)]))
         );
 
         // Cannot take snapshots with as_of >= upper.
@@ -878,23 +831,25 @@ mod tests {
         // batches that are too far in the future for the requested as_of).
         assert_eq!(
             state.snapshot(&Antichain::from_elem(9)),
-            Ok(Ok(vec![("key1".to_owned(), desc(0, 5))]))
+            Ok(Ok(vec![hollow(0, 5, &["key1"], 1), hollow(5, 10, &[], 0)]))
         );
 
         // Don't filter out batches whose lowers are <= the requested as_of.
         assert_eq!(
             state.snapshot(&Antichain::from_elem(10)),
             Ok(Ok(vec![
-                ("key1".to_owned(), desc(0, 5)),
-                ("key2".to_owned(), desc(10, 15))
+                hollow(0, 5, &["key1"], 1),
+                hollow(5, 10, &[], 0),
+                hollow(10, 15, &["key2"], 1)
             ]))
         );
 
         assert_eq!(
             state.snapshot(&Antichain::from_elem(11)),
             Ok(Ok(vec![
-                ("key1".to_owned(), desc(0, 5)),
-                ("key2".to_owned(), desc(10, 15))
+                hollow(0, 5, &["key1"], 1),
+                hollow(5, 10, &[], 0),
+                hollow(10, 15, &["key2"], 1)
             ]))
         );
     }

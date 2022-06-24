@@ -1,0 +1,63 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Verify the compaction indeed ignores truncated data when a batch was handed to
+# compare_and_append with a tighter bound than the actual data in the batch (a
+# performance optimization to allow compare_and_append users to selectively
+# retry without writing the batch again).
+#
+# We can't apply the truncation logic if the since has advanced past the lower
+# (the data is no longer at its original fidelity). Luckily, the only batches
+# that need truncation are ones written directly by a persist user, which always
+# have a since of the minimum timestamp.
+
+write-batch output=b0 lower=0 upper=3
+zero 0 1
+one 1 1
+two 2 1
+----
+parts=1 len=3
+
+truncate-batch-desc input=b0 output=b0trunc lower=1 upper=2
+----
+parts=1 len=3
+
+write-batch output=b1 lower=1 upper=4
+one 1 1
+two 2 1
+three 3 1
+----
+parts=1 len=3
+
+# Compact b1 to advance the since and lose the distinctions of the original
+# data. The truncating logic relies on the data being original fidelity and this
+# ensures that it doesn't get applied too eagerly.
+
+truncate-batch-desc input=b1 output=b1trunc lower=2 upper=3
+----
+parts=1 len=3
+
+compact output=b1advanced inputs=(b1trunc) lower=2 upper=3 since=6
+----
+parts=1 len=1
+
+fetch-batch input=b1advanced
+----
+<part 0>
+two 6 1
+
+compact output=b0_1trunc inputs=(b0trunc,b1advanced) lower=1 upper=3 since=10
+----
+parts=1 len=2
+
+fetch-batch input=b0_1trunc
+----
+<part 0>
+one 10 1
+two 10 1

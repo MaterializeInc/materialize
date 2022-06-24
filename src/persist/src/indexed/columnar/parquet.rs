@@ -32,6 +32,8 @@ const INLINE_METADATA_KEY: &'static str = "MZ:inline";
 
 /// Encodes an BlobTraceBatchPart into the Parquet format.
 pub fn encode_trace_parquet<W: Write>(w: &mut W, batch: &BlobTraceBatchPart) -> Result<(), Error> {
+    // Better to error now than write out an invalid batch.
+    batch.validate()?;
     encode_parquet_kvtd(
         w,
         encode_trace_inline_meta(batch, ProtoBatchFormat::ParquetKvtd),

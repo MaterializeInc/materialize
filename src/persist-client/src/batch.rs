@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, FOREVER};
-use crate::r#impl::metrics::Metrics;
+use crate::r#impl::metrics::{BatchWriteMetrics, Metrics};
 use crate::{PersistConfig, ShardId};
 
 /// A handle to a batch of updates that has been written to blob storage but
@@ -46,7 +46,7 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     /// [Description] of updates contained in this batch.
-    desc: Description<T>,
+    pub(crate) desc: Description<T>,
 
     shard_id: ShardId,
 
@@ -89,9 +89,9 @@ where
     pub(crate) fn new(
         blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
-        num_updates: usize,
         desc: Description<T>,
         blob_keys: Vec<String>,
+        num_updates: usize,
     ) -> Self {
         Self {
             desc,
@@ -145,6 +145,17 @@ where
         // }
         self.blob_keys.clear();
     }
+
+    #[cfg(test)]
+    pub fn into_hollow_batch(mut self) -> crate::r#impl::state::HollowBatch<T> {
+        let ret = crate::r#impl::state::HollowBatch {
+            desc: self.desc.clone(),
+            keys: self.blob_keys.clone(),
+            len: self.num_updates,
+        };
+        self.mark_consumed();
+        ret
+    }
 }
 
 /// A builder for [Batches](Batch) that allows adding updates piece by piece and
@@ -195,6 +206,7 @@ where
             shard_id,
             lower.clone(),
             Arc::clone(&blob),
+            &metrics.user,
         );
         Self {
             size_hint,
@@ -240,20 +252,20 @@ where
         // entirely if an append only has a frontier update (which is the
         // overwhelming common case in practice). The assert is a safety net in
         // case we accidentally break this behavior in ColumnarRecords.
+        let since = Antichain::from_elem(T::minimum());
         for part in self.records.finish() {
             assert!(part.len() > 0);
-            self.parts.write(part, upper.clone()).await;
+            self.parts.write(part, upper.clone(), since.clone()).await;
         }
         let keys = self.parts.finish().await;
 
-        let since = Antichain::from_elem(T::minimum());
         let desc = Description::new(self.lower, upper, since);
         let batch = Batch::new(
             self.blob,
             self.shard_id.clone(),
-            self.num_updates,
             desc,
             keys,
+            self.num_updates,
         );
 
         Ok(batch)
@@ -307,7 +319,8 @@ where
             // to make a tighter bound, possibly by changing the part
             // description to be an _inclusive_ upper.
             let upper = Antichain::new();
-            self.parts.write(part, upper).await;
+            let since = Antichain::from_elem(T::minimum());
+            self.parts.write(part, upper, since).await;
         }
 
         Ok(())
@@ -317,7 +330,7 @@ where
 // TODO: If this is dropped, cancel (and delete?) any writing parts and delete
 // any finished ones.
 #[derive(Debug)]
-struct BatchParts<T> {
+pub(crate) struct BatchParts<T> {
     max_outstanding: usize,
     metrics: Arc<Metrics>,
     shard_id: ShardId,
@@ -325,15 +338,17 @@ struct BatchParts<T> {
     blob: Arc<dyn Blob + Send + Sync>,
     writing_parts: VecDeque<(String, JoinHandle<()>)>,
     finished_parts: Vec<String>,
+    batch_metrics: BatchWriteMetrics,
 }
 
 impl<T: Timestamp + Codec64> BatchParts<T> {
-    fn new(
+    pub(crate) fn new(
         max_outstanding: usize,
         metrics: Arc<Metrics>,
         shard_id: ShardId,
         lower: Antichain<T>,
         blob: Arc<dyn Blob + Send + Sync>,
+        batch_metrics: &BatchWriteMetrics,
     ) -> Self {
         BatchParts {
             max_outstanding,
@@ -343,14 +358,20 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             blob,
             writing_parts: VecDeque::new(),
             finished_parts: Vec::new(),
+            batch_metrics: batch_metrics.clone(),
         }
     }
 
-    async fn write(&mut self, updates: ColumnarRecords, upper: Antichain<T>) {
-        let since = Antichain::from_elem(T::minimum());
+    pub(crate) async fn write(
+        &mut self,
+        updates: ColumnarRecords,
+        upper: Antichain<T>,
+        since: Antichain<T>,
+    ) {
         let desc = Description::new(self.lower.clone(), upper, since);
         let metrics = Arc::clone(&self.metrics);
         let blob = Arc::clone(&self.blob);
+        let batch_metrics = self.batch_metrics.clone();
         let key = Uuid::new_v4().to_string();
         let blob_key = key.clone();
         let index = u64::cast_from(self.finished_parts.len() + self.writing_parts.len());
@@ -384,6 +405,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     ),
                 );
 
+                let goodbytes = updates.goodbytes();
                 let batch = BlobTraceBatchPart {
                     desc: encoded_desc.clone(),
                     updates: vec![updates],
@@ -413,6 +435,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     .encode_seconds
                     .inc_by(start.elapsed().as_secs_f64());
 
+                let payload_len = buf.len();
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
                     blob.set(
                         Instant::now() + FOREVER,
@@ -422,8 +445,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     )
                     .await
                 })
-                .instrument(trace_span!("batch::set", payload_len = buf.len()))
+                .instrument(trace_span!("batch::set", payload_len))
                 .await;
+                batch_metrics.bytes.inc_by(u64::cast_from(payload_len));
+                batch_metrics.goodbytes.inc_by(u64::cast_from(goodbytes));
             }
             .instrument(write_span),
         );
@@ -434,23 +459,48 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .writing_parts
                 .pop_front()
                 .expect("pop failed when len was just > some usize");
-            let () = handle
+            let () = match handle
                 .instrument(debug_span!("batch::max_outstanding"))
                 .await
-                .expect("part upload task failed");
+            {
+                Ok(()) => (),
+                Err(err) if err.is_cancelled() => (),
+                Err(err) => panic!("part upload task failed: {}", err),
+            };
             self.finished_parts.push(key);
         }
     }
 
     #[instrument(level = "debug", name = "batch::finish_upload", skip_all, fields(shard = %self.shard_id))]
-    async fn finish(self) -> Vec<String> {
+    pub(crate) async fn finish(self) -> Vec<String> {
         let mut keys = self.finished_parts;
         for (key, handle) in self.writing_parts {
-            let () = handle.await.expect("part upload task failed");
+            let () = match handle.await {
+                Ok(()) => (),
+                Err(err) if err.is_cancelled() => (),
+                Err(err) => panic!("part upload task failed: {}", err),
+            };
             keys.push(key);
         }
         keys
     }
+}
+
+pub(crate) fn validate_truncate_batch<T: Timestamp>(
+    batch: &Description<T>,
+    truncate: &Description<T>,
+) -> Result<(), InvalidUsage<T>> {
+    if !PartialOrder::less_equal(batch.lower(), truncate.lower())
+        || PartialOrder::less_than(batch.upper(), truncate.upper())
+    {
+        return Err(InvalidUsage::InvalidBatchBounds {
+            batch_lower: batch.lower().clone(),
+            batch_upper: batch.upper().clone(),
+            append_lower: truncate.lower().clone(),
+            append_upper: truncate.upper().clone(),
+        });
+    }
+    return Ok(());
 }
 
 #[cfg(test)]

@@ -17,7 +17,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
 use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
@@ -29,6 +28,7 @@ use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
 use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
 use crate::read::ReaderId;
 use crate::ShardId;
 
@@ -117,7 +117,10 @@ where
     pub async fn compare_and_append(
         &mut self,
         batch: &HollowBatch<T>,
-    ) -> Result<Result<Result<SeqNo, Upper<T>>, InvalidUsage<T>>, Indeterminate> {
+    ) -> Result<
+        Result<Result<(SeqNo, Vec<FueledMergeReq<T>>), Upper<T>>, InvalidUsage<T>>,
+        Indeterminate,
+    > {
         let metrics = Arc::clone(&self.metrics);
         loop {
             let (seqno, res) = self
@@ -127,8 +130,8 @@ where
                 .await?;
 
             match res {
-                Ok(()) => {
-                    return Ok(Ok(Ok(seqno)));
+                Ok(merge_reqs) => {
+                    return Ok(Ok(Ok((seqno, merge_reqs))));
                 }
                 Err(Ok(_current_upper)) => {
                     // If the state machine thinks that the shard upper is not
@@ -156,6 +159,16 @@ where
         }
     }
 
+    pub async fn merge_res(&mut self, res: FueledMergeRes<T>) -> bool {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, applied) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
+                state.apply_merge_res(&res)
+            })
+            .await;
+        applied
+    }
+
     pub async fn downgrade_since(
         &mut self,
         reader_id: &ReaderId,
@@ -181,7 +194,7 @@ where
     pub async fn snapshot(
         &mut self,
         as_of: &Antichain<T>,
-    ) -> Result<Vec<(String, Description<T>)>, Since<T>> {
+    ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
             let upper = match self.state.snapshot(as_of) {
@@ -206,14 +219,16 @@ where
                     // external thing to arrive.
                     if retry.next_sleep() >= Duration::from_millis(64) {
                         info!(
-                            "snapshot as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            self.shard_id(),
                             as_of,
                             upper,
                             retry.next_sleep()
                         );
                     } else {
                         debug!(
-                            "snapshot as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            "snapshot {} as of {:?} not yet available for upper {:?} retrying in {:?}",
+                            self.shard_id(),
                             as_of,
                             upper,
                             retry.next_sleep()
@@ -386,7 +401,8 @@ where
                     }
                     Err(current) => {
                         debug!(
-                            "apply_unbatched_cmd {} lost the CaS race, retrying: {} vs {:?}",
+                            "apply_unbatched_cmd {} {} lost the CaS race, retrying: {} vs {:?}",
+                            self.shard_id(),
                             cmd.name,
                             self.state.seqno(),
                             current.as_ref().map(|x| x.seqno)
@@ -595,12 +611,285 @@ where
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::cast::CastFrom;
+    use std::collections::HashMap;
 
+    use differential_dataflow::trace::Description;
+    use mz_ore::cast::CastFrom;
+    use tokio::runtime::Handle;
+    use tokio::sync::Mutex;
+
+    use crate::batch::{validate_truncate_batch, BatchBuilder};
+    use crate::r#impl::compact::{CompactReq, Compactor};
+    use crate::read::{fetch_batch_part, Listen, ListenEvent};
     use crate::tests::new_test_client;
-    use crate::ShardId;
+    use crate::{PersistConfig, ShardId};
 
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct DatadrivenState {
+        batches: HashMap<String, HollowBatch<u64>>,
+        listens: HashMap<String, Listen<String, (), u64, i64>>,
+        merge_reqs: Vec<FueledMergeReq<u64>>,
+    }
+
+    #[tokio::test]
+    async fn machine_datadriven() {
+        fn get_arg<'a>(args: &'a HashMap<String, Vec<String>>, name: &str) -> Option<&'a str> {
+            args.get(name).map(|vals| {
+                if vals.len() != 1 {
+                    panic!("unexpected values for {}: {:?}", name, vals);
+                }
+                vals[0].as_ref()
+            })
+        }
+        fn get_u64<'a>(args: &'a HashMap<String, Vec<String>>, name: &str) -> Option<u64> {
+            get_arg(args, name).map(|x| {
+                x.parse::<u64>()
+                    .unwrap_or_else(|_| panic!("invalid {}: {}", name, x))
+            })
+        }
+
+        datadriven::walk_async("tests/machine", |mut f| async {
+            let shard_id = ShardId::new();
+            let mut client = new_test_client().await;
+            // Reset blob_target_size. Individual batch writes and compactions
+            // can override it with an arg.
+            client.cfg.blob_target_size = PersistConfig::default().blob_target_size;
+
+            let state = Arc::new(Mutex::new(DatadrivenState::default()));
+
+            f.run_async(move |tc| {
+                let shard_id = shard_id.clone();
+                let client = client.clone();
+                let state = Arc::clone(&state);
+                async move {
+                    let mut state = state.lock().await;
+                    match tc.directive.as_str() {
+                        "write-batch" => {
+                            let output = get_arg(&tc.args, "output").expect("missing output");
+                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
+                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
+                            let target_size = get_arg(&tc.args, "target_size")
+                                .map(|x| x.parse::<usize>().expect("invalid target_size"));
+
+                            let updates = tc
+                                .input
+                                .trim()
+                                .split('\n')
+                                .filter(|x| !x.is_empty())
+                                .map(|x| {
+                                    let parts = x.split(' ').collect::<Vec<_>>();
+                                    if parts.len() != 3 {
+                                        panic!("unexpected update: {}", x);
+                                    }
+                                    let (key, ts, diff) = (parts[0], parts[1], parts[2]);
+                                    let ts = ts.parse::<u64>().expect("invalid ts");
+                                    let diff = diff.parse::<i64>().expect("invalid diff");
+                                    (key.to_owned(), ts, diff)
+                                })
+                                .collect::<Vec<_>>();
+
+                            let mut cfg = client.cfg.clone();
+                            if let Some(target_size) = target_size {
+                                cfg.blob_target_size = target_size;
+                            };
+                            let mut builder = BatchBuilder::new(
+                                cfg,
+                                Arc::clone(&client.metrics),
+                                0,
+                                Antichain::from_elem(lower),
+                                Arc::clone(&client.blob),
+                                shard_id.clone(),
+                            );
+                            for (k, t, d) in updates {
+                                builder.add(&k, &(), &t, &d).await.expect("invalid batch");
+                            }
+                            let batch = builder
+                                .finish(Antichain::from_elem(upper))
+                                .await
+                                .expect("invalid batch")
+                                .into_hollow_batch();
+                            state.batches.insert(output.to_owned(), batch.clone());
+                            format!("parts={} len={}\n", batch.keys.len(), batch.len)
+                        }
+                        "fetch-batch" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let batch = state.batches.get(input).expect("unknown batch").clone();
+
+                            let mut s = String::new();
+                            for (idx, key) in batch.keys.iter().enumerate() {
+                                s.push_str(&format!("<part {}>\n", idx));
+                                fetch_batch_part(
+                                    &shard_id,
+                                    client.blob.as_ref(),
+                                    client.metrics.as_ref(),
+                                    key,
+                                    &batch.desc,
+                                    |k, _v, t, d| {
+                                        let (k, d) = (String::decode(k).unwrap(), i64::decode(d));
+                                        s.push_str(&format!("{} {} {}\n", k, t, d));
+                                    },
+                                )
+                                .await
+                            }
+                            if s.is_empty() {
+                                s.push_str("<empty>\n");
+                            }
+                            s
+                        }
+                        "truncate-batch-desc" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let output = get_arg(&tc.args, "output").expect("missing output");
+                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
+                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
+
+                            let mut batch =
+                                state.batches.get(input).expect("unknown batch").clone();
+                            let truncated_desc = Description::new(
+                                Antichain::from_elem(lower),
+                                Antichain::from_elem(upper),
+                                batch.desc.since().clone(),
+                            );
+                            match validate_truncate_batch(&batch.desc, &truncated_desc) {
+                                Ok(()) => {
+                                    batch.desc = truncated_desc;
+                                    state.batches.insert(output.to_owned(), batch.clone());
+                                    format!("parts={} len={}\n", batch.keys.len(), batch.len)
+                                }
+                                Err(err) => format!("error: {}\n", err),
+                            }
+                        }
+                        "compact" => {
+                            let output = get_arg(&tc.args, "output").expect("missing output");
+                            let lower = get_u64(&tc.args, "lower").expect("missing lower");
+                            let upper = get_u64(&tc.args, "upper").expect("missing upper");
+                            let since = get_u64(&tc.args, "since").expect("missing since");
+                            let target_size = get_arg(&tc.args, "target_size")
+                                .map(|x| x.parse::<usize>().expect("invalid target_size"));
+
+                            let mut inputs = Vec::new();
+                            for input in tc.args.get("inputs").expect("missing inputs") {
+                                inputs
+                                    .push(state.batches.get(input).expect("unknown batch").clone());
+                            }
+
+                            let mut cfg = client.cfg.clone();
+                            if let Some(target_size) = target_size {
+                                cfg.blob_target_size = target_size;
+                            };
+                            let req = CompactReq {
+                                shard_id,
+                                desc: Description::new(
+                                    Antichain::from_elem(lower),
+                                    Antichain::from_elem(upper),
+                                    Antichain::from_elem(since),
+                                ),
+                                inputs,
+                            };
+                            let res = Compactor::compact::<u64, i64>(
+                                cfg,
+                                Handle::current(),
+                                Arc::clone(&client.blob),
+                                Arc::clone(&client.metrics),
+                                req,
+                            )
+                            .await;
+                            match res {
+                                Ok(res) => {
+                                    state.batches.insert(output.to_owned(), res.output.clone());
+                                    format!(
+                                        "parts={} len={}\n",
+                                        res.output.keys.len(),
+                                        res.output.len
+                                    )
+                                }
+                                Err(err) => format!("error: {}\n", err),
+                            }
+                        }
+                        "register-listen" => {
+                            let output = get_arg(&tc.args, "output").expect("missing output");
+                            let as_of = get_u64(&tc.args, "as-of").expect("missing as-of");
+                            let read = client
+                                .open_reader::<String, (), u64, i64>(shard_id)
+                                .await
+                                .expect("invalid shard types");
+                            let listen = read.expect_listen(as_of).await;
+                            state.listens.insert(output.to_owned(), listen);
+                            "ok\n".into()
+                        }
+                        "listen-through" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let frontier = get_u64(&tc.args, "frontier").expect("missing frontier");
+                            let listen = state.listens.get_mut(input).expect("unknown listener");
+                            let mut s = String::new();
+                            'outer: loop {
+                                for event in listen.next().await {
+                                    match event {
+                                        ListenEvent::Updates(x) => {
+                                            for ((k, _v), t, d) in x.iter() {
+                                                s.push_str(&format!(
+                                                    "{} {} {}\n",
+                                                    k.as_ref().unwrap(),
+                                                    t,
+                                                    d
+                                                ));
+                                            }
+                                        }
+                                        ListenEvent::Progress(x) => {
+                                            if !x.less_than(&frontier) {
+                                                break 'outer;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if s.is_empty() {
+                                s.push_str("<empty>\n");
+                            }
+                            s
+                        }
+                        "compare-and-append" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let batch = state.batches.get(input).expect("unknown batch");
+                            let mut write = client
+                                .open_writer::<String, (), u64, i64>(shard_id)
+                                .await
+                                .expect("invalid shard types");
+                            let (_, mut merge_reqs) = write
+                                .machine
+                                .compare_and_append(batch)
+                                .await
+                                .expect("indeterminate")
+                                .expect("invalid usage")
+                                .expect("upper mismatch");
+                            state.merge_reqs.append(&mut merge_reqs);
+                            format!("ok\n")
+                        }
+                        "apply-merge-res" => {
+                            let input = get_arg(&tc.args, "input").expect("missing input");
+                            let batch = state.batches.get(input).expect("unknown batch");
+                            let mut write = client
+                                .open_writer::<String, (), u64, i64>(shard_id)
+                                .await
+                                .expect("invalid shard types");
+                            let applied = write
+                                .machine
+                                .merge_res(FueledMergeRes {
+                                    output: batch.clone(),
+                                })
+                                .await;
+                            format!("{}\n", applied)
+                        }
+                        _ => panic!("unknown directive {:?}", tc),
+                    }
+                }
+            })
+            .await;
+            f
+        })
+        .await;
+    }
 
     #[tokio::test]
     async fn apply_unbatched_cmd_truncate() {

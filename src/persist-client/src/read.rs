@@ -23,6 +23,7 @@ use futures::Stream;
 use mz_ore::task::RuntimeExt;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use timely::PartialOrder;
 use tokio::runtime::Handle;
 use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument};
 use uuid::Uuid;
@@ -126,14 +127,25 @@ where
                 None => return None,
             };
 
-            let updates = fetch_batch_part(self.blob.as_ref(), &self.metrics, &key, &desc, |t| {
-                // This would get covered by a listen started at the same as_of.
-                let keep = !self.as_of.less_than(&t);
-                if keep {
+            let mut updates = Vec::new();
+            fetch_batch_part(
+                &self.shard_id,
+                self.blob.as_ref(),
+                &self.metrics,
+                &key,
+                &desc,
+                |k, v, mut t, d| {
+                    // This would get covered by a listen started at the same as_of.
+                    if self.as_of.less_than(&t) {
+                        return;
+                    }
                     t.advance_by(self.as_of.borrow());
-                }
-                keep
-            })
+                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
+                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
+                    let d = D::decode(d);
+                    updates.push(((k, v), t, d));
+                },
+            )
             .await;
             if updates.is_empty() {
                 // We might have filtered everything.
@@ -221,13 +233,34 @@ where
         let batch = self.machine.next_listen_batch(&self.frontier).await;
         let mut updates = Vec::new();
         for key in batch.keys.iter() {
-            let mut updates_part =
-                fetch_batch_part(self.blob.as_ref(), &self.metrics, key, &batch.desc, |t| {
+            fetch_batch_part(
+                &self.machine.shard_id(),
+                self.blob.as_ref(),
+                &self.metrics,
+                key,
+                &batch.desc,
+                |k, v, t, d| {
                     // This would get covered by a snapshot started at the same as_of.
-                    self.as_of.less_than(&t)
-                })
-                .await;
-            updates.append(&mut updates_part);
+                    if !self.as_of.less_than(&t) {
+                        return;
+                    }
+                    // Because of compaction, the next batch we get might also
+                    // contain updates we've already emitted. For example, we
+                    // emitted `[1, 2)` and then compaction combined that batch
+                    // with a `[2, 3)` batch into a new `[1, 3)` batch. If this
+                    // happens, we just need to filter out anything < the
+                    // frontier. This frontier was the upper of the last batch
+                    // (and thus exclusive) so for the == case, we still emit.
+                    if !self.frontier.less_equal(&t) {
+                        return;
+                    }
+                    let k = self.metrics.codecs.key.decode(|| K::decode(k));
+                    let v = self.metrics.codecs.val.decode(|| V::decode(v));
+                    let d = D::decode(d);
+                    updates.push(((k, v), t, d));
+                },
+            )
+            .await;
         }
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
@@ -239,16 +272,30 @@ where
     }
 
     /// Test helper to read from the listener until the given frontier is
-    /// reached.
+    /// reached. Because compaction can arbitrarily combine batches, we only
+    /// return the final progress info.
     #[cfg(test)]
     #[track_caller]
-    pub async fn read_until(&mut self, ts: &T) -> Vec<ListenEvent<K, V, T, D>> {
-        let mut ret = Vec::new();
+    pub async fn read_until(
+        &mut self,
+        ts: &T,
+    ) -> (
+        Vec<((Result<K, String>, Result<V, String>), T, D)>,
+        Antichain<T>,
+    ) {
+        let mut updates = Vec::new();
+        let mut frontier = Antichain::from_elem(T::minimum());
         while self.frontier.less_than(ts) {
-            let mut next = self.next().await;
-            ret.append(&mut next);
+            for event in self.next().await {
+                match event {
+                    ListenEvent::Updates(mut x) => updates.append(&mut x),
+                    ListenEvent::Progress(x) => frontier = x,
+                }
+            }
         }
-        ret
+        // Unlike most tests, intentionally don't consolidate updates here
+        // because Listen replays them at the original fidelity.
+        (updates, frontier)
     }
 }
 
@@ -419,6 +466,10 @@ where
         // cached copy of the state, updating it, and throwing it away
         // afterward.
         let batches = self.machine.clone().snapshot(&as_of).await?;
+        let batches = batches.into_iter().flat_map(|b| {
+            let desc = b.desc.clone();
+            b.keys.into_iter().map(move |k| (k, desc.clone()))
+        });
         let mut splits = (0..num_splits.get())
             .map(|_| SnapshotSplit {
                 shard_id: self.machine.shard_id(),
@@ -470,6 +521,7 @@ where
             blob: Arc::clone(&self.blob),
             _phantom: PhantomData,
         };
+
         Ok(iter)
     }
 
@@ -564,19 +616,16 @@ where
     }
 }
 
-async fn fetch_batch_part<K, V, T, D, TFn>(
+pub(crate) async fn fetch_batch_part<T, UpdateFn>(
+    _shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     key: &str,
-    desc: &Description<T>,
-    mut t_fn: TFn,
-) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
+    registered_desc: &Description<T>,
+    mut update_fn: UpdateFn,
+) where
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
-    TFn: FnMut(&mut T) -> bool,
+    UpdateFn: FnMut(&[u8], &[u8], T, [u8; 8]),
 {
     let mut retry = metrics
         .retries
@@ -624,32 +673,92 @@ where
         // Drop the encoded representation as soon as we can to reclaim memory.
         drop(value);
 
-        let mut ret = Vec::new();
+        // There are two types of batches in persist:
+        // - Batches written by a persist user (either directly or indirectly
+        //   via BatchBuilder). These always have a since of the minimum
+        //   timestamp and may be registered in persist state with a tighter set
+        //   of bounds than are inline in the batch (truncation). To read one of
+        //   these batches, all data physically in the batch but outside of the
+        //   truncated bounds must be ignored. Not every user batch is
+        //   truncated.
+        // - Batches written by compaction. These always have an inline desc
+        //   that exactly matches the one they are registered with. The since
+        //   can be anything.
+        let inline_desc = decode_inline_desc(&batch.desc);
+        let needs_truncation = inline_desc.lower() != registered_desc.lower()
+            || inline_desc.upper() != registered_desc.upper();
+        if needs_truncation {
+            assert!(
+                PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+            assert!(
+                PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+            // As mentioned above, batches that needs truncation will always have a
+            // since of the minimum timestamp. Technically we could truncate any
+            // batch where the since is less_than the output_desc's lower, but we're
+            // strict here so we don't get any surprises.
+            assert_eq!(
+                inline_desc.since(),
+                &Antichain::from_elem(T::minimum()),
+                "key={} inline={:?} registered={:?}",
+                key,
+                inline_desc,
+                registered_desc
+            );
+        } else {
+            assert_eq!(
+                &inline_desc, registered_desc,
+                "key={} inline={:?} registered={:?}",
+                key, inline_desc, registered_desc
+            );
+        }
+
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {
-                let mut t = T::decode(t);
-                if !desc.lower().less_equal(&t) {
-                    continue;
-                }
-                if desc.upper().less_equal(&t) {
-                    continue;
-                }
-                // NB: t_fn might mutate t (i.e. a snapshots will forward it to the
-                // as_of), but the desc checks above only make sense if it hasn't be
-                // mutated yet.
-                let keep = t_fn(&mut t);
-                if !keep {
-                    continue;
+                let t = T::decode(t);
+
+                // This filtering is really subtle, see the comment above for
+                // what's going on here.
+                if needs_truncation {
+                    if !registered_desc.lower().less_equal(&t) {
+                        continue;
+                    }
+                    if registered_desc.upper().less_equal(&t) {
+                        continue;
+                    }
                 }
 
-                let k = metrics.codecs.key.decode(|| K::decode(k));
-                let v = metrics.codecs.val.decode(|| V::decode(v));
-                let d = D::decode(d);
-                ret.push(((k, v), t, d));
+                update_fn(k, v, t, d);
             }
         }
-        ret
     })
+}
+
+// TODO: This goes away the desc on BlobTraceBatchPart becomes a Description<T>,
+// which should be a straightforward refactor but it touches a decent bit.
+fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Description<T> {
+    fn decode_antichain<T: Timestamp + Codec64>(x: &Antichain<u64>) -> Antichain<T> {
+        Antichain::from(
+            x.elements()
+                .iter()
+                .map(|x| T::decode(x.to_le_bytes()))
+                .collect::<Vec<_>>(),
+        )
+    }
+    Description::new(
+        decode_antichain(desc.lower()),
+        decode_antichain(desc.upper()),
+        decode_antichain(desc.since()),
+    )
 }
 
 #[cfg(test)]
@@ -702,20 +811,17 @@ mod tests {
         // state by fetching the first events from next. This is awkward but
         // only necessary because we're about to do some weird things with
         // unreliable.
-        let mut listen_actual = listen.next().await;
+        let listen_actual = listen.next().await;
+        let expected_events = vec![ListenEvent::Progress(Antichain::from_elem(1))];
+        assert_eq!(listen_actual, expected_events);
 
         // At this point, the snapshot and listen's state should have all the
         // writes. Test this by making consensus completely unavailable.
         unreliable.totally_unavailable();
         assert_eq!(snapshot.read_all().await, all_ok(&data, 2));
-        let expected_events = vec![
-            ListenEvent::Progress(Antichain::from_elem(1)),
-            ListenEvent::Updates(all_ok(&data[1..2], 1)),
-            ListenEvent::Progress(Antichain::from_elem(2)),
-            ListenEvent::Updates(all_ok(&data[2..3], 1)),
-            ListenEvent::Progress(Antichain::from_elem(3)),
-        ];
-        listen_actual.append(&mut listen.read_until(&3).await);
-        assert_eq!(listen_actual, expected_events);
+        assert_eq!(
+            listen.read_until(&3).await,
+            (all_ok(&data[1..], 1), Antichain::from_elem(3))
+        );
     }
 }
