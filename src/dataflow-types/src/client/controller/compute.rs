@@ -612,6 +612,21 @@ where
             self.update_read_capabilities(&mut read_capability_changes)
                 .await?;
         }
+
+        // Tell the storage controller about new write frontiers for storage
+        // collections that are advanced by compute sinks.
+        // TODO(teskje): The storage controller should have a task to directly
+        // keep track of the frontiers of storage collections, instead of
+        // relying on others for that information.
+        let storage_updates: Vec<_> = updates
+            .iter()
+            .filter(|(id, _)| self.storage_mut().collection(*id).is_ok())
+            .cloned()
+            .collect();
+        self.storage_mut()
+            .update_write_frontiers(&storage_updates)
+            .await?;
+
         Ok(())
     }
 
