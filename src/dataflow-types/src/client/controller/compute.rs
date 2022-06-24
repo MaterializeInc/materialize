@@ -37,7 +37,7 @@ use crate::client::replicated::ActiveReplication;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
 use crate::client::{GenericClient, Peek};
 use crate::logging::LoggingConfig;
-use crate::sinks::{SinkConnection, PersistSinkConnection, SinkDesc};
+use crate::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;

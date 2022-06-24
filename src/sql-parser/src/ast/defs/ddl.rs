@@ -728,11 +728,7 @@ pub enum CreateSinkConnection<T: AstInfo> {
         key: Option<KafkaSinkKey>,
         consistency: Option<KafkaConsistency<T>>,
     },
-    Persist {
-        blob_uri: String,
-        consensus_uri: String,
-        shard_id: String,
-    },
+    Persist,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
@@ -757,18 +753,8 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                     f.write_node(consistency);
                 }
             }
-            CreateSinkConnection::Persist {
-                blob_uri,
-                consensus_uri,
-                shard_id,
-            } => {
-                f.write_str("PERSIST CONSENSUS '");
-                f.write_node(&display::escape_single_quote_string(consensus_uri));
-                f.write_str("' BLOB '");
-                f.write_node(&display::escape_single_quote_string(blob_uri));
-                f.write_str("' SHARD '");
-                f.write_node(&display::escape_single_quote_string(shard_id));
-                f.write_str("'");
+            CreateSinkConnection::Persist => {
+                f.write_str("PERSIST");
             }
         }
     }

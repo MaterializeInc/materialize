@@ -16,7 +16,6 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 
-use mz_persist_client::ShardId;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 
@@ -446,9 +445,6 @@ pub enum SinkConnectionBuilder {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PersistSinkConnectionBuilder {
-    pub consensus_uri: String,
-    pub blob_uri: String,
-    pub shard_id: ShardId,
     pub value_desc: RelationDesc,
 }
 

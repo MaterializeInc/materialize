@@ -24,7 +24,6 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
-use mz_persist_client::ShardId;
 use tracing::warn;
 
 use mz_ore::collections::CollectionExt;
@@ -2258,35 +2257,7 @@ impl<'a> Parser<'a> {
                     consistency,
                 })
             }
-            PERSIST => {
-                // TODO(aljoscha): We should not require (or allow) passing in consensus/blob
-                // configuration on the sink. Instead, we need to pick up the config that was given
-                // to materialized/storaged when starting up.
-                self.expect_keyword(CONSENSUS)?;
-                let consensus_uri = self.parse_literal_string()?;
-
-                self.expect_keyword(BLOB)?;
-                let blob_uri = self.parse_literal_string()?;
-
-                let shard_id = if self.peek_keyword(SHARD) {
-                    let _ = self.expect_keyword(SHARD)?;
-                    self.parse_literal_string()?
-                } else {
-                    // TODO(aljoscha): persist/storage sinks should have a human-readable
-                    // collection name and STORAGE needs to keep track of which shard IDs they map
-                    // to. Also, the lifecycle of collections created by a sink should be tracked
-                    // separate from the sink. And we can expose something like a `mz_collections`
-                    // to allow querying them.
-                    let shard_id = ShardId::new();
-                    format!("{}", shard_id)
-                };
-
-                Ok(CreateSinkConnection::Persist {
-                    consensus_uri,
-                    blob_uri,
-                    shard_id,
-                })
-            }
+            PERSIST => Ok(CreateSinkConnection::Persist),
             _ => unreachable!(),
         }
     }

@@ -21,8 +21,9 @@ use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use timely::progress::Antichain;
 
 use mz_dataflow_types::{
+    client::controller::storage::CollectionMetadata,
     sinks::{SinkAsOf, SinkDesc, TailSinkConnection},
-    TailResponse, client::controller::storage::CollectionMetadata,
+    TailResponse,
 };
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
