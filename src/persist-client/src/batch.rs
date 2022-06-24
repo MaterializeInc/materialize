@@ -285,17 +285,15 @@ where
 
         // If we've filled up a chunk of ColumnarRecords, flush it out now to
         // blob storage to keep our memory usage capped.
-        if let Some(parts) = self.records.take_filled() {
-            for part in parts {
-                // TODO: This upper would ideally be `[self.max_ts+1]` but
-                // there's nothing that lets us increment a timestamp. An empty
-                // antichain is guaranteed to correctly bound the data in this
-                // part, but it doesn't really tell us anything. Figure out how
-                // to make a tighter bound, possibly by changing the part
-                // description to be an _inclusive_ upper.
-                let upper = Antichain::new();
-                self.parts.write(part, upper).await;
-            }
+        for part in self.records.take_filled() {
+            // TODO: This upper would ideally be `[self.max_ts+1]` but
+            // there's nothing that lets us increment a timestamp. An empty
+            // antichain is guaranteed to correctly bound the data in this
+            // part, but it doesn't really tell us anything. Figure out how
+            // to make a tighter bound, possibly by changing the part
+            // description to be an _inclusive_ upper.
+            let upper = Antichain::new();
+            self.parts.write(part, upper).await;
         }
 
         Ok(())
@@ -513,6 +511,7 @@ mod tests {
             .finish(Antichain::from_elem(4))
             .await
             .expect("invalid usage");
+        assert_eq!(batch.blob_keys.len(), 3);
         write
             .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(4))
             .await
