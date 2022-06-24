@@ -276,19 +276,16 @@ impl<B: Blob + Send + Sync + 'static> Maintainer<B> {
                 builder.push(((key, val), u64::encode(time), i64::encode(diff)));
 
                 // Move data from builder into storage as we fill up ColumnarRecords.
-                if let Some(filled) = builder.take_filled() {
-                    for part in filled {
-                        debug_assert!(part.len() > 0);
-                        let (key, part_size_bytes) =
-                            handle.block_on(Self::write_trace_batch_part(
-                                &blob,
-                                desc.clone(),
-                                part,
-                                u64::cast_from(keys.len()),
-                            ))?;
-                        keys.push(key);
-                        new_size_bytes += part_size_bytes;
-                    }
+                for part in builder.take_filled() {
+                    debug_assert!(part.len() > 0);
+                    let (key, part_size_bytes) = handle.block_on(Self::write_trace_batch_part(
+                        &blob,
+                        desc.clone(),
+                        part,
+                        u64::cast_from(keys.len()),
+                    ))?;
+                    keys.push(key);
+                    new_size_bytes += part_size_bytes;
                 }
             }
 
