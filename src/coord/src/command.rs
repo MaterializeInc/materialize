@@ -82,10 +82,6 @@ pub enum Command {
         secret_key: u32,
     },
 
-    RemovePendingPeeks {
-        conn_id: u32,
-    },
-
     DumpCatalog {
         session: Session,
         tx: oneshot::Sender<Response<String>>,
