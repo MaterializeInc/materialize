@@ -401,7 +401,9 @@ pub fn plan_tail(
     };
 
     let when = query::plan_as_of(scx, as_of)?;
-    let TailOptionExtracted { progress, snapshot } = options.try_into()?;
+    let TailOptionExtracted {
+        progress, snapshot, ..
+    } = options.try_into()?;
     Ok(Plan::Tail(TailPlan {
         from,
         when,

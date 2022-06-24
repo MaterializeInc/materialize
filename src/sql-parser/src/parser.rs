@@ -1927,13 +1927,9 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FOR)?;
         let connection = match self.expect_one_of_keywords(&[KAFKA, CONFLUENT])? {
             Keyword::Kafka => {
-                self.expect_keyword(BROKER)?;
-                let broker = self.parse_literal_string()?;
-                let with_options = self.parse_opt_with_options()?;
-                CreateConnection::Kafka {
-                    broker,
-                    with_options,
-                }
+                let with_options =
+                    self.parse_comma_separated(Parser::parse_kafka_connection_options)?;
+                CreateConnection::Kafka { with_options }
             }
             Keyword::Confluent => {
                 self.expect_keywords(&[SCHEMA, REGISTRY])?;
@@ -1951,6 +1947,45 @@ impl<'a> Parser<'a> {
             connection,
             if_not_exists,
         }))
+    }
+
+    fn parse_kafka_connection_options(
+        &mut self,
+    ) -> Result<KafkaConnectionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[BROKER, BROKERS, SASL, SSL])? {
+            BROKER => KafkaConnectionOptionName::Broker,
+            BROKERS => KafkaConnectionOptionName::Brokers,
+            SASL => match self.expect_one_of_keywords(&[MECHANISMS, PASSWORD, USERNAME])? {
+                MECHANISMS => KafkaConnectionOptionName::SaslMechanisms,
+                PASSWORD => KafkaConnectionOptionName::SaslPassword,
+                USERNAME => KafkaConnectionOptionName::SaslUsername,
+                _ => unreachable!(),
+            },
+            SSL => match self.expect_one_of_keywords(&[KEY, CERTIFICATE])? {
+                KEY => {
+                    if self.parse_keyword(PASSWORD) {
+                        KafkaConnectionOptionName::SslKeyPassword
+                    } else {
+                        KafkaConnectionOptionName::SslKey
+                    }
+                }
+                CERTIFICATE => {
+                    if self.parse_keyword(AUTHORITY) {
+                        KafkaConnectionOptionName::SslCertificateAuthority
+                    } else {
+                        KafkaConnectionOptionName::SslCertificate
+                    }
+                }
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+
+        let _ = self.consume_token(&Token::Eq);
+        Ok(KafkaConnectionOption {
+            name,
+            value: self.parse_opt_with_option_value(false)?,
+        })
     }
 
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {

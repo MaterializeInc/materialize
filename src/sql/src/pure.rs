@@ -10,12 +10,15 @@
 //! SQL purification.
 //!
 //! See the [crate-level documentation](crate) for details.
+
 use std::iter;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
+use mz_kafka_util::KafkaAddrs;
 use mz_sql_parser::ast::{CsrConnection, KafkaConnection, KafkaSourceConnection};
 use prost::Message;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
@@ -74,24 +77,22 @@ pub async fn purify_create_source(
         CreateSourceConnection::Kafka(KafkaSourceConnection {
             connection, topic, ..
         }) => {
-            let (broker, connection_options) = match connection {
-                KafkaConnection::Reference { connection } => {
-                    let scx = StatementContext::new(None, &*catalog);
-                    let item = scx.get_item_by_resolved_name(&connection)?;
-                    match item.connection()? {
-                        Connection::Kafka(connection) => {
-                            (connection.broker.to_string(), connection.options.clone())
-                        }
-                        _ => bail!("{} is not a kafka connection", item.name()),
-                    }
+            // Extract any/all configuration options
+            let mut connection_options = kafka_util::extract_config(&mut with_options_map)?;
+
+            match connection {
+                KafkaConnection::Inline { broker } => {
+                    // Add broker option
+                    connection_options.insert(
+                        "bootstrap.servers".into(),
+                        KafkaAddrs::from_str(&broker)?.to_string().into(),
+                    );
                 }
-                KafkaConnection::Inline { broker } => (
-                    broker.to_string(),
-                    kafka_util::extract_config(&mut with_options_map)?,
-                ),
+                KafkaConnection::Reference { connection: _ } => {
+                    todo!()
+                }
             };
             let consumer = kafka_util::create_consumer(
-                &broker,
                 &topic,
                 &connection_options,
                 connection_context.librdkafka_log_level,

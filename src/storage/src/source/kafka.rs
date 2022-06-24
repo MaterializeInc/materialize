@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use futures::executor::block_on;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -24,13 +23,13 @@ use timely::scheduling::activate::SyncActivator;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use mz_dataflow_types::connections::ConnectionContext;
+use mz_dataflow_types::connections::{ConnectionContext, StringOrSecret};
 use mz_dataflow_types::sources::{
     encoding::SourceDataEncoding, ExternalSourceConnection, KafkaOffset, KafkaSourceConnection,
     MzOffset,
 };
 use mz_expr::PartitionId;
-use mz_kafka_util::{client::create_new_client_config, client::MzClientContext, KafkaAddrs};
+use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
 use mz_ore::thread::{JoinHandleExt, UnparkOnDropHandle};
 use mz_repr::{adt::jsonb::Jsonb, GlobalId};
 
@@ -100,25 +99,18 @@ impl SourceReader for KafkaSourceReader {
             _ => unreachable!(),
         };
         let KafkaSourceConnection {
-            connection,
+            options,
             topic,
             group_id_prefix,
             cluster_id,
             ..
         } = kc;
-        let mut config_options = BTreeMap::new();
-        for (k, v) in connection.options {
-            let v = block_on(v.get_string(&connection_context.secrets_reader))
-                .expect("reading kafka secret unexpectedly failed");
-            config_options.insert(k, v);
-        }
         let kafka_config = create_kafka_config(
             &source_name,
-            &connection.broker,
             group_id_prefix,
             cluster_id,
-            &config_options,
-            connection_context.librdkafka_log_level,
+            &options,
+            &connection_context,
         );
         let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
@@ -159,7 +151,7 @@ impl SourceReader for KafkaSourceReader {
             let partition_info = Arc::downgrade(&partition_info);
             let topic = topic.clone();
             let consumer = Arc::clone(&consumer);
-            let metadata_refresh_frequency = config_options
+            let metadata_refresh_frequency = kafka_config
                 .get("topic.metadata.refresh.interval.ms")
                 // Safe conversion: statement::extract_config enforces that option is a value
                 // between 0 and 3600000
@@ -521,18 +513,24 @@ impl KafkaSourceReader {
 }
 
 /// Creates a Kafka config.
+///
+/// `options` set additional configuration operations from the user. While these
+/// look arbitrary, other layers of the system tightly control which
+/// configuration options are allowable.
 fn create_kafka_config(
     name: &str,
-    addrs: &KafkaAddrs,
     group_id_prefix: Option<String>,
     cluster_id: Uuid,
-    config_options: &BTreeMap<String, String>,
-    librdkafka_log_level: tracing::Level,
+    options: &BTreeMap<String, StringOrSecret>,
+    connection_context: &ConnectionContext,
 ) -> ClientConfig {
-    let mut kafka_config = create_new_client_config(librdkafka_log_level);
-
-    // Broker configuration.
-    kafka_config.set("bootstrap.servers", &addrs.to_string());
+    let mut kafka_config = create_new_client_config(connection_context.librdkafka_log_level);
+    for (k, v) in options {
+        kafka_config.set(
+            k,
+            futures::executor::block_on(v.get_string(&connection_context.secrets_reader)).unwrap(),
+        );
+    }
 
     // Default to disabling Kafka auto commit. This can be explicitly enabled
     // by the user if they want to use it for progress tracking.
@@ -575,13 +573,6 @@ fn create_kafka_config(
             name
         ),
     );
-
-    // Set additional configuration operations from the user. While these look
-    // arbitrary, other layers of the system tightly control which configuration
-    // options are allowable.
-    for (k, v) in config_options {
-        kafka_config.set(k, v);
-    }
 
     kafka_config
 }

@@ -540,10 +540,57 @@ impl<T: AstInfo> AstDisplay for DbzTxMetadataOption<T> {
 impl_display_t!(DbzTxMetadataOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KafkaConnectionOptionName {
+    Broker,
+    Brokers,
+    SslKey,
+    SslKeyPassword,
+    SslCertificate,
+    SslCertificateAuthority,
+    SaslMechanisms,
+    SaslUsername,
+    SaslPassword,
+}
+
+impl AstDisplay for KafkaConnectionOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            KafkaConnectionOptionName::Broker => "BROKER",
+            KafkaConnectionOptionName::Brokers => "BROKERS",
+            KafkaConnectionOptionName::SslKey => "SSL KEY",
+            KafkaConnectionOptionName::SslKeyPassword => "SSL KEY PASSWORD",
+            KafkaConnectionOptionName::SslCertificate => "SSL CERTIFICATE",
+            KafkaConnectionOptionName::SslCertificateAuthority => "SSL CERTIFICATE AUTHORITY",
+            KafkaConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
+            KafkaConnectionOptionName::SaslUsername => "SASL USERNAME",
+            KafkaConnectionOptionName::SaslPassword => "SASL PASSWORD",
+        })
+    }
+}
+impl_display!(KafkaConnectionOptionName);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// An option in a `CREATE CONNECTION...KAFKA`.
+pub struct KafkaConnectionOption<T: AstInfo> {
+    pub name: KafkaConnectionOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaConnectionOption<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(v) = &self.value {
+            f.write_str(" = ");
+            f.write_node(v);
+        }
+    }
+}
+impl_display_t!(KafkaConnectionOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CreateConnection<T: AstInfo> {
     Kafka {
-        broker: String,
-        with_options: Vec<WithOption<T>>,
+        with_options: Vec<KafkaConnectionOption<T>>,
     },
     Csr {
         url: String,
@@ -554,18 +601,9 @@ pub enum CreateConnection<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateConnection<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
-            Self::Kafka {
-                broker,
-                with_options,
-            } => {
-                f.write_str("KAFKA BROKER '");
-                f.write_node(&display::escape_single_quote_string(broker));
-                f.write_str("'");
-                if with_options.len() > 0 {
-                    f.write_str(" WITH (");
-                    f.write_node(&display::comma_separated(&with_options));
-                    f.write_str(")");
-                }
+            Self::Kafka { with_options } => {
+                f.write_str("KAFKA ");
+                f.write_node(&display::comma_separated(&with_options));
             }
             Self::Csr {
                 url: registry,
