@@ -2341,20 +2341,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
             Plan::Execute(plan) => {
-                let plan_name = plan.name.clone();
                 match self.sequence_execute(&mut session, plan) {
                     Ok(portal_name) => {
-                        let internal_cmd_tx = self.internal_cmd_tx.clone();
-                        task::spawn(|| format!("execute:{plan_name}"), async move {
-                            internal_cmd_tx
-                                .send(Message::Command(Command::Execute {
-                                    portal_name,
-                                    session,
-                                    tx: tx.take(),
-                                    span: tracing::Span::none(),
-                                }))
-                                .expect("sending to internal_cmd_tx cannot fail");
-                        });
+                        self.internal_cmd_tx
+                            .send(Message::Command(Command::Execute {
+                                portal_name,
+                                session,
+                                tx: tx.take(),
+                                span: tracing::Span::none(),
+                            }))
+                            .expect("sending to internal_cmd_tx cannot fail");
                     }
                     Err(err) => tx.send(Err(err), session),
                 };
