@@ -22,7 +22,7 @@ use timely::progress::Antichain;
 
 use mz_dataflow_types::{
     sinks::{SinkAsOf, SinkDesc, TailSinkConnection},
-    TailResponse,
+    TailResponse, client::controller::storage::CollectionMetadata,
 };
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 
@@ -47,7 +47,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        sink: &SinkDesc,
+        sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     ) -> Option<Rc<dyn Any>>

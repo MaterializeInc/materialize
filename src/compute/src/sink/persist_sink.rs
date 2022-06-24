@@ -21,14 +21,14 @@ use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::PartialOrder;
 
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sinks::{PersistSinkConnection, SinkDesc};
-use mz_persist_client::PersistLocation;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
 
 use crate::render::sinks::SinkRender;
 
-impl<G> SinkRender<G> for PersistSinkConnection
+impl<G> SinkRender<G> for PersistSinkConnection<CollectionMetadata>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -47,7 +47,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        _sink: &SinkDesc,
+        _sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     ) -> Option<Rc<dyn Any>>
@@ -55,7 +55,12 @@ where
         G: Scope<Timestamp = Timestamp>,
     {
         let scope = sinked_collection.scope();
-        let operator_name = format!("persist_sink({})", self.shard_id);
+
+        let persist_clients = Arc::clone(&compute_state.persist_clients);
+        let persist_location = self.storage_metadata.persist_location.clone();
+        let shard_id = self.storage_metadata.persist_shard;
+
+        let operator_name = format!("persist_sink({})", shard_id);
         let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
 
         // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
@@ -71,13 +76,6 @@ where
 
         let mut input =
             persist_op.new_input(&sinked_collection.inner, Exchange::new(move |_| hashed_id));
-
-        let persist_clients = Arc::clone(&compute_state.persist_clients);
-        let persist_location = PersistLocation {
-            consensus_uri: self.consensus_uri.clone(),
-            blob_uri: self.blob_uri.clone(),
-        };
-        let shard_id = self.shard_id.clone();
 
         let token = Rc::new(());
         let token_weak = Rc::downgrade(&token);

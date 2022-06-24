@@ -20,6 +20,7 @@ use mz_persist_client::ShardId;
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, RelationDesc};
 
+use crate::client::controller::storage::CollectionMetadata;
 use crate::connections::{CsrConnection, KafkaConnection};
 
 include!(concat!(
@@ -29,15 +30,15 @@ include!(concat!(
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SinkDesc<T = mz_repr::Timestamp> {
+pub struct SinkDesc<S = (), T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
-    pub connection: SinkConnection,
+    pub connection: SinkConnection<S>,
     pub envelope: Option<SinkEnvelope>,
     pub as_of: SinkAsOf<T>,
 }
 
-impl Arbitrary for SinkDesc<mz_repr::Timestamp> {
+impl Arbitrary for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -45,7 +46,7 @@ impl Arbitrary for SinkDesc<mz_repr::Timestamp> {
         (
             any::<GlobalId>(),
             any::<RelationDesc>(),
-            any::<SinkConnection>(),
+            any::<SinkConnection<CollectionMetadata>>(),
             any::<Option<SinkEnvelope>>(),
             any::<SinkAsOf<mz_repr::Timestamp>>(),
         )
@@ -60,7 +61,7 @@ impl Arbitrary for SinkDesc<mz_repr::Timestamp> {
     }
 }
 
-impl RustType<ProtoSinkDesc> for SinkDesc<mz_repr::Timestamp> {
+impl RustType<ProtoSinkDesc> for SinkDesc<CollectionMetadata, mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoSinkDesc {
         ProtoSinkDesc {
             from: Some(self.from.into_proto()),
@@ -160,13 +161,13 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SinkConnection {
+pub enum SinkConnection<S = ()> {
     Kafka(KafkaSinkConnection),
     Tail(TailSinkConnection),
-    Persist(PersistSinkConnection),
+    Persist(PersistSinkConnection<S>),
 }
 
-impl RustType<ProtoSinkConnection> for SinkConnection {
+impl RustType<ProtoSinkConnection> for SinkConnection<CollectionMetadata> {
     fn into_proto(&self) -> ProtoSinkConnection {
         use proto_sink_connection::Kind;
         ProtoSinkConnection {
@@ -366,20 +367,16 @@ impl RustType<ProtoPublishedSchemaInfo> for PublishedSchemaInfo {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistSinkConnection {
+pub struct PersistSinkConnection<S> {
     pub value_desc: RelationDesc,
-    pub shard_id: ShardId,
-    pub consensus_uri: String,
-    pub blob_uri: String,
+    pub storage_metadata: S,
 }
 
-impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection {
+impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMetadata> {
     fn into_proto(self: &Self) -> ProtoPersistSinkConnection {
         ProtoPersistSinkConnection {
             value_desc: Some(self.value_desc.into_proto()),
-            shard_id: self.shard_id.into_proto(),
-            consensus_uri: self.consensus_uri.clone(),
-            blob_uri: self.blob_uri.clone(),
+            storage_metadata: Some(self.storage_metadata.into_proto()),
         }
     }
 
@@ -388,14 +385,14 @@ impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection {
             value_desc: proto
                 .value_desc
                 .into_rust_if_some("ProtoPersistSinkConnection::value_desc")?,
-            shard_id: proto.shard_id.into_rust()?,
-            consensus_uri: proto.consensus_uri,
-            blob_uri: proto.blob_uri,
+            storage_metadata: proto
+                .storage_metadata
+                .into_rust_if_some("ProtoPersistSinkConnection::storage_metadata")?,
         })
     }
 }
 
-impl SinkConnection {
+impl<S> SinkConnection<S> {
     /// Returns the name of the sink connection.
     pub fn name(&self) -> &'static str {
         match self {

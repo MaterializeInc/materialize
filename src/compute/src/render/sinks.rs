@@ -18,7 +18,8 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::{Collection, Hashable};
 use timely::dataflow::Scope;
 
-use mz_dataflow_types::sinks::*;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+use mz_dataflow_types::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
@@ -36,7 +37,7 @@ where
         tokens: &mut std::collections::BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         import_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
-        sink: &SinkDesc,
+        sink: &SinkDesc<CollectionMetadata>,
     ) {
         let sink_render = get_sink_render_for(&sink.connection);
 
@@ -92,7 +93,7 @@ where
 
 #[allow(clippy::borrowed_box)]
 fn apply_sink_envelope<G>(
-    sink: &SinkDesc,
+    sink: &SinkDesc<CollectionMetadata>,
     sink_render: &Box<dyn SinkRender<G>>,
     collection: Collection<G, Row, Diff>,
 ) -> Collection<G, (Option<Row>, Option<Row>), Diff>
@@ -215,7 +216,7 @@ where
     fn render_continuous_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        sink: &SinkDesc,
+        sink: &SinkDesc<CollectionMetadata>,
         sink_id: GlobalId,
         sinked_collection: Collection<G, (Option<Row>, Option<Row>), Diff>,
     ) -> Option<Rc<dyn Any>>
@@ -223,7 +224,7 @@ where
         G: Scope<Timestamp = Timestamp>;
 }
 
-fn get_sink_render_for<G>(connection: &SinkConnection) -> Box<dyn SinkRender<G>>
+fn get_sink_render_for<G>(connection: &SinkConnection<CollectionMetadata>) -> Box<dyn SinkRender<G>>
 where
     G: Scope<Timestamp = Timestamp>,
 {
