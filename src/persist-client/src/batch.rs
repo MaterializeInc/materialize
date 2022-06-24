@@ -156,6 +156,7 @@ where
     shard_id: ShardId,
     records: ColumnarRecordsVecBuilder,
     blob: Arc<dyn BlobMulti + Send + Sync>,
+    metrics: Arc<Metrics>,
 
     parts: BatchParts<T>,
 
@@ -184,7 +185,7 @@ where
     ) -> Self {
         let parts = BatchParts::new(
             cfg.batch_builder_max_outstanding_parts,
-            metrics,
+            Arc::clone(&metrics),
             shard_id,
             lower.clone(),
             Arc::clone(&blob),
@@ -195,6 +196,7 @@ where
             max_ts: T::minimum(),
             records: ColumnarRecordsVecBuilder::new_with_len(cfg.blob_target_size),
             blob,
+            metrics,
             parts,
             shard_id,
             key_buf: Vec::new(),
@@ -260,8 +262,15 @@ where
 
         self.key_buf.clear();
         self.val_buf.clear();
-        K::encode(key, &mut self.key_buf);
-        V::encode(val, &mut self.val_buf);
+        self.metrics
+            .codecs
+            .key
+            .encode(|| K::encode(key, &mut self.key_buf));
+        self.metrics
+            .codecs
+            .val
+            .encode(|| V::encode(val, &mut self.val_buf));
+
         let t = T::encode(ts);
         let d = D::encode(diff);
 
@@ -369,6 +378,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                     index,
                 };
 
+                let start = Instant::now();
                 let buf = mz_ore::task::spawn_blocking(
                     || "batch::encode_part",
                     move || {
@@ -383,6 +393,13 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .instrument(debug_span!("batch::encode_part"))
                 .await
                 .expect("part encode task failed");
+                // Can't use the `CodecMetrics::encode` helper because of async.
+                metrics.codecs.batch.encode_count.inc();
+                metrics
+                    .codecs
+                    .batch
+                    .encode_seconds
+                    .inc_by(start.elapsed().as_secs_f64());
 
                 let () = retry_external(&metrics.retries.external.batch_set, || async {
                     blob.set(
