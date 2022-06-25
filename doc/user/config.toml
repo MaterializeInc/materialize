@@ -69,6 +69,31 @@ versions = [
 ]
 
 [[menu.main]]
+identifier = "overview"
+name = "Overview"
+weight= 5
+
+[[menu.main]]
+identifier = "quickstarts"
+name = "Quickstarts"
+weight= 10
+
+[[menu.main]]
+identifier = "reference"
+name = "Reference"
+weight= 15
+
+[[menu.main]]
+identifier = "ops"
+name = "Operating Materialize"
+weight= 20
+
+[[menu.main]]
+identifier = "integrations"
+name = "Tools and integrations"
+weight= 25
+
+[[menu.main]]
 identifier = "cs_redpanda"
 name = "Redpanda"
 parent = "create-source"
@@ -139,14 +164,12 @@ weight = 5
 identifier = "integration-guides"
 name = "Integration guides"
 parent = "integrations"
-url = "/integrations"
 weight = 40
 
 [[menu.main]]
 identifier = "client-libraries"
 name = "Client libraries"
 parent = "integrations"
-url = "/integrations/#libraries-and-drivers"
 weight = 30
 
 [[menu.main]]

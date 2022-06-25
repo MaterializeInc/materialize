@@ -181,10 +181,6 @@ body {
             padding: 4px 0;
             font-weight: bold;
             color: $medium-purple-v2;
-            &:hover,
-            &.active {
-                color: $purple-v2;
-            }
         }
 
         & > ul {
