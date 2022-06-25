@@ -835,6 +835,8 @@ impl DebeziumMode {
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DebeziumDedupProjection {
+    /// The column index for the `op` field.
+    pub op_idx: usize,
     /// The column index containing the debezium source metadata
     pub source_idx: usize,
     /// The record index of the `source.snapshot` field
@@ -843,32 +845,31 @@ pub struct DebeziumDedupProjection {
     pub source_projection: DebeziumSourceProjection,
     /// The column index containing the debezium transaction metadata
     pub transaction_idx: usize,
-    /// The record index of the `transaction.total_order` field
-    pub total_order_idx: usize,
+    /// Details about the transaction metadata.
     pub tx_metadata: Option<DebeziumTransactionMetadata>,
 }
 
 impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
     fn into_proto(&self) -> ProtoDebeziumDedupProjection {
         ProtoDebeziumDedupProjection {
+            op_idx: self.op_idx.into_proto(),
             source_idx: self.source_idx.into_proto(),
             snapshot_idx: self.snapshot_idx.into_proto(),
             source_projection: Some(self.source_projection.into_proto()),
             transaction_idx: self.transaction_idx.into_proto(),
-            total_order_idx: self.total_order_idx.into_proto(),
             tx_metadata: self.tx_metadata.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoDebeziumDedupProjection) -> Result<Self, TryFromProtoError> {
         Ok(DebeziumDedupProjection {
+            op_idx: proto.op_idx.into_rust()?,
             source_idx: proto.source_idx.into_rust()?,
             snapshot_idx: proto.snapshot_idx.into_rust()?,
             source_projection: proto
                 .source_projection
                 .into_rust_if_some("ProtoDebeziumDedupProjection::source_projection")?,
             transaction_idx: proto.transaction_idx.into_rust()?,
-            total_order_idx: proto.total_order_idx.into_rust()?,
             tx_metadata: proto.tx_metadata.into_rust()?,
         })
     }
@@ -886,7 +887,7 @@ pub enum DebeziumSourceProjection {
         row: usize,
     },
     Postgres {
-        sequence: Option<usize>,
+        sequence: usize,
         lsn: usize,
     },
     SqlServer {

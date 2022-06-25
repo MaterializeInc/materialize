@@ -936,6 +936,13 @@ fn typecheck_debezium_dedup(
     value_desc: &RelationDesc,
     tx_metadata: Option<DebeziumTransactionMetadata>,
 ) -> Result<DebeziumDedupProjection, anyhow::Error> {
+    let (op_idx, op_ty) = value_desc
+        .get_by_name(&"op".into())
+        .ok_or_else(|| anyhow!("'op' column missing from debezium input"))?;
+    if op_ty.scalar_type != ScalarType::String {
+        bail!("'op' column must be of type string");
+    };
+
     let (source_idx, source_ty) = value_desc
         .get_by_name(&"source".into())
         .ok_or_else(|| anyhow!("'source' column missing from debezium input"))?;
@@ -1025,39 +1032,22 @@ fn typecheck_debezium_dedup(
             change_lsn,
             event_serial_no,
         }
-    } else if let (sequence, Some(lsn)) = postgres {
+    } else if let (Some(sequence), Some(lsn)) = postgres {
         DebeziumSourceProjection::Postgres { sequence, lsn }
     } else {
         bail!("unknown type of upstream database")
     };
 
-    let (transaction_idx, transaction_ty) = value_desc
+    let (transaction_idx, _transaction_ty) = value_desc
         .get_by_name(&"transaction".into())
         .ok_or_else(|| anyhow!("'transaction' column missing from debezium input"))?;
 
-    let tx_fields = match &transaction_ty.scalar_type {
-        ScalarType::Record { fields, .. } => fields,
-        _ => bail!("'transaction' column must be of type record"),
-    };
-
-    let total_order = tx_fields
-        .iter()
-        .enumerate()
-        .find(|(_, f)| f.0.as_str() == "total_order");
-    let total_order_idx = match total_order {
-        Some((idx, (_, ty))) => match &ty.scalar_type {
-            ScalarType::Int64 => idx,
-            _ => bail!("'total_order' column must be an bigint"),
-        },
-        None => bail!("'total_order' field missing from tx record"),
-    };
-
     Ok(DebeziumDedupProjection {
+        op_idx,
         source_idx,
         snapshot_idx,
         source_projection,
         transaction_idx,
-        total_order_idx,
         tx_metadata,
     })
 }

@@ -604,12 +604,29 @@ enum RowCoordinates {
     Postgres {
         last_commit_lsn: Option<u64>,
         lsn: i64,
-        total_order: Option<i64>,
+        op_type: PostgresOpCoordinates,
     },
     SqlServer {
         change_lsn: SqlServerLsn,
         event_serial_no: i64,
     },
+}
+
+/// The coordinates of a PostgreSQL operation type.
+///
+/// Updates to the primary key of a PostgreSQL table will result in a delete
+/// operation followed by a create operation at the same sequence number, rather
+/// than a single update operation. PostgreSQL row coordinates therefore need
+/// to encode that expected order by ensuring delete operations sort before
+/// create operations at the same sequence number.
+///
+/// See: <https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-primary-key-updates>
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+enum PostgresOpCoordinates {
+    // The order here is load bearing. See documentation comment above!
+    Delete,
+    Create,
+    Other,
 }
 
 impl DebeziumDeduplicationState {
@@ -635,18 +652,6 @@ impl DebeziumDeduplicationState {
             filenames_to_indices: HashMap::new(),
             projection,
         })
-    }
-
-    fn extract_total_order(&mut self, value: &Row) -> Option<i64> {
-        match value.iter().nth(self.projection.transaction_idx).unwrap() {
-            Datum::List(l) => match l.iter().nth(self.projection.total_order_idx).unwrap() {
-                Datum::Int64(n) => Some(n),
-                Datum::Null => None,
-                d => panic!("type error: expected bigint, found {:?}", d),
-            },
-            Datum::Null => None,
-            d => panic!("type error: expected bigint[], found {:?}", d),
-        }
     }
 
     fn extract_binlog_position(
@@ -693,38 +698,49 @@ impl DebeziumDeduplicationState {
                         RowCoordinates::MySql { file, pos, row }
                     }
                     DebeziumSourceProjection::Postgres { sequence, lsn } => {
-                        let last_commit_lsn = match sequence {
-                            Some(idx) => {
-                                let sequence = match source.iter().nth(idx).unwrap() {
-                                    Datum::String(s) => s,
-                                    Datum::Null => return Ok(None),
-                                    d => panic!("type error: expected text, found {:?}", d),
-                                };
-                                let make_err = || {
-                                    DecodeError::Text(format!("invalid sequence: {:?}", sequence))
-                                };
-                                let sequence: Vec<Option<&str>> =
-                                    serde_json::from_str(sequence).or_else(|_| Err(make_err()))?;
+                        let last_commit_lsn = {
+                            let sequence = match source.iter().nth(sequence).unwrap() {
+                                Datum::String(s) => s,
+                                Datum::Null => return Ok(None),
+                                d => panic!("type error: expected text, found {:?}", d),
+                            };
+                            let make_err =
+                                || DecodeError::Text(format!("invalid sequence: {:?}", sequence));
+                            let sequence: Vec<Option<&str>> =
+                                serde_json::from_str(sequence).or_else(|_| Err(make_err()))?;
 
-                                match sequence.first().ok_or_else(make_err)? {
-                                    Some(s) => Some(u64::from_str(s).or_else(|_| Err(make_err()))?),
-                                    None => None,
-                                }
+                            match sequence.first().ok_or_else(make_err)? {
+                                Some(s) => Some(u64::from_str(s).or_else(|_| Err(make_err()))?),
+                                None => None,
                             }
-                            None => None,
                         };
-
+                        // NOTE: The second entry of the `sequence` field is
+                        // meant to be the LSN, but due to a bug in Debezium
+                        // 1.5-1.7 it is actually the same value as
+                        // `last_commit_lsn` [0]. The top-level `lsn` field is
+                        // correct even in Debezium 1.5, however, so we use
+                        // that.
+                        //
+                        // [0]: https://github.com/debezium/debezium/pull/2563
                         let lsn = match source.iter().nth(lsn).unwrap() {
                             Datum::Int64(s) => s,
                             Datum::Null => return Ok(None),
                             d => panic!("type error: expected bigint, found {:?}", d),
                         };
-                        let total_order = self.extract_total_order(value);
-
+                        let op_type = match value
+                            .iter()
+                            .nth(self.projection.op_idx)
+                            .unwrap()
+                            .unwrap_str()
+                        {
+                            "d" => PostgresOpCoordinates::Delete,
+                            "c" => PostgresOpCoordinates::Create,
+                            _ => PostgresOpCoordinates::Other,
+                        };
                         RowCoordinates::Postgres {
                             last_commit_lsn,
                             lsn,
-                            total_order,
+                            op_type,
                         }
                     }
                     DebeziumSourceProjection::SqlServer {
