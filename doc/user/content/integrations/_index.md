@@ -1,5 +1,5 @@
 ---
-title: Tools and Integrations
+title: Tools and integrations
 description: "Get details about third-party tools and integrations supported by Materialize"
 disable_list: true
 aliases:
@@ -8,10 +8,6 @@ aliases:
   - /third-party/postgres-cloud/
   - /guides/postgres-cloud/
   - /guides/
-menu:
-  main:
-    identifier: integrations
-weight: 50
 ---
 
 [//]: # "TODO(morsapaes) Once #8396 lands, link the page here"
