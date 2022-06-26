@@ -12,14 +12,12 @@
 //! This module houses the handlers for statements that modify the catalog, like
 //! `ALTER`, `CREATE`, and `DROP`.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::str::FromStr;
 use std::time::Duration;
 
 use aws_arn::ResourceName as AmazonResourceName;
-use chrono::{NaiveDate, NaiveDateTime};
 use globset::GlobBuilder;
 use itertools::Itertools;
 use mz_kafka_util::KafkaAddrs;
@@ -49,12 +47,11 @@ use mz_storage::client::sources::encoding::{
     ProtobufEncoding, RegexEncoding, SourceDataEncoding, SourceDataEncodingInner,
 };
 use mz_storage::client::sources::{
-    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
-    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
-    PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
-    Timeline, UnplannedSourceEnvelope, UpsertStyle,
+    provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumSourceProjection,
+    DebeziumTransactionMetadata, IncludedColumnPos, KafkaSourceConnection, KeyEnvelope,
+    KinesisSourceConnection, MzOffset, PostgresSourceConnection, PostgresSourceDetails,
+    ProtoPostgresSourceDetails, PubNubSourceConnection, S3SourceConnection, SourceConnection,
+    SourceDesc, SourceEnvelope, Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 
 use crate::ast::display::AstDisplay;
@@ -687,107 +684,11 @@ pub fn plan_create_source(
                         }
                     };
 
-                    let dedup_projection = typecheck_debezium_dedup(&value_desc, tx_metadata);
-
-                    let dedup_mode = match with_options.remove("deduplication") {
-                        None => match dedup_projection {
-                            Ok(_) => Cow::from("ordered"),
-                            Err(_) => Cow::from("none"),
-                        },
-                        Some(SqlValueOrSecret::Value(Value::String(s))) => Cow::from(s),
-                        _ => sql_bail!("deduplication option must be a string"),
-                    };
-
-                    match dedup_mode.as_ref() {
-                        "ordered" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                            before_idx,
-                            after_idx,
-                            mode: DebeziumMode::Ordered(dedup_projection?),
-                        }),
-                        "full" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                            before_idx,
-                            after_idx,
-                            mode: DebeziumMode::Full(dedup_projection?),
-                        }),
-                        "none" => UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                            before_idx,
-                            after_idx,
-                            mode: DebeziumMode::None,
-                        }),
-                        "full_in_range" => {
-                            let parse_datetime = |s: &str| {
-                                let formats = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"];
-                                for format in formats {
-                                    if let Ok(dt) = NaiveDateTime::parse_from_str(s, format) {
-                                        return Ok(dt);
-                                    }
-                                }
-                                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                                    return Ok(d.and_hms(0, 0, 0));
-                                }
-
-                                sql_bail!(
-                                    "UTC DateTime specifier '{}' should match \
-                                    'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS' \
-                                    or 'YYYY-MM-DD HH:MM:SS.FF",
-                                    s
-                                )
-                            };
-
-                            let dedup_start = match with_options.remove("deduplication_start") {
-                                None => None,
-                                Some(SqlValueOrSecret::Value(Value::String(start))) => Some(parse_datetime(&start)?),
-                                _ => sql_bail!("deduplication_start option must be a string"),
-                            };
-
-                            let dedup_end = match with_options.remove("deduplication_end") {
-                                None => None,
-                                Some(SqlValueOrSecret::Value(Value::String(end))) => Some(parse_datetime(&end)?),
-                                _ => sql_bail!("deduplication_end option must be a string"),
-                            };
-
-                            match dedup_start.zip(dedup_end) {
-                                Some((start, end)) => {
-                                    if start >= end {
-                                        sql_bail!(
-                                            "Debezium deduplication start {} is not before end {}",
-                                            start,
-                                            end
-                                        );
-                                    }
-
-                                    let pad_start =
-                                        match with_options.remove("deduplication_pad_start") {
-                                            None => None,
-                                            Some(SqlValueOrSecret::Value(Value::String(pad_start))) => {
-                                                Some(parse_datetime(&pad_start)?)
-                                            }
-                                            _ => sql_bail!(
-                                                "deduplication_pad_start option must be a string"
-                                            ),
-                                        };
-
-                                    UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
-                                        before_idx,
-                                        after_idx,
-                                        mode: DebeziumMode::FullInRange {
-                                            start,
-                                            end,
-                                            pad_start,
-                                            projection: dedup_projection?,
-                                        }
-                                    })
-                                }
-                                _ => sql_bail!(
-                                    "deduplication full_in_range requires both \
-                                 'deduplication_start' and 'deduplication_end' parameters"
-                                ),
-                            }
-                        }
-                        _ => sql_bail!(
-                            "deduplication must be one of 'none', 'ordered', 'full' or 'full_in_range'."
-                        ),
-                    }
+                    UnplannedSourceEnvelope::Debezium(DebeziumEnvelope {
+                        before_idx,
+                        after_idx,
+                        dedup: typecheck_debezium_dedup(&value_desc, tx_metadata)?,
+                    })
                 }
             }
         }
@@ -1075,16 +976,11 @@ fn typecheck_debezium_dedup(
         sql_bail!("unknown type of upstream database")
     };
 
-    let (transaction_idx, _transaction_ty) = value_desc
-        .get_by_name(&"transaction".into())
-        .ok_or_else(|| sql_err!("'transaction' column missing from debezium input"))?;
-
     Ok(DebeziumDedupProjection {
         op_idx,
         source_idx,
         snapshot_idx,
         source_projection,
-        transaction_idx,
         tx_metadata,
     })
 }
@@ -1159,7 +1055,7 @@ fn typecheck_debezium_transaction_metadata(
         _ => sql_bail!("'data_collections.event_count' missing from debezium transaction metadata"),
     };
 
-    let (_data_transaction_idx, data_transaction_ty) = data_value_desc
+    let (data_transaction_idx, data_transaction_ty) = data_value_desc
         .get_by_name(&"transaction".into())
         .ok_or_else(|| sql_err!("'transaction' column missing from debezium input"))?;
 
@@ -1187,6 +1083,7 @@ fn typecheck_debezium_transaction_metadata(
         tx_data_collections_data_collection_idx,
         tx_data_collections_event_count_idx,
         tx_data_collection_name,
+        data_transaction_idx,
         data_transaction_id_idx,
     })
 }

@@ -17,11 +17,9 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use bytes::BufMut;
-use chrono::NaiveDateTime;
 
 use globset::{Glob, GlobBuilder};
-use proptest::prelude::{any, Arbitrary, BoxedStrategy, Just, Strategy};
-use proptest::prop_oneof;
+use proptest::prelude::{any, Arbitrary, BoxedStrategy, Strategy};
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -30,7 +28,6 @@ use uuid::Uuid;
 use mz_persist_types::Codec;
 use mz_proto::{any_uuid, TryFromProtoError};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
-use mz_repr::chrono::any_naive_datetime;
 use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 pub mod encoding;
@@ -609,7 +606,8 @@ pub struct DebeziumEnvelope {
     pub before_idx: usize,
     /// The column index containing the `after` row
     pub after_idx: usize,
-    pub mode: DebeziumMode,
+    /// Details about how to deduplicate the data in the topic.
+    pub dedup: DebeziumDedupProjection,
 }
 
 impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
@@ -617,7 +615,7 @@ impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
         ProtoDebeziumEnvelope {
             before_idx: self.before_idx.into_proto(),
             after_idx: self.after_idx.into_proto(),
-            mode: Some(self.mode.into_proto()),
+            dedup: Some(self.dedup.into_proto()),
         }
     }
 
@@ -625,9 +623,9 @@ impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
         Ok(DebeziumEnvelope {
             before_idx: proto.before_idx.into_rust()?,
             after_idx: proto.after_idx.into_rust()?,
-            mode: proto
-                .mode
-                .into_rust_if_some("ProtoDebeziumEnvelope::mode")?,
+            dedup: proto
+                .dedup
+                .into_rust_if_some("ProtoDebeziumEnvelope::dedup")?,
         })
     }
 }
@@ -641,6 +639,8 @@ pub struct DebeziumTransactionMetadata {
     pub tx_data_collections_data_collection_idx: usize,
     pub tx_data_collections_event_count_idx: usize,
     pub tx_data_collection_name: String,
+    /// The column index containing the debezium transaction metadata.
+    pub data_transaction_idx: usize,
     pub data_transaction_id_idx: usize,
 }
 
@@ -658,6 +658,7 @@ impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata 
                 .tx_data_collections_event_count_idx
                 .into_proto(),
             tx_data_collection_name: self.tx_data_collection_name.clone(),
+            data_transaction_idx: self.data_transaction_idx.into_proto(),
             data_transaction_id_idx: self.data_transaction_id_idx.into_proto(),
         }
     }
@@ -677,146 +678,9 @@ impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata 
                 .tx_data_collections_event_count_idx
                 .into_rust()?,
             tx_data_collection_name: proto.tx_data_collection_name,
+            data_transaction_idx: proto.data_transaction_idx.into_rust()?,
             data_transaction_id_idx: proto.data_transaction_id_idx.into_rust()?,
         })
-    }
-}
-
-/// Ordered means we can trust Debezium high water marks
-///
-/// In standard operation, Debezium should always emit messages in position order, but
-/// messages may be duplicated.
-///
-/// For example, this is a legal stream of Debezium event positions:
-///
-/// ```text
-/// 1 2 3 2
-/// ```
-///
-/// Note that `2` appears twice, but the *first* time it appeared it appeared in order.
-/// Any position below the highest-ever seen position is guaranteed to be a duplicate,
-/// and can be ignored.
-///
-/// Now consider this stream:
-///
-/// ```text
-/// 1 3 2
-/// ```
-///
-/// In this case, `2` is sent *out* of order, and if it is ignored we will miss important
-/// state.
-///
-/// It is possible for users to do things with multiple databases and multiple Debezium
-/// instances pointing at the same Kafka topic that mean that the Debezium guarantees do
-/// not hold, in which case we are required to track individual messages, instead of just
-/// the highest-ever-seen message.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum DebeziumMode {
-    /// Do not perform any deduplication
-    None,
-    /// We can trust high water mark
-    Ordered(DebeziumDedupProjection),
-    /// We need to store some piece of state for every message
-    Full(DebeziumDedupProjection),
-    FullInRange {
-        projection: DebeziumDedupProjection,
-        pad_start: Option<NaiveDateTime>,
-        start: NaiveDateTime,
-        end: NaiveDateTime,
-    },
-}
-
-impl Arbitrary for DebeziumMode {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            Just(DebeziumMode::None),
-            any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Ordered),
-            any::<DebeziumDedupProjection>().prop_map(DebeziumMode::Full),
-            (
-                any::<DebeziumDedupProjection>(),
-                any::<bool>(),
-                any_naive_datetime(),
-                any_naive_datetime(),
-                any_naive_datetime(),
-            )
-                .prop_map(|(projection, pad_start_option, pad_start, start, end)| {
-                    DebeziumMode::FullInRange {
-                        projection,
-                        pad_start: if pad_start_option {
-                            Some(pad_start)
-                        } else {
-                            None
-                        },
-                        start,
-                        end,
-                    }
-                }),
-        ]
-        .boxed()
-    }
-}
-
-impl RustType<ProtoDebeziumMode> for DebeziumMode {
-    fn into_proto(&self) -> ProtoDebeziumMode {
-        use proto_debezium_mode::{Kind, ProtoFullInRange};
-        ProtoDebeziumMode {
-            kind: Some(match self {
-                DebeziumMode::None => Kind::None(()),
-                DebeziumMode::Ordered(o) => Kind::Ordered(o.into_proto()),
-                DebeziumMode::Full(f) => Kind::Full(f.into_proto()),
-                DebeziumMode::FullInRange {
-                    projection,
-                    pad_start,
-                    start,
-                    end,
-                } => Kind::FullInRange(ProtoFullInRange {
-                    projection: Some(projection.into_proto()),
-                    pad_start: pad_start.into_proto(),
-                    start: Some(start.into_proto()),
-                    end: Some(end.into_proto()),
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoDebeziumMode) -> Result<Self, TryFromProtoError> {
-        use proto_debezium_mode::{Kind, ProtoFullInRange};
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDebeziumMode::kind"))?;
-        Ok(match kind {
-            Kind::None(()) => DebeziumMode::None,
-            Kind::Ordered(o) => DebeziumMode::Ordered(o.into_rust()?),
-            Kind::Full(o) => DebeziumMode::Full(o.into_rust()?),
-            Kind::FullInRange(ProtoFullInRange {
-                projection,
-                pad_start,
-                start,
-                end,
-            }) => DebeziumMode::FullInRange {
-                projection: projection.into_rust_if_some("ProtoFullInRange::projection")?,
-                pad_start: pad_start.into_rust()?,
-                start: start.into_rust_if_some("ProtoFullInRange::start")?,
-                end: end.into_rust_if_some("ProtoFullInRange::end")?,
-            },
-        })
-    }
-}
-
-impl DebeziumMode {
-    pub fn tx_metadata(&self) -> Option<&DebeziumTransactionMetadata> {
-        match self {
-            DebeziumMode::Ordered(DebeziumDedupProjection { tx_metadata, .. })
-            | DebeziumMode::Full(DebeziumDedupProjection { tx_metadata, .. })
-            | DebeziumMode::FullInRange {
-                projection: DebeziumDedupProjection { tx_metadata, .. },
-                ..
-            } => tx_metadata.as_ref(),
-            DebeziumMode::None => None,
-        }
     }
 }
 
@@ -830,8 +694,6 @@ pub struct DebeziumDedupProjection {
     pub snapshot_idx: usize,
     /// The upstream database specific fields
     pub source_projection: DebeziumSourceProjection,
-    /// The column index containing the debezium transaction metadata
-    pub transaction_idx: usize,
     /// Details about the transaction metadata.
     pub tx_metadata: Option<DebeziumTransactionMetadata>,
 }
@@ -843,7 +705,6 @@ impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
             source_idx: self.source_idx.into_proto(),
             snapshot_idx: self.snapshot_idx.into_proto(),
             source_projection: Some(self.source_projection.into_proto()),
-            transaction_idx: self.transaction_idx.into_proto(),
             tx_metadata: self.tx_metadata.into_proto(),
         }
     }
@@ -856,7 +717,6 @@ impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
             source_projection: proto
                 .source_projection
                 .into_rust_if_some("ProtoDebeziumDedupProjection::source_projection")?,
-            transaction_idx: proto.transaction_idx.into_rust()?,
             tx_metadata: proto.tx_metadata.into_rust()?,
         })
     }

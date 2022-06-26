@@ -95,7 +95,7 @@ message ProtoIncludedColumnPos {
 message ProtoDebeziumEnvelope {
     uint64 before_idx = 1;
     uint64 after_idx = 2;
-    ProtoDebeziumMode mode = 3;
+    ProtoDebeziumDedupProjection dedup = 3;
 }
 
 message ProtoDebeziumTransactionMetadata {
@@ -106,23 +106,8 @@ message ProtoDebeziumTransactionMetadata {
     uint64 tx_data_collections_data_collection_idx = 5;
     uint64 tx_data_collections_event_count_idx = 6;
     string tx_data_collection_name = 7;
-    uint64 data_transaction_id_idx = 8;
-}
-
-message ProtoDebeziumMode {
-    message ProtoFullInRange {
-        ProtoDebeziumDedupProjection projection = 1;
-        mz_repr.chrono.ProtoNaiveDateTime pad_start = 2;
-        mz_repr.chrono.ProtoNaiveDateTime start = 3;
-        mz_repr.chrono.ProtoNaiveDateTime end = 4;
-    }
-
-    oneof kind {
-        google.protobuf.Empty none = 1;
-        ProtoDebeziumDedupProjection ordered = 2;
-        ProtoDebeziumDedupProjection full = 3;
-        ProtoFullInRange full_in_range = 4;
-    }
+    uint64 data_transaction_idx = 8;
+    uint64 data_transaction_id_idx = 9;
 }
 
 message ProtoDebeziumDedupProjection {
@@ -130,7 +115,6 @@ message ProtoDebeziumDedupProjection {
     uint64 source_idx = 2;
     uint64 snapshot_idx = 3;
     ProtoDebeziumSourceProjection source_projection = 4;
-    uint64 transaction_idx = 5;
     ProtoDebeziumTransactionMetadata tx_metadata = 6;
 }
 
