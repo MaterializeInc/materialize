@@ -17,7 +17,7 @@ aws-sdk-s3 = { version = "0.13.0", default-features = false, features = ["native
 aws-sdk-sqs = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-sdk-sts = { version = "0.13.0", default-features = false, features = ["native-tls", "rt-tokio"] }
 aws-smithy-http = "0.43.0"
-aws-types = { version = "0.13.0", features = ["hardcoded-credentials"] }
+aws-types = { version = "0.14.0", features = ["hardcoded-credentials"] }
 byteorder = "1.4.3"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
