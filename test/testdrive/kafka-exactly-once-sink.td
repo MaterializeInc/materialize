@@ -99,7 +99,42 @@ $ set dbz-schema={
           "null"
         ]
       },
-      { "name": "after", "type": ["row", "null"] }
+      { "name": "op", "type": "string" },
+      { "name": "after", "type": ["row", "null"] },
+      {
+        "name": "source",
+        "type": {
+          "type": "record",
+          "name": "Source",
+          "namespace": "whatever",
+          "fields": [
+            {
+              "name": "snapshot",
+              "type": [
+                {
+                  "type": "string",
+                  "connect.version": 1,
+                  "connect.parameters": {
+                    "allowed": "true,last,false"
+                  },
+                  "connect.default": "false",
+                  "connect.name": "io.debezium.data.Enum"
+                },
+                "null"
+              ],
+              "default": "false"
+            },
+            {
+              "name": "lsn",
+              "type": ["long", "null"]
+            },
+            {
+              "name": "sequence",
+              "type": ["string", "null"]
+            }
+          ]
+        }
+      }
     ]
   }
 
@@ -219,7 +254,7 @@ $ kafka-ingest format=avro topic=input_cdcv2 schema=${cdcv2-schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[1],"counts":[{"time":1,"count":1}]}}
 
 $ kafka-ingest format=avro topic=input_dbz schema=${dbz-schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 # ensure that the sink works with log compaction enabled on the consistency topic
 
@@ -268,7 +303,7 @@ $ kafka-create-topic topic=rt-binding-consistency-test-input
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE DEBEZIUM
 
 $ kafka-ingest format=avro topic=rt-binding-consistency-test-input schema=${dbz-schema} timestamp=1
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 $ kafka-verify format=avro sink=materialize.public.rt_binding_consistency_test_sink
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "<TIMESTAMP>"}}

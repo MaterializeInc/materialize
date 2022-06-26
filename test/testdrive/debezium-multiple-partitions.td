@@ -64,32 +64,6 @@ $ set schema={
           ],
           "connect.name": "io.debezium.connector.mysql.Source"
         }
-      },
-      {
-        "name": "transaction",
-        "type": [
-          "null",
-          {
-            "type": "record",
-            "name": "ConnectDefault",
-            "namespace": "io.confluent.connect.avro",
-            "fields": [
-              {
-                "name": "id",
-                "type": "string"
-              },
-              {
-                "name": "total_order",
-                "type": "long"
-              },
-              {
-                "name": "data_collection_order",
-                "type": "long"
-              }
-            ]
-          }
-        ],
-        "default": null
       }
     ]
   }
@@ -98,19 +72,18 @@ $ kafka-create-topic topic=data partitions=3
 
 > CREATE MATERIALIZED SOURCE multipartition
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (deduplication = 'ordered')
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
 
 # Ingest the data in the reverse order but in separate partitions
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=2
-{"a":3} {"before":null,"after":{"row":{"a":3,"b":1}},"source":{"file":"binlog","pos":3,"row":0,"snapshot":{"boolean":false}}, "op": "c", "transaction": null}
+{"a":3} {"before":null,"after":{"row":{"a":3,"b":1}},"source":{"file":"binlog","pos":3,"row":0,"snapshot":{"boolean":false}}, "op": "c"}
 
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=1
-{"a":2} {"before":null,"after":{"row":{"a":2,"b":1}},"source":{"file":"binlog","pos":2,"row":0,"snapshot":{"boolean":false}}, "op": "c", "transaction": null}
+{"a":2} {"before":null,"after":{"row":{"a":2,"b":1}},"source":{"file":"binlog","pos":2,"row":0,"snapshot":{"boolean":false}}, "op": "c"}
 
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=0
-{"a":1} {"before":null,"after":{"row":{"a":1,"b":1}},"source":{"file":"binlog","pos":1,"row":0,"snapshot":{"boolean":false}}, "op": "c", "transaction": null}
+{"a":1} {"before":null,"after":{"row":{"a":1,"b":1}},"source":{"file":"binlog","pos":1,"row":0,"snapshot":{"boolean":false}}, "op": "c"}
 
 > SELECT a, b FROM multipartition
 a b

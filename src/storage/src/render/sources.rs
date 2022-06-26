@@ -310,7 +310,7 @@ where
             // render envelopes
             match &envelope {
                 SourceEnvelope::Debezium(dbz_envelope) => {
-                    let (stream, errors) = match dbz_envelope.mode.tx_metadata() {
+                    let (stream, errors) = match &dbz_envelope.dedup.tx_metadata {
                         Some(tx_metadata) => {
                             let tx_storage_metadata = description
                                 .source_imports
@@ -334,18 +334,9 @@ where
                             needed_tokens.push(tx_token);
                             error_collections.push(tx_source_err);
 
-                            super::debezium::render_tx(
-                                dbz_envelope,
-                                &results,
-                                tx_source_ok,
-                                dataflow_debug_name.clone(),
-                            )
+                            super::debezium::render_tx(dbz_envelope, &results, tx_source_ok)
                         }
-                        None => super::debezium::render(
-                            dbz_envelope,
-                            &results,
-                            dataflow_debug_name.clone(),
-                        ),
+                        None => super::debezium::render(dbz_envelope, &results),
                     };
                     (stream.as_collection(), Some(errors.as_collection()))
                 }
