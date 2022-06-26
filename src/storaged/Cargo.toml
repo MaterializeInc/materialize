@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.58"
 axum = "0.5.9"
-clap = { version = "3.2.5", features = ["derive", "env"] }
+clap = { version = "3.2.6", features = ["derive", "env"] }
 futures = "0.3.21"
 mz-build-info = { path = "../build-info" }
 mz-dataflow-types = { path = "../dataflow-types" }
