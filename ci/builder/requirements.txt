@@ -13,7 +13,7 @@ colored==1.4.3
 docker==5.0.3
 ec2instanceconnectcli==1.0.2
 flake8==4.0.1
-humanize==4.2.0
+humanize==4.2.1
 isort==5.10.1
 junit-xml==1.9
 mypy==0.961
