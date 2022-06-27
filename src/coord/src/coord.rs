@@ -171,7 +171,7 @@ mod dataflow_builder;
 mod indexes;
 
 #[derive(Debug)]
-pub enum Message<T = mz_repr::Timestamp> {
+pub enum Message {
     Command(Command),
     ControllerReady,
     CreateSourceStatementReady(CreateSourceStatementReady),
@@ -179,14 +179,13 @@ pub enum Message<T = mz_repr::Timestamp> {
     SendDiffs(SendDiffs),
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
-    AdvanceLocalInput(AdvanceLocalInput<T>),
+    AdvanceLocalInput(AdvanceLocalInput),
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
 }
 
 #[derive(Debug)]
-pub struct AdvanceLocalInput<T> {
-    advance_to: T,
+pub struct AdvanceLocalInput {
     ids: Vec<GlobalId>,
 }
 
@@ -274,6 +273,26 @@ pub enum PeekResponseUnary {
     Canceled,
 }
 
+struct GroupCommit {
+    pending_writes: Vec<PendingWriteTxn>,
+    table_advances: HashSet<GlobalId>,
+}
+
+impl GroupCommit {
+    fn new() -> Self {
+        GroupCommit {
+            pending_writes: Vec::new(),
+            table_advances: HashSet::new(),
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.pending_writes.is_empty() && self.table_advances.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.pending_writes.len() + self.table_advances.len()
+    }
+}
+
 /// A pending write transaction that will be committing during the next group commit.
 struct PendingWriteTxn {
     /// List of all write operations within the transaction.
@@ -352,7 +371,7 @@ fn concretize_replica_config(
 }
 
 /// Holds tables needing advancement.
-struct AdvanceTables<T> {
+struct AdvanceTables {
     /// The current number of tables to advance in a single batch.
     batch_size: usize,
     /// The set of tables to advance.
@@ -360,24 +379,19 @@ struct AdvanceTables<T> {
     /// An ordered set of work to ensure fairness. Elements may be duplicated here,
     /// so there's no guarantee that there is a corresponding element in `set`.
     work: VecDeque<GlobalId>,
-    /// Timestamp at which to advance the tables.
-    advance_to: T,
 }
 
-impl<T: CoordTimestamp> AdvanceTables<T> {
+impl AdvanceTables {
     fn new() -> Self {
         Self {
             batch_size: 1,
             set: HashSet::new(),
             work: VecDeque::new(),
-            advance_to: T::minimum(),
         }
     }
 
     // Inserts ids to be advanced to ts.
-    fn insert<I: Iterator<Item = GlobalId>>(&mut self, ts: T, ids: I) {
-        assert!(self.advance_to.less_than(&ts));
-        self.advance_to = ts;
+    fn insert<I: Iterator<Item = GlobalId>>(&mut self, ids: I) {
         let ids = ids.collect::<Vec<_>>();
         self.set.extend(&ids);
         self.work.extend(ids);
@@ -386,15 +400,12 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
     /// Returns the set of tables to advance. Blocks forever if there are none.
     ///
     /// This method is cancel-safe because there are no await points when the set is non-empty.
-    async fn recv(&mut self) -> AdvanceLocalInput<T> {
+    async fn recv(&mut self) -> AdvanceLocalInput {
         if self.set.is_empty() {
             futures::future::pending::<()>().await;
         }
         let mut remaining = self.batch_size;
-        let mut inputs = AdvanceLocalInput {
-            advance_to: self.advance_to.clone(),
-            ids: Vec::new(),
-        };
+        let mut inputs = AdvanceLocalInput { ids: Vec::new() };
         // Fetch out of the work queue to ensure that no table is starved from
         // advancement in the case that the periodic advancement interval is less than
         // the total time to advance all tables.
@@ -450,7 +461,7 @@ pub struct Coordinator<S> {
 
     /// Tracks tables needing advancement, which can be processed at a low priority
     /// in the biased select loop.
-    advance_tables: AdvanceTables<Timestamp>,
+    advance_tables: AdvanceTables,
 
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
@@ -483,8 +494,9 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<Deferred>,
-    /// Pending writes waiting for a group commit
-    pending_writes: Vec<PendingWriteTxn>,
+
+    /// Pending writes and table advancements waiting for a group commit
+    pending_group_commit: GroupCommit,
 
     /// Handle to secret manager that can create and delete secrets from
     /// an arbitrary secret storage engine.
@@ -597,10 +609,6 @@ impl<S: Append + 'static> Coordinator<S> {
     /// NOTE: This can be removed once DDL is included in group commits.
     fn peek_local_ts(&self) -> Timestamp {
         self.global_timeline.peek_ts()
-    }
-
-    fn local_fast_forward(&mut self, lower_bound: Timestamp) {
-        self.global_timeline.fast_forward(lower_bound);
     }
 
     fn now(&self) -> EpochMillis {
@@ -1015,17 +1023,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::AdvanceLocalInputs => {
                     // Convince the coordinator it needs to open a new timestamp
                     // and advance inputs.
-                    // Fast forwarding puts the `TimestampOracle` in write mode,
-                    // which means the next read will have to advance a table
-                    // after reading from it. To prevent this we explicitly put
-                    // the `TimestampOracle` in read mode. Writes will always
-                    // advance a table no matter what mode the `TimestampOracle`
-                    // is in. We step back the value of `now()` so that the
-                    // next write can happen at `now()` and not a value above
-                    // `now()`
-                    let now = self.now();
-                    self.local_fast_forward(now.step_back().unwrap_or(now));
-                    let _ = self.get_local_read_ts();
+                    self.advance_local_inputs();
                 }
                 Message::AdvanceLocalInput(inputs) => {
                     self.advance_local_input(inputs).await;
@@ -1038,8 +1036,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
 
-            if let Some(timestamp) = self.global_timeline.should_advance_to() {
-                self.advance_local_inputs(timestamp).await;
+            if let Some(_) = self.global_timeline.should_advance_to() {
+                self.advance_local_inputs();
             }
         }
     }
@@ -1050,83 +1048,22 @@ impl<S: Append + 'static> Coordinator<S> {
     // because they currently processed serially by persist. In order to allow
     // other coordinator messages to be processed (like user queries), split up the
     // processing of this work.
-    async fn advance_local_inputs(&mut self, advance_to: mz_repr::Timestamp) {
-        self.advance_tables.insert(
-            advance_to,
-            self.catalog
-                .entries()
-                .filter_map(|e| if e.is_table() { Some(e.id()) } else { None }),
-        );
+    fn advance_local_inputs(&mut self) {
+        self.advance_tables
+            .insert(self.catalog.entries().filter_map(|e| {
+                if e.is_table() {
+                    Some(e.id())
+                } else {
+                    None
+                }
+            }));
     }
 
-    // Advance a local input (table). This downgrades the capabilitiy of a table,
-    // which means that it can no longer produce new data before this timestamp.
+    // Advance a local input (table). This downgrades the capability of a table,
+    // which means that it can no longer produce new data before the assigned timestamp.
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn advance_local_input(&mut self, inputs: AdvanceLocalInput<mz_repr::Timestamp>) {
-        // We split up table advancement into batches of requests so that user queries
-        // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
-        // maximum amount of time we are willing to block user queries for. We could
-        // process tables one at a time, but that increases the overall processing time
-        // because we miss out on batching the requests to the postgres server. To
-        // balance these two goals (not blocking user queries, minimizing time to
-        // advance tables), we record how long a batch takes to process, and will
-        // adjust the size of the next batch up or down based on the response time.
-        //
-        // On one extreme, should we ever be able to advance all tables in less time
-        // than MAX_WAIT (probably due to connection pools or other actual parallelism
-        // on the persist side), great, we've minimized the total processing time
-        // without blocking user queries for more than our target. On the other extreme
-        // where we can only process one table at a time (probably due to the postgres
-        // server being over used or some other cloud/network slowdown inbetween), the
-        // AdvanceTables struct will gracefully attempt to close tables in a bounded
-        // and fair manner.
-        const MAX_WAIT: Duration = Duration::from_millis(50);
-        // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
-        // change the batch size.
-        const WINDOW: Duration = Duration::from_millis(10);
-        let start = Instant::now();
-        let storage = self.dataflow_client.storage();
-        let appends = inputs
-            .ids
-            .into_iter()
-            .filter_map(|id| {
-                if self.catalog.try_get_entry(&id).is_none()
-                    || !storage
-                        .collection(id)
-                        .unwrap()
-                        .write_frontier
-                        .less_than(&inputs.advance_to)
-                {
-                    // Filter out tables that were dropped while waiting for advancement.
-                    // Filter out tables whose upper is already advanced. This is not needed for
-                    // correctness (advance_to and write_frontier should be equal here), just
-                    // performance, as it's a no-op.
-                    None
-                } else {
-                    Some((id, vec![], inputs.advance_to))
-                }
-            })
-            .collect::<Vec<_>>();
-        let num_updates = appends.len();
-        self.dataflow_client
-            .storage_mut()
-            .append(appends)
-            .await
-            .unwrap();
-        let elapsed = start.elapsed();
-        trace!(
-            "advance_local_inputs for {} tables to {} took: {} ms",
-            num_updates,
-            inputs.advance_to,
-            elapsed.as_millis()
-        );
-        if elapsed > (MAX_WAIT + WINDOW) {
-            self.advance_tables.decrease_batch();
-        } else if elapsed < (MAX_WAIT - WINDOW) && num_updates == self.advance_tables.batch_size {
-            // Only increase the batch size if it completed under the window and the batch
-            // was full.
-            self.advance_tables.increase_batch();
-        }
+    async fn advance_local_input(&mut self, inputs: AdvanceLocalInput) {
+        self.submit_table_advancement(inputs.ids);
     }
 
     /// Attempts to commit all pending write transactions in a group commit. If the timestamp
@@ -1134,7 +1071,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// immediately. Otherwise we must wait for `now()` to advance past the timestamp chosen for the
     /// writes.
     async fn try_group_commit(&mut self) {
-        if self.pending_writes.is_empty() {
+        if self.pending_group_commit.is_empty() {
             return;
         }
 
@@ -1172,6 +1109,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
+    /// A batch of tables may also be advanced at the same timestamp as the tables writes.
     async fn group_commit(&mut self) {
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method. We will still commit the write without waiting for `now()`
@@ -1183,15 +1121,15 @@ impl<S: Append + 'static> Coordinator<S> {
             advance_to,
         } = self.get_and_step_local_write_ts();
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
-            HashMap::with_capacity(self.pending_writes.len());
-        let mut responses = Vec::with_capacity(self.pending_writes.len());
+            HashMap::with_capacity(self.pending_group_commit.len());
+        let mut responses = Vec::with_capacity(self.pending_group_commit.pending_writes.len());
         for PendingWriteTxn {
             writes,
             client_transmitter,
             response,
             session,
             action,
-        } in self.pending_writes.drain(..)
+        } in self.pending_group_commit.pending_writes.drain(..)
         {
             for WriteOp { id, rows } in writes {
                 // If the table that some write was targeting has been deleted while the write was
@@ -1213,15 +1151,59 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             responses.push((client_transmitter, response, session, action));
         }
-        let appends = appends
+        for id in self.pending_group_commit.table_advances.drain() {
+            appends.entry(id).or_insert(Vec::new());
+        }
+        let appends: Vec<_> = appends
             .into_iter()
             .map(|(id, updates)| (id, updates, advance_to))
             .collect();
+
+        // We split up table advancement into batches of requests so that user queries
+        // are not blocked waiting for this periodic work to complete. MAX_WAIT is the
+        // maximum amount of time we are willing to block user queries for. We could
+        // process tables one at a time, but that increases the overall processing time
+        // because we miss out on batching the requests to the postgres server. To
+        // balance these two goals (not blocking user queries, minimizing time to
+        // advance tables), we record how long a batch takes to process, and will
+        // adjust the size of the next batch up or down based on the response time. We
+        // include regular table write times in this calculation so that when we are
+        // experiencing a lot of writes we will lower the number of table advancements
+        // to compensate and vice versa.
+        //
+        // On one extreme, should we ever be able to advance all tables in less time
+        // than MAX_WAIT (probably due to connection pools or other actual parallelism
+        // on the persist side), great, we've minimized the total processing time
+        // without blocking user queries for more than our target. On the other extreme
+        // where we can only process one table at a time (probably due to the postgres
+        // server being over used or some other cloud/network slowdown inbetween), the
+        // AdvanceTables struct will gracefully attempt to close tables in a bounded
+        // and fair manner.
+        const MAX_WAIT: Duration = Duration::from_millis(50);
+        // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
+        // change the batch size.
+        const WINDOW: Duration = Duration::from_millis(10);
+        let start = Instant::now();
+        let num_tables = appends.len();
         self.dataflow_client
             .storage_mut()
             .append(appends)
             .await
             .unwrap();
+        let elapsed = start.elapsed();
+        trace!(
+            "group commit for {} tables to {} took: {} ms",
+            num_tables,
+            advance_to,
+            elapsed.as_millis()
+        );
+        if elapsed > (MAX_WAIT + WINDOW) {
+            self.advance_tables.decrease_batch();
+        } else if elapsed < (MAX_WAIT - WINDOW) && num_tables >= self.advance_tables.batch_size {
+            // Only increase the batch size if it completed under the window and the batch
+            // was full.
+            self.advance_tables.increase_batch();
+        }
         for (client_transmitter, response, mut session, action) in responses {
             session.vars_mut().end_transaction(action);
             client_transmitter.send(response, session);
@@ -1230,12 +1212,24 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Submit a write to be executed during the next group commit.
     fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        if self.pending_writes.is_empty() {
+        if self.pending_group_commit.is_empty() {
             self.internal_cmd_tx
                 .send(Message::GroupCommit)
                 .expect("sending to internal_cmd_tx cannot fail");
         }
-        self.pending_writes.push(pending_write_txn);
+        self.pending_group_commit
+            .pending_writes
+            .push(pending_write_txn);
+    }
+
+    /// Submit a table to be advanced during the next group commit.
+    fn submit_table_advancement(&mut self, ids: Vec<GlobalId>) {
+        if self.pending_group_commit.is_empty() {
+            self.internal_cmd_tx
+                .send(Message::GroupCommit)
+                .expect("sending to internal_cmd_tx cannot fail");
+        }
+        self.pending_group_commit.table_advances.extend(ids);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1972,6 +1966,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
             // Cancel pending writes. There is at most one pending write per session.
             if let Some(idx) = self
+                .pending_group_commit
                 .pending_writes
                 .iter()
                 .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
@@ -1980,7 +1975,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     client_transmitter,
                     session,
                     ..
-                } = self.pending_writes.remove(idx);
+                } = self.pending_group_commit.pending_writes.remove(idx);
                 let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
             }
 
@@ -5482,7 +5477,7 @@ pub async fn serve<S: Append + 'static>(
                 pending_tails: HashMap::new(),
                 write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 write_lock_wait_group: VecDeque::new(),
-                pending_writes: Vec::new(),
+                pending_group_commit: GroupCommit::new(),
                 secrets_controller,
                 replica_sizes,
                 availability_zones,
@@ -6219,28 +6214,6 @@ mod timeline {
             }
         }
 
-        /// Electively advance the tracked times.
-        ///
-        /// If `lower_bound` is strictly greater than the current time (of either state), the
-        /// resulting state will be `Writing(lower_bound)`.
-        pub fn fast_forward(&mut self, lower_bound: T) {
-            match &self.state {
-                TimestampOracleState::Writing(ts) => {
-                    if ts.less_than(&lower_bound) {
-                        self.advance_to = Some(lower_bound.clone());
-                        self.state = TimestampOracleState::Writing(lower_bound);
-                    }
-                }
-                TimestampOracleState::Reading(ts) => {
-                    if ts.less_than(&lower_bound) {
-                        // This may result in repetition in the case `lower_bound == ts + 1`.
-                        // This is documented as fine, and concerned users can protect themselves.
-                        self.advance_to = Some(lower_bound.clone());
-                        self.state = TimestampOracleState::Writing(lower_bound);
-                    }
-                }
-            }
-        }
         /// Whether and to what the next value of `self.write_ts() has advanced since this method was last called.
         ///
         /// This method may produce the same value multiple times, and should not be used as a test for whether
