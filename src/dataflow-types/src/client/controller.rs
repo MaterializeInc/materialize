@@ -557,10 +557,10 @@ where
                 }
             }
             UnderlyingControllerResponse::Compute(
-                instance,
+                _instance,
                 ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when),
             ) => Ok(Some(ControllerResponse::ComputeReplicaHeartbeat(
-                instance, replica_id, when,
+                replica_id, when,
             ))),
         }
     }

@@ -1281,9 +1281,14 @@ impl<S: Append + 'static> Coordinator<S> {
             }) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
             }
-            ControllerResponse::ComputeReplicaHeartbeat(_instance_id, replica_id, when) => {
-                const REPLICA_STATUS_GRANULARITY: u32 = 60; /* seconds */
+            ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
+                // Round off the time based on `REPLICA_STATUS_GRANULARITY`.
+                // We can't just do something like `(timestamp / REPLICA_STATUS_GRANULARITY) * REPLICA_STATUS_GRANULARITY`
+                // with a Unix timestamp, because then everything will be offset due to leap seconds
+                // (e.g. rounding to 60 seconds will produce records at every HH:mm:26 since
+                //  there have been 26 leap seconds since 1970).
                 let when_coarsened = {
+                    const REPLICA_STATUS_GRANULARITY: u32 = 60; /* seconds, must be less than 1 day */
                     let seconds = when.time().num_seconds_from_midnight();
                     let seconds_offset = seconds % REPLICA_STATUS_GRANULARITY;
                     (when - chrono::Duration::seconds(seconds_offset.into()))

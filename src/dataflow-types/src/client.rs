@@ -655,7 +655,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
     /// Notification that we have received a message from the given compute replica
     /// at the given time.
-    ComputeReplicaHeartbeat(ComputeInstanceId, ReplicaId, DateTime<Utc>),
+    ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
 /// A response from the ActiveReplication client:
