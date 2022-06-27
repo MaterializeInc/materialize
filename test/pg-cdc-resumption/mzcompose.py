@@ -26,9 +26,11 @@ def workflow_default(c: Composition) -> None:
     initialize(c)
 
     for scenario in [
-        disconnect_pg_during_snapshot,
+        # TODO: re-enable these as part of
+        # <https://github.com/MaterializeInc/materialize/issues/13254>
+        # disconnect_pg_during_snapshot,
         disconnect_pg_during_replication,
-        restart_pg_during_snapshot,
+        # restart_pg_during_snapshot,
         restart_mz_during_snapshot,
         restart_pg_during_replication,
         restart_mz_during_replication,
