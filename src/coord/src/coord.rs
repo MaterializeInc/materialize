@@ -139,11 +139,11 @@ use mz_sql::plan::{
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    CreateViewsPlan, DDLPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params,
+    PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_transform::Optimizer;
@@ -183,7 +183,7 @@ pub enum Message {
     AdvanceLocalInputs,
     AdvanceLocalInput(AdvanceLocalInput),
     ComputeInstanceStatus(ComputeInstanceEvent),
-    GroupCommit(WriteTimestamp),
+    GroupCommit,
 }
 
 #[derive(Debug)]
@@ -217,7 +217,7 @@ pub struct CreateSourceStatementReady {
 /// An operation that is deferred while waiting for a lock.
 enum Deferred {
     Plan(DeferredPlan),
-    GroupCommit(WriteTimestamp),
+    GroupCommit,
 }
 
 /// This is the struct meant to be paired with [`Message::WriteLockGrant`], but
@@ -295,22 +295,40 @@ impl GroupCommit {
 
 /// A pending write transaction that will be committed during the next group commit.
 #[derive(Debug)]
-enum PendingWriteTxn {
-    /// User initiated transaction.
-    User {
+struct PendingWriteTxn {
+    /// Write transaction contents.
+    write_txn: WriteTxn,
+    /// Transmitter used to send a response back to the client.
+    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Session of the client who initiated the transaction.
+    session: Session,
+}
+
+/// Different forms of write transactions
+enum WriteTxn {
+    /// Writes to user tables.
+    Write {
         /// List of all write operations within the transaction.
-        writes: Vec<Write>,
-        /// Transmitter used to send a response back to the client.
-        client_transmitter: ClientTransmitter<ExecuteResponse>,
+        writes: Vec<WriteOp>,
         /// Client response for transaction.
-        response: Result<ExecuteResponse, CoordError>,
-        /// Session of the client who initiated the transaction.
-        session: Session,
+        response: ExecuteResponse,
         /// The action to take at the end of the transaction.
         action: Option<EndTransactionAction>,
     },
-    /// System initiated writes.
-    System { writes: Vec<BuiltinTableUpdate> },
+    /// DDL operations, these cause writes to system tables.
+    DDL {
+        /// DDL plan.
+        plan: DDLPlan,
+        /// `GlobalId`s that this DDL depends on.
+        depends_on: Vec<GlobalId>,
+    },
+    /// Sink creation completed, this causes writes to system tables.
+    SinkConnectorReady {
+        id: GlobalId,
+        oid: u32,
+        result: Result<SinkConnector, CoordError>,
+        compute_instance: ComputeInstanceId,
+    },
 }
 
 #[derive(Debug)]
@@ -1054,9 +1072,7 @@ impl<S: Append + 'static> Coordinator<S> {
                                 self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                                     .await;
                             }
-                            Deferred::GroupCommit(write_timestamp) => {
-                                self.group_commit(write_timestamp).await
-                            }
+                            Deferred::GroupCommit() => self.group_commit().await,
                         }
                     }
                     // N.B. if no deferred plans, write lock is released by drop
@@ -1071,8 +1087,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::AdvanceLocalInput(inputs) => {
                     self.advance_local_input(inputs).await;
                 }
-                Message::GroupCommit(write_timestamp) => {
-                    self.try_group_commit(write_timestamp).await;
+                Message::GroupCommit => {
+                    self.try_group_commit().await;
                 }
                 Message::ComputeInstanceStatus(status) => {
                     self.message_compute_instance_status(status).await
@@ -1109,17 +1125,12 @@ impl<S: Append + 'static> Coordinator<S> {
     /// If the timestamp chosen for the writes is not ahead of `now()`, then we can execute and
     /// commit the writes immediately. Otherwise we must wait for `now()` to advance past the
     /// timestamp chosen for the writes.
-    async fn try_group_commit(
-        &mut self,
-        WriteTimestamp {
-            timestamp,
-            advance_to,
-        }: WriteTimestamp,
-    ) {
+    async fn try_group_commit(&mut self) {
         if self.pending_group_commit.is_empty() {
             return;
         }
 
+        let timestamp = self.get_local_read_ts();
         let now = (self.catalog.config().now)();
         if timestamp > now {
             // Cap retry time to 1s. In cases where the system clock has retreated by
@@ -1131,25 +1142,13 @@ impl<S: Append + 'static> Coordinator<S> {
             task::spawn(|| "group_commit", async move {
                 tokio::time::sleep(Duration::from_millis(remaining_ms)).await;
                 internal_cmd_tx
-                    .send(Message::GroupCommit(WriteTimestamp {
-                        timestamp,
-                        advance_to,
-                    }))
+                    .send(Message::GroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
         } else {
             match Arc::clone(&self.write_lock).try_lock_owned() {
-                Ok(_guard) => {
-                    self.group_commit(WriteTimestamp {
-                        timestamp,
-                        advance_to,
-                    })
-                    .await
-                }
-                Err(_) => self.defer_write(Deferred::GroupCommit(WriteTimestamp {
-                    timestamp,
-                    advance_to,
-                })),
+                Ok(_guard) => self.group_commit().await,
+                Err(_) => self.defer_write(Deferred::GroupCommit),
             };
         }
     }
@@ -1164,13 +1163,23 @@ impl<S: Append + 'static> Coordinator<S> {
     /// for `now()` to advance. This is ok because the next batch of writes will trigger the wait
     /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline. This
     /// approach prevents an unbounded advancing of the global timeline ahead of `now()`.
-    async fn group_commit(
-        &mut self,
-        WriteTimestamp {
+    async fn group_commit(&mut self) {
+        let WriteTimestamp {
             timestamp,
             advance_to,
-        }: WriteTimestamp,
-    ) {
+        } = self.get_local_write_ts();
+
+        // Separate out DDL from non-DDL
+        let mut ddl = Vec::new();
+        let mut writes = Vec::new();
+        for write in self.pending_group_commit.pending_writes.drain(..) {
+            if matches!(write.write_txn, WriteTxn::Write { .. }) {
+                writes.push(write);
+            } else {
+                ddl.push(write);
+            }
+        }
+
         let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
         appends.reserve(
             self.pending_group_commit.pending_writes.len()
@@ -1179,6 +1188,83 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut responses = Vec::new();
         responses.reserve(self.pending_group_commit.pending_writes.len());
 
+        // It's important to process DDLs first, because some write may depend on an object that's
+        // deleted in a DDL.
+        for PendingWriteTxn {
+            write_txn,
+            client_transmitter,
+            session,
+        } in ddl.into_iter().chain(writes.into_iter())
+        {
+            match write_txn {
+                WriteTxn::DDL { plan, depends_on } => {
+                    let builtin_table_updates = if let DDLPlan::CreateSink(plan) = plan {
+                        match self
+                            .sequence_create_sink(session, plan, depends_on, client_transmitter)
+                            .await
+                        {
+                            Some(builtin_table_updates) => builtin_table_updates,
+                            None => Vec::new(),
+                        }
+                    } else {
+                        match self.sequence_ddl_plan(&session, plan).await {
+                            Ok(builtin_table_updates) => {
+                                responses.push((client_transmitter, Ok(response), session, None));
+                                builtin_table_updates
+                            }
+                            Err(e) => {
+                                client_transmitter.send(Err(e), session);
+                                Vec::new();
+                            }
+                        }
+                    };
+
+                    for builtin_table_update in builtin_table_updates {
+                        appends
+                            .entry(builtin_table_update.id)
+                            .or_default()
+                            .push(Update {
+                                row: builtin_table_update.row,
+                                diff: builtin_table_update.diff,
+                                timestamp,
+                            });
+                    }
+                }
+                WriteTxn::Write { writes, response } => {
+                    for WriteOp { id, rows } in writes {
+                        // If the object that some write was targeting has been deleted by a DDL,
+                        // then the write will be ignored and we respond to the client that the
+                        // write was successful. This is only possible if the write and the delete
+                        // were concurrent. Therefore, we are free to order the write before the
+                        // delete without violating any consistency guarantees.
+                        if self.catalog.try_get_entry(&id).is_some() {
+                            let updates = rows
+                                .into_iter()
+                                .map(|(row, diff)| Update {
+                                    row,
+                                    diff,
+                                    timestamp,
+                                })
+                                .collect::<Vec<_>>();
+                            appends.entry(id).or_default().extend(updates);
+                        }
+                    }
+                    responses.push((client_transmitter, Ok(response), session, action));
+                }
+                WriteTxn::SinkConnectorReady {
+                    id,
+                    oid,
+                    result,
+                    compute_instance,
+                } => {
+                    let (builtin_table_update, response) = self
+                        .handle_sink_connector_ready(id, oid, result, compute_instance, &session)
+                        .await;
+                    builtin_table_updates.extend(builtin_table_update.into_iter());
+                    responses.push((client_transmitter, response, session));
+                }
+            }
+        }
         for pending_write_txn in self.pending_group_commit.pending_writes.drain(..) {
             match pending_write_txn {
                 PendingWriteTxn::User {
@@ -1286,9 +1372,8 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Submit a write to be executed during the next group commit.
     fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
         if self.pending_group_commit.is_empty() {
-            let write_timestamp = self.get_local_write_ts();
             self.internal_cmd_tx
-                .send(Message::GroupCommit(write_timestamp))
+                .send(Message::GroupCommit)
                 .expect("sending to internal_cmd_tx cannot fail");
         }
         self.pending_group_commit
@@ -1527,6 +1612,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let plan = CreateRolePlan {
                         name: session.user().to_string(),
                     };
+                    // TODO(jkosh44) submit system ddl
                     if let Err(err) = self.sequence_create_role(Some(&session), None, plan).await {
                         let _ = tx.send(Response {
                             result: Err(err),
@@ -2139,24 +2225,13 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Removes all temporary items created by the specified connection, though
     /// not the temporary schema itself.
-    async fn drop_temp_items(
-        &mut self,
-        client_response: Option<(ClientTransmitter<ExecuteResponse>, ExecuteResponse)>,
-        session: Session,
-    ) {
+    /// TODO(jkosh44) find usages and figure this out
+    async fn drop_temp_items(&mut self, session: &Session) -> Vec<BuiltinTableUpdate> {
         let ops = self.catalog.drop_temp_item_ops(session.conn_id());
-        match client_response {
-            Some((tx, response)) => {
-                self.client_catalog_transact(session, ops, |_| Ok(()), tx, Ok(response), Err)
-                    .await
-                    .expect("unable to drop temporary items for conn_id");
-            }
-            None => {
-                self.system_catalog_transact(Some(&session), ops, |_| Ok(()))
-                    .await
-                    .expect("unable to drop temporary items for conn_id");
-            }
-        }
+        self.catalog_transact(Some(session), ops, |_| Ok(()))
+            .await
+            .expect("unable to drop temporary items for conn_id")
+            .0
     }
 
     async fn handle_sink_connection_ready(
@@ -2245,64 +2320,32 @@ impl<S: Append + 'static> Coordinator<S> {
         depends_on: Vec<GlobalId>,
     ) {
         match plan {
-            Plan::CreateConnection(plan) => {
-                self.sequence_create_connection(tx, session, plan).await;
+            plan @ Plan::CreateConnector(plan)
+            | plan @ Plan::CreateDatabase(_)
+            | plan @ Plan::CreateSchema(_)
+            | plan @ Plan::CreateRole(_)
+            | plan @ Plan::CreateComputeInstance(_)
+            | plan @ Plan::CreateComputeInstanceReplica(_)
+            | plan @ Plan::CreateTable(_)
+            | plan @ Plan::CreateSecret(_)
+            | plan @ Plan::CreateSink(_)
+            | plan @ Plan::CreateView(_)
+            | plan @ Plan::CreateViews(_)
+            | plan @ Plan::CreateIndex(_)
+            | plan @ Plan::CreateType(_)
+            | plan @ Plan::DropDatabase(_)
+            | plan @ Plan::DropSchema(_)
+            | plan @ Plan::DropRoles(_)
+            | plan @ Plan::DropComputeInstances(_)
+            | plan @ Plan::DropComputeInstanceReplica(_)
+            | plan @ Plan::DropItems(_) => {
+                //TODO(jkosh44) get rid of DDLPlan
+                self.submit_write(PendingWriteTxn {
+                    write_txn: WriteTxn::DDL { plan, depends_on },
+                    client_transmitter: tx,
+                    session,
+                });
             }
-
-            Plan::CreateDatabase(plan) => self.sequence_create_database(tx, session, plan).await,
-
-            Plan::CreateSchema(plan) => self.sequence_create_schema(tx, session, plan).await,
-            Plan::CreateRole(plan) => {
-                let _ = self
-                    .sequence_create_role(None, Some((tx, session)), plan)
-                    .await;
-            }
-            Plan::CreateComputeInstance(plan) => {
-                self.sequence_create_compute_instance(tx, session, plan)
-                    .await;
-            }
-            Plan::CreateComputeInstanceReplica(plan) => {
-                self.sequence_create_compute_instance_replica(tx, session, plan)
-                    .await;
-            }
-            Plan::CreateTable(plan) => {
-                self.sequence_create_table(tx, session, plan, depends_on)
-                    .await;
-            }
-            Plan::CreateSecret(plan) => self.sequence_create_secret(tx, session, plan).await,
-            Plan::CreateSource(_) => unreachable!("handled separately"),
-            Plan::CreateSink(plan) => {
-                self.sequence_create_sink(tx, session, plan, depends_on)
-                    .await;
-            }
-            Plan::CreateView(plan) => {
-                self.sequence_create_view(tx, session, plan, depends_on)
-                    .await;
-            }
-            Plan::CreateViews(plan) => {
-                self.sequence_create_views(tx, session, plan, depends_on)
-                    .await;
-            }
-            Plan::CreateIndex(plan) => {
-                self.sequence_create_index(tx, session, plan, depends_on)
-                    .await;
-            }
-            Plan::CreateType(plan) => {
-                self.sequence_create_type(tx, session, plan, depends_on)
-                    .await;
-            }
-            Plan::DropDatabase(plan) => self.sequence_drop_database(tx, session, plan).await,
-            Plan::DropSchema(plan) => self.sequence_drop_schema(tx, session, plan).await,
-            Plan::DropRoles(plan) => self.sequence_drop_roles(tx, session, plan).await,
-            Plan::DropComputeInstances(plan) => {
-                self.sequence_drop_compute_instances(tx, session, plan)
-                    .await;
-            }
-            Plan::DropComputeInstanceReplica(plan) => {
-                self.sequence_drop_compute_instance_replica(tx, session, plan)
-                    .await;
-            }
-            Plan::DropItems(plan) => self.sequence_drop_items(tx, session, plan).await,
             Plan::EmptyQuery => {
                 tx.send(Ok(ExecuteResponse::EmptyQuery), session);
             }
@@ -2365,7 +2408,13 @@ impl<S: Append + 'static> Coordinator<S> {
                     session,
                 );
             }
-            Plan::AlterItemRename(plan) => self.sequence_alter_item_rename(tx, session, plan).await,
+            plan @ Plan::AlterItemRename(_) => {
+                self.submit_write(PendingWriteTxn {
+                    write_txn: WriteTxn::DDL { plan, depends_on },
+                    client_transmitter: tx,
+                    session,
+                });
+            }
             Plan::AlterIndexSetOptions(plan) => {
                 tx.send(self.sequence_alter_index_set_options(plan).await, session);
             }
@@ -2375,24 +2424,12 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::AlterSecret(plan) => {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
-            Plan::DiscardTemp => {
-                self.drop_temp_items(Some((tx, ExecuteResponse::DiscardedTemp)), session)
-                    .await;
-            }
-            Plan::DiscardAll => {
-                if let TransactionStatus::Started(_) = session.transaction() {
-                    let drop_sinks = session.reset();
-                    self.drop_sinks(drop_sinks).await;
-                    self.drop_temp_items(Some((tx, ExecuteResponse::DiscardedAll)), session)
-                        .await;
-                } else {
-                    tx.send(
-                        Err(CoordError::OperationProhibitsTransaction(
-                            "DISCARD ALL".into(),
-                        )),
-                        session,
-                    );
-                }
+            plan @ Plan::DiscardTemp | plan @ Plan::DiscardAll => {
+                self.submit_write(PendingWriteTxn {
+                    write_txn: WriteTxn::DDL { plan, depends_on },
+                    client_transmitter: tx,
+                    session,
+                });
             }
             Plan::Declare(plan) => {
                 let param_types = vec![];
@@ -2474,6 +2511,70 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    async fn sequence_ddl_plan(
+        &mut self,
+        session: &mut Session,
+        plan: Plan,
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
+        match plan {
+            Plan::CreateConnection(plan) => self.sequence_create_connection(&session, plan).await,
+            Plan::CreateDatabase(plan) => self.sequence_create_database(&session, plan).await,
+            Plan::CreateSchema(plan) => self.sequence_create_schema(&session, plan).await,
+            Plan::CreateRole(plan) => self.sequence_create_role(Some(&session), plan).await,
+            Plan::CreateComputeInstance(plan) => {
+                self.sequence_create_compute_instance(&session, plan).await
+            }
+            Plan::CreateComputeInstanceReplica(plan) => {
+                self.sequence_create_compute_instance_replica(&session, plan)
+                    .await
+            }
+            Plan::CreateTable(plan) => self.sequence_create_table(&session, plan, depends_on).await,
+            Plan::CreateSecret(plan) => self.sequence_create_secret(&session, plan).await,
+            Plan::CreateView(plan) => self.sequence_create_view(&session, plan, depends_on).await,
+            Plan::CreateViews(plan) => {
+                self.sequence_create_views(&mut session, plan, depends_on)
+                    .await
+            }
+            Plan::CreateIndex(plan) => self.sequence_create_index(&session, plan, depends_on).await,
+            Plan::CreateType(plan) => self.sequence_create_type(&session, plan, depends_on).await,
+            Plan::CreateSource(plan) => {
+                self.sequence_create_source(&session, plan, depends_on)
+                    .await
+            }
+            Plan::DropDatabase(plan) => self.sequence_drop_database(&session, plan).await,
+            Plan::DropSchema(plan) => self.sequence_drop_schema(&session, plan).await,
+            Plan::DropRoles(plan) => self.sequence_drop_roles(&session, plan).await,
+            Plan::DropComputeInstances(plan) => {
+                self.sequence_drop_compute_instances(&session, plan).await
+            }
+            Plan::DropComputeInstanceReplica(plan) => {
+                self.sequence_drop_compute_instance_replica(&session, plan)
+                    .await
+            }
+            Plan::DropItems(plan) => self.sequence_drop_items(&session, plan).await,
+            Plan::AlterItemRename(plan) => self.sequence_alter_item_rename(&session, plan).await,
+            Plan::DiscardTemp => {
+                let builtin_updates = self.drop_temp_items(&session).await;
+                Ok((builtin_updates, ExecuteResponse::DiscardedTemp))
+            }
+            Plan::DiscardAll => {
+                if let TransactionStatus::Started(_) = session.transaction() {
+                    let builtin_updates = self.drop_temp_items(&session).await;
+                    let drop_sinks = session.reset();
+                    self.drop_sinks(drop_sinks).await;
+                    Ok((builtin_updates, ExecuteResponse::DiscardedAll))
+                } else {
+                    Err(CoordError::OperationProhibitsTransaction(
+                        "DISCARD ALL".into(),
+                    ))
+                }
+            }
+            plan @ _ => {
+                unreachable!("{:?} should not be sequenced in a group commit", plan)
+            }
+        }
+    }
+
     // Returns the name of the portal to execute.
     #[tracing::instrument(level = "debug", skip(self))]
     fn sequence_execute(
@@ -2494,39 +2595,12 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_connection(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: CreateConnectionPlan,
-    ) {
-        let if_not_exists = plan.if_not_exists;
-        let ops = match self.sequence_create_connector_inner(plan).await {
-            Ok(ops) => ops,
-            Err(e) => return tx.send(Err(e), session),
-        };
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::CreatedConnection { existed: false }),
-            |e| match e {
-                CoordError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                    ..
-                }) if if_not_exists => Ok(ExecuteResponse::CreatedConnection { existed: true }),
-                _ => Err(e),
-            },
-        )
-        .await;
-    }
-
-    async fn sequence_create_connector_inner(
-        &mut self,
-        plan: CreateConnectionPlan,
-    ) -> Result<Vec<catalog::Op>, CoordError> {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let connection_oid = self.catalog.allocate_oid().await?;
         let connection_gid = self.catalog.allocate_user_id().await?;
-        Ok(vec![catalog::Op::CreateItem {
+        let ops = vec![catalog::Op::CreateItem {
             id: connection_gid,
             oid: connection_oid,
             name: plan.name.clone(),
@@ -2534,130 +2608,103 @@ impl<S: Append + 'static> Coordinator<S> {
                 create_sql: plan.connection.create_sql,
                 connection: plan.connection.connection,
             }),
-        }])
+        }];
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok((builtin_table_updates, ())) => Ok((
+                builtin_table_updates,
+                ExecuteResponse::CreatedConnector { existed: false },
+            )),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => Ok((
+                Vec::new(),
+                ExecuteResponse::CreatedConnector { existed: true },
+            )),
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_database(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: CreateDatabasePlan,
-    ) {
-        let if_not_exists = plan.if_not_exists;
-        let ops = match self.sequence_create_database_inner(plan).await {
-            Ok(ops) => ops,
-            Err(e) => return tx.send(Err(e), session),
-        };
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-            |e| match e {
-                CoordError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
-                    ..
-                }) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
-                _ => Err(e),
-            },
-        )
-        .await;
-    }
-
-    async fn sequence_create_database_inner(
-        &mut self,
-        plan: CreateDatabasePlan,
-    ) -> Result<Vec<catalog::Op>, CoordError> {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let db_oid = self.catalog.allocate_oid().await?;
         let schema_oid = self.catalog.allocate_oid().await?;
-        Ok(vec![catalog::Op::CreateDatabase {
+        let ops = vec![catalog::Op::CreateDatabase {
             name: plan.name.clone(),
             oid: db_oid,
             public_schema_oid: schema_oid,
-        }])
+        }];
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok((builtin_updates, _)) => Ok((
+                builtin_updates,
+                ExecuteResponse::CreatedSchema { existed: false },
+            )),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::SchemaAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedSchema { existed: true }))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_schema(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: CreateSchemaPlan,
-    ) {
-        let oid = match self.catalog.allocate_oid().await {
-            Ok(oid) => oid,
-            Err(e) => return tx.send(Err(e.into()), session),
-        };
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
+        let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateSchema {
             database_id: plan.database_spec,
             schema_name: plan.schema_name,
             oid,
         };
-        self.client_catalog_transact(
-            session,
-            vec![op],
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::CreatedSchema { existed: false }),
-            |e| match e {
-                CoordError::Catalog(catalog::Error {
-                    kind: catalog::ErrorKind::SchemaAlreadyExists(_),
-                    ..
-                }) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
-                _ => Err(e),
-            },
-        )
-        .await;
+        match self
+            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await
+        {
+            Ok((builtin_updates, _)) => Ok((
+                builtin_updates,
+                ExecuteResponse::CreatedSchema { existed: false },
+            )),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::SchemaAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedSchema { existed: true }))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_role(
         &mut self,
         session: Option<&Session>,
-        client: Option<(ClientTransmitter<ExecuteResponse>, Session)>,
         plan: CreateRolePlan,
-    ) -> Result<(), CoordError> {
-        let (oid, client) = match (self.catalog.allocate_oid().await, client) {
-            (Ok(oid), client) => (oid, client),
-            (Err(e), Some((tx, session))) => {
-                tx.send(Err(e.into()), session);
-                return Ok(());
-            }
-            (Err(e), None) => return Err(e.into()),
-        };
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
+        let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateRole {
             name: plan.name,
             oid,
         };
-        match client {
-            Some((tx, session)) => {
-                self.client_catalog_transact(
-                    session,
-                    vec![op],
-                    |_| Ok(()),
-                    tx,
-                    Ok(ExecuteResponse::CreatedRole),
-                    Err,
-                )
-                .await;
-            }
-            None => {
-                self.system_catalog_transact(session, vec![op], |_| Ok(()))
-                    .await?
-            }
-        }
-        Ok(())
+        self.catalog_transact(session, vec![op], |_| Ok(()))
+            .await
+            .map(|(builtin_updates, _)| (builtin_updates, ExecuteResponse::CreatedRole))
     }
 
     async fn sequence_create_compute_instance(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         CreateComputeInstancePlan {
             name,
             config,
             replicas,
         }: CreateComputeInstancePlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let introspection_sources = if config.is_some() {
             self.catalog.allocate_introspection_source_indexes().await
         } else {
@@ -2674,14 +2721,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 ReplicaConfig::Managed { size, .. } => Some(size.clone()),
                 ReplicaConfig::Remote { .. } => None,
             };
-            let config = match concretize_replica_config(
-                config,
-                &self.replica_sizes,
-                &self.availability_zones,
-            ) {
-                Ok(config) => config,
-                Err(e) => return tx.send(Err(e), session),
-            };
+            let config =
+                concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,
                 config,
@@ -2689,56 +2730,45 @@ impl<S: Append + 'static> Coordinator<S> {
                 logical_size,
             });
         }
-        if let Some(_) = self
-            .client_catalog_transact(
-                session,
-                ops,
-                |_| Ok(()),
-                tx,
-                Ok(ExecuteResponse::CreatedComputeInstance { existed: false }),
-                Err,
-            )
+        let builtin_updates = self
+            .catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?
+            .0;
+        let instance = self
+            .catalog
+            .resolve_compute_instance(&name)
+            .expect("compute instance must exist after creation");
+        self.dataflow_client
+            .create_instance(instance.id, instance.logging.clone())
             .await
-        {
-            let instance = self
-                .catalog
-                .resolve_compute_instance(&name)
-                .expect("compute instance must exist after creation");
+            .unwrap();
+        for (replica_id, replica) in instance.replicas_by_id.clone() {
             self.dataflow_client
-                .create_instance(instance.id, instance.logging.clone())
+                .add_replica_to_instance(instance.id, replica_id, replica.config)
                 .await
                 .unwrap();
-            for (replica_id, replica) in instance.replicas_by_id.clone() {
-                self.dataflow_client
-                    .add_replica_to_instance(instance.id, replica_id, replica.config)
-                    .await
-                    .unwrap();
-            }
         }
+        Ok((
+            builtin_updates,
+            ExecuteResponse::CreatedComputeInstance { existed: false },
+        ))
     }
 
     async fn sequence_create_compute_instance_replica(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         CreateComputeInstanceReplicaPlan {
             name,
             of_cluster,
             config,
         }: CreateComputeInstanceReplicaPlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let logical_size = match &config {
             ReplicaConfig::Managed { size, .. } => Some(size.clone()),
             ReplicaConfig::Remote { .. } => None,
         };
-        let config = match concretize_replica_config(
-            config,
-            &self.replica_sizes,
-            &self.availability_zones,
-        ) {
-            Ok(config) => config,
-            Err(e) => return tx.send(Err(e), session),
-        };
+        let config =
+            concretize_replica_config(config, &self.replica_sizes, &self.availability_zones)?;
         let op = catalog::Op::CreateComputeInstanceReplica {
             name: name.clone(),
             config: config.clone(),
@@ -2746,78 +2776,32 @@ impl<S: Append + 'static> Coordinator<S> {
             logical_size,
         };
 
-        if let Some(_) = self
-            .client_catalog_transact(
-                session,
-                vec![op],
-                |_| Ok(()),
-                tx,
-                Ok(ExecuteResponse::CreatedComputeInstanceReplica { existed: false }),
-                Err,
-            )
+        let builtin_updates = self
+            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await?
+            .0;
+
+        let instance = self
+            .catalog
+            .resolve_compute_instance(&of_cluster)
+            .expect("compute instance must exist after creation");
+        let replica_id = instance.replica_id_by_name[&name];
+        self.dataflow_client
+            .add_replica_to_instance(instance.id, replica_id, config)
             .await
-        {
-            let instance = self
-                .catalog
-                .resolve_compute_instance(&of_cluster)
-                .expect("compute instance must exist after creation");
-            let replica_id = instance.replica_id_by_name[&name];
-            self.dataflow_client
-                .add_replica_to_instance(instance.id, replica_id, config)
-                .await
-                .unwrap();
-        }
+            .unwrap();
+
+        Ok((
+            builtin_updates,
+            ExecuteResponse::CreatedComputeInstanceReplica { existed: false },
+        ))
     }
 
     async fn sequence_create_secret(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        plan: CreateSecretPlan,
-    ) {
-        let if_not_exists = plan.if_not_exists;
-        let (ops, id) = match self.sequence_create_secret_inner(&session, plan).await {
-            Ok((ops, id)) => (ops, id),
-            Err(e) => return tx.send(Err(e), session),
-        };
-        if let None = self
-            .client_catalog_transact(
-                session,
-                ops,
-                |_| Ok(()),
-                tx,
-                Ok(ExecuteResponse::CreatedSecret { existed: false }),
-                |e| match e {
-                    CoordError::Catalog(catalog::Error {
-                        kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                        ..
-                    }) if if_not_exists => Ok(ExecuteResponse::CreatedSecret { existed: true }),
-                    _ => Err(e),
-                },
-            )
-            .await
-        {
-            match self
-                .secrets_controller
-                .apply(vec![SecretOp::Delete { id }])
-                .await
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    warn!(
-                        "Dropping newly created secrets has encountered an error: {}",
-                        e
-                    );
-                }
-            }
-        }
-    }
-
-    async fn sequence_create_secret_inner(
-        &mut self,
         session: &Session,
         plan: CreateSecretPlan,
-    ) -> Result<(Vec<catalog::Op>, GlobalId), CoordError> {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let CreateSecretPlan {
             name,
             mut secret,
@@ -2846,77 +2830,46 @@ impl<S: Append + 'static> Coordinator<S> {
             name,
             item: CatalogItem::Secret(secret.clone()),
         }];
-
-        Ok((ops, id))
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok((builtin_updates, _)) => Ok((
+                builtin_updates,
+                ExecuteResponse::CreatedSecret { existed: false },
+            )),
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedSecret { existed: true }))
+            }
+            Err(err) => {
+                match self
+                    .secrets_controller
+                    .apply(vec![SecretOp::Delete { id }])
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(
+                            "Dropping newly created secrets has encountered an error: {}",
+                            e
+                        );
+                    }
+                }
+                Err(err)
+            }
+        }
+        Ok((
+            builtin_updates,
+            ExecuteResponse::CreatedComputeInstance { existed: false },
+        ))
     }
 
     async fn sequence_create_table(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        plan: CreateTablePlan,
-        depends_on: Vec<GlobalId>,
-    ) {
-        let if_not_exists = plan.if_not_exists;
-        let (ops, table_id) = match self
-            .sequence_create_table_inner(&session, plan, depends_on)
-            .await
-        {
-            Ok((ops, table_id)) => (ops, table_id),
-            Err(e) => return tx.send(Err(e), session),
-        };
-        if let Some(_) = self
-            .client_catalog_transact(
-                session,
-                ops,
-                |_| Ok(()),
-                tx,
-                Ok(ExecuteResponse::CreatedTable { existed: false }),
-                |e| match e {
-                    CoordError::Catalog(catalog::Error {
-                        kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                        ..
-                    }) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
-                    _ => Err(e),
-                },
-            )
-            .await
-        {
-            // Determine the initial validity for the table.
-            let since_ts = self.get_local_read_ts();
-
-            // Announce the creation of the table source.
-            let source_description = self
-                .catalog
-                .state()
-                .source_description_for(table_id)
-                .unwrap();
-
-            let ingestion = IngestionDescription {
-                id: table_id,
-                desc: source_description,
-                since: Antichain::from_elem(since_ts),
-                source_imports: BTreeMap::new(),
-                storage_metadata: (),
-            };
-
-            self.dataflow_client
-                .storage_mut()
-                .create_sources(vec![ingestion])
-                .await
-                .unwrap();
-
-            self.initialize_storage_read_policies(vec![table_id], self.logical_compaction_window_ms)
-                .await
-        }
-    }
-
-    async fn sequence_create_table_inner(
-        &mut self,
         session: &Session,
         plan: CreateTablePlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<(Vec<catalog::Op>, GlobalId), CoordError> {
+    ) {
         let CreateTablePlan { name, table, .. } = plan;
 
         let conn_id = if table.temporary {
@@ -2933,113 +2886,61 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
         };
         let table_oid = self.catalog.allocate_oid().await?;
-        Ok((
-            vec![catalog::Op::CreateItem {
-                id: table_id,
-                oid: table_oid,
-                name,
-                item: CatalogItem::Table(table.clone()),
-            }],
-            table_id,
-        ))
+        let ops = vec![catalog::Op::CreateItem {
+            id: table_id,
+            oid: table_oid,
+            name,
+            item: CatalogItem::Table(table.clone()),
+        }];
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok((builtin_updates, _)) => {
+                // Determine the initial validity for the table.
+                let since_ts = self.get_local_write_ts();
+
+                // Announce the creation of the table source.
+                let source_description = self
+                    .catalog
+                    .state()
+                    .source_description_for(table_id)
+                    .unwrap();
+                let ingestion = IngestionDescription {
+                    id: table_id,
+                    desc: source_description,
+                    since: Antichain::from_elem(since_ts),
+                    source_imports: BTreeMap::new(),
+                    storage_metadata: (),
+                };
+                self.dataflow_client
+                    .storage_mut()
+                    .create_sources(vec![ingestion])
+                    .await
+                    .unwrap();
+                self.initialize_storage_read_policies(
+                    vec![table_id],
+                    self.logical_compaction_window_ms,
+                )
+                .await;
+                Ok((
+                    builtin_updates,
+                    ExecuteResponse::CreatedTable { existed: false },
+                ))
+            }
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedTable { existed: true }))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_source(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
-        plan: CreateSourcePlan,
-        depends_on: Vec<GlobalId>,
-    ) {
-        let if_not_exists = plan.if_not_exists;
-        let (ops, source_id, index) = match self
-            .sequence_create_source_inner(&session, plan, depends_on)
-            .await
-        {
-            Ok((ops, source_id, index)) => (ops, source_id, index),
-            Err(e) => return tx.send(Err(e), session),
-        };
-        if let Some(df) = self
-            .client_catalog_transact(
-                session,
-                ops,
-                move |txn| {
-                    if let Some((index_id, compute_instance)) = index {
-                        let mut builder = txn.dataflow_builder(compute_instance);
-                        Ok(Some((
-                            builder.build_index_dataflow(index_id)?,
-                            compute_instance,
-                        )))
-                    } else {
-                        Ok(None)
-                    }
-                },
-                tx,
-                Ok(ExecuteResponse::CreatedSource { existed: false }),
-                |e| match e {
-                    CoordError::Catalog(catalog::Error {
-                        kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                        ..
-                    }) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
-                    _ => Err(e),
-                },
-            )
-            .await
-        {
-            // Do everything to instantiate the source at the coordinator and
-            // inform the timestamper and dataflow workers of its existence before
-            // shipping any dataflows that depend on its existence.
-
-            let source_description = self
-                .catalog
-                .state()
-                .source_description_for(source_id)
-                .unwrap();
-
-            let mut ingestion = IngestionDescription {
-                id: source_id,
-                desc: source_description,
-                since: Antichain::from_elem(Timestamp::minimum()),
-                source_imports: BTreeMap::new(),
-                storage_metadata: (),
-            };
-
-            for id in self.catalog.state().get_entry(&source_id).uses() {
-                if self.catalog.state().get_entry(id).source().is_some() {
-                    ingestion.source_imports.insert(*id, ());
-                }
-            }
-
-            self.dataflow_client
-                .storage_mut()
-                .create_sources(vec![ingestion])
-                .await
-                .unwrap();
-
-            self.initialize_storage_read_policies(
-                vec![source_id],
-                self.logical_compaction_window_ms,
-            )
-            .await;
-            if let Some((df, compute_instance)) = df {
-                self.ship_dataflow(df, compute_instance).await;
-            }
-        }
-    }
-
-    async fn sequence_create_source_inner(
-        &mut self,
         session: &Session,
         plan: CreateSourcePlan,
         depends_on: Vec<GlobalId>,
-    ) -> Result<
-        (
-            Vec<catalog::Op>,
-            GlobalId,
-            Option<(GlobalId, ComputeInstanceId)>,
-        ),
-        CoordError,
-    > {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let mut ops = vec![];
         let source_id = self.catalog.allocate_user_id().await?;
         let source_oid = self.catalog.allocate_oid().await?;
@@ -3090,16 +2991,77 @@ impl<S: Append + 'static> Coordinator<S> {
         } else {
             None
         };
-        Ok((ops, source_id, index))
+
+        match self
+            .catalog_transact(Some(session), ops, move |txn| {
+                if let Some((index_id, compute_instance)) = index {
+                    let mut builder = txn.dataflow_builder(compute_instance);
+                    Ok(Some((
+                        builder.build_index_dataflow(index_id)?,
+                        compute_instance,
+                    )))
+                } else {
+                    Ok(None)
+                }
+            })
+            .await
+        {
+            Ok((builtin_updates, df)) => {
+                // Do everything to instantiate the source at the coordinator and
+                // inform the timestamper and dataflow workers of its existence before
+                // shipping any dataflows that depend on its existence.
+                let source_description = self
+                    .catalog
+                    .state()
+                    .source_description_for(source_id)
+                    .unwrap();
+                let mut ingestion = IngestionDescription {
+                    id: source_id,
+                    desc: source_description,
+                    since: Antichain::from_elem(Timestamp::minimum()),
+                    source_imports: BTreeMap::new(),
+                    storage_metadata: (),
+                };
+                for id in self.catalog.state().get_entry(&source_id).uses() {
+                    if self.catalog.state().get_entry(id).source().is_some() {
+                        ingestion.source_imports.insert(*id, ());
+                    }
+                }
+                self.dataflow_client
+                    .storage_mut()
+                    .create_sources(vec![ingestion])
+                    .await
+                    .unwrap();
+                self.initialize_storage_read_policies(
+                    vec![source_id],
+                    self.logical_compaction_window_ms,
+                )
+                .await;
+                if let Some((df, compute_instance)) = df {
+                    self.ship_dataflow(df, compute_instance).await;
+                }
+                Ok((
+                    builtin_updates,
+                    ExecuteResponse::CreatedSource { existed: false },
+                ))
+            }
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if plan.if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedSource { existed: true }))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_sink(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         plan: CreateSinkPlan,
         depends_on: Vec<GlobalId>,
-    ) {
+        tx: ClientTransmitter<ExecuteResponse>,
+    ) -> Option<Vec<BuiltinTableUpdate>> {
         let CreateSinkPlan {
             name,
             sink,
@@ -3114,11 +3076,17 @@ impl<S: Append + 'static> Coordinator<S> {
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_user_id().await {
             Ok(id) => id,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return None;
+            }
         };
         let oid = match self.catalog.allocate_oid().await {
             Ok(id) => id,
-            Err(e) => return tx.send(Err(e.into()), session),
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return None;
+            }
         };
 
         // Then try to create a placeholder catalog item with an unknown
@@ -3142,8 +3110,8 @@ impl<S: Append + 'static> Coordinator<S> {
             }),
         };
 
-        match self
-            .system_catalog_transact(Some(&session), vec![op], |txn| -> Result<(), CoordError> {
+        let transact_result = self
+            .catalog_transact(Some(&session), vec![op], |txn| -> Result<(), CoordError> {
                 let from_entry = txn.catalog.get_entry(&sink.from);
                 // Insert a dummy dataflow to trigger validation before we try to actually create
                 // the external sink resources (e.g. Kafka Topics)
@@ -3170,64 +3138,45 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .map(|_ok| ())
             })
-            .await
-        {
-            Ok(_) => {
-                // Announce the creation of the sink's corresponding source.
-                // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
-                if let Some(desc) = self.catalog.state().source_description_for(id) {
-                    let ingestion = IngestionDescription {
-                        id,
-                        desc,
-                        since: Antichain::from_elem(Timestamp::minimum()),
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                    };
-                    self.dataflow_client
-                        .storage_mut()
-                        .create_sources(vec![ingestion])
-                        .await
-                        .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![id],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
-                }
-                // Now we're ready to create the sink connector. Arrange to notify the
-                // main coordinator thread when the future completes.
-                let connection_builder = sink.connection_builder;
-                let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let connection_context = self.connection_context.clone();
-                task::spawn(
-                    || format!("sink_connection_ready:{}", sink.from),
-                    async move {
-                        internal_cmd_tx
-                            .send(Message::SinkConnectionReady(SinkConnectionReady {
-                                session,
-                                tx,
-                                id,
-                                oid,
-                                result: sink_connection::build(
-                                    connection_builder,
-                                    id,
-                                    connection_context,
-                                )
-                                .await,
-                                compute_instance,
-                            }))
-                            .expect("sending to internal_cmd_tx cannot fail");
-                    },
-                );
-            }
+            .await;
+
+        let builtin_updates = match transact_result {
+            Ok((builtin_updates, ())) => builtin_updates,
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
             })) if if_not_exists => {
                 tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
+                return None;
             }
-            Err(error) => tx.send(Err(error), session),
-        }
+            Err(error) => {
+                tx.send(Err(error));
+                return None;
+            }
+        };
+
+        // Now we're ready to create the sink connector. Arrange to notify the
+        // main coordinator thread when the future completes.
+        let connection_builder = sink.connector_builder;
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let connection_context = self.connector_context.clone();
+        task::spawn(
+            || format!("sink_connection_ready:{}", sink.from),
+            async move {
+                internal_cmd_tx
+                    .send(Message::SinkConnectionReady(SinkConnectionReady {
+                        session,
+                        tx,
+                        id,
+                        oid,
+                        result: sink_connection::build(connection_builder, id, connection_context)
+                            .await,
+                        compute_instance,
+                    }))
+                    .expect("sending to internal_cmd_tx cannot fail");
+            },
+        );
+        Some(builtin_updates)
     }
 
     async fn generate_view_ops(
@@ -3308,12 +3257,11 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_view(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
-    ) {
-        let (ops, index) = match self
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
+        let (ops, index) = self
             .generate_view_ops(
                 &session,
                 plan.name,
@@ -3322,51 +3270,46 @@ impl<S: Append + 'static> Coordinator<S> {
                 plan.materialize,
                 depends_on,
             )
+            .await?;
+        match self
+            .catalog_transact(Some(session), ops, |txn| {
+                if let Some((index_id, compute_instance)) = index {
+                    let mut builder = txn.dataflow_builder(compute_instance);
+                    Ok(Some((
+                        builder.build_index_dataflow(index_id)?,
+                        compute_instance,
+                    )))
+                } else {
+                    Ok(None)
+                }
+            })
             .await
         {
-            Ok((ops, index)) => (ops, index),
-            Err(e) => return tx.send(Err(e), session),
-        };
-        if let Some(df) = self
-            .client_catalog_transact(
-                session,
-                ops,
-                |txn| {
-                    if let Some((index_id, compute_instance)) = index {
-                        let mut builder = txn.dataflow_builder(compute_instance);
-                        Ok(Some((
-                            builder.build_index_dataflow(index_id)?,
-                            compute_instance,
-                        )))
-                    } else {
-                        Ok(None)
-                    }
-                },
-                tx,
-                Ok(ExecuteResponse::CreatedView { existed: false }),
-                |e| match e {
-                    CoordError::Catalog(catalog::Error {
-                        kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                        ..
-                    }) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
-                    _ => Err(e),
-                },
-            )
-            .await
-        {
-            if let Some((df, compute_instance)) = df {
-                self.ship_dataflow(df, compute_instance).await;
+            Ok((builtin_updates, df)) => {
+                if let Some((df, compute_instance)) = df {
+                    self.ship_dataflow(df, compute_instance).await;
+                }
+                Ok((
+                    builtin_updates,
+                    ExecuteResponse::CreatedView { existed: false },
+                ))
             }
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedView { existed: true }))
+            }
+            Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_views(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: CreateViewsPlan,
         depends_on: Vec<GlobalId>,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let mut ops = vec![];
         let mut indexes = vec![];
 
@@ -3389,47 +3332,43 @@ impl<S: Append + 'static> Coordinator<S> {
             indexes.extend(index);
         }
         match self
-            .client_catalog_transact(
-                session,
-                ops,
-                |txn| {
-                    let mut dfs = HashMap::new();
-                    for (index_id, compute_instance) in indexes {
-                        let mut builder = txn.dataflow_builder(compute_instance);
-                        let df = builder.build_index_dataflow(index_id)?;
-                        dfs.entry(compute_instance)
-                            .or_insert_with(Vec::new)
-                            .push(df);
-                    }
-                    Ok(dfs)
-                },
-                tx,
-                Ok(ExecuteResponse::CreatedView { existed: false }),
-                |e| match e {
-                    _ if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
-                    _ => Err(e),
-                },
-            )
+            .catalog_transact(Some(session), ops, |txn| {
+                let mut dfs = HashMap::new();
+                for (index_id, compute_instance) in indexes {
+                    let mut builder = txn.dataflow_builder(compute_instance);
+                    let df = builder.build_index_dataflow(index_id)?;
+                    dfs.entry(compute_instance)
+                        .or_insert_with(Vec::new)
+                        .push(df);
+                }
+                Ok(dfs)
+            })
             .await
         {
-            Some(dfs) => {
+            Ok((builtin_updates, dfs)) => {
                 for (compute_instance, dfs) in dfs {
                     if !dfs.is_empty() {
                         self.ship_dataflows(dfs, compute_instance).await;
                     }
                 }
+                Ok((
+                    builtin_updates,
+                    ExecuteResponse::CreatedView { existed: false },
+                ))
             }
-            None => {}
+            Err(_) if plan.if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedView { existed: true }))
+            }
+            Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_index(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: CreateIndexPlan,
         depends_on: Vec<GlobalId>,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let CreateIndexPlan {
             name,
             index,
@@ -3440,10 +3379,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // An index must be created on a specific compute instance.
         let compute_instance = index.compute_instance;
 
-        let id = match self.catalog.allocate_user_id().await {
-            Ok(id) => id,
-            Err(e) => return tx.send(Err(e.into()), session),
-        };
+        let id = self.catalog.allocate_user_id().await?;
         let index = catalog::Index {
             create_sql: index.create_sql,
             keys: index.keys,
@@ -3452,71 +3388,47 @@ impl<S: Append + 'static> Coordinator<S> {
             depends_on,
             compute_instance,
         };
-        let oid = match self.catalog.allocate_oid().await {
-            Ok(oid) => oid,
-            Err(e) => return tx.send(Err(e.into()), session),
-        };
+        let oid = self.catalog.allocate_oid().await?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
             name,
             item: CatalogItem::Index(index),
         };
-        if let Some(df) = self
-            .client_catalog_transact(
-                session,
-                vec![op],
-                |txn| {
-                    let mut builder = txn.dataflow_builder(compute_instance);
-                    let df = builder.build_index_dataflow(id)?;
-                    Ok(df)
-                },
-                tx,
-                Ok(ExecuteResponse::CreatedIndex { existed: false }),
-                |e| match e {
-                    CoordError::Catalog(catalog::Error {
-                        kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                        ..
-                    }) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
-                    _ => Err(e),
-                },
-            )
+        match self
+            .catalog_transact(Some(session), vec![op], |txn| {
+                let mut builder = txn.dataflow_builder(compute_instance);
+                let df = builder.build_index_dataflow(id)?;
+                Ok(df)
+            })
             .await
         {
-            self.ship_dataflow(df, compute_instance).await;
-            self.set_index_options(id, options)
-                .await
-                .expect("index enabled");
+            Ok((builtin_updates, df)) => {
+                self.ship_dataflow(df, compute_instance).await;
+                self.set_index_options(id, options)
+                    .await
+                    .expect("index enabled");
+                Ok((
+                    builtin_updates,
+                    ExecuteResponse::CreatedIndex { existed: false },
+                ))
+            }
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => {
+                Ok((Vec::new(), ExecuteResponse::CreatedIndex { existed: true }))
+            }
+            Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_type(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: CreateTypePlan,
         depends_on: Vec<GlobalId>,
-    ) {
-        let ops = match self.sequence_create_type_inner(plan, depends_on).await {
-            Ok(ops) => ops,
-            Err(e) => return tx.send(Err(e), session),
-        };
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::CreatedType),
-            Err,
-        )
-        .await;
-    }
-
-    async fn sequence_create_type_inner(
-        &mut self,
-        plan: CreateTypePlan,
-        depends_on: Vec<GlobalId>,
-    ) -> Result<Vec<catalog::Op>, CoordError> {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let typ = catalog::Type {
             create_sql: plan.typ.create_sql,
             details: CatalogTypeDetails {
@@ -3527,79 +3439,66 @@ impl<S: Append + 'static> Coordinator<S> {
         };
         let id = self.catalog.allocate_user_id().await?;
         let oid = self.catalog.allocate_oid().await?;
-        let op = catalog::Op::CreateItem {
+        let ops = vec![catalog::Op::CreateItem {
             id,
             oid,
             name: plan.name,
             item: CatalogItem::Type(typ),
-        };
-        Ok(vec![op])
+        }];
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok((builtin_updates, _)) => Ok((builtin_updates, ExecuteResponse::CreatedType)),
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_drop_database(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: DropDatabasePlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let ops = self.catalog.drop_database_ops(plan.id);
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::DroppedDatabase),
-            Err,
-        )
-        .await;
+        let builtin_updates = self
+            .catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?
+            .0;
+        Ok((builtin_updates, ExecuteResponse::DroppedDatabase))
     }
 
     async fn sequence_drop_schema(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: DropSchemaPlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let ops = self.catalog.drop_schema_ops(plan.id);
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::DroppedSchema),
-            Err,
-        )
-        .await;
+        let builtin_updates = self
+            .catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?
+            .0;
+        Ok((builtin_updates, ExecuteResponse::DroppedSchema))
     }
 
     async fn sequence_drop_roles(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: DropRolesPlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let ops = plan
             .names
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::DroppedRole),
-            Err,
-        )
-        .await;
+        let builtin_updates = self
+            .catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?
+            .0;
+        Ok((builtin_updates, ExecuteResponse::DroppedRole))
     }
 
     async fn sequence_drop_compute_instances(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: DropComputeInstancesPlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let mut ops = Vec::new();
         let mut instance_replica_drop_sets = Vec::with_capacity(plan.names.len());
         for name in plan.names {
@@ -3618,15 +3517,10 @@ impl<S: Append + 'static> Coordinator<S> {
             ops.extend(self.catalog.drop_items_ops(&ids_to_drop));
             ops.push(catalog::Op::DropComputeInstance { name });
         }
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::DroppedComputeInstance),
-            Err,
-        )
-        .await;
+        let builtin_updates = self
+            .catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?
+            .0;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
                 self.dataflow_client
@@ -3639,14 +3533,14 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await
                 .unwrap();
         }
+        Ok((builtin_updates, ExecuteResponse::DroppedComputeInstance))
     }
 
     async fn sequence_drop_compute_instance_replica(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         DropComputeInstanceReplicaPlan { names }: DropComputeInstanceReplicaPlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         if names.is_empty() {
             return tx.send(Ok(ExecuteResponse::DroppedComputeInstanceReplicas), session);
         }
@@ -3669,15 +3563,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 instance.replicas_by_id[&replica_id].clone(),
             ));
         }
-        self.client_catalog_transact(
-            session,
-            ops,
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::DroppedComputeInstanceReplicas),
-            Err,
-        )
-        .await;
+        let builtin_updates = self
+            .catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?
+            .0;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
             self.dataflow_client
@@ -3685,15 +3574,22 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await
                 .unwrap();
         }
+        Ok((
+            builtin_updates,
+            ExecuteResponse::DroppedComputeInstanceReplicas,
+        ))
     }
 
     async fn sequence_drop_items(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: DropItemsPlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let ops = self.catalog.drop_items_ops(&plan.items);
+        let builtin_updates = self
+            .catalog_transact(Some(session), ops, |_| Ok(()))
+            .await?
+            .0;
         let response = match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
@@ -3708,8 +3604,7 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         };
-        self.client_catalog_transact(session, ops, |_| Ok(()), tx, Ok(response), Err)
-            .await;
+        Ok((builtin_updates, response))
     }
 
     fn sequence_show_all_variables(
@@ -5150,24 +5045,24 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_alter_item_rename(
         &mut self,
-        tx: ClientTransmitter<ExecuteResponse>,
-        session: Session,
+        session: &Session,
         plan: AlterItemRenamePlan,
-    ) {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         let op = catalog::Op::RenameItem {
             id: plan.id,
             current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
-        self.client_catalog_transact(
-            session,
-            vec![op],
-            |_| Ok(()),
-            tx,
-            Ok(ExecuteResponse::AlteredObject(plan.object_type)),
-            Err,
-        )
-        .await;
+        match self
+            .catalog_transact(Some(session), vec![op], |_| Ok(()))
+            .await
+        {
+            Ok((builtin_updates, _)) => Ok((
+                builtin_updates,
+                ExecuteResponse::AlteredObject(plan.object_type),
+            )),
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_alter_index_set_options(
@@ -5276,7 +5171,7 @@ impl<S: Append + 'static> Coordinator<S> {
         F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, CoordError>,
         C: FnOnce(CoordError) -> Result<ExecuteResponse, CoordError>,
     {
-        let result = self.catalog_transact_inner(Some(&session), ops, f).await;
+        let result = self.catalog_transact(Some(&session), ops, f).await;
         let (builtin_updates, result) = match result {
             Ok((builtin_updates, result)) => (Ok(builtin_updates), Some(result)),
             Err(e) => (Err(e), None),
@@ -5321,7 +5216,7 @@ impl<S: Append + 'static> Coordinator<S> {
     where
         F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, CoordError>,
     {
-        let result = self.catalog_transact_inner(session, ops, f).await;
+        let result = self.catalog_transact(session, ops, f).await;
         let (builtin_updates, result) = match result {
             Ok((builtin_updates, result)) => (Some(builtin_updates), Ok(result)),
             Err(e) => (None, Err(e)),
@@ -5338,7 +5233,7 @@ impl<S: Append + 'static> Coordinator<S> {
         result
     }
 
-    async fn catalog_transact_inner<F, R>(
+    async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
