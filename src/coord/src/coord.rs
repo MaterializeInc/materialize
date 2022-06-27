@@ -1287,6 +1287,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // with a Unix timestamp, because then everything will be offset due to leap seconds
                 // (e.g. rounding to 60 seconds will produce records at every HH:mm:26 since
                 //  there have been 26 leap seconds since 1970).
+                // This wouldn't be a real problem but would look a bit annoying.
                 let when_coarsened = {
                     const REPLICA_STATUS_GRANULARITY: u32 = 60; /* seconds, must be less than 1 day */
                     let seconds = when.time().num_seconds_from_midnight();
