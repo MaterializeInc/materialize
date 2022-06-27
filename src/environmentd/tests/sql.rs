@@ -15,8 +15,6 @@
 
 use std::error::Error;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse;
@@ -32,7 +30,6 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
 use mz_ore::assert_contains;
-use mz_ore::now::{NowFn, NOW_ZERO, SYSTEM_TIME};
 use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
 
 use crate::util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
@@ -349,23 +346,13 @@ fn test_tail_negative_diffs() -> Result<(), Box<dyn Error>> {
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
 
-    // Set the timestamp to zero for deterministic initial timestamps.
-    let nowfn = Arc::new(Mutex::new(NOW_ZERO.clone()));
-    let now = {
-        let nowfn = Arc::clone(&nowfn);
-        NowFn::from(move || (nowfn.lock().unwrap())())
-    };
-    let config = util::Config::default().workers(2).with_now(now);
+    let config = util::Config::default().workers(2);
     let server = util::start_server(config)?;
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_writes.batch_execute("CREATE DEFAULT INDEX t_primary_idx ON t")?;
-    // Now that the index (and its since) are initialized to 0, we can resume using
-    // system time. Do a read to bump the oracle's state so it will read from the
-    // system clock during inserts below.
-    *nowfn.lock().unwrap() = SYSTEM_TIME.clone();
     client_writes.batch_execute("SELECT * FROM t")?;
     client_reads.batch_execute(
         "BEGIN;
@@ -1032,36 +1019,37 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 #[test]
 fn test_explain_timestamp_table() -> Result<(), Box<dyn Error>> {
     mz_ore::test::init_logging();
-    let timestamp = Arc::new(Mutex::new(1_000));
-    let now = {
-        let timestamp = Arc::clone(&timestamp);
-        NowFn::from(move || *timestamp.lock().unwrap())
-    };
-    let config = util::Config::default().with_now(now);
+    let config = util::Config::default();
     let server = util::start_server(config)?;
     let mut client = server.connect(postgres::NoTls)?;
-    let timestamp_re = Regex::new(r"\d{4}").unwrap();
+    let timestamp_str = "<TIMESTAMP>";
+    let timestamp_re = Regex::new(r"(\d{13})").unwrap();
+    let whitespace_re = Regex::new(r"\s+<TIMESTAMP>").unwrap();
 
     client.batch_execute("CREATE TABLE t1 (i1 INT)")?;
 
-    let expect = "     timestamp:          <TIMESTAMP>
-         since:[         <TIMESTAMP>]
-         upper:[         <TIMESTAMP>]
+    let expect = format!(
+        "     timestamp:{timestamp_str}
+         since:[{timestamp_str}]
+         upper:[{timestamp_str}]
      has table: true
- table read ts:          <TIMESTAMP>
+ table read ts:{timestamp_str}
 
 source materialize.public.t1 (u1, storage):
- read frontier:[         <TIMESTAMP>]
-write frontier:[         <TIMESTAMP>]\n";
+ read frontier:[{timestamp_str}]
+write frontier:[{timestamp_str}]\n"
+    );
 
     // Upper starts at 0, which the regex doesn't cover. Wait until it moves ahead.
     Retry::default()
+        .max_duration(Duration::from_secs(5))
         .retry(|_| {
             let row = client
                 .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
                 .unwrap();
             let explain: String = row.get(0);
-            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+            let explain = timestamp_re.replace_all(&explain, timestamp_str);
+            let explain = whitespace_re.replace_all(&explain, timestamp_str);
             if explain != expect {
                 Err(format!("expected {expect}, got {explain}"))
             } else {
