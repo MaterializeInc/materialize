@@ -73,7 +73,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
@@ -147,7 +147,9 @@ use mz_sql::plan::{
 use mz_stash::Append;
 use mz_transform::Optimizer;
 
-use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
+use crate::catalog::builtin::{
+    BUILTINS, MZ_CLUSTER_REPLICAS_HEARTBEATS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
     Connection, SinkConnectionState,
@@ -423,6 +425,22 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReplicaMetadata {
+    pub last_heartbeat: DateTime<Utc>,
+}
+
+impl ReplicaMetadata {
+    pub fn as_row(&self, id: ReplicaId) -> Row {
+        let &ReplicaMetadata { last_heartbeat } = self;
+        Row::pack_slice(&[
+            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+            Datum::Int64(id.try_into().expect("Replica IDs should not overflow i64")),
+            Datum::TimestampTz(last_heartbeat),
+        ])
+    }
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
@@ -494,6 +512,10 @@ pub struct Coordinator<S> {
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
+
+    /// Metadata about replicas that doesn't need to be persisted.
+    /// Intended for inclusion in system tables.
+    transient_replica_metadata: HashMap<ReplicaId, ReplicaMetadata>,
 }
 
 /// Metadata about an active connection.
@@ -1258,6 +1280,46 @@ impl<S: Append + 'static> Coordinator<S> {
                 peek_id: _,
             }) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
+            }
+            ControllerResponse::ComputeReplicaHeartbeat(_instance_id, replica_id, when) => {
+                const REPLICA_STATUS_GRANULARITY: u32 = 60; /* seconds */
+                let when_coarsened = {
+                    let seconds = when.time().num_seconds_from_midnight();
+                    let seconds_offset = seconds % REPLICA_STATUS_GRANULARITY;
+                    (when - chrono::Duration::seconds(seconds_offset.into()))
+                        .with_nanosecond(0)
+                        .unwrap()
+                };
+                let new = ReplicaMetadata {
+                    last_heartbeat: when_coarsened,
+                };
+                let old = self
+                    .transient_replica_metadata
+                    .insert(replica_id, new.clone());
+
+                if old.as_ref() != Some(&new) {
+                    let table = self
+                        .catalog
+                        .state()
+                        .resolve_builtin_table(&MZ_CLUSTER_REPLICAS_HEARTBEATS);
+                    let retraction = old.map(|old| BuiltinTableUpdate {
+                        id: table,
+                        row: old.as_row(replica_id),
+                        diff: -1,
+                    });
+                    let insertion = BuiltinTableUpdate {
+                        id: table,
+                        row: new.as_row(replica_id),
+                        diff: 1,
+                    };
+
+                    let updates = if let Some(retraction) = retraction {
+                        vec![retraction, insertion]
+                    } else {
+                        vec![insertion]
+                    };
+                    self.send_builtin_table_updates(updates).await;
+                }
             }
         }
     }
@@ -5493,6 +5555,7 @@ pub async fn serve<S: Append + 'static>(
                 replica_sizes,
                 availability_zones,
                 connection_context,
+                transient_replica_metadata: HashMap::new(),
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();
