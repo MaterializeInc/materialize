@@ -1182,10 +1182,9 @@ impl<S: Append + 'static> Coordinator<S> {
             timestamp,
             advance_to,
         } = self.get_and_step_local_write_ts();
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-        appends.reserve(self.pending_writes.len());
-        let mut responses = Vec::new();
-        responses.reserve(self.pending_writes.len());
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
+            HashMap::with_capacity(self.pending_writes.len());
+        let mut responses = Vec::with_capacity(self.pending_writes.len());
         for PendingWriteTxn {
             writes,
             client_transmitter,
@@ -3479,49 +3478,58 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let response = ExecuteResponse::TransactionExited {
+        let response = Ok(ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
-        };
+        });
 
-        let txn = self.clear_transaction(&mut session).await;
+        let result = self
+            .sequence_end_transaction_inner(&mut session, action)
+            .await;
+
+        let (response, action) = match result {
+            Ok(Some(writes)) if writes.is_empty() => (response, action),
+            Ok(Some(writes)) => {
+                self.submit_write(PendingWriteTxn {
+                    writes,
+                    client_transmitter: tx,
+                    response,
+                    session,
+                    action,
+                });
+                return;
+            }
+            Ok(None) => (response, action),
+            Err(err) => (Err(err), EndTransactionAction::Rollback),
+        };
+        session.vars_mut().end_transaction(action);
+        tx.send(response, session);
+    }
+
+    async fn sequence_end_transaction_inner(
+        &mut self,
+        session: &mut Session,
+        action: EndTransactionAction,
+    ) -> Result<Option<Vec<WriteOp>>, CoordError> {
+        let txn = self.clear_transaction(session).await;
+
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
                 if let TransactionOps::Writes(mut writes) = ops {
                     for WriteOp { id, .. } in &writes {
                         // Re-verify this id exists.
-                        if let None = self.catalog.try_get_entry(&id) {
-                            session
-                                .vars_mut()
-                                .end_transaction(EndTransactionAction::Rollback);
-                            tx.send(
-                                Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                ))),
-                                session,
-                            );
-                            return;
-                        }
+                        let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
+                            CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                        })?;
                     }
 
                     // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                     writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                    if !writes.is_empty() {
-                        self.submit_write(PendingWriteTxn {
-                            writes,
-                            client_transmitter: tx,
-                            response: Ok(response),
-                            session,
-                            action,
-                        });
-                        return;
-                    }
+                    return Ok(Some(writes));
                 }
             }
         }
-
-        session.vars_mut().end_transaction(action);
-        tx.send(Ok(response), session);
+        Ok(None)
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
