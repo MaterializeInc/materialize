@@ -204,6 +204,8 @@ steps:
 
   - id: kafka-sasl-plain
     label: Kafka SASL PLAIN smoke test
+    # https://github.com/MaterializeInc/materialize/issues/13289
+    soft_fail: true
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/kafka-sasl-plain/smoketest.td]
