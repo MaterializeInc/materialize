@@ -2000,6 +2000,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let remote = if self.parse_keyword(REMOTE) {
+            Some(self.parse_literal_string()?)
+        } else {
+            None
+        };
+
         Ok(Statement::CreateSource(CreateSourceStatement {
             name,
             col_names,
@@ -2011,6 +2017,7 @@ impl<'a> Parser<'a> {
             if_not_exists,
             materialized,
             key_constraint,
+            remote,
         }))
     }
 

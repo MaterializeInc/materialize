@@ -1028,6 +1028,7 @@ pub struct Source {
     pub connection: SourceConnection,
     pub desc: RelationDesc,
     pub depends_on: Vec<GlobalId>,
+    pub remote_addr: Option<String>,
 }
 
 impl Source {
@@ -3290,12 +3291,15 @@ impl<S: Append> Catalog<S> {
                 conn_id: None,
                 depends_on,
             }),
-            Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                connection: source.connection,
-                desc: source.desc,
-                depends_on,
-            }),
+            Plan::CreateSource(CreateSourcePlan { source, remote, .. }) => {
+                CatalogItem::Source(Source {
+                    create_sql: source.create_sql,
+                    connection: source.connection,
+                    desc: source.desc,
+                    depends_on,
+                    remote_addr: remote,
+                })
+            }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;

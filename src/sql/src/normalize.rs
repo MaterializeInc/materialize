@@ -359,6 +359,7 @@ pub fn create_statement(
             if_not_exists,
             materialized,
             key_constraint: _,
+            remote: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;
