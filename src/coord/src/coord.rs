@@ -89,6 +89,7 @@ use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_dataflow_types::client::controller::storage::CreateSourceRequest;
 use mz_dataflow_types::client::controller::{
     ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent, ReadPolicy,
 };
@@ -711,7 +712,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(src) => {
                     // Re-announce the source description.
                     let source_description = self
                         .catalog
@@ -735,7 +736,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![ingestion])
+                        .create_sources(vec![CreateSourceRequest {
+                            ingestion,
+                            remote_addr: src.remote_addr.clone(),
+                        }])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -770,7 +774,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![ingestion])
+                        .create_sources(vec![CreateSourceRequest {
+                            ingestion,
+                            remote_addr: None,
+                        }])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -809,7 +816,10 @@ impl<S: Append + 'static> Coordinator<S> {
                         };
                         self.dataflow_client
                             .storage_mut()
-                            .create_sources(vec![ingestion])
+                            .create_sources(vec![CreateSourceRequest {
+                                ingestion,
+                                remote_addr: None,
+                            }])
                             .await
                             .unwrap();
                         self.initialize_storage_read_policies(
@@ -2729,7 +2739,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![ingestion])
+                    .create_sources(vec![CreateSourceRequest {
+                        ingestion,
+                        remote_addr: None,
+                    }])
                     .await
                     .unwrap();
 
@@ -2762,6 +2775,7 @@ impl<S: Append + 'static> Coordinator<S> {
             connection: plan.source.connection,
             desc: plan.source.desc,
             depends_on,
+            remote_addr: plan.remote,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
@@ -2845,7 +2859,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![ingestion])
+                    .create_sources(vec![CreateSourceRequest {
+                        ingestion,
+                        remote_addr: source.remote_addr,
+                    }])
                     .await
                     .unwrap();
 
@@ -2965,7 +2982,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     };
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![ingestion])
+                        .create_sources(vec![CreateSourceRequest {
+                            ingestion,
+                            remote_addr: None,
+                        }])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(

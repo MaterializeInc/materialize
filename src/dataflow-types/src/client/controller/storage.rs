@@ -64,6 +64,18 @@ include!(concat!(
     "/mz_dataflow_types.client.controller.storage.rs"
 ));
 
+/// Describes a request to create a source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateSourceRequest<T> {
+    /// The description of the source to ingest.
+    pub ingestion: IngestionDescription<(), T>,
+    /// The address of a `storaged` process on which to install the source.
+    ///
+    /// If `None`, the controller manages the lifetime of the `storaged`
+    /// process.
+    pub remote_addr: Option<String>,
+}
+
 #[async_trait]
 pub trait StorageController: Debug + Send {
     type Timestamp;
@@ -91,7 +103,7 @@ pub trait StorageController: Debug + Send {
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
     async fn create_sources(
         &mut self,
-        ingestions: Vec<IngestionDescription<(), Self::Timestamp>>,
+        sources: Vec<CreateSourceRequest<Self::Timestamp>>,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -332,32 +344,32 @@ where
 
     async fn create_sources(
         &mut self,
-        mut ingestions: Vec<IngestionDescription<(), T>>,
+        mut sources: Vec<CreateSourceRequest<T>>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
         // 1. create a dropped source identifier, or
         // 2. create an existing source identifier with a new description.
         // Make sure to check for errors within `ingestions` as well.
-        ingestions.sort_by_key(|ingestion| ingestion.id);
-        ingestions.dedup();
-        for pos in 1..ingestions.len() {
-            if ingestions[pos - 1].id == ingestions[pos].id {
-                return Err(StorageError::SourceIdReused(ingestions[pos].id));
+        sources.sort_by_key(|s| s.ingestion.id);
+        sources.dedup();
+        for pos in 1..sources.len() {
+            if sources[pos - 1].ingestion.id == sources[pos].ingestion.id {
+                return Err(StorageError::SourceIdReused(sources[pos].ingestion.id));
             }
         }
-        for ingestion in ingestions.iter() {
-            if let Ok(collection) = self.collection(ingestion.id) {
+        for source in sources.iter() {
+            if let Ok(collection) = self.collection(source.ingestion.id) {
                 let (desc, since) = &collection.description;
-                if (desc, since) != (&ingestion.desc, &ingestion.since) {
-                    return Err(StorageError::SourceIdReused(ingestion.id));
+                if (desc, since) != (&source.ingestion.desc, &source.ingestion.since) {
+                    return Err(StorageError::SourceIdReused(source.ingestion.id));
                 }
             }
         }
 
-        let mut external_ingestions = vec![];
+        let mut external_sources = vec![];
 
         // Install collection state for each bound source.
-        for ingestion in ingestions {
+        for source in sources {
             // TODO(petrosagg): durably record the persist shard we mint here
             let persist_shard = ShardId::new();
             let (write, read) = self
@@ -367,92 +379,114 @@ where
                 .expect("invalid persist usage");
             self.state
                 .persist_handles
-                .insert(ingestion.id, PersistHandles { read, write });
+                .insert(source.ingestion.id, PersistHandles { read, write });
 
             let timestamp_shard_id = TypedCollection::new("timestamp-shard-id")
-                .insert_without_overwrite(&mut self.state.stash, &ingestion.id, ShardId::new())
+                .insert_without_overwrite(
+                    &mut self.state.stash,
+                    &source.ingestion.id,
+                    ShardId::new(),
+                )
                 .await?;
 
             let collection_state = CollectionState::new(
-                ingestion.desc.clone(),
-                ingestion.since.clone(),
+                source.ingestion.desc.clone(),
+                source.ingestion.since.clone(),
                 persist_shard,
                 timestamp_shard_id,
             );
 
             self.state
                 .collections
-                .insert(ingestion.id, collection_state);
+                .insert(source.ingestion.id, collection_state);
 
             // TODO(petrosagg): it's weird that tables go through this path and we filter them
             // manually. Think how to make better types to reflect their differences
-            if matches!(ingestion.desc.connection, SourceConnection::External { .. }) {
-                external_ingestions.push(ingestion);
+            if matches!(
+                source.ingestion.desc.connection,
+                SourceConnection::External { .. }
+            ) {
+                external_sources.push(source);
             }
         }
 
         // Here we create a new storaged process to handle each new source. Each
         // ingestion is augmented with the collection metadata.
-        for ingestion in external_ingestions {
+        for source in external_sources {
             let mut source_imports = BTreeMap::new();
-            for (id, _) in ingestion.source_imports {
+            for (id, _) in source.ingestion.source_imports {
                 let metadata = self.collection_metadata(id)?;
                 source_imports.insert(id, metadata);
             }
 
+            let remote_addr = source.remote_addr.clone();
+
             let augmented_ingestion = IngestionDescription {
                 source_imports,
                 // The rest of the fields are identical
-                id: ingestion.id,
-                desc: ingestion.desc,
-                since: ingestion.since,
-                storage_metadata: self.collection_metadata(ingestion.id)?,
+                id: source.ingestion.id,
+                desc: source.ingestion.desc,
+                since: source.ingestion.since,
+                storage_metadata: self.collection_metadata(source.ingestion.id)?,
             };
 
-            let storage_service = self
-                .orchestrator
-                .ensure_service(
-                    &ingestion.id.to_string(),
-                    ServiceConfig {
-                        image: self.storaged_image.clone(),
-                        args: &|assigned| {
-                            vec![
-                                format!("--workers=1"),
-                                format!(
-                                    "--listen-addr={}:{}",
-                                    assigned.listen_host, assigned.ports["controller"]
-                                ),
-                                format!(
-                                    "--internal-http-listen-addr={}:{}",
-                                    assigned.listen_host, assigned.ports["internal-http"]
-                                ),
-                                format!("--opentelemetry-resource=storage_id={}", ingestion.id),
-                            ]
+            let addr = if let Some(remote_addr) = remote_addr {
+                tracing::info!(
+                    "{}: connecting to pre-existing storaged instance at address: {}",
+                    source.ingestion.id,
+                    remote_addr
+                );
+                remote_addr
+            } else {
+                let storage_service = self
+                    .orchestrator
+                    .ensure_service(
+                        &source.ingestion.id.to_string(),
+                        ServiceConfig {
+                            image: self.storaged_image.clone(),
+                            args: &|assigned| {
+                                vec![
+                                    format!("--workers=1"),
+                                    format!(
+                                        "--listen-addr={}:{}",
+                                        assigned.listen_host, assigned.ports["controller"]
+                                    ),
+                                    format!(
+                                        "--internal-http-listen-addr={}:{}",
+                                        assigned.listen_host, assigned.ports["internal-http"]
+                                    ),
+                                    format!(
+                                        "--opentelemetry-resource=storage_id={}",
+                                        source.ingestion.id
+                                    ),
+                                ]
+                            },
+                            ports: vec![
+                                ServicePort {
+                                    name: "controller".into(),
+                                    port_hint: 2100,
+                                },
+                                ServicePort {
+                                    name: "internal-http".into(),
+                                    port_hint: 6877,
+                                },
+                            ],
+                            // TODO: limits?
+                            cpu_limit: None,
+                            memory_limit: None,
+                            scale: NonZeroUsize::new(1).unwrap(),
+                            labels: HashMap::new(),
+                            availability_zone: None,
                         },
-                        ports: vec![
-                            ServicePort {
-                                name: "controller".into(),
-                                port_hint: 2100,
-                            },
-                            ServicePort {
-                                name: "internal-http".into(),
-                                port_hint: 6877,
-                            },
-                        ],
-                        // TODO: limits?
-                        cpu_limit: None,
-                        memory_limit: None,
-                        scale: NonZeroUsize::new(1).unwrap(),
-                        labels: HashMap::new(),
-                        availability_zone: None,
-                    },
-                )
-                .await?;
+                    )
+                    .await?;
+
+                storage_service.addresses("controller").into_element()
+            };
 
             // TODO: don't block waiting for a connection. Put a queue in the
             // middle instead.
             let mut client = Box::new({
-                let addr = storage_service.addresses("controller").into_element();
                 let mut client = StoragedRemoteClient::new(&[addr]);
                 client.connect().await;
                 client
@@ -463,7 +497,7 @@ where
                 .await
                 .expect("Storage command failed; unrecoverable");
 
-            self.state.clients.insert(ingestion.id, client);
+            self.state.clients.insert(source.ingestion.id, client);
         }
 
         Ok(())
