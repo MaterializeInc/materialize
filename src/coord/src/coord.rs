@@ -138,11 +138,11 @@ use mz_sql::plan::{
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DDLPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
-    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
-    FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params,
-    PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
+    HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
+    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_transform::Optimizer;
@@ -320,7 +320,7 @@ enum WriteTxn {
     /// DDL operations, these cause writes to system tables.
     DDL {
         /// DDL plan.
-        plan: DDLPlan,
+        plan: Plan,
         /// `GlobalId`s that this DDL depends on.
         depends_on: Vec<GlobalId>,
     },
@@ -1197,7 +1197,7 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             match write_txn {
                 WriteTxn::DDL { plan, depends_on } => {
-                    let builtin_table_updates = if let DDLPlan::CreateSink(plan) = plan {
+                    let builtin_table_updates = if let Plan::CreateSink(plan) = plan {
                         match self
                             .sequence_create_sink(session, plan, depends_on, client_transmitter)
                             .await
@@ -1379,17 +1379,6 @@ impl<S: Append + 'static> Coordinator<S> {
         self.pending_group_commit
             .pending_writes
             .push(pending_write_txn);
-    }
-
-    /// Submit a table to be advanced during the next group commit.
-    fn submit_table_advancement(&mut self, ids: Vec<GlobalId>) {
-        if self.pending_group_commit.is_empty() {
-            let write_timestamp = self.get_local_write_ts();
-            self.internal_cmd_tx
-                .send(Message::GroupCommit(write_timestamp))
-                .expect("sending to internal_cmd_tx cannot fail");
-        }
-        self.pending_group_commit.table_advances.extend(ids);
     }
 
     /// Submit a table to be advanced during the next group commit.
@@ -3735,13 +3724,13 @@ impl<S: Append + 'static> Coordinator<S> {
                         })?;
                     }
 
-                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
-                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                        return Ok(Some(writes));
-                    }
+                    // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                    writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                    return Ok(Some(writes));
                 }
             }
         }
+
         Ok(None)
     }
 
