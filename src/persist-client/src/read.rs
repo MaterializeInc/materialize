@@ -34,7 +34,7 @@ use mz_persist_types::{Codec, Codec64};
 
 use crate::error::InvalidUsage;
 use crate::r#impl::machine::{retry_external, Machine, FOREVER};
-use crate::r#impl::metrics::{Metrics, RetriesMetrics};
+use crate::r#impl::metrics::Metrics;
 use crate::r#impl::state::{DescriptionMeta, Since};
 use crate::ShardId;
 
@@ -126,20 +126,14 @@ where
                 None => return None,
             };
 
-            let updates = fetch_batch_part(
-                self.blob.as_ref(),
-                &self.metrics.retries,
-                &key,
-                &desc,
-                |t| {
-                    // This would get covered by a listen started at the same as_of.
-                    let keep = !self.as_of.less_than(&t);
-                    if keep {
-                        t.advance_by(self.as_of.borrow());
-                    }
-                    keep
-                },
-            )
+            let updates = fetch_batch_part(self.blob.as_ref(), &self.metrics, &key, &desc, |t| {
+                // This would get covered by a listen started at the same as_of.
+                let keep = !self.as_of.less_than(&t);
+                if keep {
+                    t.advance_by(self.as_of.borrow());
+                }
+                keep
+            })
             .await;
             if updates.is_empty() {
                 // We might have filtered everything.
@@ -228,7 +222,7 @@ where
         let mut updates = Vec::new();
         for key in batch_keys.iter() {
             let mut updates_part =
-                fetch_batch_part(self.blob.as_ref(), &self.metrics.retries, key, &desc, |t| {
+                fetch_batch_part(self.blob.as_ref(), &self.metrics, key, &desc, |t| {
                     // This would get covered by a snapshot started at the same as_of.
                     self.as_of.less_than(&t)
                 })
@@ -572,7 +566,7 @@ where
 
 async fn fetch_batch_part<K, V, T, D, TFn>(
     blob: &(dyn BlobMulti + Send + Sync),
-    metrics: &RetriesMetrics,
+    metrics: &Metrics,
     key: &str,
     desc: &Description<T>,
     mut t_fn: TFn,
@@ -585,11 +579,12 @@ where
     TFn: FnMut(&mut T) -> bool,
 {
     let mut retry = metrics
+        .retries
         .fetch_batch_part
         .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
     let get_span = debug_span!("fetch_batch::get");
     let value = loop {
-        let value = retry_external(&metrics.external.fetch_batch_get, || async {
+        let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
             blob.get(Instant::now() + FOREVER, key).await
         })
         .instrument(get_span.clone())
@@ -615,12 +610,15 @@ where
     drop(get_span);
 
     trace_span!("fetch_batch::decode").in_scope(|| {
-        let batch = BlobTraceBatchPart::decode(&value)
+        let batch = metrics
+            .codecs
+            .batch
+            .decode(|| BlobTraceBatchPart::decode(&value))
             .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", key, err))
-            // We received a State that we couldn't decode. This could
-            // happen if persist messes up backward/forward compatibility,
-            // if the durable data was corrupted, or if operations messes up
-            // deployment. In any case, fail loudly.
+            // We received a State that we couldn't decode. This could happen if
+            // persist messes up backward/forward compatibility, if the durable
+            // data was corrupted, or if operations messes up deployment. In any
+            // case, fail loudly.
             .expect("internal error: invalid encoded state");
 
         // Drop the encoded representation as soon as we can to reclaim memory.
@@ -643,8 +641,9 @@ where
                 if !keep {
                     continue;
                 }
-                let k = K::decode(k);
-                let v = V::decode(v);
+
+                let k = metrics.codecs.key.decode(|| K::decode(k));
+                let v = metrics.codecs.val.decode(|| V::decode(v));
                 let d = D::decode(d);
                 ret.push(((k, v), t, d));
             }

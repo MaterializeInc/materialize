@@ -1,12 +1,10 @@
 ---
-title: "SQL Reference"
+title: "Reference"
 description: "A single page with every SQL command, function, type, and keyword."
-menu:
-  main:
-    identifier: 'reference'
-    name: 'Reference'
-    weight: 30
+disable_list: true
 ---
+
+[//]: # "TODO(morsapaes) Re-hash this page into something more useful, and add it as an Overview sub-menu under Reference"
 
 We want Materialize to be easy to use, so we designed it to work with SQL. However, every database implements SQL a little differently, and none matches the full standard. In general, we model our implementation after PostgreSQL.
 

@@ -38,7 +38,6 @@ Avro
 Begin
 Between
 Bigint
-Blob
 Boolean
 Both
 Bpchar
@@ -70,7 +69,6 @@ Compression
 Confluent
 Connection
 Connections
-Consensus
 Consistency
 Constraint
 Copy
@@ -265,7 +263,6 @@ Sequences
 Serializable
 Session
 Set
-Shard
 Show
 Sink
 Sinks

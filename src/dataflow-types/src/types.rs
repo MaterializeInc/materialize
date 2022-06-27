@@ -384,7 +384,7 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: BTreeMap<GlobalId, crate::types::sinks::SinkDesc<T>>,
+    pub sink_exports: BTreeMap<GlobalId, crate::types::sinks::SinkDesc<S, T>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
@@ -421,7 +421,10 @@ proptest::prop_compose! {
         index_imports in proptest::collection::vec(any_dataflow_index(), 1..3),
         objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
         index_exports in proptest::collection::vec(any_dataflow_index(), 1..3),
-        sink_descs in proptest::collection::vec(any::<(GlobalId, SinkDesc<mz_repr::Timestamp>)>(), 1..3),
+        sink_descs in proptest::collection::vec(
+            any::<(GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>)>(),
+            1..3,
+        ),
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<u64>(), 1..5),
         debug_name in ".*",
@@ -519,7 +522,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 
     /// Exports as `id` a sink described by `description`.
-    pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc<T>) {
+    pub fn export_sink(&mut self, id: GlobalId, description: SinkDesc<(), T>) {
         self.sink_exports.insert(id, description);
     }
 
@@ -754,15 +757,15 @@ impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndex {
     }
 }
 
-impl ProtoMapEntry<GlobalId, SinkDesc> for ProtoSinkExport {
-    fn from_rust<'a>((id, sink_desc): (&'a GlobalId, &'a SinkDesc)) -> Self {
+impl ProtoMapEntry<GlobalId, SinkDesc<CollectionMetadata>> for ProtoSinkExport {
+    fn from_rust<'a>((id, sink_desc): (&'a GlobalId, &'a SinkDesc<CollectionMetadata>)) -> Self {
         ProtoSinkExport {
             id: Some(id.into_proto()),
             sink_desc: Some(sink_desc.into_proto()),
         }
     }
 
-    fn into_rust(self) -> Result<(GlobalId, SinkDesc), TryFromProtoError> {
+    fn into_rust(self) -> Result<(GlobalId, SinkDesc<CollectionMetadata>), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSinkExport::id")?,
             self.sink_desc

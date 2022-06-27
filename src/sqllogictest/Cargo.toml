@@ -10,7 +10,7 @@ publish = false
 anyhow = "1.0.58"
 bytes = "1.1.0"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-clap = { version = "3.2.5", features = ["derive"] }
+clap = { version = "3.2.6", features = ["derive"] }
 fallible-iterator = "0.2.0"
 futures = "0.3.21"
 junit-report = "0.7.1"
@@ -28,7 +28,7 @@ postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 regex = "1.5.6"
 serde_json = "1.0.81"
 tempfile = "3.2.0"
-time = "0.3.10"
+time = "0.3.11"
 tokio = "1.19.2"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
 tower-http = { version = "0.3.4", features = ["cors"] }

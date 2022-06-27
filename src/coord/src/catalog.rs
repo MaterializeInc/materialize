@@ -30,7 +30,10 @@ use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use mz_dataflow_types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_dataflow_types::sinks::{
+    PersistSinkConnection, PersistSinkConnectionBuilder, SinkConnection, SinkConnectionBuilder,
+    SinkEnvelope,
+};
 use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -172,6 +175,26 @@ impl CatalogState {
                 Some(mz_dataflow_types::sources::SourceDesc {
                     connection,
                     desc: source.desc.clone(),
+                })
+            }
+            // TODO(teskje): Replace once `CatalogItem::RecordedView` lands.
+            CatalogItem::Sink(Sink {
+                connection:
+                    SinkConnectionState::Ready(SinkConnection::Persist(PersistSinkConnection {
+                        value_desc,
+                        ..
+                    }))
+                    | SinkConnectionState::Pending(SinkConnectionBuilder::Persist(
+                        PersistSinkConnectionBuilder { value_desc },
+                    )),
+                ..
+            }) => {
+                let connection = SourceConnection::Local {
+                    timeline: Timeline::EpochMilliseconds,
+                };
+                Some(mz_dataflow_types::sources::SourceDesc {
+                    connection,
+                    desc: value_desc.clone(),
                 })
             }
             _ => None,

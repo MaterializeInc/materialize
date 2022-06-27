@@ -31,11 +31,13 @@ use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::TryStreamExt as _;
 use futures::stream::{FuturesUnordered, StreamExt};
+use mz_persist_client::cache::PersistClientCache;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use tokio::sync::Mutex;
 use tokio_stream::StreamMap;
 use uuid::Uuid;
 
@@ -742,10 +744,16 @@ where
     pub async fn new(
         postgres_url: String,
         persist_location: PersistLocation,
+        persist_clients: Arc<Mutex<PersistClientCache>>,
         orchestrator: Arc<dyn NamespacedOrchestrator>,
         storaged_image: String,
     ) -> Self {
-        let persist_client = persist_location.open().await.unwrap();
+        let persist_client = persist_clients
+            .lock()
+            .await
+            .open(persist_location.clone())
+            .await
+            .unwrap();
 
         Self {
             state: StorageControllerState::new(postgres_url).await,

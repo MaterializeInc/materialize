@@ -1,3 +1,3 @@
 Name | Permitted values | Default value | Description
 ----------------------------|--------|--------|--------
-`logical_compaction_window` | SQL [interval](/sql/types/interval/) string | '1ms' | Overrides the [logical compaction window](/ops/optimization/#compaction) for the data stored in this index. The default value is controlled by the [`--logical-compaction-window`](/cli/#compaction-window) command-line option.
+`LOGICAL COMPACTION WINDOW` | SQL [interval](/sql/types/interval/) string | '1ms' | Overrides the [logical compaction window](/ops/optimization/#compaction) for the data stored in this index. A value of `0` disables logical compaction.

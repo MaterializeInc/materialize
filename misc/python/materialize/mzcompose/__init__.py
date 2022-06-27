@@ -341,7 +341,6 @@ class Composition:
                 [
                     "docker",
                     "compose",
-                    *(["--log-level=ERROR"] if self.silent else []),
                     f"-f/dev/fd/{self.file.fileno()}",
                     "--project-directory",
                     self.path,

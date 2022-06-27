@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fs;
@@ -276,19 +276,26 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         let supervisors = Arc::clone(&self.supervisors);
         let stream = async_stream::stream! {
             let mut events = Vec::new();
+            // Keep track of services we have already seen, so we only emit
+            // events for new services.
+            let mut current_services = HashSet::new();
             loop {
                 {
                     let supervisors = supervisors.lock().expect("lock poisoned");
                     for (service, processes) in supervisors.iter() {
+                        if current_services.contains(service) {
+                            continue;
+                        }
                         for process_idx in 0..processes.len() {
                             events.push(ServiceEvent {
-                                service_id: service.to_string(),
+                                service_id: service.clone(),
                                 process_id: process_idx as i64,
                                 status: ServiceStatus::Unknown,
                                 time: Utc::now(),
                             });
                         }
                     }
+                    current_services = supervisors.keys().cloned().collect();
                 }
 
                 for event in events.drain(..) {

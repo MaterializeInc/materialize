@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
@@ -19,7 +18,6 @@ use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, TupleData,
 };
 use timely::scheduling::SyncActivator;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
@@ -273,55 +271,34 @@ async fn postgres_replication_loop_inner(
     // Buffer rows from snapshot to retract and retry, if initial snapshot fails.
     // Postgres sources cannot proceed without a successful snapshot.
     let mut snapshot_tx = Transaction::new();
-    loop {
-        let file =
-            tokio::fs::File::from_std(tempfile::tempfile().map_err(|e| SourceReaderError {
-                inner: SourceErrorDetails::FileIO(e.to_string()),
-            })?);
-        let mut writer = tokio::io::BufWriter::new(file);
-        match task_info
-            .produce_snapshot(&mut snapshot_tx, &mut writer)
-            .await
-        {
-            Ok(_) => {
-                info!(
-                    "replication snapshot for source {} succeeded",
-                    &task_info.source_id
-                );
-                snapshot_tx
-                    .close(task_info.lsn, &task_info.sender, &task_info.activator)
-                    .await;
-                break;
-            }
-            Err(ReplicationError::Recoverable(e)) => {
-                writer.flush().await.map_err(|e| SourceReaderError {
-                    inner: SourceErrorDetails::Initialization(e.to_string()),
-                })?;
-                warn!(
-                    "replication snapshot for source {} failed, retrying: {}",
-                    &task_info.source_id, e
-                );
-                let reader = BufReader::new(writer.into_inner().into_std().await);
-                let res = PostgresTaskInfo::revert_snapshot(&mut snapshot_tx, reader)
-                    .await
-                    .map_err(|e| SourceReaderError {
-                        inner: SourceErrorDetails::FileIO(e.to_string()),
-                    });
-                snapshot_tx
-                    .close(task_info.lsn, &task_info.sender, &task_info.activator)
-                    .await;
-
-                res?;
-            }
-            Err(ReplicationError::Fatal(e)) => {
-                return Err(SourceReaderError {
-                    inner: SourceErrorDetails::Initialization(e.to_string()),
-                })
-            }
+    match task_info.produce_snapshot(&mut snapshot_tx).await {
+        Ok(_) => {
+            info!(
+                "replication snapshot for source {} succeeded",
+                &task_info.source_id
+            );
+            snapshot_tx
+                .close(task_info.lsn, &task_info.sender, &task_info.activator)
+                .await;
         }
-
-        // TODO(petrosagg): implement exponential back-off
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        Err(ReplicationError::Recoverable(e)) => {
+            // TODO: In the future we probably want to handle this more gracefully,
+            // to avoid stressing out any monitoring tools,
+            // but for now panicking is the easiest way to dump the data in the pipe.
+            // The restarted storaged instance will restart the snapshot fresh, which will
+            // avoid any inconsistencies. Note that if the same lsn is chosen in the
+            // next snapshotting, the remapped timestamp chosen will be the same for
+            // both instances of storaged.
+            panic!(
+                "replication snapshot for source {} failed: {}",
+                &task_info.source_id, e
+            );
+        }
+        Err(ReplicationError::Fatal(e)) => {
+            return Err(SourceReaderError {
+                inner: SourceErrorDetails::Initialization(e.to_string()),
+            })
+        }
     }
 
     loop {
@@ -436,10 +413,9 @@ impl PostgresTaskInfo {
     ///
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
-    async fn produce_snapshot<W: AsyncWrite + Unpin>(
+    async fn produce_snapshot(
         &mut self,
         snapshot_tx: &mut Transaction,
-        buffer: &mut W,
     ) -> Result<(), ReplicationError> {
         let client =
             try_recoverable!(mz_postgres_util::connect_replication(&self.connection.conn).await);
@@ -531,11 +507,6 @@ impl PostgresTaskInfo {
                     Ok(())
                 }));
                 snapshot_tx.insert(mz_row.clone());
-                try_fatal!(
-                    buffer
-                        .write_all(&try_fatal!(bincode::serialize(&mz_row)))
-                        .await
-                );
             }
 
             self.metrics.tables.inc();
@@ -543,23 +514,6 @@ impl PostgresTaskInfo {
         self.metrics.lsn.set(self.lsn.into());
         client.simple_query("COMMIT;").await?;
         Ok(())
-    }
-
-    /// Reverts a failed snapshot by deleting any processed rows from the dataflow.
-    async fn revert_snapshot<R: Read + Seek>(
-        snapshot_tx: &mut Transaction,
-        mut reader: R,
-    ) -> Result<(), anyhow::Error> {
-        tokio::task::block_in_place(|| -> Result<(), anyhow::Error> {
-            let len = reader.seek(SeekFrom::Current(0))?;
-            reader.seek(SeekFrom::Start(0))?;
-            let mut reader = reader.take(len);
-            while reader.limit() > 0 {
-                let row = bincode::deserialize_from(&mut reader)?;
-                snapshot_tx.delete(row);
-            }
-            Ok(())
-        })
     }
 
     /// Converts a Tuple received in the replication stream into a Row instance. The logical
