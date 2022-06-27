@@ -668,7 +668,7 @@ pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
     /// A notification that we heard a response
     /// from the given replica at the given time.
     ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
-}    
+}
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
