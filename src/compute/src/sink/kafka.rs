@@ -22,8 +22,6 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::executor::block_on;
 use futures::{StreamExt, TryFutureExt};
 use itertools::Itertools;
-use mz_dataflow_types::client::controller::storage::CollectionMetadata;
-use mz_interchange::json::JsonEncoder;
 use prometheus::core::AtomicU64;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
@@ -46,6 +44,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 use mz_avro::types::Value;
+use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sinks::{
     KafkaSinkConnection, KafkaSinkConsistencyConnection, PublishedSchemaInfo, SinkAsOf, SinkDesc,
@@ -55,6 +54,7 @@ use mz_interchange::avro::{
     self, get_debezium_transaction_schema, AvroEncoder, AvroSchemaGenerator,
 };
 use mz_interchange::encode::Encode;
+use mz_interchange::json::JsonEncoder;
 use mz_kafka_util::client::{create_new_client_config, MzClientContext};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;

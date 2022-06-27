@@ -36,9 +36,8 @@ use crate::client::controller::storage::{StorageController, StorageError};
 use crate::client::replicated::ActiveReplication;
 use crate::client::{ComputeClient, ComputeCommand, ComputeInstanceId, InstanceConfig, ReplicaId};
 use crate::client::{GenericClient, Peek};
-use crate::logging::LoggingConfig;
-use crate::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 use crate::logging::{LogVariant, LoggingConfig};
+use crate::sinks::{PersistSinkConnection, SinkConnection, SinkDesc};
 use crate::{DataflowDescription, SourceInstanceDesc};
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -356,9 +355,8 @@ where
             }
         }
 
-        // Here we augment all the imported sources and all the exported
-        // persist sinks with the appropriate storage metadata needed by
-        // the compute instance to read them.
+        // Here we augment all imported sources and all exported sinks with with the appropriate
+        // storage metadata needed by the compute instance.
         let mut augmented_dataflows = Vec::with_capacity(dataflows.len());
         for d in dataflows {
             let mut source_imports = BTreeMap::new();
@@ -631,6 +629,11 @@ where
                 .await?;
         }
 
+        // Tell the storage controller about new write frontiers for storage
+        // collections that are advanced by compute sinks.
+        // TODO(teskje): The storage controller should have a task to directly
+        // keep track of the frontiers of storage collections, instead of
+        // relying on others for that information.
         let storage_updates: Vec<_> = updates
             .iter()
             .filter(|(id, _)| self.storage_mut().collection(*id).is_ok())

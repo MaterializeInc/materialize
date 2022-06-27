@@ -4,7 +4,7 @@
     <ul>
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1">
-        <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
+        <a class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
           {{.Name | markdownify}}
         </a>
 

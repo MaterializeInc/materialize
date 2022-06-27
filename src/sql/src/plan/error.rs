@@ -23,6 +23,7 @@ use mz_repr::ColumnName;
 
 use crate::catalog::CatalogError;
 use crate::names::PartialObjectName;
+use crate::names::ResolvedObjectName;
 use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 
@@ -68,6 +69,7 @@ pub enum PlanError {
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
+    InvalidSecret(ResolvedObjectName),
     InvalidTemporarySchema,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
@@ -157,6 +159,7 @@ impl fmt::Display for PlanError {
             Self::InvalidCharLength(e) => e.fmt(f),
             Self::InvalidVarCharMaxLength(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
+            Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }

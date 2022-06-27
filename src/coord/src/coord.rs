@@ -113,8 +113,8 @@ use mz_expr::{
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{to_datetime, EpochMillis, NowFn};
 use mz_ore::retry::Retry;
-use mz_ore::task;
 use mz_ore::thread::JoinHandleExt;
+use mz_ore::{stack, task};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{Numeric, NumericMaxScale};
 use mz_repr::{
@@ -381,7 +381,9 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
         self.work.extend(ids);
     }
 
-    // Returns the set of tables to advance. Blocks forever if there are none.
+    /// Returns the set of tables to advance. Blocks forever if there are none.
+    ///
+    /// This method is cancel-safe because there are no await points when the set is non-empty.
     async fn recv(&mut self) -> AdvanceLocalInput<T> {
         if self.set.is_empty() {
             futures::future::pending::<()>().await;
@@ -664,6 +666,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn bootstrap(
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
@@ -796,6 +799,29 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
+                    // Re-announce the source description.
+                    // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+                    if let Some(desc) = self.catalog.state().source_description_for(entry.id()) {
+                        let ingestion = IngestionDescription {
+                            id: entry.id(),
+                            desc,
+                            since: Antichain::from_elem(Timestamp::minimum()),
+                            source_imports: BTreeMap::new(),
+                            storage_metadata: (),
+                        };
+                        self.dataflow_client
+                            .storage_mut()
+                            .create_sources(vec![ingestion])
+                            .await
+                            .unwrap();
+                        self.initialize_storage_read_policies(
+                            vec![entry.id()],
+                            self.logical_compaction_window_ms,
+                        )
+                        .await;
+                    }
+
+                    // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
                         SinkConnectionState::Pending(builder) => builder,
                         SinkConnectionState::Ready(_) => {
@@ -901,54 +927,43 @@ impl<S: Append + 'static> Coordinator<S> {
         mut internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
         mut cmd_rx: mpsc::UnboundedReceiver<Command>,
     ) {
-        {
-            // An explicit SELECT or INSERT on a table will bump the table's timestamps,
-            // but there are cases where timestamps are not bumped but we expect the closed
-            // timestamps to advance (`AS OF X`, TAILing views over RT sources and
-            // tables). To address these, spawn a task that forces table timestamps to
-            // close on a regular interval. This roughly tracks the behavior of realtime
-            // sources that close off timestamps on an interval.
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut interval = tokio::time::interval(self.catalog.config().timestamp_frequency);
-            task::spawn(|| "coordinator_advance_local_inputs", async move {
-                loop {
-                    interval.tick().await;
-                    // If sending fails, the main thread has shutdown.
-                    if internal_cmd_tx.send(Message::AdvanceLocalInputs).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        // Spawn a watcher task that listens for compute service status changes and
-        // reports them to the coordinator.
-        task::spawn(|| "compute_service_watcher", {
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let mut events = self.dataflow_client.watch_compute_services();
-            async move {
-                while let Some(event) = events.next().await {
-                    if internal_cmd_tx
-                        .send(Message::ComputeInstanceStatus(event))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        });
+        // An explicit SELECT or INSERT on a table will bump the table's timestamps,
+        // but there are cases where timestamps are not bumped but we expect the closed
+        // timestamps to advance (`AS OF X`, TAILing views over RT sources and
+        // tables). To address these, spawn a task that forces table timestamps to
+        // close on a regular interval. This roughly tracks the behavior of realtime
+        // sources that close off timestamps on an interval.
+        let mut advance_local_inputs_interval =
+            tokio::time::interval(self.catalog.config().timestamp_frequency);
+        // Watcher that listens for and reports compute service status changes.
+        let mut compute_events = self.dataflow_client.watch_compute_services();
 
         loop {
+            // Before adding a branch to this select loop, please ensure that the branch is
+            // cancellation safe and add a comment explaining why. You can refer here for more
+            // info: https://docs.rs/tokio/latest/tokio/macro.select.html#cancellation-safety
             let msg = select! {
                 // Order matters here. We want to process internal commands
                 // before processing external commands.
                 biased;
 
+                // `recv()` on `UnboundedReceiver` is cancel-safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 Some(m) = internal_cmd_rx.recv() => m,
+                // `next()` on any stream is cancel-safe:
+                // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
+                Some(event) = compute_events.next() => Message::ComputeInstanceStatus(event),
+                // `tick()` on `Interval` is cancel-safe:
+                // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
+                _ = advance_local_inputs_interval.tick() => Message::AdvanceLocalInputs,
+                // See [`mz_dataflow_types::client::controller::Controller::ready`] for notes
+                // on why this is cancel-safe.
                 m = self.dataflow_client.ready() => {
                     let () = m.unwrap();
                     Message::ControllerReady
                 }
+                // `recv()` on `UnboundedReceiver` is cancellation safe:
+                // https://docs.rs/tokio/1.8.0/tokio/sync/mpsc/struct.UnboundedReceiver.html#cancel-safety
                 m = cmd_rx.recv() => match m {
                     None => break,
                     Some(m) => Message::Command(m),
@@ -961,6 +976,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // advance_tables is fully emptied, this allows us to replace an old request
                 // with a new one, avoiding duplication of work, which wouldn't be possible if
                 // we had already sent all AdvanceLocalInput messages on a channel.
+                // See [`AdvanceTables::recv`] for notes on why this is cancel-safe.
                 inputs = self.advance_tables.recv() => {
                     Message::AdvanceLocalInput(inputs)
                 },
@@ -1589,6 +1605,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn message_compute_instance_status(&mut self, event: ComputeInstanceEvent) {
         self.catalog_transact(
             None,
@@ -2354,20 +2371,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
             Plan::Execute(plan) => {
-                let plan_name = plan.name.clone();
                 match self.sequence_execute(&mut session, plan) {
                     Ok(portal_name) => {
-                        let internal_cmd_tx = self.internal_cmd_tx.clone();
-                        task::spawn(|| format!("execute:{plan_name}"), async move {
-                            internal_cmd_tx
-                                .send(Message::Command(Command::Execute {
-                                    portal_name,
-                                    session,
-                                    tx: tx.take(),
-                                    span: tracing::Span::none(),
-                                }))
-                                .expect("sending to internal_cmd_tx cannot fail");
-                        });
+                        self.internal_cmd_tx
+                            .send(Message::Command(Command::Execute {
+                                portal_name,
+                                session,
+                                tx: tx.take(),
+                                span: tracing::Span::none(),
+                            }))
+                            .expect("sending to internal_cmd_tx cannot fail");
                     }
                     Err(err) => tx.send(Err(err), session),
                 };
@@ -3013,21 +3026,21 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
         match transact_result {
             Ok(()) => {
+                // Announce the creation of the sink's corresponding source.
+                // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
                 if let Some(desc) = self.catalog.state().source_description_for(id) {
                     let ingestion = IngestionDescription {
                         id,
                         desc,
-                        since: Antichain::from_elem(0), // TODO
+                        since: Antichain::from_elem(Timestamp::minimum()),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
                     };
-
                     self.dataflow_client
                         .storage_mut()
                         .create_sources(vec![ingestion])
                         .await
                         .unwrap();
-
                     self.initialize_storage_read_policies(
                         vec![id],
                         self.logical_compaction_window_ms,
@@ -5033,6 +5046,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// function successfully returns on any built `DataflowDesc`.
     ///
     /// [`CatalogState`]: crate::catalog::CatalogState
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
@@ -5163,6 +5177,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(result)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
         // Most DDL queries cause writes to system tables. Unlike writes to user tables, system
         // table writes are not batched in a group commit. This is mostly due to the complexity
@@ -5205,6 +5220,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 .entry(compute_instance)
                 .or_insert(vec![])
                 .push(id);
+
+            // Persist sinks write to storage collections, which need to be
+            // dropped when their sinks are dropped.
+            // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+            if self.dataflow_client.storage_mut().collection(id).is_ok() {
+                self.dataflow_client
+                    .storage_mut()
+                    .drop_sources(vec![id])
+                    .await
+                    .unwrap();
+            }
         }
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.
@@ -5536,6 +5562,10 @@ pub async fn serve<S: Append + 'static>(
     let handle = TokioHandle::current();
 
     let thread = thread::Builder::new()
+        // The Coordinator thread tends to keep a lot of data on its stack. To
+        // prevent a stack overflow we allocate a stack twice as big as the default
+        // stack.
+        .stack_size(2 * stack::STACK_SIZE)
         .name("coordinator".to_string())
         .spawn(move || {
             let mut coord = Coordinator {

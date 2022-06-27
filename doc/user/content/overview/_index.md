@@ -1,13 +1,12 @@
 ---
-title: "What Is Materialize?"
+title: "What is Materialize?"
 description: "Learn more about Materialize"
 aliases:
   - /overview/what-is-materialize/
 menu:
   main:
-    identifier: overview
-    weight: 10
-    name: "Overview"
+    parent: overview
+    weight: 5
 ---
 
 Materialize is a streaming SQL materialized view engine.

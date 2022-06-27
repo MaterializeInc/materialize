@@ -421,7 +421,10 @@ proptest::prop_compose! {
         index_imports in proptest::collection::vec(any_dataflow_index(), 1..3),
         objects_to_build in proptest::collection::vec(any::<BuildDesc<Plan>>(), 1..3),
         index_exports in proptest::collection::vec(any_dataflow_index(), 1..3),
-        sink_descs in proptest::collection::vec(any::<(GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>)>(), 1..3),
+        sink_descs in proptest::collection::vec(
+            any::<(GlobalId, SinkDesc<CollectionMetadata, mz_repr::Timestamp>)>(),
+            1..3,
+        ),
         as_of_some in any::<bool>(),
         as_of in proptest::collection::vec(any::<u64>(), 1..5),
         debug_name in ".*",

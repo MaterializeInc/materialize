@@ -35,6 +35,7 @@ use differential_dataflow::Hashable;
 use futures::stream::LocalBoxStream;
 use futures::{Stream, StreamExt as _};
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
+use mz_persist_client::cache::PersistClientCache;
 use prometheus::core::{AtomicI64, AtomicU64};
 use serde::{Deserialize, Serialize};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract};
@@ -46,6 +47,7 @@ use timely::progress::Antichain;
 use timely::scheduling::activate::SyncActivator;
 use timely::scheduling::ActivateOnDrop;
 use timely::Data;
+use tokio::sync::Mutex;
 use tokio::time::MissedTickBehavior;
 use tracing::error;
 
@@ -702,6 +704,7 @@ pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
     source_connection: &ExternalSourceConnection,
     connection_context: ConnectionContext,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<S::Key, S::Value, S::Diff>>,
@@ -750,6 +753,7 @@ where
                 now,
                 timestamp_frequency.clone(),
                 as_of.clone(),
+                persist_clients,
             )
             .await
             {

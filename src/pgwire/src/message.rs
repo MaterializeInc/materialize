@@ -16,7 +16,6 @@ use mz_coord::session::ClientSeverity as CoordClientSeverity;
 use mz_coord::session::TransactionStatus as CoordTransactionStatus;
 use mz_coord::{CoordError, StartupMessage};
 use mz_expr::EvalError;
-use mz_pgcopy::CopyErrorNotSupportedResponse;
 use mz_repr::{ColumnName, NotNullViolation, RelationDesc};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -444,12 +443,6 @@ impl ErrorResponse {
     pub fn with_position(mut self, position: usize) -> ErrorResponse {
         self.position = Some(position);
         self
-    }
-}
-
-impl From<CopyErrorNotSupportedResponse> for ErrorResponse {
-    fn from(error: CopyErrorNotSupportedResponse) -> Self {
-        ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, error.message)
     }
 }
 

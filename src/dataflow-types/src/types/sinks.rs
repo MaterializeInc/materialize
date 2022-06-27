@@ -29,7 +29,7 @@ include!(concat!(
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SinkDesc<S, T = mz_repr::Timestamp> {
+pub struct SinkDesc<S = (), T = mz_repr::Timestamp> {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
     pub connection: SinkConnection<S>,
@@ -160,7 +160,7 @@ impl RustType<ProtoSinkAsOf> for SinkAsOf<mz_repr::Timestamp> {
 }
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SinkConnection<S> {
+pub enum SinkConnection<S = ()> {
     Kafka(KafkaSinkConnection),
     Tail(TailSinkConnection),
     Persist(PersistSinkConnection<S>),

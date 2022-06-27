@@ -180,19 +180,16 @@ impl CatalogState {
                     desc: source.desc.clone(),
                 })
             }
+            // TODO(teskje): Replace once `CatalogItem::RecordedView` lands.
             CatalogItem::Sink(Sink {
-                connection:
-                    SinkConnectionState::Pending(SinkConnectionBuilder::Persist(
-                        PersistSinkConnectionBuilder { value_desc },
-                    )),
-                ..
-            })
-            | CatalogItem::Sink(Sink {
                 connection:
                     SinkConnectionState::Ready(SinkConnection::Persist(PersistSinkConnection {
                         value_desc,
                         ..
-                    })),
+                    }))
+                    | SinkConnectionState::Pending(SinkConnectionBuilder::Persist(
+                        PersistSinkConnectionBuilder { value_desc },
+                    )),
                 ..
             }) => {
                 let connection = SourceConnection::Local {
@@ -2490,9 +2487,16 @@ impl<S: Append> Catalog<S> {
             None => return Ok(()),
         };
         let user = session.user().to_string();
-        let occurred_at = self.state.config.start_time.timestamp_nanos() as u64
-            + self.state.config.start_instant.elapsed().as_nanos() as u64;
-        let event = VersionedEvent::new(event_type, object_type, event_details, user, occurred_at);
+        let occurred_at = (self.state.config.now)();
+        let id = tx.get_and_increment_id(storage::AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let event = VersionedEvent::new(
+            id,
+            event_type,
+            object_type,
+            event_details,
+            user,
+            occurred_at,
+        );
         builtin_table_updates.push(self.state.pack_audit_log_update(&event)?);
         tx.insert_audit_log_event(event);
         Ok(())

@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use differential_dataflow::Collection;
+use mz_persist_client::write::WriteHandle;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::Scope;
@@ -29,17 +30,30 @@ pub(crate) fn persist_sink<G>(
     // TODO(teskje): vary active_worker_index, to distribute work for multiple sinks
     let active_worker_index = 0;
 
-    let write = if active_worker_index == scope.index() {
-        let shard_id = target.persist_shard;
-        let persist_client =
-            futures_executor::block_on(target.persist_location.open()).expect("cannot open client");
-        let (write, read) =
-            futures_executor::block_on(persist_client.open::<Row, Row, Timestamp, Diff>(shard_id))
-                .expect("could not open persist shard");
+    let write: Option<WriteHandle<_, _, _, _>> = if active_worker_index == scope.index() {
+        let _shard_id = target.persist_shard;
 
-        // TODO(teskje): use `open_write`
-        futures_executor::block_on(read.expire());
-        Some(write)
+        //TODO(LH): Plumb persist_clients until here, and use it to open the connection
+        // let persist_client = async {
+        //     persist_clients
+        //         .lock()
+        //         .await
+        //         .open(persist_location)
+        //         .await
+        //         .with_context(|| "error creating persist client")?;
+        // }
+        // .await;
+
+        // let persist_client =
+        //     futures_executor::block_on(target.persist_location.open()).expect("cannot open client");
+        // let (write, read) =
+        //     futures_executor::block_on(persist_client.open::<Row, Row, Timestamp, Diff>(shard_id))
+        //         .expect("could not open persist shard");
+
+        // // TODO(teskje): use `open_write`
+        // futures_executor::block_on(read.expire());
+        // Some(write)
+        None
     } else {
         None
     };

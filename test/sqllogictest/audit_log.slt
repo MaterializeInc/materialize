@@ -43,20 +43,20 @@ CREATE SOURCE s FROM PUBNUB
 SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
 CHANNEL 'pubnub-market-orders';
 
-query TTTT
-SELECT event_type, object_type, event_details, user FROM mz_audit_events ORDER BY occurred_at
+query ITTTT
+SELECT id, event_type, object_type, event_details, user FROM mz_audit_events ORDER BY id
 ----
-create  cluster  {"name":"foo"}  materialize
-create  cluster-replica  {"cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
-create  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-create  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
-create  view  {"database":"materialize","item":"unmat","schema":"public"}  materialize
-create  index  {"database":"materialize","item":"t_primary_idx","schema":"public"}  materialize
-alter  view  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
-drop  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
-drop  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-create  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
-create  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
-drop  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
-drop  view  {"database":"materialize","item":"renamed","schema":"public"}  materialize
-create  source  {"database":"materialize","item":"s","schema":"public"}  materialize
+1  create  cluster  {"name":"foo"}  materialize
+2  create  cluster-replica  {"cluster_name":"foo","logical_size":"1","replica_name":"r"}  materialize
+3  create  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
+4  create  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
+5  create  view  {"database":"materialize","item":"unmat","schema":"public"}  materialize
+6  create  index  {"database":"materialize","item":"t_primary_idx","schema":"public"}  materialize
+7  alter  view  {"new_name":"renamed","previous_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
+8  drop  index  {"database":"materialize","item":"v2_primary_idx","schema":"public"}  materialize
+9  drop  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
+10  create  view  {"database":"materialize","item":"v2","schema":"public"}  materialize
+11  create  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
+12  drop  index  {"database":"materialize","item":"renamed_primary_idx","schema":"public"}  materialize
+13  drop  view  {"database":"materialize","item":"renamed","schema":"public"}  materialize
+14  create  source  {"database":"materialize","item":"s","schema":"public"}  materialize

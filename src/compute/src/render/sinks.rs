@@ -19,7 +19,7 @@ use differential_dataflow::{Collection, Hashable};
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use timely::dataflow::Scope;
 
-use mz_dataflow_types::sinks::*;
+use mz_dataflow_types::sinks::{SinkConnection, SinkDesc, SinkEnvelope};
 use mz_expr::{permutation_for_arrangement, MapFilterProject};
 use mz_interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};

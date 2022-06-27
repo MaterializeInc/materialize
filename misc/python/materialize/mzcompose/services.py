@@ -40,6 +40,7 @@ class Materialized(Service):
         name: str = "materialized",
         hostname: Optional[str] = None,
         image: Optional[str] = None,
+        ports: Optional[List[str]] = None,
         extra_ports: List[int] = [],
         memory: Optional[str] = None,
         data_directory: str = "/mzdata",
@@ -52,6 +53,7 @@ class Materialized(Service):
         volumes: Optional[List[str]] = None,
         volumes_extra: Optional[List[str]] = None,
         depends_on: Optional[List[str]] = None,
+        allow_host_ports: bool = False,
     ) -> None:
         if environment is None:
             environment = [
@@ -89,7 +91,9 @@ class Materialized(Service):
             f"--timestamp-frequency {timestamp_frequency}",
         ]
 
-        config_ports = [6875, 5432, *extra_ports, 6876]
+        config_ports: List[Union[str, int]] = (
+            [*ports, *extra_ports] if ports else [6875, 5432, *extra_ports, 6876]
+        )
 
         if isinstance(image, str) and ":v" in image:
             requested_version = image.split(":v")[1]
@@ -124,6 +128,7 @@ class Materialized(Service):
                 "ports": config_ports,
                 "environment": environment,
                 "volumes": volumes,
+                "allow_host_ports": allow_host_ports,
             }
         )
 
