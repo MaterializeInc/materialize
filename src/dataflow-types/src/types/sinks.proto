@@ -11,6 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 
+import "dataflow-types/src/client/controller/storage.proto";
 import "dataflow-types/src/types/connections.proto";
 import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
@@ -82,7 +83,5 @@ message ProtoPublishedSchemaInfo {
 
 message ProtoPersistSinkConnection {
     mz_repr.relation_and_scalar.ProtoRelationDesc value_desc = 1;
-    string shard_id = 2;
-    string consensus_uri = 3;
-    string blob_uri = 4;
+    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 2;
 }

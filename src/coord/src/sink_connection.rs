@@ -342,9 +342,7 @@ fn build_persist_sink(
     _id: GlobalId,
 ) -> Result<SinkConnection, CoordError> {
     Ok(SinkConnection::Persist(PersistSinkConnection {
-        consensus_uri: builder.consensus_uri,
-        blob_uri: builder.blob_uri,
-        shard_id: builder.shard_id,
         value_desc: builder.value_desc,
+        storage_metadata: (),
     }))
 }

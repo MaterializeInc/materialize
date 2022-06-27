@@ -794,6 +794,29 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
+                    // Re-announce the source description.
+                    // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+                    if let Some(desc) = self.catalog.state().source_description_for(entry.id()) {
+                        let ingestion = IngestionDescription {
+                            id: entry.id(),
+                            desc,
+                            since: Antichain::from_elem(Timestamp::minimum()),
+                            source_imports: BTreeMap::new(),
+                            storage_metadata: (),
+                        };
+                        self.dataflow_client
+                            .storage_mut()
+                            .create_sources(vec![ingestion])
+                            .await
+                            .unwrap();
+                        self.initialize_storage_read_policies(
+                            vec![entry.id()],
+                            self.logical_compaction_window_ms,
+                        )
+                        .await;
+                    }
+
+                    // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
                         SinkConnectionState::Pending(builder) => builder,
                         SinkConnectionState::Ready(_) => {
@@ -2904,7 +2927,29 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .await;
         match transact_result {
-            Ok(()) => (),
+            Ok(()) => {
+                // Announce the creation of the sink's corresponding source.
+                // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+                if let Some(desc) = self.catalog.state().source_description_for(id) {
+                    let ingestion = IngestionDescription {
+                        id,
+                        desc,
+                        since: Antichain::from_elem(Timestamp::minimum()),
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                    };
+                    self.dataflow_client
+                        .storage_mut()
+                        .create_sources(vec![ingestion])
+                        .await
+                        .unwrap();
+                    self.initialize_storage_read_policies(
+                        vec![id],
+                        self.logical_compaction_window_ms,
+                    )
+                    .await;
+                }
+            }
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
@@ -5077,6 +5122,17 @@ impl<S: Append + 'static> Coordinator<S> {
                 .entry(compute_instance)
                 .or_insert(vec![])
                 .push(id);
+
+            // Persist sinks write to storage collections, which need to be
+            // dropped when their sinks are dropped.
+            // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+            if self.dataflow_client.storage_mut().collection(id).is_ok() {
+                self.dataflow_client
+                    .storage_mut()
+                    .drop_sources(vec![id])
+                    .await
+                    .unwrap();
+            }
         }
         for (compute_instance, ids) in by_compute_instance {
             // A cluster could have been dropped, so verify it exists.

@@ -3930,7 +3930,6 @@ dependencies = [
  "datadriven",
  "itertools",
  "mz-ore",
- "mz-persist-client",
  "mz-walkabout",
  "phf",
  "phf_codegen",
