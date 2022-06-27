@@ -69,7 +69,7 @@ pub enum SourceDataEncoding {
 }
 
 impl RustType<ProtoSourceDataEncoding> for SourceDataEncoding {
-    fn into_proto(self: &Self) -> ProtoSourceDataEncoding {
+    fn into_proto(&self) -> ProtoSourceDataEncoding {
         use proto_source_data_encoding::{Kind, ProtoKeyValue};
         ProtoSourceDataEncoding {
             kind: Some(match self {
@@ -186,7 +186,7 @@ pub struct DataEncoding {
 }
 
 impl RustType<ProtoDataEncoding> for DataEncoding {
-    fn into_proto(self: &Self) -> ProtoDataEncoding {
+    fn into_proto(&self) -> ProtoDataEncoding {
         ProtoDataEncoding {
             force_nullable_columns: self.force_nullable_columns,
             inner: Some(self.inner.into_proto()),
@@ -319,7 +319,7 @@ pub struct AvroEncoding {
 }
 
 impl RustType<ProtoAvroEncoding> for AvroEncoding {
-    fn into_proto(self: &Self) -> ProtoAvroEncoding {
+    fn into_proto(&self) -> ProtoAvroEncoding {
         ProtoAvroEncoding {
             schema: self.schema.clone(),
             csr_connection: self.csr_connection.into_proto(),
@@ -345,7 +345,7 @@ pub struct ProtobufEncoding {
 }
 
 impl RustType<ProtoProtobufEncoding> for ProtobufEncoding {
-    fn into_proto(self: &Self) -> ProtoProtobufEncoding {
+    fn into_proto(&self) -> ProtoProtobufEncoding {
         ProtoProtobufEncoding {
             descriptors: self.descriptors.clone(),
             message_name: self.message_name.clone(),
@@ -370,7 +370,7 @@ pub struct CsvEncoding {
 }
 
 impl RustType<ProtoCsvEncoding> for CsvEncoding {
-    fn into_proto(self: &Self) -> ProtoCsvEncoding {
+    fn into_proto(&self) -> ProtoCsvEncoding {
         ProtoCsvEncoding {
             columns: Some(self.columns.into_proto()),
             delimiter: self.delimiter.into_proto(),
@@ -399,7 +399,7 @@ pub enum ColumnSpec {
 }
 
 impl RustType<ProtoColumnSpec> for ColumnSpec {
-    fn into_proto(self: &Self) -> ProtoColumnSpec {
+    fn into_proto(&self) -> ProtoColumnSpec {
         use proto_column_spec::{Kind, ProtoHeader};
         ProtoColumnSpec {
             kind: Some(match self {
@@ -457,7 +457,7 @@ impl Arbitrary for RegexEncoding {
 }
 
 impl RustType<ProtoRegexEncoding> for RegexEncoding {
-    fn into_proto(self: &Self) -> ProtoRegexEncoding {
+    fn into_proto(&self) -> ProtoRegexEncoding {
         ProtoRegexEncoding {
             regex: Some(self.regex.into_proto()),
         }

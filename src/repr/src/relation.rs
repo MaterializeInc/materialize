@@ -227,7 +227,7 @@ impl RustType<ProtoRelationType> for RelationType {
 }
 
 impl RustType<ProtoKey> for Vec<usize> {
-    fn into_proto(self: &Self) -> ProtoKey {
+    fn into_proto(&self) -> ProtoKey {
         ProtoKey {
             keys: self.into_proto(),
         }
@@ -334,7 +334,7 @@ pub struct RelationDesc {
 }
 
 impl RustType<ProtoRelationDesc> for RelationDesc {
-    fn into_proto(self: &Self) -> ProtoRelationDesc {
+    fn into_proto(&self) -> ProtoRelationDesc {
         ProtoRelationDesc {
             typ: Some(self.typ.into_proto()),
             names: self.names.into_proto(),

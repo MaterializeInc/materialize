@@ -172,7 +172,7 @@ impl RustType<ProtoMatcherImpl> for MatcherImpl {
 }
 
 impl RustType<ProtoSubpatternVec> for Vec<Subpattern> {
-    fn into_proto(self: &Self) -> ProtoSubpatternVec {
+    fn into_proto(&self) -> ProtoSubpatternVec {
         ProtoSubpatternVec {
             vec: self.into_proto(),
         }
