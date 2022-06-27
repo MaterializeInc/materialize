@@ -97,7 +97,7 @@ impl RustType<ProtoIngestionDescription>
         mz_repr::Timestamp,
     >
 {
-    fn into_proto(self: &Self) -> ProtoIngestionDescription {
+    fn into_proto(&self) -> ProtoIngestionDescription {
         // we have to turn a BTreeMap into a vec here
         let source_imports: Vec<_> = self
             .source_imports
@@ -308,7 +308,7 @@ pub enum IncludedColumnSource {
 }
 
 impl RustType<ProtoIncludedColumnSource> for IncludedColumnSource {
-    fn into_proto(self: &Self) -> ProtoIncludedColumnSource {
+    fn into_proto(&self) -> ProtoIncludedColumnSource {
         use proto_included_column_source::Kind;
         ProtoIncludedColumnSource {
             kind: Some(match self {
@@ -356,7 +356,7 @@ pub enum KeyEnvelope {
 }
 
 impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
-    fn into_proto(self: &Self) -> ProtoKeyEnvelope {
+    fn into_proto(&self) -> ProtoKeyEnvelope {
         use proto_key_envelope::Kind;
         ProtoKeyEnvelope {
             kind: Some(match self {
@@ -429,7 +429,7 @@ pub enum Timeline {
 }
 
 impl RustType<ProtoTimeline> for Timeline {
-    fn into_proto(self: &Self) -> ProtoTimeline {
+    fn into_proto(&self) -> ProtoTimeline {
         use proto_timeline::Kind;
         ProtoTimeline {
             kind: Some(match self {
@@ -486,7 +486,7 @@ pub enum SourceEnvelope {
 }
 
 impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
-    fn into_proto(self: &Self) -> ProtoSourceEnvelope {
+    fn into_proto(&self) -> ProtoSourceEnvelope {
         use proto_source_envelope::Kind;
         ProtoSourceEnvelope {
             kind: Some(match self {
@@ -563,7 +563,7 @@ pub struct UpsertEnvelope {
 }
 
 impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
-    fn into_proto(self: &Self) -> ProtoUpsertEnvelope {
+    fn into_proto(&self) -> ProtoUpsertEnvelope {
         ProtoUpsertEnvelope {
             style: Some(self.style.into_proto()),
             key_indices: self.key_indices.into_proto(),
@@ -590,7 +590,7 @@ pub enum UpsertStyle {
 }
 
 impl RustType<ProtoUpsertStyle> for UpsertStyle {
-    fn into_proto(self: &Self) -> ProtoUpsertStyle {
+    fn into_proto(&self) -> ProtoUpsertStyle {
         use proto_upsert_style::{Kind, ProtoDebezium};
         ProtoUpsertStyle {
             kind: Some(match self {
@@ -626,7 +626,7 @@ pub struct DebeziumEnvelope {
 }
 
 impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
-    fn into_proto(self: &Self) -> ProtoDebeziumEnvelope {
+    fn into_proto(&self) -> ProtoDebeziumEnvelope {
         ProtoDebeziumEnvelope {
             before_idx: self.before_idx.into_proto(),
             after_idx: self.after_idx.into_proto(),
@@ -658,7 +658,7 @@ pub struct DebeziumTransactionMetadata {
 }
 
 impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata {
-    fn into_proto(self: &Self) -> ProtoDebeziumTransactionMetadata {
+    fn into_proto(&self) -> ProtoDebeziumTransactionMetadata {
         ProtoDebeziumTransactionMetadata {
             tx_metadata_global_id: Some(self.tx_metadata_global_id.into_proto()),
             tx_status_idx: self.tx_status_idx.into_proto(),
@@ -773,7 +773,7 @@ impl Arbitrary for DebeziumMode {
 }
 
 impl RustType<ProtoDebeziumMode> for DebeziumMode {
-    fn into_proto(self: &Self) -> ProtoDebeziumMode {
+    fn into_proto(&self) -> ProtoDebeziumMode {
         use proto_debezium_mode::{Kind, ProtoFullInRange};
         ProtoDebeziumMode {
             kind: Some(match self {
@@ -849,7 +849,7 @@ pub struct DebeziumDedupProjection {
 }
 
 impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
-    fn into_proto(self: &Self) -> ProtoDebeziumDedupProjection {
+    fn into_proto(&self) -> ProtoDebeziumDedupProjection {
         ProtoDebeziumDedupProjection {
             source_idx: self.source_idx.into_proto(),
             snapshot_idx: self.snapshot_idx.into_proto(),
@@ -896,7 +896,7 @@ pub enum DebeziumSourceProjection {
 }
 
 impl RustType<ProtoDebeziumSourceProjection> for DebeziumSourceProjection {
-    fn into_proto(self: &Self) -> ProtoDebeziumSourceProjection {
+    fn into_proto(&self) -> ProtoDebeziumSourceProjection {
         use proto_debezium_source_projection::{Kind, ProtoMySql, ProtoPostgres, ProtoSqlServer};
         ProtoDebeziumSourceProjection {
             kind: Some(match self {
@@ -1299,7 +1299,7 @@ pub struct SourceDesc {
 }
 
 impl RustType<ProtoSourceDesc> for SourceDesc {
-    fn into_proto(self: &Self) -> ProtoSourceDesc {
+    fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
             desc: Some(self.desc.into_proto()),
@@ -1368,7 +1368,7 @@ impl Arbitrary for SourceConnection {
 }
 
 impl RustType<ProtoSourceConnection> for SourceConnection {
-    fn into_proto(self: &Self) -> ProtoSourceConnection {
+    fn into_proto(&self) -> ProtoSourceConnection {
         use proto_source_connection::{Kind, ProtoExternal, ProtoLocal};
         ProtoSourceConnection {
             kind: Some(match self {

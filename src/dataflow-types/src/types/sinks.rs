@@ -198,7 +198,7 @@ pub struct KafkaSinkConsistencyConnection {
 }
 
 impl RustType<ProtoKafkaSinkConsistencyConnection> for KafkaSinkConsistencyConnection {
-    fn into_proto(self: &Self) -> ProtoKafkaSinkConsistencyConnection {
+    fn into_proto(&self) -> ProtoKafkaSinkConsistencyConnection {
         ProtoKafkaSinkConsistencyConnection {
             topic: self.topic.clone(),
             schema_id: self.schema_id,
@@ -350,7 +350,7 @@ pub struct PublishedSchemaInfo {
 }
 
 impl RustType<ProtoPublishedSchemaInfo> for PublishedSchemaInfo {
-    fn into_proto(self: &Self) -> ProtoPublishedSchemaInfo {
+    fn into_proto(&self) -> ProtoPublishedSchemaInfo {
         ProtoPublishedSchemaInfo {
             key_schema_id: self.key_schema_id.clone(),
             value_schema_id: self.value_schema_id,
@@ -372,7 +372,7 @@ pub struct PersistSinkConnection<S> {
 }
 
 impl RustType<ProtoPersistSinkConnection> for PersistSinkConnection<CollectionMetadata> {
-    fn into_proto(self: &Self) -> ProtoPersistSinkConnection {
+    fn into_proto(&self) -> ProtoPersistSinkConnection {
         ProtoPersistSinkConnection {
             value_desc: Some(self.value_desc.into_proto()),
             storage_metadata: Some(self.storage_metadata.into_proto()),

@@ -263,7 +263,7 @@ impl TryFrom<&ProtoRow> for Row {
 }
 
 impl RustType<ProtoRow> for Row {
-    fn into_proto(self: &Self) -> ProtoRow {
+    fn into_proto(&self) -> ProtoRow {
         let datums = self.iter().map(|x| x.into()).collect();
         ProtoRow { datums }
     }

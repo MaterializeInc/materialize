@@ -17,7 +17,7 @@ use crate::proto::{RustType, TryFromProtoError};
 include!(concat!(env!("OUT_DIR"), "/mz_repr.url.rs"));
 
 impl RustType<ProtoUrl> for Url {
-    fn into_proto(self: &Self) -> ProtoUrl {
+    fn into_proto(&self) -> ProtoUrl {
         ProtoUrl {
             url: self.to_string(),
         }

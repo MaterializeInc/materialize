@@ -1840,7 +1840,7 @@ impl RustType<ProtoEvalError> for EvalError {
 }
 
 impl RustType<ProtoDims> for (usize, usize) {
-    fn into_proto(self: &Self) -> ProtoDims {
+    fn into_proto(&self) -> ProtoDims {
         ProtoDims {
             f0: self.0.into_proto(),
             f1: self.1.into_proto(),

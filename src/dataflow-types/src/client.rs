@@ -263,7 +263,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
 }
 
 impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
-    fn into_proto(self: &Self) -> ProtoCompaction {
+    fn into_proto(&self) -> ProtoCompaction {
         ProtoCompaction {
             id: Some(self.0.into_proto()),
             frontier: Some((&self.1).into()),
