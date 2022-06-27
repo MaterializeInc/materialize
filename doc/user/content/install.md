@@ -9,13 +9,9 @@ aliases:
  - /install
 ---
 
-{{< cta target="_blank" full_width="true" href="https://materialize.com/s/chat" >}}
-Want to connect with Materialize? Join our growing community on Slack! →
-{{< /cta >}}
+Materialize was first built as a single binary that runs on a single node: `materialized`. To support mission-critical deployments at any scale, we are now evolving the binary into a [cloud-native platform](https://materialize.com/materialize-unbundled/) with built-in horizontal scaling, active replication and decoupled storage.
 
-You can access Materialize through the `materialized` binary, which you can
-install on macOS and Linux, or [build](#build-from-source) on most OSes (e.g. FreeBSD). These
-instructions install the latest release of Materialize, **{{< version >}}**. For prior releases and unstable builds, see the [Versions page](/versions).
+You can [sign up for early access](https://materialize.com/materialize-cloud-access/) to learn more about the new architecture, and in the meantime use these instructions to install the latest long-term support (LTS) release of Materialize, **{{< version >}}**. Once Materialize is generally available in the cloud (Fall 2022 🚀), Docker will be supported for local development and testing.
 
 {{< warning >}}
 Support for the ARM CPU architecture is in beta. You may encounter performance

@@ -29,27 +29,6 @@ require 'pg'
 conn = PG.connect(host:"127.0.0.1", port: 6875, user: "materialize")
 ```
 
-### Materialize Cloud Instance
-
-Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file as an environment variable. Replace `MY_INSTANCE_ID` in the `PG.connect` method with your Materialize Cloud instance ID.
-
-```ruby
-require 'pg'
-
-# Define the Postgres TLS certificates environment variables
-ENV['PGSSLCERT'] = 'materialize.crt'
-ENV['PGSSLKEY'] = 'materialize.key'
-ENV['PGSSLROOTCERT'] = 'ca.crt'
-
-# Verify ssl in pg connect
-conn = PG.connect(host:"MY_INSTANCE_ID", port: 6875, user: "materialize", sslmode: "verify-full")
-res  = conn.exec('select tablename from pg_tables;')
-
-res.each do |row|
-  puts row['tablename']
-end
-```
-
 ## Stream
 
 To take full advantage of incrementally updated materialized views from a Ruby application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.

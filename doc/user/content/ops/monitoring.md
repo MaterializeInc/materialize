@@ -9,12 +9,6 @@ menu:
     weight: 50
 ---
 
-{{< note >}}
-
-This topic describes monitoring for the installed version of Materialize. For information about monitoring Materialize Cloud, see [Monitor Cloud](../../cloud/monitor-cloud).
-
-{{< /note >}}
-
 Materialize supports integration with monitoring tools using both the
 [Prometheus](#prometheus) format and via [SQL interface](#system-catalog-sql-interface)
 that provide more information about internal state.

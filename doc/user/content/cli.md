@@ -380,8 +380,7 @@ We record the following data:
 * System architecture (ARM or x86_64)
 * Operating system type (Linux or macOS)
 
-We use this data to guide our product roadmap. Unless you are using [Materialize
-Cloud](/cloud/), we do not and cannot correlate this
+We use this data to guide our product roadmap, but do not and cannot correlate this
 data to your identity.
 
 ### Dataflow tuning

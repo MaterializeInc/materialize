@@ -41,7 +41,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
 
     `materialize` should be listed under "Plugins". If this is not the case, double-check that the virtual environment is activated!
 
-1. To get started, make sure you have Materialize [installed and running](/install/). You can also use the `dbt-materialize` adapter with [Materialize Cloud](/cloud/get-started-with-cloud/#sign-up).
+1. To get started, make sure you have Materialize [installed and running](/install/).
 
 ## Create and configure a dbt project
 
@@ -69,7 +69,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
 1. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
 
-    As an example, the following profile would allow you to connect to Materialize in two different environments: an instance running locally (`dev`) and a Materialize Cloud instance (`prod`).
+    As an example, the following profile would allow you to connect to a Materialize instance running locally (`dev`).
 
     ```yaml
     default:
@@ -84,20 +84,6 @@ dbt manages all your connection configurations (or, profiles) in a file called [
           pass: password
           dbname: materialize
           schema: public
-
-        prod:
-          type: materialize
-          threads: 1
-          host: instance.materialize.cloud
-          port: 6875
-          user: materialize
-          pass: password
-          dbname: materialize
-          schema: analytics
-          sslmode: verify-ca
-          sslcert: materialize.crt
-          sslkey: materialize.key
-          sslrootcert: ca.crt
 
       target: dev
     ```

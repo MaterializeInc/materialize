@@ -7,51 +7,49 @@ disable_h1: true
 weight: 1
 ---
 
-Materialize is a streaming database for real-time applications. Materialize
-accepts input data from a variety of streaming sources (like Kafka), data stores and databases (like S3 and Postgres), and files
-(like CSV and JSON), and lets you query them using SQL.
+Materialize is a streaming database for real-time applications. It lets you ask complex questions about your data using SQL, and incrementally maintains the results of these SQL queries up-to-date as the underlying data changes.
 
-{{< callout primary_url="/docs/get-started/" primary_text="Get Started">}}
-  # Get started with Materialize
+{{< callout primary_url="/docs/get-started/" primary_text="Get Early Access">}}
+  # Materialize is going cloud 🚀
 
-  Follow this walkthrough to start creating live views on streaming data with Materialize.
+  We are evolving the `materialized` binary into a cloud-native platform that extends the core Materialize functionality with **horizontal scaling**, **active replication** and **decoupled storage**.
+
 {{</ callout >}}
 
+## Where to go from here?
+
 {{< multilinkbox >}}
-{{< linkbox icon="bulb" title="Key Concepts" >}}
-- [Materialize overview](/overview/what-is-materialize/)
-- [Key Concepts](/overview/key-concepts/)
-- [Materialize Cloud overview](/cloud/)
+{{< linkbox title="Learn the basics" >}}
+- [Overview](/overview/what-is-materialize/)
+- [Key concepts](/overview/key-concepts/)
 {{</ linkbox >}}
-{{< linkbox icon="touch" title="Quickstarts" >}}
-- [Real-time analytics dashboard](/quickstarts/live-analytics/)
-- [Streaming SQL on server logs](/quickstarts/log-parsing/)
-- [Microservices](/quickstarts/microservice/)
+{{< linkbox title="Get started" >}}
+- [Install Materialize](./install)
 {{</ linkbox >}}
-{{< linkbox icon="doc" title="Guides" >}}
+{{< linkbox title="Dive deeper" >}}
 - [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 - [dbt &amp; Materialize](/integrations/dbt/)
 - [Materialize &amp; Node.js](/integrations/node-js/)
 - [Time-windowed computation](/sql/patterns/temporal-filters/)
 {{</ linkbox >}}
-{{< linkbox icon="book" title="Reference" >}}
+{{< linkbox title="Build" >}}
+- [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
+- [dbt &amp; Materialize](/integrations/dbt/)
+- [Materialize &amp; Node.js](/integrations/node-js/)
+- [Time-windowed computation](/sql/patterns/temporal-filters/)
+
+
 - [`CREATE SOURCE`](/sql/create-source/)
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/)
-- [`SQL Data Types`](/sql/types/)
-- [`SQL Functions`](/sql/functions/)
+- [`SQL data types`](/sql/types/)
+- [`SQL functions`](/sql/functions/)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
-## New &amp; updated
+- [Time-windowed computation](/sql/patterns/temporal-filters/)
 
-- [Release Notes](/release-notes/)
-- [CDC with MySQL](/integrations/cdc-mysql/)
-- [Materialize Cloud](/cloud/) - Now in open beta!
-
-## Learn more
-
-- [**Install Materialize**](./install) to try it out or try [Materialize Cloud](/cloud/) for free.
-- [**Check out the Materialize blog**](https://www.materialize.com/blog/) for neat things our developers wrote.
+- [**Install Materialize**](./install) to try it out and sign up for early access to [Materialize Cloud](https://materialize.com/materialize-cloud-access/).
+- [**Check out the Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
 - [**What is Materialize?**](./overview/what-is-materialize) to learn
 more about what Materialize does and how it works.
 - [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.
