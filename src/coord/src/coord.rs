@@ -148,7 +148,7 @@ use mz_stash::Append;
 use mz_transform::Optimizer;
 
 use crate::catalog::builtin::{
-    BUILTINS, MZ_CLUSTER_REPLICAS_HEARTBEATS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    BUILTINS, MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
@@ -1307,7 +1307,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     let table = self
                         .catalog
                         .state()
-                        .resolve_builtin_table(&MZ_CLUSTER_REPLICAS_HEARTBEATS);
+                        .resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
                     let retraction = old.map(|old| BuiltinTableUpdate {
                         id: table,
                         row: old.as_row(replica_id),
