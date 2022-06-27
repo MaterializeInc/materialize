@@ -83,6 +83,10 @@ If you need to, you can install and use the `mssh` command provided by the
 underlying [EC2 connect CLI] directly, but it's usually much easier to go
 through `bin/scratch ssh`.
 
+To use Visual Studio Code Remote development with the instance, you need to install an SSH key on it.
+Use `bin/scratch ssh INSTANCE-ID`, then append to the `.ssh/authorized_keys` file your public SSH key (should be a local file like `~/.ssh/something.pub`).
+Then use the [guide](https://code.visualstudio.com/docs/remote/ssh) to connect with VS Code.
+
 ### `bin/scratch mine`
 
 This subcommand lists all the machines that a given user has created with `bin/scratch create`, along with metadata about them. For example:
