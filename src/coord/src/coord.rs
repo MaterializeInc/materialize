@@ -67,7 +67,6 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::future::Future;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -279,11 +278,14 @@ pub enum PeekResponseUnary {
 struct PendingWriteTxn {
     /// List of all write operations within the transaction.
     writes: Vec<WriteOp>,
-    /// The client of the write transaction is waiting for a response from this `sender`.
-    /// A response should only be sent after the write transaction has been made durable or aborted.
-    sender: oneshot::Sender<Option<ExecuteResponse>>,
-    /// Connection ID of the client who initiated the transaction.
-    conn_id: u32,
+    /// Transmitter used to send a response back to the client.
+    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Client response for transaction.
+    response: Result<ExecuteResponse, CoordError>,
+    /// Session of the client who initiated the transaction.
+    session: Session,
+    /// The action to take at the end of the transaction.
+    action: EndTransactionAction,
 }
 
 /// Timestamps used by writes in an Append command.
@@ -1180,9 +1182,17 @@ impl<S: Append + 'static> Coordinator<S> {
             timestamp,
             advance_to,
         } = self.get_and_step_local_write_ts();
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-        for PendingWriteTxn { writes, .. } in &mut self.pending_writes {
-            let writes = std::mem::take(writes);
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
+            HashMap::with_capacity(self.pending_writes.len());
+        let mut responses = Vec::with_capacity(self.pending_writes.len());
+        for PendingWriteTxn {
+            writes,
+            client_transmitter,
+            response,
+            session,
+            action,
+        } in self.pending_writes.drain(..)
+        {
             for WriteOp { id, rows } in writes {
                 // If the table that some write was targeting has been deleted while the write was
                 // waiting, then the write will be ignored and we respond to the client that the
@@ -1201,6 +1211,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     appends.entry(id).or_default().extend(updates);
                 }
             }
+            responses.push((client_transmitter, response, session, action));
         }
         let appends = appends
             .into_iter()
@@ -1211,10 +1222,20 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
-
-        for PendingWriteTxn { sender: tx, .. } in self.pending_writes.drain(..) {
-            let _ = tx.send(None);
+        for (client_transmitter, response, mut session, action) in responses {
+            session.vars_mut().end_transaction(action);
+            client_transmitter.send(response, session);
         }
+    }
+
+    /// Submit a write to be executed during the next group commit.
+    fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
+        if self.pending_writes.is_empty() {
+            self.internal_cmd_tx
+                .send(Message::GroupCommit)
+                .expect("sending to internal_cmd_tx cannot fail");
+        }
+        self.pending_writes.push(pending_write_txn);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1950,14 +1971,17 @@ impl<S: Append + 'static> Coordinator<S> {
             }
 
             // Cancel pending writes. There is at most one pending write per session.
-            if let Some(idx) = self.pending_writes.iter().position(
-                |PendingWriteTxn {
-                     conn_id: txn_conn_id,
-                     ..
-                 }| *txn_conn_id == conn_id,
-            ) {
-                let PendingWriteTxn { sender, .. } = self.pending_writes.remove(idx);
-                let _ = sender.send(Some(ExecuteResponse::Canceled));
+            if let Some(idx) = self
+                .pending_writes
+                .iter()
+                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
+            {
+                let PendingWriteTxn {
+                    client_transmitter,
+                    session,
+                    ..
+                } = self.pending_writes.remove(idx);
+                let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
             }
 
             // Cancel deferred writes. There is at most one deferred write per session.
@@ -3454,88 +3478,58 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let response = ExecuteResponse::TransactionExited {
+        let response = Ok(ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
-        };
+        });
 
-        // Immediately do tasks that must be serialized in the coordinator.
-        let rx = self
+        let result = self
             .sequence_end_transaction_inner(&mut session, action)
             .await;
 
-        // We can now wait for responses or errors and do any session/transaction
-        // finalization in a separate task.
-        let conn_id = session.conn_id();
-        task::spawn(
-            || format!("sequence_end_transaction:{conn_id}"),
-            async move {
-                let result = match rx {
-                    // If we have more work to do, do it
-                    Ok(fut) => fut.await,
-                    Err(e) => Err(e),
-                };
-
-                if result.is_err() {
-                    action = EndTransactionAction::Rollback;
-                }
-                session.vars_mut().end_transaction(action);
-
-                match result {
-                    Ok(None) => tx.send(Ok(response), session),
-                    Ok(Some(response)) => tx.send(Ok(response), session),
-                    Err(err) => tx.send(Err(err), session),
-                }
-            },
-        );
+        let (response, action) = match result {
+            Ok(Some(writes)) if writes.is_empty() => (response, action),
+            Ok(Some(writes)) => {
+                self.submit_write(PendingWriteTxn {
+                    writes,
+                    client_transmitter: tx,
+                    response,
+                    session,
+                    action,
+                });
+                return;
+            }
+            Ok(None) => (response, action),
+            Err(err) => (Err(err), EndTransactionAction::Rollback),
+        };
+        session.vars_mut().end_transaction(action);
+        tx.send(response, session);
     }
 
     async fn sequence_end_transaction_inner(
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<impl Future<Output = Result<Option<ExecuteResponse>, CoordError>>, CoordError> {
+    ) -> Result<Option<Vec<WriteOp>>, CoordError> {
         let txn = self.clear_transaction(session).await;
-
-        let mut write_rx = None;
 
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
-                match ops {
-                    TransactionOps::Writes(mut writes) => {
-                        for WriteOp { id, .. } in &writes {
-                            // Re-verify this id exists.
-                            let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
-                                CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
-                            })?;
-                        }
-
-                        // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
-                        writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                        let (tx, rx) = oneshot::channel();
-                        write_rx = Some(rx);
-                        if self.pending_writes.is_empty() {
-                            self.internal_cmd_tx
-                                .send(Message::GroupCommit)
-                                .expect("sending to internal_cmd_tx cannot fail");
-                        }
-                        self.pending_writes.push(PendingWriteTxn {
-                            writes,
-                            sender: tx,
-                            conn_id: session.conn_id(),
-                        });
+                if let TransactionOps::Writes(mut writes) = ops {
+                    for WriteOp { id, .. } in &writes {
+                        // Re-verify this id exists.
+                        let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
+                            CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                        })?;
                     }
-                    _ => {}
+
+                    // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
+                    writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+                    return Ok(Some(writes));
                 }
             }
         }
-        Ok(async move {
-            if let Some(rx) = write_rx {
-                Ok(rx.await?)
-            } else {
-                Ok(None)
-            }
-        })
+        Ok(None)
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
