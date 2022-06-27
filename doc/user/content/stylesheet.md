@@ -74,11 +74,6 @@ This is a warning.
 This is a beta notice.
 {{</ beta >}}
 
-### `cloud_notice` shortcode
-
-{{< cloud-notice >}}
-
-
 ### `cta` shortcode
 
 {{< cta href="/install" >}}
