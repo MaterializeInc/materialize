@@ -29,9 +29,8 @@ _shtab_scratch_completion_options=(
 
 _shtab_scratch_create_options=(
   "(- :)"{-h,--help}"[show this help message and exit]"
-  "--subnet-id[EC2 Subnet ID. Defaults to Materialize scratch account.]:subnet_id:"
   "--key-name[Optional EC2 Key Pair name]:key_name:"
-  "--security-group-id[EC2 Security Group ID. Defaults to Materialize scratch account.]:security_group_id:"
+  "--security-group-name[EC2 Security Group name. Defaults to Materialize scratch account.]:security_group_name:"
   "--extra-tags[Additional EC2 tags for created instance. Format\: \{\"key\", \"value\"\}]:extra_tags:"
   "--instance-profile[EC2 instance profile \/ IAM role. Defaults to \`admin-instance\`.]:instance_profile:"
   "--output-format[]:output_format:(table csv)"
