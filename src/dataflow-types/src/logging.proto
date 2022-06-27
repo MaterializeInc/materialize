@@ -9,6 +9,7 @@
 
 syntax = "proto3";
 
+import "dataflow-types/src/client/controller/storage.proto";
 import "google/protobuf/empty.proto";
 import "repr/src/global_id.proto";
 import "repr/src/proto.proto";
@@ -18,6 +19,11 @@ package mz_dataflow_types.logging;
 message ProtoActiveLog {
     ProtoLogVariant key = 1;
     mz_repr.global_id.ProtoGlobalId value = 2;
+}
+
+message ProtoSinkLog {
+    ProtoLogVariant key = 1;
+    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata value = 2;
 }
 
 message ProtoTimelyLog {
@@ -62,5 +68,6 @@ message ProtoLogVariant {
 message ProtoLoggingConfig {
     mz_repr.proto.ProtoU128 granularity_ns = 1;
     repeated ProtoActiveLog active_logs = 2;
-    bool log_logging = 3;
+    repeated ProtoSinkLog sink_logs = 3;
+    bool log_logging = 4;
 }

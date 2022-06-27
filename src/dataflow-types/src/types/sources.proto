@@ -201,7 +201,6 @@ message ProtoExternalSourceConnection {
         ProtoS3SourceConnection s3 = 3;
         ProtoPostgresSourceConnection postgres = 4;
         ProtoPubNubSourceConnection pubnub = 5;
-        ProtoIntrospectionSourceConnection introspection = 6;
     }
 }
 

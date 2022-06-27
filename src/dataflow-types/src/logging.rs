@@ -42,6 +42,7 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
             granularity_ns: Some(self.granularity_ns.into_proto()),
             active_logs: self.active_logs.into_proto(),
             log_logging: self.log_logging,
+            sink_logs: self.sink_logs.into_proto(),
         }
     }
 
@@ -52,9 +53,24 @@ impl RustType<ProtoLoggingConfig> for LoggingConfig {
                 .into_rust_if_some("ProtoLoggingConfig::granularity_ns")?,
             active_logs: proto.active_logs.into_rust()?,
             log_logging: proto.log_logging,
-            // TODO(teskje): implement
-            sink_logs: HashMap::new(),
+            sink_logs: proto.sink_logs.into_rust()?,
         })
+    }
+}
+
+impl ProtoMapEntry<LogVariant, CollectionMetadata> for ProtoSinkLog {
+    fn from_rust<'a>(entry: (&'a LogVariant, &'a CollectionMetadata)) -> Self {
+        Self {
+            key: Some(entry.0.into_proto()),
+            value: Some(entry.1.into_proto()),
+        }
+    }
+
+    fn into_rust(self) -> Result<(LogVariant, CollectionMetadata), TryFromProtoError> {
+        Ok((
+            self.key.into_rust_if_some("ProtoSinkLog::key")?,
+            self.value.into_rust_if_some("ProtoSinkLog::value")?,
+        ))
     }
 }
 

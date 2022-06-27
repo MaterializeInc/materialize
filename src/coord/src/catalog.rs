@@ -31,13 +31,11 @@ use mz_dataflow_types::client::controller::ComputeInstanceEvent;
 use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
-use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use mz_dataflow_types::logging::{LogVariant, LoggingConfig as DataflowLoggingConfig};
 use mz_dataflow_types::sinks::{
     PersistSinkConnection, PersistSinkConnectionBuilder, SinkConnection, SinkConnectionBuilder,
     SinkEnvelope,
 };
-use mz_dataflow_types::logging::{LogVariant, LoggingConfig as DataflowLoggingConfig};
-use mz_dataflow_types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
 use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
@@ -571,39 +569,13 @@ impl CatalogState {
                 source_name,
                 CatalogItem::Source(Source {
                     create_sql: "TODO".into(),
-                    connection: SourceConnection::External {
-                        connection: ExternalSourceConnection::IntrospectionSourceConnection(
-                            IntrospectionSourceConnection {
-                                consensus_uri: collection_meta.persist_location.consensus_uri,
-                                blob_uri: collection_meta.persist_location.blob_uri,
-                                shard_id: collection_meta.persist_shard,
-                            },
-                        ),
-                        encoding: SourceDataEncoding::Single(DataEncoding::RowCodec(desc.clone())),
-                        envelope: SourceEnvelope::DifferentialRow,
-                        metadata_columns: Vec::new(),
-                        ts_frequency: self.config.timestamp_frequency,
+                    connection: SourceConnection::Local {
                         timeline: Timeline::EpochMilliseconds,
                     },
                     desc,
                     depends_on: vec![log_id],
                 }),
             );
-
-            // // TODO(LH): And remove this (creates a temporary source such that the rest of the code
-            // // works)
-            // self.insert_item(
-            //     source_id,
-            //     oid,
-            //     source_name,
-            //     CatalogItem::Table(Table {
-            //         create_sql: "TODO".into(),
-            //         desc,
-            //         defaults: vec![],
-            //         conn_id: None,
-            //         depends_on: vec![],
-            //     }),
-            // );
 
             log_collections_by_variant.insert(log.variant.clone(), source_id);
         }
@@ -1817,7 +1789,7 @@ impl<S: Append> Catalog<S> {
             .load_compute_instance_replicas()
             .await?;
         for (instance_id, replica_id, name, config) in replicas {
-            // TODO(teskje)
+            // TODO(teskje): Here we reload the data from postgres catalog
             let log_collections = Vec::new();
 
             catalog.state.insert_compute_instance_replica(
