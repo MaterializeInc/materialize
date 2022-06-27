@@ -8,13 +8,15 @@
 # by the Apache License, Version 2.0.
 
 #
-# Change the definition of a column to be NOT NULL
+# Remove NOT NULL constraint from column
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_allow_nullability (f1 INTEGER NOT NULL);
 ALTER TABLE alter_allow_nullability REPLICA IDENTITY FULL;
 INSERT INTO alter_allow_nullability VALUES (123),(234);
+
+$ schema-registry-wait-schema schema=postgres.public.alter_allow_nullability-value
 
 > CREATE MATERIALIZED SOURCE alter_allow_nullability
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_allow_nullability'
@@ -31,6 +33,5 @@ INSERT INTO alter_allow_nullability VALUES (NULL);
 UPDATE alter_allow_nullability SET f1 = NULL WHERE f1 = 123;
 DELETE FROM alter_allow_nullability WHERE f1 = 234;
 
-> SELECT * FROM alter_allow_nullability;
-<null>
-<null>
+! SELECT * FROM alter_allow_nullability;
+contains:Decode error: Decoding error: Reader expected variant at index 1, got 0

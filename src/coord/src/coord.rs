@@ -67,7 +67,6 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-
 use std::fmt::Formatter;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -182,8 +181,8 @@ pub enum Message {
     WriteLockGrant(tokio::sync::OwnedMutexGuard<()>),
     AdvanceLocalInputs,
     AdvanceLocalInput(AdvanceLocalInput),
-    ComputeInstanceStatus(ComputeInstanceEvent),
     GroupCommit,
+    ComputeInstanceStatus(ComputeInstanceEvent),
 }
 
 #[derive(Debug)]
@@ -290,6 +289,9 @@ impl GroupCommit {
     }
     fn is_empty(&self) -> bool {
         self.pending_writes.is_empty() && self.table_advances.is_empty()
+    }
+    fn len(&self) -> usize {
+        self.pending_writes.len() + self.table_advances.len()
     }
 }
 
@@ -562,6 +564,7 @@ pub struct Coordinator<S> {
     write_lock: Arc<tokio::sync::Mutex<()>>,
     /// Holds plans deferred due to write lock.
     write_lock_wait_group: VecDeque<Deferred>,
+
     /// Pending writes and table advancements waiting for a group commit
     pending_group_commit: GroupCommit,
 
@@ -1180,13 +1183,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         }
 
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> = HashMap::new();
-        appends.reserve(
-            self.pending_group_commit.pending_writes.len()
-                + self.pending_group_commit.table_advances.len(),
-        );
-        let mut responses = Vec::new();
-        responses.reserve(self.pending_group_commit.pending_writes.len());
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
+            HashMap::with_capacity(self.pending_group_commit.len());
+        let mut responses = Vec::with_capacity(self.pending_group_commit.pending_writes.len());
 
         // It's important to process DDLs first, because some write may depend on an object that's
         // deleted in a DDL.
@@ -1306,6 +1305,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
             }
+            responses.push((client_transmitter, response, session, action));
         }
         for id in self.pending_group_commit.table_advances.drain() {
             appends.entry(id).or_insert(Vec::new());
@@ -1387,6 +1387,16 @@ impl<S: Append + 'static> Coordinator<S> {
             let write_timestamp = self.get_local_write_ts();
             self.internal_cmd_tx
                 .send(Message::GroupCommit(write_timestamp))
+                .expect("sending to internal_cmd_tx cannot fail");
+        }
+        self.pending_group_commit.table_advances.extend(ids);
+    }
+
+    /// Submit a table to be advanced during the next group commit.
+    fn submit_table_advancement(&mut self, ids: Vec<GlobalId>) {
+        if self.pending_group_commit.is_empty() {
+            self.internal_cmd_tx
+                .send(Message::GroupCommit)
                 .expect("sending to internal_cmd_tx cannot fail");
         }
         self.pending_group_commit.table_advances.extend(ids);
@@ -3685,7 +3695,6 @@ impl<S: Append + 'static> Coordinator<S> {
             was_implicit: session.transaction().is_implicit(),
         });
 
-        // Immediately do tasks that must be serialized in the coordinator.
         let result = self
             .sequence_end_transaction_inner(&mut session, action)
             .await;
@@ -3718,24 +3727,21 @@ impl<S: Append + 'static> Coordinator<S> {
 
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
-                match ops {
-                    TransactionOps::Writes(mut writes) => {
-                        for WriteOp { id, .. } in &writes {
-                            // Re-verify this id exists.
-                            let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
-                                CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
-                            })?;
-                        }
+                if let TransactionOps::Writes(mut writes) = ops {
+                    for WriteOp { id, .. } in &writes {
+                        // Re-verify this id exists.
+                        let _ = self.catalog.try_get_entry(&id).ok_or_else(|| {
+                            CoordError::SqlCatalog(CatalogError::UnknownItem(id.to_string()))
+                        })?;
+                    }
 
                         // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                         writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
                         return Ok(Some(writes));
                     }
-                    _ => {}
                 }
             }
         }
-
         Ok(None)
     }
 

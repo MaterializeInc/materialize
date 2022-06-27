@@ -789,7 +789,7 @@ tables or sources in the system catalog.
 
 ### Correctness
 
-Materialize maintains three correctness guarantees.
+Materialize maintains four correctness guarantees.
 
 1. *Transactions in Materialize are strictly serializable with
    respect to the client initiated operations that occur inside of Materialize.*
