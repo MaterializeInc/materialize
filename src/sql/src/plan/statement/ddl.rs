@@ -1490,12 +1490,8 @@ pub fn plan_view(
         name,
         columns,
         query,
-        with_options,
     } = def;
 
-    if !with_options.is_empty() {
-        bail_unsupported!("WITH options");
-    }
     let query::PlannedQuery {
         mut expr,
         mut desc,
@@ -1720,7 +1716,6 @@ pub fn plan_create_views(
                         .iter()
                         .map(|c| Ident::new(c.name.clone()))
                         .collect(),
-                    with_options: vec![],
                     query,
                 };
                 views.push(plan_view(scx, &mut viewdef, &Params::empty(), temporary)?);

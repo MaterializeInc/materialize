@@ -572,19 +572,12 @@ pub struct ViewDefinition<T: AstInfo> {
     /// View name
     pub name: UnresolvedObjectName,
     pub columns: Vec<Ident>,
-    pub with_options: Vec<WithOption<T>>,
     pub query: Query<T>,
 }
 
 impl<T: AstInfo> AstDisplay for ViewDefinition<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
-
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
 
         if !self.columns.is_empty() {
             f.write_str(" (");
