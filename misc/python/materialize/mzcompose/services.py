@@ -198,6 +198,64 @@ class Computed(Service):
         super().__init__(name=name, config=config)
 
 
+class Storaged(Service):
+    def __init__(
+        self,
+        name: str = "storaged",
+        hostname: Optional[str] = None,
+        image: Optional[str] = None,
+        ports: List[int] = [2100],
+        memory: Optional[str] = None,
+        options: Optional[Union[str, List[str]]] = "",
+        environment: Optional[List[str]] = None,
+        volumes: Optional[List[str]] = None,
+        workers: Optional[int] = None,
+    ) -> None:
+        if environment is None:
+            environment = [
+                "STORAGED_LOG_FILTER",
+                "MZ_SOFT_ASSERTIONS=1",
+            ]
+
+        if volumes is None:
+            # We currently give computed access to /tmp so that it can load CSV files
+            # but this requirement is expected to go away in the future.
+            volumes = DEFAULT_MZ_VOLUMES
+
+        config: ServiceConfig = {"image": image} if image else {"mzbuild": "storaged"}
+
+        if hostname:
+            config["hostname"] = hostname
+
+        # Depending on the docker-compose version, this may either work or be ignored with a warning
+        # Unfortunately no portable way of setting the memory limit is known
+        if memory:
+            config["deploy"] = {"resources": {"limits": {"memory": memory}}}
+
+        command_list = []
+        if options:
+            if isinstance(options, str):
+                command_list.append(options)
+            else:
+                command_list.extend(options)
+
+        if workers:
+            command_list.append(f"--workers {workers}")
+
+        command_list.append("--secrets-path=/mzdata/secrets")
+
+        config.update(
+            {
+                "command": " ".join(command_list),
+                "ports": ports,
+                "environment": environment,
+                "volumes": volumes,
+            }
+        )
+
+        super().__init__(name=name, config=config)
+
+
 class Zookeeper(Service):
     def __init__(
         self,

@@ -191,6 +191,18 @@ steps:
     agents:
       queue: linux-x86_64
 
+  - id: remote-storaged
+    label: Remote Storaged
+    depends_on: build-x86_64
+    timeout_in_minutes: 10
+    inputs: [test/remote-storaged]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: remote-storaged
+    agents:
+      queue: linux-x86_64
+
+
   - id: kafka-ssl
     label: Kafka SSL smoke test
     depends_on: build-x86_64

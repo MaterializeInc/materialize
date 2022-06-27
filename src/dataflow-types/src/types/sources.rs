@@ -1296,6 +1296,7 @@ impl RustType<ProtoCompression> for Compression {
 pub struct SourceDesc {
     pub connection: SourceConnection,
     pub desc: RelationDesc,
+    pub remote_addr: Option<String>,
 }
 
 impl RustType<ProtoSourceDesc> for SourceDesc {
@@ -1303,6 +1304,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
             desc: Some(self.desc.into_proto()),
+            remote_addr: self.remote_addr.clone(),
         }
     }
 
@@ -1312,6 +1314,7 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
             desc: proto.desc.into_rust_if_some("ProtoSourceDesc::desc")?,
+            remote_addr: proto.remote_addr,
         })
     }
 }

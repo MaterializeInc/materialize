@@ -256,6 +256,7 @@ message ProtoCompression {
 message ProtoSourceDesc {
     ProtoSourceConnection connection = 1;
     mz_repr.relation_and_scalar.ProtoRelationDesc desc = 2;
+    optional string remote_addr = 3;
 }
 
 message ProtoIngestionDescription {

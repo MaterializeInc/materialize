@@ -168,6 +168,7 @@ impl CatalogState {
                 Some(mz_dataflow_types::sources::SourceDesc {
                     connection,
                     desc: table.desc.clone(),
+                    remote_addr: None,
                 })
             }
             CatalogItem::Source(source) => {
@@ -175,6 +176,7 @@ impl CatalogState {
                 Some(mz_dataflow_types::sources::SourceDesc {
                     connection,
                     desc: source.desc.clone(),
+                    remote_addr: source.remote_addr.clone(),
                 })
             }
             // TODO(teskje): Replace once `CatalogItem::RecordedView` lands.
@@ -195,6 +197,7 @@ impl CatalogState {
                 Some(mz_dataflow_types::sources::SourceDesc {
                     connection,
                     desc: value_desc.clone(),
+                    remote_addr: None,
                 })
             }
             _ => None,
@@ -1068,6 +1071,7 @@ pub struct Source {
     pub connection: SourceConnection,
     pub desc: RelationDesc,
     pub depends_on: Vec<GlobalId>,
+    pub remote_addr: Option<String>,
 }
 
 impl Source {
@@ -3345,12 +3349,15 @@ impl<S: Append> Catalog<S> {
                 conn_id: None,
                 depends_on,
             }),
-            Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                connection: source.connection,
-                desc: source.desc,
-                depends_on,
-            }),
+            Plan::CreateSource(CreateSourcePlan { source, remote, .. }) => {
+                CatalogItem::Source(Source {
+                    create_sql: source.create_sql,
+                    connection: source.connection,
+                    desc: source.desc,
+                    depends_on,
+                    remote_addr: remote,
+                })
+            }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
