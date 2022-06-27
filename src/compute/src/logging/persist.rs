@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use differential_dataflow::Collection;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::write::WriteHandle;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -18,10 +20,12 @@ use timely::dataflow::Scope;
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operators_async_ext::OperatorBuilderExt;
+use tokio::sync::Mutex;
 
 // TODO(teskje): remove code duplication with `PersistSinkConnector`
 pub(crate) fn persist_sink<G>(
     target: &CollectionMetadata,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
     collection: &Collection<G, (Row, Row), Diff>,
 ) where
     G: Scope<Timestamp = Timestamp>,
@@ -31,29 +35,20 @@ pub(crate) fn persist_sink<G>(
     let active_worker_index = 0;
 
     let write: Option<WriteHandle<_, _, _, _>> = if active_worker_index == scope.index() {
-        let _shard_id = target.persist_shard;
+        let shard_id = target.persist_shard;
+        let location = target.persist_location.clone();
+        let persist_client =
+            futures_executor::block_on(async { persist_clients.lock().await.open(location).await });
 
-        //TODO(LH): Plumb persist_clients until here, and use it to open the connection
-        // let persist_client = async {
-        //     persist_clients
-        //         .lock()
-        //         .await
-        //         .open(persist_location)
-        //         .await
-        //         .with_context(|| "error creating persist client")?;
-        // }
-        // .await;
+        let persist_client = persist_client.expect("Successful connection");
 
-        // let persist_client =
-        //     futures_executor::block_on(target.persist_location.open()).expect("cannot open client");
-        // let (write, read) =
-        //     futures_executor::block_on(persist_client.open::<Row, Row, Timestamp, Diff>(shard_id))
-        //         .expect("could not open persist shard");
+        let (write, read) =
+            futures_executor::block_on(persist_client.open::<Row, Row, Timestamp, Diff>(shard_id))
+                .expect("could not open persist shard");
 
-        // // TODO(teskje): use `open_write`
-        // futures_executor::block_on(read.expire());
-        // Some(write)
-        None
+        // TODO(teskje): use `open_write`
+        futures_executor::block_on(read.expire());
+        Some(write)
     } else {
         None
     };

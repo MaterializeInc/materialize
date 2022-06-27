@@ -11,10 +11,12 @@
 
 use std::any::Any;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
@@ -25,6 +27,7 @@ use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
+use tokio::sync::Mutex;
 
 use super::{LogVariant, TimelyLog};
 use crate::logging::persist::persist_sink;
@@ -45,6 +48,7 @@ use mz_timely_util::replay::MzReplay;
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
     linked: std::rc::Rc<
         EventLink<
             Timestamp,
@@ -161,7 +165,7 @@ pub fn construct<A: Allocate>(
                 let updates = construct_reachability(key.clone(), value);
 
                 if let Some(target) = config.sink_logs.get(&variant) {
-                    persist_sink(target, &updates);
+                    persist_sink(target, persist_clients.clone(), &updates);
                 }
 
                 let trace = updates

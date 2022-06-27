@@ -291,24 +291,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 Rc::clone(&t_linked),
                 t_activator.clone(),
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 Rc::clone(&r_linked),
                 r_activator.clone(),
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 Rc::clone(&d_linked),
                 d_activator.clone(),
             ));
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 Rc::clone(&c_linked),
                 m_activator.clone(),
             ));
@@ -428,24 +432,28 @@ impl<'a, A: Allocate> ActiveComputeState<'a, A> {
             t_traces.extend(logging::timely::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 t_linked,
                 t_activator,
             ));
             r_traces.extend(logging::reachability::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 r_linked,
                 r_activator,
             ));
             d_traces.extend(logging::differential::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 d_linked,
                 d_activator,
             ));
             m_traces.extend(logging::materialized::construct(
                 &mut self.timely_worker,
                 logging,
+                self.compute_state.persist_clients.clone(),
                 c_linked,
                 m_activator,
             ));

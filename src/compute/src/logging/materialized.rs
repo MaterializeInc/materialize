@@ -12,15 +12,18 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::count::CountTotal;
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::WorkerIdentifier;
+use tokio::sync::Mutex;
 use tracing::error;
 use uuid::Uuid;
 
@@ -89,6 +92,7 @@ impl Peek {
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &mz_dataflow_types::logging::LoggingConfig,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
     compute: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, ComputeEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
@@ -323,7 +327,7 @@ pub fn construct<A: Allocate>(
                 });
 
                 if let Some(target) = config.sink_logs.get(&variant) {
-                    persist_sink(target, &rows);
+                    persist_sink(target, persist_clients.clone(), &rows);
                 }
 
                 let trace = rows

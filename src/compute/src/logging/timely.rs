@@ -12,11 +12,13 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use mz_expr::{permutation_for_arrangement, MirScalarExpr};
+use mz_persist_client::cache::PersistClientCache;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::capture::EventLink;
@@ -26,6 +28,7 @@ use mz_dataflow_types::logging::LoggingConfig;
 use mz_dataflow_types::KeysValsHandle;
 use mz_dataflow_types::RowSpine;
 use mz_repr::{datum_list_size, datum_size, Datum, DatumVec, Diff, Row, Timestamp};
+use tokio::sync::Mutex;
 
 use super::{LogVariant, TimelyLog};
 use crate::logging::persist::persist_sink;
@@ -46,9 +49,11 @@ use mz_timely_util::replay::MzReplay;
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
+    persist_clients: Arc<Mutex<PersistClientCache>>,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
+    dbg!("In construct!");
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
     let peers = worker.peers();
 
@@ -494,7 +499,7 @@ pub fn construct<A: Allocate>(
                 });
 
                 if let Some(target) = config.sink_logs.get(&variant) {
-                    persist_sink(target, &rows);
+                    persist_sink(target, persist_clients.clone(), &rows);
                 }
 
                 let trace = rows
