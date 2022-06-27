@@ -8,39 +8,23 @@
 # by the Apache License, Version 2.0.
 
 $ set foo-schema={
+    "name": "row",
     "type": "record",
-    "name": "envelope",
     "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": ["null", "long"]}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+      {"name": "a", "type": ["null", "long"]}
     ]
   }
 
 $ kafka-create-topic topic=foo
 
 $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
-{"before": null, "after": {"row":{"a": {"long": 1}}}}
-{"before": null, "after": {"row":{"a": {"long": 2}}}}
-{"before": null, "after": {"row":{"a": null}}}
-
-$ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=2
-{"before": null, "after": null}
+{"a": {"long": 1}}
+{"a": {"long": 2}}
+{"a": null}
 
 > CREATE SOURCE foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${foo-schema}' ENVELOPE DEBEZIUM
+  FORMAT AVRO USING SCHEMA '${foo-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);
