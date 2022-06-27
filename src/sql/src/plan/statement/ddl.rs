@@ -309,6 +309,7 @@ pub fn plan_create_source(
         format,
         key_constraint,
         include_metadata,
+        remote,
     } = &stmt;
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
@@ -870,6 +871,24 @@ pub fn plan_create_source(
         }
     }
 
+    let remote = remote
+        .as_ref()
+        .map(|remote_option| {
+            scx.require_unsafe_mode("CREATE SOURCE ... REMOTE ...")?;
+
+            match remote_option {
+                WithOptionValue::Ident(_) => {
+                    return Err(anyhow!(
+                        "invalid REMOTE: must be a string, not an identifier"
+                    ));
+                }
+                _ => {}
+            }
+            String::try_from_value(remote_option.clone())
+                .map_err(|e| anyhow!("invalid REMOTE: {}", e))
+        })
+        .transpose()?;
+
     let if_not_exists = *if_not_exists;
     let materialized = *materialized;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
@@ -892,7 +911,6 @@ pub fn plan_create_source(
             _ => Timeline::EpochMilliseconds,
         }
     };
-
     let source = Source {
         create_sql,
         connection: SourceConnection::External {
@@ -913,6 +931,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         materialized,
+        remote,
     }))
 }
 

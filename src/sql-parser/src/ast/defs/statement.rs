@@ -458,6 +458,7 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub if_not_exists: bool,
     pub materialized: bool,
     pub key_constraint: Option<KeyConstraint>,
+    pub remote: Option<WithOptionValue<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -505,6 +506,11 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
                 f.write_str(" ENVELOPE ");
                 f.write_node(envelope);
             }
+        }
+
+        if let Some(remote) = &self.remote {
+            f.write_str(" REMOTE ");
+            f.write_node(remote);
         }
     }
 }
