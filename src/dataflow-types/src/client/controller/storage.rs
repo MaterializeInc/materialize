@@ -400,8 +400,6 @@ where
                 source_imports.insert(id, metadata);
             }
 
-            let remote_addr = ingestion.desc.remote_addr.clone();
-
             let augmented_ingestion = IngestionDescription {
                 source_imports,
                 // The rest of the fields are identical
@@ -411,60 +409,50 @@ where
                 storage_metadata: self.collection_metadata(ingestion.id)?,
             };
 
-            let addr = if let Some(remote_addr) = remote_addr {
-                tracing::info!(
-                    "{}: connecting to pre-existing storaged instance at address: {}",
-                    ingestion.id,
-                    remote_addr
-                );
-                remote_addr
-            } else {
-                let storage_service = self
-                    .orchestrator
-                    .ensure_service(
-                        &ingestion.id.to_string(),
-                        ServiceConfig {
-                            image: self.storaged_image.clone(),
-                            args: &|assigned| {
-                                vec![
-                                    format!("--workers=1"),
-                                    format!(
-                                        "--listen-addr={}:{}",
-                                        assigned.listen_host, assigned.ports["controller"]
-                                    ),
-                                    format!(
-                                        "--internal-http-listen-addr={}:{}",
-                                        assigned.listen_host, assigned.ports["internal-http"]
-                                    ),
-                                    format!("--opentelemetry-resource=storage_id={}", ingestion.id),
-                                ]
-                            },
-                            ports: vec![
-                                ServicePort {
-                                    name: "controller".into(),
-                                    port_hint: 2100,
-                                },
-                                ServicePort {
-                                    name: "internal-http".into(),
-                                    port_hint: 6877,
-                                },
-                            ],
-                            // TODO: limits?
-                            cpu_limit: None,
-                            memory_limit: None,
-                            scale: NonZeroUsize::new(1).unwrap(),
-                            labels: HashMap::new(),
-                            availability_zone: None,
+            let storage_service = self
+                .orchestrator
+                .ensure_service(
+                    &ingestion.id.to_string(),
+                    ServiceConfig {
+                        image: self.storaged_image.clone(),
+                        args: &|assigned| {
+                            vec![
+                                format!("--workers=1"),
+                                format!(
+                                    "--listen-addr={}:{}",
+                                    assigned.listen_host, assigned.ports["controller"]
+                                ),
+                                format!(
+                                    "--internal-http-listen-addr={}:{}",
+                                    assigned.listen_host, assigned.ports["internal-http"]
+                                ),
+                                format!("--opentelemetry-resource=storage_id={}", ingestion.id),
+                            ]
                         },
-                    )
-                    .await?;
-
-                storage_service.addresses("controller").into_element()
-            };
+                        ports: vec![
+                            ServicePort {
+                                name: "controller".into(),
+                                port_hint: 2100,
+                            },
+                            ServicePort {
+                                name: "internal-http".into(),
+                                port_hint: 6877,
+                            },
+                        ],
+                        // TODO: limits?
+                        cpu_limit: None,
+                        memory_limit: None,
+                        scale: NonZeroUsize::new(1).unwrap(),
+                        labels: HashMap::new(),
+                        availability_zone: None,
+                    },
+                )
+                .await?;
 
             // TODO: don't block waiting for a connection. Put a queue in the
             // middle instead.
             let mut client = Box::new({
+                let addr = storage_service.addresses("controller").into_element();
                 let mut client = StoragedRemoteClient::new(&[addr]);
                 client.connect().await;
                 client
