@@ -2721,8 +2721,8 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.expect_one_of_keywords(&[
-            CONNECTION, CLUSTER, DATABASE, INDEX, ROLE, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE,
-            USER, VIEW,
+            CONNECTION, CLUSTER, DATABASE, INDEX, RECORDED, ROLE, SECRET, SCHEMA, SINK, SOURCE,
+            TABLE, TYPE, USER, VIEW,
         ])? {
             DATABASE => {
                 let if_exists = self.parse_if_exists()?;
@@ -2771,16 +2771,13 @@ impl<'a> Parser<'a> {
             TABLE => ObjectType::Table,
             TYPE => ObjectType::Type,
             VIEW => ObjectType::View,
+            RECORDED => {
+                self.expect_keyword(VIEW)?;
+                ObjectType::RecordedView
+            }
             SECRET => ObjectType::Secret,
             CONNECTION => ObjectType::Connection,
-            _ => {
-                return self.expected(
-                    self.peek_pos(),
-                    "DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, \
-                     TABLE, TYPE, USER, VIEW after DROP",
-                    self.peek_token(),
-                );
-            }
+            _ => unreachable!(),
         };
 
         let if_exists = self.parse_if_exists()?;

@@ -959,6 +959,13 @@ DROP VIEW myschema.myview
 DropObjects(DropObjectsStatement { materialized: false, object_type: View, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
 
 parse-statement
+DROP RECORDED VIEW myschema.myview
+----
+DROP RECORDED VIEW myschema.myview
+=>
+DropObjects(DropObjectsStatement { materialized: false, object_type: RecordedView, if_exists: false, names: [UnresolvedObjectName([Ident("myschema"), Ident("myview")])], cascade: false })
+
+parse-statement
 DROP SOURCE myschema.mydatasource
 ----
 DROP SOURCE myschema.mydatasource
@@ -1398,7 +1405,7 @@ CREATE CONNECTOR conn1 FOR KAFKA BROKER 'kafka:1234' WITH (security_protocol = '
 parse-statement
 DROP CONNECTOR conn1
 ----
-error: Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier "connector"
+error: Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or RECORDED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier "connector"
 DROP CONNECTOR conn1
      ^
 
