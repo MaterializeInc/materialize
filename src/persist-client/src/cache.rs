@@ -14,12 +14,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mz_ore::metrics::MetricsRegistry;
-use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
-use mz_persist::location::{BlobMulti, Consensus, ExternalError};
+use mz_persist::cfg::{BlobConfig, ConsensusConfig};
+use mz_persist::location::{Blob, Consensus, ExternalError};
 use tracing::debug;
 
 use crate::r#impl::machine::retry_external;
-use crate::r#impl::metrics::{Metrics, MetricsBlobMulti, MetricsConsensus};
+use crate::r#impl::metrics::{Metrics, MetricsBlob, MetricsConsensus};
 use crate::{PersistClient, PersistConfig, PersistLocation};
 
 /// A cache of [PersistClient]s indexed by [PersistLocation]s.
@@ -34,7 +34,7 @@ use crate::{PersistClient, PersistConfig, PersistLocation};
 pub struct PersistClientCache {
     pub(crate) cfg: PersistConfig,
     metrics: Arc<Metrics>,
-    blob_by_uri: HashMap<String, Arc<dyn BlobMulti + Send + Sync>>,
+    blob_by_uri: HashMap<String, Arc<dyn Blob + Send + Sync>>,
     consensus_by_uri: HashMap<String, Arc<dyn Consensus + Send + Sync>>,
 }
 
@@ -73,7 +73,7 @@ impl PersistClientCache {
             Entry::Vacant(x) => {
                 // Intentionally hold the lock, so we don't double connect under
                 // concurrency.
-                let blob = BlobMultiConfig::try_from(x.key()).await?;
+                let blob = BlobConfig::try_from(x.key()).await?;
                 let blob = retry_external(&self.metrics.retries.external.blob_open, || {
                     blob.clone().open()
                 })
@@ -81,8 +81,8 @@ impl PersistClientCache {
                 Arc::clone(x.insert(blob))
             }
         };
-        let blob = Arc::new(MetricsBlobMulti::new(blob, Arc::clone(&self.metrics)))
-            as Arc<dyn BlobMulti + Send + Sync>;
+        let blob = Arc::new(MetricsBlob::new(blob, Arc::clone(&self.metrics)))
+            as Arc<dyn Blob + Send + Sync>;
         let consensus = match self.consensus_by_uri.entry(location.consensus_uri) {
             Entry::Occupied(x) => Arc::clone(x.get()),
             Entry::Vacant(x) => {

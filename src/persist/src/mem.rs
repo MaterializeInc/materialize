@@ -18,14 +18,14 @@ use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::error::Error;
-use crate::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
+use crate::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
 #[cfg(test)]
 #[derive(Debug)]
 pub struct MemMultiRegistry {
-    blob_multi_by_path: HashMap<String, Arc<tokio::sync::Mutex<MemBlobMultiCore>>>,
+    blob_by_path: HashMap<String, Arc<tokio::sync::Mutex<MemBlobCore>>>,
 }
 
 #[cfg(test)]
@@ -33,34 +33,34 @@ impl MemMultiRegistry {
     /// Constructs a new, empty [MemMultiRegistry].
     pub fn new() -> Self {
         MemMultiRegistry {
-            blob_multi_by_path: HashMap::new(),
+            blob_by_path: HashMap::new(),
         }
     }
 
-    /// Opens a [MemBlobMulti] associated with `path`.
+    /// Opens a [MemBlob] associated with `path`.
     ///
     /// TODO: Replace this with PersistClientCache once they're in the same
     /// crate.
-    pub async fn blob_multi(&mut self, path: &str) -> MemBlobMulti {
-        if let Some(blob) = self.blob_multi_by_path.get(path) {
-            MemBlobMulti::open(MemBlobMultiConfig {
+    pub async fn blob(&mut self, path: &str) -> MemBlob {
+        if let Some(blob) = self.blob_by_path.get(path) {
+            MemBlob::open(MemBlobConfig {
                 core: Arc::clone(&blob),
             })
         } else {
-            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobMultiCore::default()));
-            self.blob_multi_by_path
+            let blob = Arc::new(tokio::sync::Mutex::new(MemBlobCore::default()));
+            self.blob_by_path
                 .insert(path.to_string(), Arc::clone(&blob));
-            MemBlobMulti::open(MemBlobMultiConfig { core: blob })
+            MemBlob::open(MemBlobConfig { core: blob })
         }
     }
 }
 
 #[derive(Debug, Default)]
-struct MemBlobMultiCore {
+struct MemBlobCore {
     dataz: HashMap<String, Bytes>,
 }
 
-impl MemBlobMultiCore {
+impl MemBlobCore {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         Ok(self.dataz.get(key).map(|x| x.to_vec()))
     }
@@ -80,27 +80,27 @@ impl MemBlobMultiCore {
     }
 }
 
-/// Configuration for opening a [MemBlobMulti].
+/// Configuration for opening a [MemBlob].
 #[derive(Debug, Default)]
-pub struct MemBlobMultiConfig {
-    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+pub struct MemBlobConfig {
+    core: Arc<tokio::sync::Mutex<MemBlobCore>>,
 }
 
-/// An in-memory implementation of [BlobMulti].
+/// An in-memory implementation of [Blob].
 #[derive(Debug)]
-pub struct MemBlobMulti {
-    core: Arc<tokio::sync::Mutex<MemBlobMultiCore>>,
+pub struct MemBlob {
+    core: Arc<tokio::sync::Mutex<MemBlobCore>>,
 }
 
-impl MemBlobMulti {
+impl MemBlob {
     /// Opens the given location for non-exclusive read-write access.
-    pub fn open(config: MemBlobMultiConfig) -> Self {
-        MemBlobMulti { core: config.core }
+    pub fn open(config: MemBlobConfig) -> Self {
+        MemBlob { core: config.core }
     }
 }
 
 #[async_trait]
-impl BlobMulti for MemBlobMulti {
+impl Blob for MemBlob {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         self.core.lock().await.get(key)
     }
@@ -250,17 +250,17 @@ impl Consensus for MemConsensus {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::{blob_multi_impl_test, consensus_impl_test};
+    use crate::location::tests::{blob_impl_test, consensus_impl_test};
 
     use super::*;
 
     #[tokio::test]
-    async fn mem_blob_multi() -> Result<(), ExternalError> {
+    async fn mem_blob() -> Result<(), ExternalError> {
         let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new()));
-        blob_multi_impl_test(move |path| {
+        blob_impl_test(move |path| {
             let path = path.to_owned();
             let registry = Arc::clone(&registry);
-            async move { Ok(registry.lock().await.blob_multi(&path).await) }
+            async move { Ok(registry.lock().await.blob(&path).await) }
         })
         .await
     }

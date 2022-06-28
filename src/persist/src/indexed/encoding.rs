@@ -33,7 +33,7 @@ use crate::gen::persist::{
 use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
 use crate::indexed::columnar::ColumnarRecords;
-use crate::location::BlobMulti;
+use crate::location::Blob;
 
 /// The metadata necessary to reconstruct a list of [BlobTraceBatchPart]s.
 ///
@@ -61,7 +61,7 @@ pub struct TraceBatchMeta {
 }
 
 /// The structure serialized and stored as a value in
-/// [crate::location::BlobMulti] storage for data keys corresponding to trace
+/// [crate::location::Blob] storage for data keys corresponding to trace
 /// data.
 ///
 /// This batch represents the data that was originally written at some time in
@@ -113,7 +113,7 @@ impl TraceBatchMeta {
     }
 
     /// Assert that all of the [BlobTraceBatchPart]'s obey the required invariants.
-    pub async fn validate_data<B: BlobMulti + Send + Sync + 'static>(
+    pub async fn validate_data<B: Blob + Send + Sync + 'static>(
         &self,
         cache: &BlobCache<B>,
     ) -> Result<(), Error> {
@@ -385,7 +385,7 @@ mod tests {
     use crate::error::Error;
     use crate::indexed::columnar::ColumnarRecordsVec;
     use crate::indexed::metrics::Metrics;
-    use crate::mem::{MemBlobMulti, MemBlobMultiConfig};
+    use crate::mem::{MemBlob, MemBlobConfig};
     use crate::workload::DataGenerator;
 
     use super::*;
@@ -547,7 +547,7 @@ mod tests {
     async fn trace_batch_meta_validate_data() -> Result<(), Error> {
         let blob = BlobCache::new(
             Arc::new(Metrics::default()),
-            MemBlobMulti::open(MemBlobMultiConfig::default()),
+            MemBlob::open(MemBlobConfig::default()),
             None,
         );
         let format = ProtoBatchFormat::ParquetKvtd;

@@ -21,7 +21,7 @@ use crate::error::Error;
 use crate::gen::persist::ProtoBatchFormat;
 use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta};
 use crate::indexed::metrics::Metrics;
-use crate::location::{Atomicity, BlobMulti};
+use crate::location::{Atomicity, Blob};
 
 /// User hints for [BlobCache] operations.
 #[derive(Debug)]
@@ -32,7 +32,7 @@ pub enum CacheHint {
     NeverAdd,
 }
 
-/// A disk-backed cache for objects in [BlobMulti] storage.
+/// A disk-backed cache for objects in [Blob] storage.
 ///
 /// The data for the objects in the cache is stored on disk, mmap'd, and a
 /// validated handle is stored in-memory to avoid repeatedly decoding it.
@@ -65,10 +65,10 @@ impl<B> Clone for BlobCache<B> {
 const MB: usize = 1024 * 1024;
 const GB: usize = 1024 * MB;
 
-impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
+impl<B: Blob + Send + Sync + 'static> BlobCache<B> {
     const DEFAULT_CACHE_SIZE_LIMIT: usize = 2 * GB;
 
-    /// Returns a new, empty cache for the given [BlobMulti] storage.
+    /// Returns a new, empty cache for the given [Blob] storage.
     pub fn new(metrics: Arc<Metrics>, blob: B, cache_size_limit: Option<usize>) -> Self {
         BlobCache {
             metrics,
@@ -137,8 +137,8 @@ impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
     }
 }
 
-impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
-    /// Writes a batch to backing [BlobMulti] storage.
+impl<B: Blob + Send + Sync + 'static> BlobCache<B> {
+    /// Writes a batch to backing [Blob] storage.
     ///
     /// Returns the size of the encoded blob value in bytes.
     pub async fn set_trace_batch(
@@ -179,7 +179,7 @@ impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
         Ok(val_len)
     }
 
-    /// Removes a batch from both [BlobMulti] storage and the local cache.
+    /// Removes a batch from both [Blob] storage and the local cache.
     pub async fn delete_trace_batch(&mut self, batch: &TraceBatchMeta) -> Result<(), Error> {
         let delete_start = Instant::now();
         for key in batch.keys.iter() {
@@ -208,7 +208,7 @@ impl<B: BlobMulti + Send + Sync + 'static> BlobCache<B> {
     }
 }
 
-/// Internal, in-memory cache for objects in [BlobMulti] storage that back an
+/// Internal, in-memory cache for objects in [Blob] storage that back an
 /// arrangement.
 #[derive(Clone, Debug)]
 struct BlobCacheInner {

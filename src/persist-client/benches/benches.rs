@@ -16,11 +16,11 @@ use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Runtime;
 
-use mz_persist::file::{FileBlobConfig, FileBlobMulti};
-use mz_persist::location::{BlobMulti, Consensus, ExternalError};
-use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+use mz_persist::file::{FileBlob, FileBlobConfig};
+use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use mz_persist::postgres::{PostgresConsensus, PostgresConsensusConfig};
-use mz_persist::s3::{S3BlobConfig, S3BlobMulti};
+use mz_persist::s3::{S3Blob, S3BlobConfig};
 use mz_persist::workload::DataGenerator;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Metrics, PersistClient, PersistConfig};
@@ -28,7 +28,7 @@ use mz_persist_types::Codec64;
 
 // The "plumbing" and "porcelain" names are from git [1]. Our "plumbing"
 // benchmarks are ones that are low-level, fundamental pieces of code like
-// writing to a BlobMulti/Consensus impl or encoding a batch of updates into our
+// writing to a Blob/Consensus impl or encoding a batch of updates into our
 // columnar format. One way to look at this is as the fastest we could possibly
 // go in theory. The "porcelain" ones are measured at the level of the public
 // API. One way to think of this is how fast we actually are in practice.
@@ -95,7 +95,7 @@ pub fn bench_persist(c: &mut Criterion) {
 }
 
 async fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
-    let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
+    let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
     let consensus = Arc::new(MemConsensus::default());
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
     PersistClient::new(PersistConfig::default(), blob, consensus, metrics).await
@@ -110,7 +110,7 @@ async fn create_file_pg_client(
     let dir = tempfile::tempdir().map_err(anyhow::Error::new)?;
     let file = FileBlobConfig::from(dir.path());
 
-    let blob = Arc::new(FileBlobMulti::open(file).await?) as Arc<dyn BlobMulti + Send + Sync>;
+    let blob = Arc::new(FileBlob::open(file).await?) as Arc<dyn Blob + Send + Sync>;
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
@@ -129,7 +129,7 @@ async fn create_s3_pg_client(
         None => return Ok(None),
     };
 
-    let blob = Arc::new(S3BlobMulti::open(s3).await?) as Arc<dyn BlobMulti + Send + Sync>;
+    let blob = Arc::new(S3Blob::open(s3).await?) as Arc<dyn Blob + Send + Sync>;
     let postgres_consensus = Arc::new(PostgresConsensus::open(pg).await?);
     let consensus = Arc::clone(&postgres_consensus) as Arc<dyn Consensus + Send + Sync>;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
@@ -191,14 +191,14 @@ fn bench_all_blob<BenchBlobFn>(
     data: &DataGenerator,
     bench_blob_fn: BenchBlobFn,
 ) where
-    BenchBlobFn: Fn(&mut Bencher, &Arc<dyn BlobMulti + Send + Sync>),
+    BenchBlobFn: Fn(&mut Bencher, &Arc<dyn Blob + Send + Sync>),
 {
     // Unlike the other ones, create a new mem blob before each call to
     // bench_blob_fn and drop it after to keep mem usage down.
     {
         g.bench_function(BenchmarkId::new("mem", data.goodput_pretty()), |b| {
-            let mem_blob = MemBlobMulti::open(MemBlobMultiConfig::default());
-            let mem_blob = Arc::new(mem_blob) as Arc<dyn BlobMulti + Send + Sync>;
+            let mem_blob = MemBlob::open(MemBlobConfig::default());
+            let mem_blob = Arc::new(mem_blob) as Arc<dyn Blob + Send + Sync>;
             bench_blob_fn(b, &mem_blob);
         });
     }
@@ -208,9 +208,9 @@ fn bench_all_blob<BenchBlobFn>(
     {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let file_blob = runtime
-            .block_on(FileBlobMulti::open(FileBlobConfig::from(temp_dir.path())))
+            .block_on(FileBlob::open(FileBlobConfig::from(temp_dir.path())))
             .expect("failed to create file blob");
-        let file_blob = Arc::new(file_blob) as Arc<dyn BlobMulti + Send + Sync>;
+        let file_blob = Arc::new(file_blob) as Arc<dyn Blob + Send + Sync>;
         g.bench_function(BenchmarkId::new("file", data.goodput_pretty()), |b| {
             bench_blob_fn(b, &file_blob);
         });
@@ -223,9 +223,9 @@ fn bench_all_blob<BenchBlobFn>(
         .expect("failed to load s3 config")
     {
         let s3_blob = runtime
-            .block_on(S3BlobMulti::open(config))
+            .block_on(S3Blob::open(config))
             .expect("failed to create s3 blob");
-        let s3_blob = Arc::new(s3_blob) as Arc<dyn BlobMulti + Send + Sync>;
+        let s3_blob = Arc::new(s3_blob) as Arc<dyn Blob + Send + Sync>;
         g.bench_function(BenchmarkId::new("s3", data.goodput_pretty()), |b| {
             bench_blob_fn(b, &s3_blob);
         });

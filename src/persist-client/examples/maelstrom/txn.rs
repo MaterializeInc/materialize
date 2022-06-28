@@ -23,16 +23,16 @@ use timely::PartialOrder;
 use tokio::sync::Mutex;
 use tracing::{debug, info, trace};
 
-use mz_persist::cfg::{BlobMultiConfig, ConsensusConfig};
-use mz_persist::location::{BlobMulti, Consensus, ExternalError};
-use mz_persist::unreliable::{UnreliableBlobMulti, UnreliableConsensus, UnreliableHandle};
+use mz_persist::cfg::{BlobConfig, ConsensusConfig};
+use mz_persist::location::{Blob, Consensus, ExternalError};
+use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
 use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, ShardId};
 
 use crate::maelstrom::api::{Body, ErrorCode, MaelstromError, NodeId, ReqTxnOp, ResTxnOp};
 use crate::maelstrom::node::{Handle, Service};
-use crate::maelstrom::services::{CachingBlobMulti, MaelstromBlobMulti, MaelstromConsensus};
+use crate::maelstrom::services::{CachingBlob, MaelstromBlob, MaelstromConsensus};
 use crate::maelstrom::Args;
 
 pub fn run(args: Args) -> Result<(), anyhow::Error> {
@@ -422,11 +422,11 @@ impl Service for TransactorService {
 
         // Construct requested Blob.
         let blob = match &args.blob_uri {
-            Some(blob_uri) => BlobMultiConfig::try_from(blob_uri).await?.open().await?,
-            None => MaelstromBlobMulti::new(handle.clone()),
+            Some(blob_uri) => BlobConfig::try_from(blob_uri).await?.open().await?,
+            None => MaelstromBlob::new(handle.clone()),
         };
-        let blob = Arc::new(UnreliableBlobMulti::new(blob, unreliable.clone()))
-            as Arc<dyn BlobMulti + Send + Sync>;
+        let blob =
+            Arc::new(UnreliableBlob::new(blob, unreliable.clone())) as Arc<dyn Blob + Send + Sync>;
         // Normal production persist usage (even including a real SQL txn impl)
         // isn't particularly benefitted by a cache, so we don't have one baked
         // into persist. In contrast, our Maelstrom transaction model
@@ -434,7 +434,7 @@ impl Service for TransactorService {
         // txn. As a result, without a cache, things would be terribly slow,
         // unreliable would cause more retries than are interesting, and the
         // Lamport diagrams that Maelstrom generates would be noisy.
-        let blob = CachingBlobMulti::new(blob);
+        let blob = CachingBlob::new(blob);
 
         // Construct requested Consensus.
         let consensus = match &args.consensus_uri {

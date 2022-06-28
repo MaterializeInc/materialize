@@ -21,7 +21,7 @@ use rand::{Rng, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
-    Atomicity, BlobMulti, Consensus, Determinate, ExternalError, SeqNo, VersionedData,
+    Atomicity, Blob, Consensus, Determinate, ExternalError, SeqNo, VersionedData,
 };
 
 #[derive(Debug)]
@@ -128,22 +128,22 @@ impl UnreliableHandle {
     }
 }
 
-/// An unreliable delegate to [BlobMulti].
+/// An unreliable delegate to [Blob].
 #[derive(Debug)]
-pub struct UnreliableBlobMulti {
+pub struct UnreliableBlob {
     handle: UnreliableHandle,
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
 }
 
-impl UnreliableBlobMulti {
-    /// Returns a new [UnreliableBlobMulti].
-    pub fn new(blob: Arc<dyn BlobMulti + Send + Sync>, handle: UnreliableHandle) -> Self {
-        UnreliableBlobMulti { handle, blob }
+impl UnreliableBlob {
+    /// Returns a new [UnreliableBlob].
+    pub fn new(blob: Arc<dyn Blob + Send + Sync>, handle: UnreliableHandle) -> Self {
+        UnreliableBlob { handle, blob }
     }
 }
 
 #[async_trait]
-impl BlobMulti for UnreliableBlobMulti {
+impl Blob for UnreliableBlob {
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         self.handle
             .run_op(deadline, "get", || self.blob.get(deadline, key))
@@ -248,16 +248,15 @@ impl Consensus for UnreliableConsensus {
 mod tests {
     use std::time::Duration;
 
-    use crate::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+    use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 
     use super::*;
 
     #[tokio::test]
-    async fn unreliable_blob_multi() {
-        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()))
-            as Arc<dyn BlobMulti + Send + Sync>;
+    async fn unreliable_blob() {
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default())) as Arc<dyn Blob + Send + Sync>;
         let handle = UnreliableHandle::default();
-        let blob = UnreliableBlobMulti::new(blob, handle.clone());
+        let blob = UnreliableBlob::new(blob, handle.clone());
         let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
 
         // Use a fixed seed so this test doesn't flake.
