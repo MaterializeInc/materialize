@@ -17,4 +17,4 @@ def check_required_vars() -> None:
         if not os.environ.get("AWS_PROFILE"):
             os.environ["AWS_PROFILE"] = "mz-scratch-admin"
         if not os.environ.get("AWS_DEFAULT_REGION"):
-            os.environ["AWS_DEFAULT_REGION"] = "us-east-2"
+            os.environ["AWS_DEFAULT_REGION"] = "us-east-1"

@@ -16,8 +16,7 @@ from typing import Any, Dict, List
 from materialize.cli.scratch import check_required_vars
 from materialize.scratch import (
     DEFAULT_INSTANCE_PROFILE_NAME,
-    DEFAULT_SECURITY_GROUP_ID,
-    DEFAULT_SUBNET_ID,
+    DEFAULT_SECURITY_GROUP_NAME,
     ROOT,
     MachineDesc,
     launch_cluster,
@@ -54,19 +53,13 @@ def multi_json(s: str) -> List[Dict[Any, Any]]:
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--subnet-id",
-        type=str,
-        default=DEFAULT_SUBNET_ID,
-        help="EC2 Subnet ID. Defaults to Materialize scratch account.",
-    )
-    parser.add_argument(
         "--key-name", type=str, required=False, help="Optional EC2 Key Pair name"
     )
     parser.add_argument(
-        "--security-group-id",
+        "--security-group-name",
         type=str,
-        default=DEFAULT_SECURITY_GROUP_ID,
-        help="EC2 Security Group ID. Defaults to Materialize scratch account.",
+        default=DEFAULT_SECURITY_GROUP_NAME,
+        help="EC2 Security Group name. Defaults to Materialize scratch account.",
     )
     parser.add_argument(
         "--extra-tags",
@@ -146,9 +139,8 @@ def run(args: argparse.Namespace) -> None:
 
     instances = launch_cluster(
         descs,
-        subnet_id=args.subnet_id,
         key_name=args.key_name,
-        security_group_id=args.security_group_id,
+        security_group_name=args.security_group_name,
         instance_profile=args.instance_profile,
         extra_tags=extra_tags,
         delete_after=datetime.datetime.utcnow() + max_age,
