@@ -9,21 +9,12 @@ menu:
     weight: 5
 ---
 
-Materialize is a streaming SQL materialized view engine.
-
-If that jargon-filled sentence doesn't answer all of your questions, we'll cover some important conceptual topics related to Materialize:
-
-- What it helps teams accomplish
-- What it actually is
-- How it works
+Materialize is a streaming database for real-time applications. It lets you ask complex questions about your data using SQL, and incrementally maintains the results of these SQL queries up-to-date as the underlying data changes.
 
 ## What does Materialize do?
 
-Materialize lets you ask questions about your data, and then get low-latency,
-correct answers, even as the underlying data changes.
-
-Why not just use your database's built-in functionality to perform these same
-computations? Because your database often acts as if it's never been asked that
+You might be wondering: why not just use your database's built-in functionality to perform these same
+computations? Your database often acts as if it's never been asked that
 question before, which means it can take a _long_ time to come up with an
 answer, each and every time you pose the query.
 

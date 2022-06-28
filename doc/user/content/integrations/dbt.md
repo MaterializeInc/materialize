@@ -41,7 +41,7 @@ Setting up a dbt project with Materialize is similar to setting it up with any o
 
     `materialize` should be listed under "Plugins". If this is not the case, double-check that the virtual environment is activated!
 
-1. To get started, make sure you have Materialize [installed and running](/install/). You can also use the `dbt-materialize` adapter with [Materialize Cloud](/cloud/get-started-with-cloud/#sign-up).
+1. To get started, make sure you have Materialize [installed and running](/install/).
 
 ## Create and configure a dbt project
 

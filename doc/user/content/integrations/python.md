@@ -29,20 +29,6 @@ dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
 conn = psycopg2.connect(dsn)
 ```
 
-### Materialize Cloud Instance
-
-Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file in the [connection string parameters](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING). Replace `MY_INSTANCE_ID` in the connection string property with your Materialize Cloud instance ID.
-
-```python
-#!/usr/bin/env python3
-
-import psycopg2
-import sys
-
-dsn = "postgresql://materialize@MY_INSTANCE_ID:6875/materialize?sslmode=verify-full&sslcert=materialize.crt&sslkey=materialize.key&sslrootcert=ca.crt"
-conn = psycopg2.connect(dsn)
-```
-
 ## Stream
 
 To take full advantage of incrementally updated materialized views from a Python application, instead of [querying](#query) Materialize for the state of a view at a point in time, use [a `TAIL` statement](/sql/tail/) to request a stream of updates as the view changes.
