@@ -4845,27 +4845,51 @@ impl<'a> Parser<'a> {
             OPTIMIZER,
             QUERY,
         ]) {
-            Some(RAW) => NewExplainStage::RawPlan,
+            Some(RAW) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::RawPlan
+            }
             Some(QUERY) => {
                 self.expect_keyword(GRAPH)?;
-                NewExplainStage::QueryGraph
+                ExplainStageNew::QueryGraph
             }
-            Some(DECORRELATED) => NewExplainStage::DecorrelatedPlan,
+            Some(DECORRELATED) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::DecorrelatedPlan
+            }
             Some(OPTIMIZED) => {
                 if self.parse_keyword(QUERY) {
                     self.expect_keyword(GRAPH)?;
-                    NewExplainStage::OptimizedQueryGraph
+                    ExplainStageNew::OptimizedQueryGraph
                 } else {
-                    NewExplainStage::OptimizedPlan
+                    self.expect_keyword(PLAN)?;
+                    ExplainStageNew::OptimizedPlan
                 }
             }
-            Some(PHYSICAL) => NewExplainStage::PhysicalPlan,
-            Some(OPTIMIZER) => NewExplainStage::Trace,
-            None => NewExplainStage::OptimizedPlan,
+            Some(PHYSICAL) => {
+                self.expect_keyword(PLAN)?;
+                ExplainStageNew::PhysicalPlan
+            }
+            Some(OPTIMIZER) => {
+                self.expect_keyword(TRACE)?;
+                ExplainStageNew::Trace
+            }
+            None => ExplainStageNew::OptimizedPlan,
             _ => unreachable!(),
         };
-        // TODO (#13137): Make specifying the format optional upon getting rid
-        // of the old explain syntax.
+
+        let config_flags = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let config_flags = self.parse_comma_separated(Self::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            config_flags
+        } else {
+            vec![]
+        };
+
+        // TODO (#13299): Make specifying the format optional upon getting rid
+        // of the old explain syntax
+        self.expect_keyword(AS)?;
         let format = match self.parse_one_of_keywords(&[TEXT, JSON]) {
             Some(TEXT) => ExplainFormat::Text,
             Some(JSON) => ExplainFormat::Json,
@@ -4873,27 +4897,6 @@ impl<'a> Parser<'a> {
             _ => unreachable!(),
         };
 
-        if stage == NewExplainStage::Trace {
-            self.expect_keyword(TRACE)?
-        } else {
-            // TODO (#13137): When getting rid of the old explain syntax,
-            // make this keyword optional if there was no stage keyword in order to
-            // support the syntax "EXPLAIN <query>".
-            self.expect_keyword(PLAN)?;
-        }
-
-        let configs = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let configs = self.parse_comma_separated(Self::parse_identifier)?;
-            self.expect_token(&Token::RParen)?;
-            configs
-        } else {
-            vec![]
-        };
-
-        // TODO (#13137): When getting rid of the old explain syntax,
-        // make this keyword optional if there was no stage keyword in order to
-        // support the syntax "EXPLAIN <query>".
         self.expect_keyword(FOR)?;
 
         // VIEW view_name | query
@@ -4906,8 +4909,8 @@ impl<'a> Parser<'a> {
         Ok(Statement::Explain(ExplainStatement::New(
             ExplainStatementNew {
                 stage,
+                config_flags,
                 format,
-                configs,
                 explainee,
             },
         )))
@@ -4952,38 +4955,38 @@ impl<'a> Parser<'a> {
         ]) {
             Some(RAW) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                OldExplainStage::RawPlan
+                ExplainStageOld::RawPlan
             }
             Some(QUERY) => {
                 self.expect_keywords(&[GRAPH, FOR])?;
-                OldExplainStage::QueryGraph
+                ExplainStageOld::QueryGraph
             }
             Some(DECORRELATED) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                OldExplainStage::DecorrelatedPlan
+                ExplainStageOld::DecorrelatedPlan
             }
             Some(OPTIMIZED) => {
                 if self.parse_keyword(QUERY) {
                     self.expect_keywords(&[GRAPH, FOR])?;
-                    OldExplainStage::OptimizedQueryGraph
+                    ExplainStageOld::OptimizedQueryGraph
                 } else {
                     self.expect_keywords(&[PLAN, FOR])?;
-                    OldExplainStage::OptimizedPlan
+                    ExplainStageOld::OptimizedPlan
                 }
             }
             Some(PLAN) => {
                 self.expect_keyword(FOR)?;
-                OldExplainStage::OptimizedPlan
+                ExplainStageOld::OptimizedPlan
             }
             Some(PHYSICAL) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                OldExplainStage::PhysicalPlan
+                ExplainStageOld::PhysicalPlan
             }
             Some(TIMESTAMP) => {
                 self.expect_keywords(&[FOR])?;
-                OldExplainStage::Timestamp
+                ExplainStageOld::Timestamp
             }
-            None => OldExplainStage::OptimizedPlan,
+            None => ExplainStageOld::OptimizedPlan,
             _ => unreachable!(),
         };
 

@@ -28,7 +28,7 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     CreateViewStatement, DeleteStatement, ExplainStatement, Explainee, Ident, InsertStatement,
-    OldExplainStage, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
+    ExplainStageOld, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
     TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
@@ -191,13 +191,13 @@ pub fn describe_explain_old(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
         match stage {
-            OldExplainStage::RawPlan => "Raw Plan",
-            OldExplainStage::QueryGraph => "Query Graph",
-            OldExplainStage::OptimizedQueryGraph => "Optimized Query Graph",
-            OldExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-            OldExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-            OldExplainStage::PhysicalPlan => "Physical Plan",
-            OldExplainStage::Timestamp => "Timestamp",
+            ExplainStageOld::RawPlan => "Raw Plan",
+            ExplainStageOld::QueryGraph => "Query Graph",
+            ExplainStageOld::OptimizedQueryGraph => "Optimized Query Graph",
+            ExplainStageOld::DecorrelatedPlan => "Decorrelated Plan",
+            ExplainStageOld::OptimizedPlan { .. } => "Optimized Plan",
+            ExplainStageOld::PhysicalPlan => "Physical Plan",
+            ExplainStageOld::Timestamp => "Timestamp",
         },
         ScalarType::String.nullable(false),
     )))
