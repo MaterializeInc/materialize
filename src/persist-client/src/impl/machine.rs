@@ -198,6 +198,7 @@ where
     }
 
     pub async fn merge_res(&mut self, res: FueledMergeRes<T>) -> bool {
+        let as_of = res.output.desc.since().clone();
         let mut state_before = TraceMeta::from(&self.state.collections.trace);
 
         let metrics = Arc::clone(&self.metrics);
@@ -209,12 +210,13 @@ where
             .await;
 
         let state_after = TraceMeta::from(&self.state.collections.trace);
-        let as_of = self.upper();
         let before = self.wip_fetch_updates(&as_of, &state_before).await;
         let after = self.wip_fetch_updates(&as_of, &state_after).await;
         eprintln!(
-            "WIP compact before/after {} {:?} {:?}",
+            "WIP compact before/after {} {} {} {:?} {:?}",
             applied,
+            state_before.spine.len(),
+            state_after.spine.len(),
             before.len(),
             after.len()
         );

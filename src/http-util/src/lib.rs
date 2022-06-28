@@ -121,7 +121,8 @@ pub async fn print_prometheus(registry: &MetricsRegistry) -> impl IntoResponse {
             if !line.starts_with("mz_persist") {
                 continue;
             }
-            tracing::info!("{}", line);
+            // tracing::info!("{}", line);
         }
+        return;
     }
 }
