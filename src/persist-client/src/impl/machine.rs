@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::location::{Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
+use mz_persist::location::{Blob, Consensus, ExternalError, Indeterminate, SeqNo, VersionedData};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -28,13 +28,16 @@ use crate::error::InvalidUsage;
 use crate::r#impl::metrics::{
     CmdMetrics, Metrics, MetricsRetryStream, RetriesMetrics, RetryMetrics,
 };
-use crate::r#impl::state::{HollowBatch, ReadCapability, Since, State, StateCollections, Upper};
+use crate::r#impl::state::{
+    HollowBatch, ReadCapability, Since, State, StateCollections, TraceMeta, Upper,
+};
 use crate::r#impl::trace::{FueledMergeReq, FueledMergeRes};
-use crate::read::ReaderId;
+use crate::read::{fetch_batch_part, ReaderId};
 use crate::ShardId;
 
 #[derive(Debug)]
 pub struct Machine<K, V, T, D> {
+    blob: Arc<dyn Blob + Send + Sync>,
     consensus: Arc<dyn Consensus + Send + Sync>,
     metrics: Arc<Metrics>,
 
@@ -45,6 +48,7 @@ pub struct Machine<K, V, T, D> {
 impl<K, V, T: Clone, D> Clone for Machine<K, V, T, D> {
     fn clone(&self) -> Self {
         Self {
+            blob: Arc::clone(&self.blob),
             consensus: Arc::clone(&self.consensus),
             metrics: Arc::clone(&self.metrics),
             state: self.state.clone(),
@@ -61,6 +65,7 @@ where
 {
     pub async fn new(
         shard_id: ShardId,
+        blob: Arc<dyn Blob + Send + Sync>,
         consensus: Arc<dyn Consensus + Send + Sync>,
         metrics: Arc<Metrics>,
     ) -> Result<Self, InvalidUsage<T>> {
@@ -74,6 +79,7 @@ where
             })
             .await?;
         Ok(Machine {
+            blob,
             consensus,
             metrics,
             state,
@@ -160,13 +166,63 @@ where
         }
     }
 
+    async fn wip_fetch_updates(
+        &self,
+        as_of: &Antichain<T>,
+        meta: &TraceMeta,
+    ) -> Vec<((Vec<u8>, Vec<u8>), T, D)> {
+        let mut updates = Vec::new();
+        for batch in meta.spine.iter() {
+            let desc = Description::<T>::from(&batch.desc);
+            for key in batch.keys.iter() {
+                fetch_batch_part(
+                    self.blob.as_ref(),
+                    &self.metrics,
+                    key,
+                    &desc,
+                    |k, v, mut t, d| {
+                        // This would get covered by a listen started at the same as_of.
+                        if as_of.less_than(&t) {
+                            return;
+                        }
+                        t.advance_by(as_of.borrow());
+                        let d = D::decode(d);
+                        updates.push(((k.to_vec(), v.to_vec()), t, d));
+                    },
+                )
+                .await;
+            }
+        }
+        differential_dataflow::consolidation::consolidate_updates(&mut updates);
+        updates
+    }
+
     pub async fn merge_res(&mut self, res: FueledMergeRes<T>) -> bool {
+        let mut state_before = TraceMeta::from(&self.state.collections.trace);
+
         let metrics = Arc::clone(&self.metrics);
         let (_seqno, applied) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, state| {
+                state_before = TraceMeta::from(&state.trace);
                 state.apply_merge_res(&res)
             })
             .await;
+
+        let state_after = TraceMeta::from(&self.state.collections.trace);
+        let as_of = self.upper();
+        let before = self.wip_fetch_updates(&as_of, &state_before).await;
+        let after = self.wip_fetch_updates(&as_of, &state_after).await;
+        eprintln!(
+            "WIP compact before/after {} {:?} {:?}",
+            applied,
+            before.len(),
+            after.len()
+        );
+        if !applied {
+            assert_eq!(state_before, state_after);
+        }
+        assert_eq!(before, after);
+
         applied
     }
 
@@ -836,7 +892,7 @@ mod tests {
 
         // Write a bunch of batches. This should result in a bounded number of
         // live entries in consensus.
-        const NUM_BATCHES: u64 = 100;
+        const NUM_BATCHES: u64 = 10;
         for idx in 0..NUM_BATCHES {
             write
                 .expect_compare_and_append(&[((idx.to_string(), ()), idx, 1)], idx, idx + 1)

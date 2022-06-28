@@ -171,6 +171,10 @@ impl Compactor {
             let mut updates = Vec::new();
             for part in req.inputs.iter() {
                 for key in part.keys.iter() {
+                    // eprintln!(
+                    //     "WIP compact key={} batch_desc={:?} output_desc={:?} updates=\n  {:?}",
+                    //     key, part.desc, req.desc, updates
+                    // );
                     handle.block_on(fetch_batch_part(
                         blob.as_ref(),
                         &metrics,

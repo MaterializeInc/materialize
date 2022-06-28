@@ -306,6 +306,7 @@ impl PersistClient {
         trace!("Client::open shard_id={:?}", shard_id);
         let mut machine = Machine::new(
             shard_id,
+            Arc::clone(&self.blob),
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
         )
@@ -380,6 +381,7 @@ impl PersistClient {
         trace!("Client::open_writer shard_id={:?}", shard_id);
         let mut machine = Machine::new(
             shard_id,
+            Arc::clone(&self.blob),
             Arc::clone(&self.consensus),
             Arc::clone(&self.metrics),
         )

@@ -82,12 +82,12 @@ pub struct SnapshotSplit {
 /// See [ReadHandle::snapshot] for details.
 #[derive(Debug)]
 pub struct SnapshotIter<K, V, T, D> {
-    metrics: Arc<Metrics>,
-    shard_id: ShardId,
-    as_of: Antichain<T>,
-    batches: Vec<(String, Description<T>)>,
-    blob: Arc<dyn Blob + Send + Sync>,
-    _phantom: PhantomData<(K, V, T, D)>,
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) shard_id: ShardId,
+    pub(crate) as_of: Antichain<T>,
+    pub(crate) batches: Vec<(String, Description<T>)>,
+    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
+    pub(crate) _phantom: PhantomData<(K, V, T, D)>,
 }
 
 impl<K, V, T, D> SnapshotIter<K, V, T, D>
@@ -589,7 +589,7 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     key: &str,
-    desc: &Description<T>,
+    output_desc: &Description<T>,
     mut update_fn: UpdateFn,
 ) where
     T: Timestamp + Lattice + Codec64,
@@ -641,8 +641,54 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
         // Drop the encoded representation as soon as we can to reclaim memory.
         drop(value);
 
+        let decode_antichain = |x: &Antichain<u64>| {
+            Antichain::from(
+                x.elements()
+                    .iter()
+                    .map(|x| T::decode(x.to_le_bytes()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let batch_desc = Description::new(
+            decode_antichain(batch.desc.lower()),
+            decode_antichain(batch.desc.upper()),
+            decode_antichain(batch.desc.since()),
+        );
+        assert!(
+            PartialOrder::less_equal(batch_desc.lower(), output_desc.lower()),
+            "batch={:?} output={:?}",
+            batch_desc,
+            output_desc
+        );
+        assert!(
+            PartialOrder::less_equal(output_desc.upper(), batch_desc.upper()),
+            "batch={:?} output={:?}",
+            batch_desc,
+            output_desc
+        );
+
         // WIP this is really subtle and possibly wrong, justify!
-        let has_original_timestamps = PartialOrder::less_equal(desc.since(), desc.lower());
+        let has_original_timestamps =
+            PartialOrder::less_equal(batch_desc.since(), batch_desc.lower());
+        assert_eq!(
+            has_original_timestamps,
+            PartialOrder::less_equal(output_desc.since(), output_desc.lower()),
+            "batch={:?} output={:?}",
+            batch_desc,
+            output_desc
+        );
+
+        // WIP trying to debug the CI failure
+        if batch_desc.lower() != output_desc.lower() || batch_desc.upper() != output_desc.upper() {
+            assert_eq!(
+                batch_desc.since(),
+                &Antichain::from_elem(T::minimum()),
+                "batch={:?} output={:?}",
+                batch_desc,
+                output_desc
+            );
+        }
 
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {
@@ -650,10 +696,10 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
 
                 // WIP this is really subtle and possibly wrong, justify!
                 if has_original_timestamps {
-                    if !desc.lower().less_equal(&t) {
+                    if !output_desc.lower().less_equal(&t) {
                         continue;
                     }
-                    if desc.upper().less_equal(&t) {
+                    if output_desc.upper().less_equal(&t) {
                         continue;
                     }
                 }

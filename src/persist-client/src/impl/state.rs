@@ -43,7 +43,7 @@ pub struct HollowBatch<T> {
 pub struct StateCollections<T> {
     readers: HashMap<ReaderId, ReadCapability<T>>,
 
-    trace: Trace<T>,
+    pub(crate) trace: Trace<T>,
 }
 
 impl<T> StateCollections<T>
@@ -179,7 +179,7 @@ pub struct State<K, V, T, D> {
     shard_id: ShardId,
 
     seqno: SeqNo,
-    collections: StateCollections<T>,
+    pub(crate) collections: StateCollections<T>,
 
     // According to the docs, PhantomData is to "mark things that act like they
     // own a T". State doesn't actually own K, V, or D, just the ability to
@@ -334,32 +334,32 @@ impl<T> Determinacy for Upper<T> {
     const DETERMINANT: bool = true;
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct AntichainMeta(Vec<[u8; 8]>);
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct AntichainMeta(Vec<[u8; 8]>);
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct DescriptionMeta {
     lower: AntichainMeta,
     upper: AntichainMeta,
     since: AntichainMeta,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct BatchMeta {
-    desc: DescriptionMeta,
-    keys: Vec<String>,
-    len: usize,
+    pub(crate) desc: DescriptionMeta,
+    pub(crate) keys: Vec<String>,
+    pub(crate) len: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct TraceMeta {
-    since: AntichainMeta,
+    pub(crate) since: AntichainMeta,
     // TODO: Should this more directly reflect the SpineBatch structure?
-    spine: Vec<BatchMeta>,
+    pub(crate) spine: Vec<BatchMeta>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct StateRollupMeta {
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub(crate) struct StateRollupMeta {
     shard_id: ShardId,
     key_codec: String,
     val_codec: String,
@@ -368,7 +368,7 @@ struct StateRollupMeta {
 
     seqno: SeqNo,
     readers: Vec<(ReaderId, AntichainMeta, SeqNo)>,
-    trace: TraceMeta,
+    pub(crate) trace: TraceMeta,
 }
 
 mod codec_impls {

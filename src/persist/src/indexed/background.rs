@@ -644,6 +644,7 @@ mod tests {
         };
 
         let test_cases = vec![
+            // "Normal" case
             CompactionTestCase {
                 b0: vec![vec![
                     (("k".as_bytes(), "v".as_bytes()), 0, 1),
@@ -680,6 +681,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has multiple parts
             CompactionTestCase {
                 b0: vec![
                     vec![(("k".as_bytes(), "v".as_bytes()), 0, 1)],
@@ -716,6 +718,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // Both of the inputs have multiple parts
             CompactionTestCase {
                 b0: vec![
                     vec![(("k".as_bytes(), "v".as_bytes()), 0, 1)],
@@ -752,6 +755,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has empty parts
             CompactionTestCase {
                 b0: vec![
                     vec![],
@@ -791,6 +795,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has only empty parts
             CompactionTestCase {
                 b0: vec![vec![], vec![], vec![]],
                 b0_desc: desc_from(0, 1, 0),
@@ -825,6 +830,7 @@ mod tests {
                     (("k3".as_bytes(), "v3".as_bytes()), 2, 1),
                 ],
             },
+            // One of the inputs has no parts
             CompactionTestCase {
                 b0: vec![],
                 b0_desc: desc_from(0, 1, 0),

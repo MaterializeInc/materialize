@@ -459,10 +459,14 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 .writing_parts
                 .pop_front()
                 .expect("pop failed when len was just > some usize");
-            let () = handle
+            let () = match handle
                 .instrument(debug_span!("batch::max_outstanding"))
                 .await
-                .expect("part upload task failed");
+            {
+                Ok(()) => (),
+                Err(err) if err.is_cancelled() => (),
+                Err(err) => panic!("part upload task failed: {}", err),
+            };
             self.finished_parts.push(key);
         }
     }
@@ -471,7 +475,11 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     pub(crate) async fn finish(self) -> Vec<String> {
         let mut keys = self.finished_parts;
         for (key, handle) in self.writing_parts {
-            let () = handle.await.expect("part upload task failed");
+            let () = match handle.await {
+                Ok(()) => (),
+                Err(err) if err.is_cancelled() => (),
+                Err(err) => panic!("part upload task failed: {}", err),
+            };
             keys.push(key);
         }
         keys

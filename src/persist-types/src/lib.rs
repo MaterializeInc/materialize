@@ -22,7 +22,7 @@ mod codec_impls;
 
 /// Encoding and decoding operations for a type usable as a persisted key or
 /// value.
-pub trait Codec: Sized + 'static {
+pub trait Codec: Sized + Send + 'static {
     /// Name of the codec.
     ///
     /// This name is stored for the key and value when a stream is first created
@@ -53,7 +53,7 @@ pub trait Codec: Sized + 'static {
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp
 /// or diff.
-pub trait Codec64: Sized + 'static {
+pub trait Codec64: Sized + Send + 'static {
     /// Name of the codec.
     ///
     /// This name is stored for the timestamp and diff when a stream is first
