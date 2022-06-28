@@ -7,6 +7,34 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Conversion from Avro schemas to Materialize `RelationDesc`s.
+//!
+//! A few notes for posterity on how this conversion happens are in order.
+//!
+//! If the schema is an Avro record, we flatten it to its fields, which become the columns
+//! of the relation.
+//!
+//! Each individual field is then converted to its SQL equivalent. For most types, this
+//! conversion is the obvious one. The only non-trivial counterexample is Avro unions.
+//!
+//! Since Avro types are not nullable by default, the typical way normal (i.e., nullable)
+//! SQL fields are represented in Avro is by a union of the underlying type with the
+//! singleton type { Null }; in Avro schema notation, this is `["null", "TheType"]`.
+//! We shall call union types following this pattern _Nullability-Pattern Unions_.
+//! We shall call all other union types (e.g. `["MyType1", "MyType2"]` or `["null", "MyType1", "MyType2"]`) _Essential Unions_.
+//! Since there is an obvious way to represent Nullability-Pattern Unions, but not Essential Unions, in the SQL type system,
+//! we must handle Essential Unions with a bit of a hack (at least until Materialize supports union or sum types, which may be never).
+//!
+//! When an Essential Union appears as one of the fields of a record, we expand
+//! it to _n_ columns in SQL, where _n_ is the number of non-null variants in the union. These
+//! columns will be given names created by pasting their index at the end of the overall name
+//! of the field. For example, if an Essential Union in a field named `"Foo"` has schema `[int, bool]`, it will expand to the columns `"Foo1": bool, "Foo2": int`. There is an implicit constraint upheld be the source pipeline that only one such column will be non-`null` at a time
+//!
+//! When an Essential Union appears _elsewhere_ than as one of the fields of a record,
+//! there is nothing we can do, because we expect to be able to turn it into exactly one
+//! SQL type, not a series of them. Thus, in these cases, we just bail. For example, it's
+//! not possible to ingest an array or map whose element type is an Essential Union.
+
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -14,6 +42,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
+use mz_ore::collections::CollectionExt;
 use tracing::warn;
 
 use mz_avro::error::Error as AvroError;
@@ -40,6 +69,8 @@ pub fn schema_to_relationdesc(schema: Schema) -> Result<RelationDesc, anyhow::Er
     )?))
 }
 
+/// Convert an Avro schema to a series of columns and names, flattening the top-level record,
+/// if the top node is indeed a record.
 fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     let mut columns = vec![];
     let mut seen_avro_nodes = Default::default();
@@ -60,71 +91,85 @@ fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, Colu
     Ok(columns)
 }
 
+/// Get the series of (one or more) SQL columns corresponding to an Avro union.
+/// See module comments for details.
+fn get_union_columns<'a>(
+    seen_avro_nodes: &mut HashSet<usize>,
+    schema: SchemaNode<'a>,
+    base_name: Option<&str>,
+) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
+    let us = match schema.inner {
+        SchemaPiece::Union(us) => us,
+        _ => panic!("This function should only be called on unions."),
+    };
+    let mut columns = vec![];
+    let vs = us.variants();
+    if vs.is_empty() || (vs.len() == 1 && is_null(&vs[0])) {
+        bail!(anyhow!("Empty or null-only unions are not supported"));
+    } else {
+        for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
+            let named_idx = match v {
+                SchemaPieceOrNamed::Named(idx) => Some(*idx),
+                _ => None,
+            };
+            if let Some(named_idx) = named_idx {
+                if !seen_avro_nodes.insert(named_idx) {
+                    bail!(
+                        "Recursive types are not supported: {}",
+                        v.get_human_name(schema.root)
+                    );
+                }
+            }
+            let node = schema.step(v);
+            if let SchemaPiece::Union(_) = node.inner {
+                unreachable!("Internal error: directly nested avro union!");
+            }
+
+            let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
+                // There is only one non-null variant in the
+                // union, so we can use the field name directly.
+                base_name
+                    .map(|n| n.to_owned())
+                    .or_else(|| {
+                        v.get_piece_and_name(schema.root)
+                            .1
+                            .map(|full_name| full_name.base_name().to_owned())
+                    })
+                    .unwrap_or_else(|| "?column?".into())
+            } else {
+                // There are multiple non-null variants in the
+                // union, so we need to invent field names for
+                // each variant.
+                base_name
+                    .map(|n| format!("{}{}", n, i + 1))
+                    .or_else(|| {
+                        v.get_piece_and_name(schema.root)
+                            .1
+                            .map(|full_name| full_name.base_name().to_owned())
+                    })
+                    .unwrap_or_else(|| "?column?".into())
+            };
+
+            // If there is more than one variant in the union,
+            // the column's output type is nullable, as this
+            // column will be null whenever it is uninhabited.
+            let ty = validate_schema_2(seen_avro_nodes, node)?;
+            columns.push((name.into(), ty.nullable(vs.len() > 1)));
+            if let Some(named_idx) = named_idx {
+                seen_avro_nodes.remove(&named_idx);
+            }
+        }
+    }
+    Ok(columns)
+}
+
 fn get_named_columns<'a>(
     seen_avro_nodes: &mut HashSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
 ) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
-    if let SchemaPiece::Union(us) = schema.inner {
-        let mut columns = vec![];
-        let vs = us.variants();
-        if vs.is_empty() || (vs.len() == 1 && is_null(&vs[0])) {
-            bail!(anyhow!("Empty or null-only unions are not supported"));
-        } else {
-            for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
-                let named_idx = match v {
-                    SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                    _ => None,
-                };
-                if let Some(named_idx) = named_idx {
-                    if !seen_avro_nodes.insert(named_idx) {
-                        bail!(
-                            "Recursive types are not supported: {}",
-                            v.get_human_name(schema.root)
-                        );
-                    }
-                }
-                let node = schema.step(v);
-                if let SchemaPiece::Union(_) = node.inner {
-                    unreachable!("Internal error: directly nested avro union!");
-                }
-
-                let name = if vs.len() == 1 || (vs.len() == 2 && vs.iter().any(is_null)) {
-                    // There is only one non-null variant in the
-                    // union, so we can use the field name directly.
-                    base_name
-                        .map(|n| n.to_owned())
-                        .or_else(|| {
-                            v.get_piece_and_name(schema.root)
-                                .1
-                                .map(|full_name| full_name.base_name().to_owned())
-                        })
-                        .unwrap_or_else(|| "?column?".into())
-                } else {
-                    // There are multiple non-null variants in the
-                    // union, so we need to invent field names for
-                    // each variant.
-                    base_name
-                        .map(|n| format!("{}{}", n, i + 1))
-                        .or_else(|| {
-                            v.get_piece_and_name(schema.root)
-                                .1
-                                .map(|full_name| full_name.base_name().to_owned())
-                        })
-                        .unwrap_or_else(|| "?column?".into())
-                };
-
-                // If there is more than one variant in the union,
-                // the column's output type is nullable, as this
-                // column will be null whenever it is uninhabited.
-                let ty = validate_schema_2(seen_avro_nodes, node)?;
-                columns.push((name.into(), ty.nullable(vs.len() > 1)));
-                if let Some(named_idx) = named_idx {
-                    seen_avro_nodes.remove(&named_idx);
-                }
-            }
-        }
-        Ok(columns)
+    if let SchemaPiece::Union(_) = schema.inner {
+        get_union_columns(seen_avro_nodes, schema, base_name)
     } else {
         let scalar_type = validate_schema_2(seen_avro_nodes, schema)?;
         Ok(vec![(
@@ -136,11 +181,28 @@ fn get_named_columns<'a>(
     }
 }
 
+/// Get the single column corresponding to a schema node.
+/// It is an error if this node should correspond to more than one column
+/// (because it is an Essential Union in the sense described in the module docs).
 fn validate_schema_2(
     seen_avro_nodes: &mut HashSet<usize>,
     schema: SchemaNode,
 ) -> anyhow::Result<ScalarType> {
     Ok(match schema.inner {
+        SchemaPiece::Union(_) => {
+            let columns = get_union_columns(seen_avro_nodes, schema, None)?;
+            if columns.len() != 1 {
+                bail!("Union of more than one non-null type not valid here");
+            }
+            let (_column_name, column_type) = columns.into_element();
+            // It's okay to lose the nullability information here, as it's not relevant to
+            // any higher layer. This will either be included in an array or map type,
+            // where all values are nullable. It can't be included as a top-level column
+            // or as a record type, where nullability is actually tracked, because in
+            // those cases we will have already gone through the `Union` code path in
+            // `get_named_columns`.
+            column_type.scalar_type
+        }
         SchemaPiece::Null => bail!("null outside of union types is not supported"),
         SchemaPiece::Boolean => ScalarType::Bool,
         SchemaPiece::Int => ScalarType::Int32,
