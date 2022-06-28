@@ -47,7 +47,7 @@ def main(argv: List[str]) -> None:
         prog="mzcompose",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="""
-mzcompose orchestrates services defined in mzcompose.yml or mzcompose.py.
+mzcompose orchestrates services defined in mzcompose.py.
 It wraps Docker Compose to add some Materialize-specific features.""",
         epilog="""
 These are only the most common options. There are additional Docker Compose
@@ -68,7 +68,7 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     parser.add_argument(
         "--find",
         metavar="DIR",
-        help="use the mzcompose.yml file from DIR, rather than the current directory",
+        help="use the mzcompose.py file from DIR, rather than the current directory",
     )
     parser.add_argument(
         "--preserve-ports",
@@ -101,7 +101,6 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     help_command.register(parser, subparsers)
     ImagesCommand.register(parser, subparsers)
     KillCommand.register(parser, subparsers)
-    LintCommand().register(parser, subparsers)
     ListCompositionsCommand().register(parser, subparsers)
     ListWorkflowsCommand().register(parser, subparsers)
     LogsCommand.register(parser, subparsers)
@@ -152,7 +151,7 @@ def load_composition(args: argparse.Namespace) -> mzcompose.Composition:
             for path in repo.compositions.values():
                 hint += f"    {path.relative_to(Path.cwd())}\n"
             raise UIError(
-                "directory does not contain an mzcompose.yml or mzcompose.py",
+                "directory does not contain mzcompose.py",
                 hint,
             )
 
@@ -245,21 +244,6 @@ exec "$(dirname "$0")"/{}/bin/pyactivate -m materialize.cli.mzcompose "$@"
             with open(mzcompose_path, "w") as f:
                 f.write(template.format(os.path.relpath(repo.root, path)))
             mzbuild.chmod_x(mzcompose_path)
-
-
-class LintCommand(Command):
-    name = "lint"
-    help = "surface common errors in compositions"
-
-    def run(cls, args: argparse.Namespace) -> None:
-        repo = mzbuild.Repository.from_arguments(ROOT, args)
-        errors = []
-        for name in repo.compositions:
-            errors += mzcompose.Composition.lint(repo, name)
-        for error in sorted(errors):
-            print(error)
-        if errors:
-            raise UIError("lint errors discovered")
 
 
 class ListCompositionsCommand(Command):

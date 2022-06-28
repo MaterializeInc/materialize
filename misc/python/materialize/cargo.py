@@ -114,12 +114,11 @@ class Crate:
         #
         # † As a development convenience, we omit mzcompose configuration files
         # within a crate. This is technically incorrect if someone writes
-        # `include!("mzcompose.yml")`, but that seems like a crazy thing to do.
+        # `include!("mzcompose.py")`, but that seems like a crazy thing to do.
         return git.expand_globs(
             self.root,
             f"{self.path}/**",
             f":(exclude){self.path}/mzcompose",
-            f":(exclude){self.path}/mzcompose.yml",
             f":(exclude){self.path}/mzcompose.py",
         )
 

@@ -85,7 +85,7 @@ There are also two other special version identifiers:
 
 ### For an existing feature
 
-1. Decide which is the earlest version ```vX.Y.Z``` that supports the desired functionality and create a test named ```create-in-vX.Y.Z-feature_under_test.td``` where you will be creating the database objects that will be surviving an upgrade attempt. Use ```any_version``` if the feature exists in all versions listed in ```mzcompose.yml``` and `current_source` if you are adding the feature just now and it does not exist in any previously released version.
+1. Decide which is the earlest version ```vX.Y.Z``` that supports the desired functionality and create a test named ```create-in-vX.Y.Z-feature_under_test.td``` where you will be creating the database objects that will be surviving an upgrade attempt. Use ```any_version``` if the feature exists in all versions listed in ```mzcompose.py``` and `current_source` if you are adding the feature just now and it does not exist in any previously released version.
 
 2. In a file named ```check-from-vX.Y.Z-feature_undex_test.td``` put the queries that will be testing that the object has survived the upgrade intact. This may include any of the following:
 

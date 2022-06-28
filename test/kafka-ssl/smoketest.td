@@ -104,7 +104,7 @@ $ kafka-verify format=avro sink=materialize.public.snk sort-messages=true
 {"before": null, "after": {"row":{"a": 1}}}
 {"before": null, "after": {"row":{"a": 2}}}
 
-# Check environment variables; defined in mzcompose.yml
+# Check environment variables; defined in mzcompose.py
 
 > CREATE SINK env_pw_snk FROM data
   INTO KAFKA BROKER 'kafka' TOPIC 'snk'

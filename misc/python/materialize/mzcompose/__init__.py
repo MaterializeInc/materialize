@@ -22,7 +22,6 @@ import importlib.abc
 import importlib.util
 import inspect
 import os
-import re
 import subprocess
 import sys
 import time
@@ -30,7 +29,6 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from inspect import getmembers, isfunction
-from pathlib import Path
 from tempfile import TemporaryFile
 from typing import (
     Any,
@@ -69,87 +67,8 @@ class UnknownCompositionError(UIError):
         super().__init__(f"unknown composition {name!r}")
 
 
-class LintError:
-    def __init__(self, file: Path, message: str):
-        self.file = file
-        self.message = message
-
-    def __str__(self) -> str:
-        return f"{os.path.relpath(self.file)}: {self.message}"
-
-    def __lt__(self, other: "LintError") -> bool:
-        return (self.file, self.message) < (other.file, other.message)
-
-
-def _lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
-    if "services" not in composition:
-        return
-
-    for (name, service) in composition["services"].items():
-        if "mzbuild" not in service and "image" in service:
-            _lint_image_name(path, service["image"], errors)
-
-        if isinstance(service.get("environment"), dict):
-            errors.append(
-                LintError(
-                    path, f"environment for service {name} uses dict instead of list"
-                )
-            )
-
-
-def _lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
-    from materialize.mzcompose.services import (
-        DEFAULT_CONFLUENT_PLATFORM_VERSION,
-        LINT_DEBEZIUM_VERSIONS,
-    )
-
-    match = re.search(r"((?P<repo>[^/]+)/)?(?P<image>[^:]+)(:(?P<tag>.*))?", spec)
-    if not match:
-        errors.append(LintError(path, f"malformatted image specification: {spec}"))
-        return
-    (repo, image, tag) = (match.group("repo"), match.group("image"), match.group("tag"))
-
-    if not tag:
-        errors.append(LintError(path, f"image {spec} missing tag"))
-    elif tag == "latest":
-        errors.append(LintError(path, f'image {spec} depends on floating "latest" tag'))
-
-    if repo == "confluentinc" and image.startswith("cp-"):
-        # An '$XXX' environment variable may have been used to specify the version
-        if "$" not in tag and tag != DEFAULT_CONFLUENT_PLATFORM_VERSION:
-            errors.append(
-                LintError(
-                    path,
-                    f"image {spec} depends on wrong version of Confluent Platform "
-                    f"(want {DEFAULT_CONFLUENT_PLATFORM_VERSION})",
-                )
-            )
-
-    if repo == "debezium":
-        if "$" not in tag and tag not in LINT_DEBEZIUM_VERSIONS:
-            errors.append(
-                LintError(
-                    path,
-                    f"image {spec} depends on wrong version of Debezium "
-                    f"(want {LINT_DEBEZIUM_VERSIONS})",
-                )
-            )
-
-    if not repo and image == "zookeeper":
-        errors.append(
-            LintError(
-                path, f"replace {spec} with official confluentinc/cp-zookeeper image"
-            )
-        )
-
-    if repo == "wurstmeister" and image == "kafka":
-        errors.append(
-            LintError(path, f"replace {spec} with official confluentinc/cp-kafka image")
-        )
-
-
 class Composition:
-    """A parsed mzcompose.yml with a loaded mzcompose.py file."""
+    """A loaded mzcompose.py file."""
 
     @dataclass
     class TestResult:
@@ -177,21 +96,10 @@ class Composition:
         else:
             raise UnknownCompositionError(name)
 
-        # load the mzcompose.yml file, if one exists
-        mzcompose_yml = self.path / "mzcompose.yml"
-        if mzcompose_yml.exists():
-            with open(mzcompose_yml) as f:
-                compose = yaml.safe_load(f) or {}
-        else:
-            compose = {}
-
-        self.compose = compose
-
-        if "version" not in compose:
-            compose["version"] = "3.7"
-
-        if "services" not in compose:
-            compose["services"] = {}
+        self.compose: dict[str, Any] = {
+            "version": "3.7",
+            "services": {},
+        }
 
         # Load the mzcompose.py file, if one exists
         mzcompose_py = self.path / "mzcompose.py"
@@ -212,12 +120,12 @@ class Composition:
 
             for python_service in getattr(module, "SERVICES", []):
                 name = python_service.name
-                if name in compose["services"]:
+                if name in self.compose["services"]:
                     raise UIError(f"service {name!r} specified more than once")
-                compose["services"][name] = python_service.config
+                self.compose["services"][name] = python_service.config
 
         # Add default volumes
-        compose.setdefault("volumes", {}).update(
+        self.compose.setdefault("volumes", {}).update(
             {
                 "mzdata": None,
                 "pgdata": None,
@@ -229,7 +137,7 @@ class Composition:
 
         # The CLI driver will handle acquiring these dependencies.
         if munge_services:
-            self.dependencies = self._munge_services(compose["services"].items())
+            self.dependencies = self._munge_services(self.compose["services"].items())
 
         # Emit the munged configuration to a temporary file so that we can later
         # pass it to Docker Compose.
@@ -298,23 +206,6 @@ class Composition:
         self.file.truncate()
         yaml.dump(self.compose, self.file)
         self.file.flush()
-
-    @classmethod
-    def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
-        """Checks a composition for common errors."""
-        if not name in repo.compositions:
-            raise UnknownCompositionError(name)
-
-        errs: List[LintError] = []
-
-        path = repo.compositions[name] / "mzcompose.yml"
-
-        if path.exists():
-            with open(path) as f:
-                composition = yaml.safe_load(f) or {}
-
-            _lint_composition(path, composition, errs)
-        return errs
 
     def invoke(
         self, *args: str, capture: bool = False, stdin: Optional[str] = None
