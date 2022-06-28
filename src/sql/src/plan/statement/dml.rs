@@ -27,8 +27,8 @@ use mz_sql_parser::ast::{AstInfo, ExplainStatementNew, ExplainStatementOld};
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateViewStatement, DeleteStatement, ExplainStage, ExplainStatement, Explainee, Ident,
-    InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
+    CreateViewStatement, DeleteStatement, ExplainStatement, Explainee, Ident, InsertStatement,
+    OldExplainStage, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
     TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
@@ -180,7 +180,7 @@ pub fn describe_explain_new(
     _scx: &StatementContext,
     _explain: ExplainStatementNew<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    unimplemented!() // TODO: #13295
+    Err(anyhow!("unimplemented interface")) // TODO: #13295
 }
 
 pub fn describe_explain_old(
@@ -191,13 +191,13 @@ pub fn describe_explain_old(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
         match stage {
-            ExplainStage::RawPlan => "Raw Plan",
-            ExplainStage::QueryGraph => "Query Graph",
-            ExplainStage::OptimizedQueryGraph => "Optimized Query Graph",
-            ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-            ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-            ExplainStage::PhysicalPlan => "Physical Plan",
-            ExplainStage::Timestamp => "Timestamp",
+            OldExplainStage::RawPlan => "Raw Plan",
+            OldExplainStage::QueryGraph => "Query Graph",
+            OldExplainStage::OptimizedQueryGraph => "Optimized Query Graph",
+            OldExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+            OldExplainStage::OptimizedPlan { .. } => "Optimized Plan",
+            OldExplainStage::PhysicalPlan => "Physical Plan",
+            OldExplainStage::Timestamp => "Timestamp",
         },
         ScalarType::String.nullable(false),
     )))
@@ -287,7 +287,7 @@ pub fn plan_explain_new(
     _explain: ExplainStatementNew<Aug>,
     _params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    unimplemented!() // TODO: #13295
+    Err(anyhow!("unimplemented interface")) // TODO: #13295
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns

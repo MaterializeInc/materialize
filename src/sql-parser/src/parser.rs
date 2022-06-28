@@ -4837,7 +4837,80 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain_new(&mut self) -> Result<Statement<Raw>, ParserError> {
-        Err(ParserError::new(self.index, "unimplemented"))
+        let stage = match self.parse_one_of_keywords(&[
+            RAW,
+            DECORRELATED,
+            OPTIMIZED,
+            PHYSICAL,
+            OPTIMIZER,
+            QUERY,
+        ]) {
+            Some(RAW) => NewExplainStage::RawPlan,
+            Some(QUERY) => {
+                self.expect_keyword(GRAPH)?;
+                NewExplainStage::QueryGraph
+            }
+            Some(DECORRELATED) => NewExplainStage::DecorrelatedPlan,
+            Some(OPTIMIZED) => {
+                if self.parse_keyword(QUERY) {
+                    self.expect_keyword(GRAPH)?;
+                    NewExplainStage::OptimizedQueryGraph
+                } else {
+                    NewExplainStage::OptimizedPlan
+                }
+            }
+            Some(PHYSICAL) => NewExplainStage::PhysicalPlan,
+            Some(OPTIMIZER) => NewExplainStage::Trace,
+            None => NewExplainStage::OptimizedPlan,
+            _ => unreachable!(),
+        };
+        // TODO (#13137): Make specifying the format optional upon getting rid
+        // of the old explain syntax.
+        let format = match self.parse_one_of_keywords(&[TEXT, JSON]) {
+            Some(TEXT) => ExplainFormat::Text,
+            Some(JSON) => ExplainFormat::Json,
+            None => return Err(ParserError::new(self.index, "expected a format")),
+            _ => unreachable!(),
+        };
+
+        if stage == NewExplainStage::Trace {
+            self.expect_keyword(TRACE)?
+        } else {
+            // TODO (#13137): When getting rid of the old explain syntax,
+            // make this keyword optional if there was no stage keyword in order to
+            // support the syntax "EXPLAIN <query>".
+            self.expect_keyword(PLAN)?;
+        }
+
+        let configs = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let configs = self.parse_comma_separated(Self::parse_identifier)?;
+            self.expect_token(&Token::RParen)?;
+            configs
+        } else {
+            vec![]
+        };
+
+        // TODO (#13137): When getting rid of the old explain syntax,
+        // make this keyword optional if there was no stage keyword in order to
+        // support the syntax "EXPLAIN <query>".
+        self.expect_keyword(FOR)?;
+
+        // VIEW view_name | query
+        let explainee = if self.parse_keyword(VIEW) {
+            Explainee::View(self.parse_raw_name()?)
+        } else {
+            Explainee::Query(self.parse_query()?)
+        };
+
+        Ok(Statement::Explain(ExplainStatement::New(
+            ExplainStatementNew {
+                stage,
+                format,
+                configs,
+                explainee,
+            },
+        )))
     }
 
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
@@ -4879,38 +4952,38 @@ impl<'a> Parser<'a> {
         ]) {
             Some(RAW) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::RawPlan
+                OldExplainStage::RawPlan
             }
             Some(QUERY) => {
                 self.expect_keywords(&[GRAPH, FOR])?;
-                ExplainStage::QueryGraph
+                OldExplainStage::QueryGraph
             }
             Some(DECORRELATED) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::DecorrelatedPlan
+                OldExplainStage::DecorrelatedPlan
             }
             Some(OPTIMIZED) => {
                 if self.parse_keyword(QUERY) {
                     self.expect_keywords(&[GRAPH, FOR])?;
-                    ExplainStage::OptimizedQueryGraph
+                    OldExplainStage::OptimizedQueryGraph
                 } else {
                     self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::OptimizedPlan
+                    OldExplainStage::OptimizedPlan
                 }
             }
             Some(PLAN) => {
                 self.expect_keyword(FOR)?;
-                ExplainStage::OptimizedPlan
+                OldExplainStage::OptimizedPlan
             }
             Some(PHYSICAL) => {
                 self.expect_keywords(&[PLAN, FOR])?;
-                ExplainStage::PhysicalPlan
+                OldExplainStage::PhysicalPlan
             }
             Some(TIMESTAMP) => {
                 self.expect_keywords(&[FOR])?;
-                ExplainStage::Timestamp
+                OldExplainStage::Timestamp
             }
-            None => ExplainStage::OptimizedPlan,
+            None => OldExplainStage::OptimizedPlan,
             _ => unreachable!(),
         };
 

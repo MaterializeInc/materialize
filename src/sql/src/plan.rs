@@ -41,8 +41,8 @@ use mz_pgcopy::CopyFormatParams;
 use mz_repr::{ColumnName, Diff, GlobalId, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ExplainOptions, ExplainStage, Expr, FetchDirection, IndexOptionName, NoticeSeverity,
-    ObjectType, Raw, SetVariableValue, Statement, TransactionAccessMode,
+    ExplainOptions, Expr, FetchDirection, IndexOptionName, NoticeSeverity, ObjectType,
+    OldExplainStage, Raw, SetVariableValue, Statement, TransactionAccessMode,
 };
 use crate::catalog::{CatalogType, IdReference};
 use crate::names::{
@@ -354,7 +354,7 @@ pub struct ExplainPlanNew {
 pub struct ExplainPlanOld {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
-    pub stage: ExplainStage,
+    pub stage: OldExplainStage,
     pub options: ExplainOptions,
 }
 

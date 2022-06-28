@@ -136,3 +136,26 @@ EXPLAIN TIMESTAMP FOR SELECT 1
 EXPLAIN TIMESTAMP FOR SELECT 1
 =>
 Explain(Old(ExplainStatementOld { stage: Timestamp, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
+
+parse-statement
+EXPLAIN OPTIMIZED QUERY GRAPH TEXT PLAN WITH (monotonicity, types) FOR VIEW foo
+----
+EXPLAIN OPTIMIZED QUERY GRAPH TEXT PLAN WITH (monotonicity, types) FOR VIEW foo
+=>
+Explain(New(ExplainStatementNew { stage: OptimizedQueryGraph, format: Text, configs: [Ident("monotonicity"), Ident("types")], explainee: View(Name(UnresolvedObjectName([Ident("foo")]))) }))
+
+parse-statement
+EXPLAIN JSON PLAN FOR SELECT * FROM foo
+----
+EXPLAIN OPTIMIZED JSON PLAN FOR SELECT * FROM foo
+=>
+Explain(New(ExplainStatementNew { stage: OptimizedPlan, format: Json, configs: [], explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) }))
+
+parse-statement
+EXPLAIN OPTIMIZER TEXT TRACE WITH (est_cost) FOR SELECT 1 + 1
+----
+EXPLAIN OPTIMIZER TEXT TRACE WITH (est_cost) FOR SELECT 1 + 1
+=>
+Explain(New(ExplainStatementNew { stage: Trace, format: Text, configs: [Ident("est_cost")], explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Op { op: Op { namespace: [], op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("1"))) }, alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }) }))
+
+# TODO (#13137): Add negative tests for new explain API.
