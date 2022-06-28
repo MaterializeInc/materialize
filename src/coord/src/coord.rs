@@ -1281,28 +1281,32 @@ impl<S: Append + 'static> Coordinator<S> {
                 let new = ReplicaMetadata {
                     last_heartbeat: when_coarsened,
                 };
-                let old = self
+                let old = match self
                     .transient_replica_metadata
-                    .insert(replica_id, Some(new.clone()));
+                    .insert(replica_id, Some(new.clone()))
+                {
+                    None => None,
+                    // `None` is the tombstone for a removed replica
+                    Some(None) => return,
+                    Some(Some(md)) => Some(md),
+                };
 
-                if let Some(old) = old {
-                    if old.as_ref() != Some(&new) {
-                        let retraction = old.map(|old| {
-                            self.catalog
-                                .state()
-                                .pack_replica_heartbeat_update(replica_id, old, -1)
-                        });
-                        let insertion = self
-                            .catalog
+                if old.as_ref() != Some(&new) {
+                    let retraction = old.map(|old| {
+                        self.catalog
                             .state()
-                            .pack_replica_heartbeat_update(replica_id, new, 1);
-                        let updates = if let Some(retraction) = retraction {
-                            vec![retraction, insertion]
-                        } else {
-                            vec![insertion]
-                        };
-                        self.send_builtin_table_updates(updates).await;
-                    }
+                            .pack_replica_heartbeat_update(replica_id, old, -1)
+                    });
+                    let insertion = self
+                        .catalog
+                        .state()
+                        .pack_replica_heartbeat_update(replica_id, new, 1);
+                    let updates = if let Some(retraction) = retraction {
+                        vec![retraction, insertion]
+                    } else {
+                        vec![insertion]
+                    };
+                    self.send_builtin_table_updates(updates).await;
                 }
             }
         }
