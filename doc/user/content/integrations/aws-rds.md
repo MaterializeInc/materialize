@@ -17,8 +17,6 @@ As an account with the `rds_superuser` role, make these changes to the upstream 
 
 1. The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. If you are hosting your own installation of Materialize, add the instance's IP address in the security group for the RDS instance.
 
-    If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
-
 1. Restart the database so all changes can take effect.
 
 1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:
