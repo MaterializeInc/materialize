@@ -138,6 +138,15 @@ where
 
             match res {
                 Ok(merge_reqs) => {
+                    if batch.len > 0 {
+                        eprintln!(
+                            "WIP wrote {} updates to {}: {:?}{:?}",
+                            batch.len,
+                            self.shard_id(),
+                            batch.desc.lower().elements(),
+                            batch.desc.upper().elements(),
+                        );
+                    }
                     return Ok(Ok(Ok((seqno, merge_reqs))));
                 }
                 Err(Ok(_current_upper)) => {
@@ -213,8 +222,9 @@ where
         let before = self.wip_fetch_updates(&as_of, &state_before).await;
         let after = self.wip_fetch_updates(&as_of, &state_after).await;
         eprintln!(
-            "WIP compact before/after {} {} {} {:?} {:?}",
+            "WIP compact {} before/after {} {} {} {:?} {:?}",
             applied,
+            self.shard_id(),
             state_before.spine.len(),
             state_after.spine.len(),
             before.len(),
@@ -253,7 +263,7 @@ where
     pub async fn snapshot(
         &mut self,
         as_of: &Antichain<T>,
-    ) -> Result<Vec<(String, Description<T>)>, Since<T>> {
+    ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
         let mut retry: Option<MetricsRetryStream> = None;
         loop {
             let upper = match self.state.snapshot(as_of) {

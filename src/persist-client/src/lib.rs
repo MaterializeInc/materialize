@@ -225,7 +225,7 @@ impl Default for PersistConfig {
         let compaction_disabled = mz_ore::env::is_var_truthy("MZ_PERSIST_COMPACTION_DISABLED");
         const MB: usize = 1024 * 1024;
         Self {
-            blob_target_size: 128 * MB,
+            blob_target_size: 1 * MB,
             batch_builder_max_outstanding_parts: 2,
             compaction_enabled: !compaction_disabled,
         }

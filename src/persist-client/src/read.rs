@@ -9,6 +9,7 @@
 
 //! Read capabilities and handles
 
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
@@ -127,6 +128,7 @@ where
                 None => return None,
             };
 
+            let mut ts_diffs = HashMap::<(T, D), usize>::new();
             let mut updates = Vec::new();
             fetch_batch_part(
                 self.blob.as_ref(),
@@ -142,10 +144,18 @@ where
                     let k = self.metrics.codecs.key.decode(|| K::decode(k));
                     let v = self.metrics.codecs.val.decode(|| V::decode(v));
                     let d = D::decode(d);
+                    *(ts_diffs.entry((t.clone(), d.clone())).or_default()) += 1;
                     updates.push(((k, v), t, d));
                 },
             )
             .await;
+            eprintln!(
+                "WIP snapshot iter batch had {} updates: {} {:?}\n{:?}",
+                updates.len(),
+                key,
+                desc,
+                ts_diffs,
+            );
             if updates.is_empty() {
                 // We might have filtered everything.
                 continue;
@@ -440,6 +450,15 @@ where
         // cached copy of the state, updating it, and throwing it away
         // afterward.
         let batches = self.machine.clone().snapshot(&as_of).await?;
+        eprintln!(
+            "WIP snapshot for {}: \n  {:?}",
+            self.machine.shard_id(),
+            batches
+        );
+        let batches = batches.into_iter().flat_map(|b| {
+            let desc = b.desc.clone();
+            b.keys.into_iter().map(move |k| (k, desc.clone()))
+        });
         let mut splits = (0..num_splits.get())
             .map(|_| SnapshotSplit {
                 shard_id: self.machine.shard_id(),
@@ -452,6 +471,11 @@ where
                 .batches
                 .push((batch_key, (&desc).into()));
         }
+        eprintln!(
+            "WIP snapshot splits {}: \n  {:?}",
+            self.machine.shard_id(),
+            splits
+        );
         return Ok(splits);
     }
 
@@ -491,6 +515,12 @@ where
             blob: Arc::clone(&self.blob),
             _phantom: PhantomData,
         };
+        eprintln!(
+            "WIP snapshot iter {}: \n  {:?}",
+            self.machine.shard_id(),
+            iter.batches,
+        );
+
         Ok(iter)
     }
 

@@ -16,6 +16,8 @@
     clippy::cast_sign_loss
 )]
 
+use std::hash::Hash;
+
 use bytes::BufMut;
 
 mod codec_impls;
@@ -53,7 +55,7 @@ pub trait Codec: Sized + Send + 'static {
 
 /// Encoding and decoding operations for a type usable as a persisted timestamp
 /// or diff.
-pub trait Codec64: Sized + Send + 'static {
+pub trait Codec64: Hash + Sized + Send + 'static {
     /// Name of the codec.
     ///
     /// This name is stored for the timestamp and diff when a stream is first
