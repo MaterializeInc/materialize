@@ -25,9 +25,9 @@ _schema&lowbar;name_ | The schema to show views from. Defaults to `public` in th
 `SHOW FULL VIEWS`'s output is a table, with this structure:
 
 ```nofmt
- name  | type | materialized | volatility
--------+------+--------------+-----------
- ...   | ...  | ...          | ...
+ name  | type | materialized
+-------+------+--------------
+ ...   | ...  | ...
 ```
 
 Field | Meaning
@@ -35,7 +35,6 @@ Field | Meaning
 **name** | The name of the view.
 **type** | Whether the view was created by the `user` or the `system`.
 **materialized** | Does the view have an in-memory index? For more details, see [`CREATE INDEX`](../create-index).
-**volatility** | Whether the view is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ## Examples
 
