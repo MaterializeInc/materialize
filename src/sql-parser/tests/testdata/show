@@ -229,6 +229,13 @@ SHOW CREATE VIEW foo
 ShowCreateView(ShowCreateViewStatement { view_name: Name(UnresolvedObjectName([Ident("foo")])) })
 
 parse-statement
+SHOW CREATE RECORDED VIEW foo
+----
+SHOW CREATE RECORDED VIEW foo
+=>
+ShowCreateRecordedView(ShowCreateRecordedViewStatement { recorded_view_name: Name(UnresolvedObjectName([Ident("foo")])) })
+
+parse-statement
 SHOW CREATE SINK foo
 ----
 SHOW CREATE SINK foo

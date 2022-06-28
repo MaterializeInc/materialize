@@ -70,6 +70,7 @@ pub enum Statement<T: AstInfo> {
     ShowIndexes(ShowIndexesStatement<T>),
     ShowColumns(ShowColumnsStatement<T>),
     ShowCreateView(ShowCreateViewStatement<T>),
+    ShowCreateRecordedView(ShowCreateRecordedViewStatement<T>),
     ShowCreateSource(ShowCreateSourceStatement<T>),
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
@@ -132,6 +133,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ShowIndexes(stmt) => f.write_node(stmt),
             Statement::ShowColumns(stmt) => f.write_node(stmt),
             Statement::ShowCreateView(stmt) => f.write_node(stmt),
+            Statement::ShowCreateRecordedView(stmt) => f.write_node(stmt),
             Statement::ShowCreateSource(stmt) => f.write_node(stmt),
             Statement::ShowCreateTable(stmt) => f.write_node(stmt),
             Statement::ShowCreateSink(stmt) => f.write_node(stmt),
@@ -1618,6 +1620,20 @@ impl<T: AstInfo> AstDisplay for ShowCreateViewStatement<T> {
     }
 }
 impl_display_t!(ShowCreateViewStatement);
+
+/// `SHOW CREATE RECORDED VIEW <name>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowCreateRecordedViewStatement<T: AstInfo> {
+    pub recorded_view_name: T::ObjectName,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateRecordedViewStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW CREATE RECORDED VIEW ");
+        f.write_node(&self.recorded_view_name);
+    }
+}
+impl_display_t!(ShowCreateRecordedViewStatement);
 
 /// `SHOW CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

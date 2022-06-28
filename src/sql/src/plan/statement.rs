@@ -139,6 +139,9 @@ pub fn describe(
         Statement::ShowCreateSource(stmt) => show::describe_show_create_source(&scx, stmt)?,
         Statement::ShowCreateTable(stmt) => show::describe_show_create_table(&scx, stmt)?,
         Statement::ShowCreateView(stmt) => show::describe_show_create_view(&scx, stmt)?,
+        Statement::ShowCreateRecordedView(stmt) => {
+            show::describe_show_create_recorded_view(&scx, stmt)?
+        }
         Statement::ShowDatabases(stmt) => show::show_databases(&scx, stmt)?.describe()?,
         Statement::ShowIndexes(stmt) => show::show_indexes(&scx, stmt)?.describe()?,
         Statement::ShowObjects(stmt) => show::show_objects(&scx, stmt)?.describe()?,
@@ -252,6 +255,7 @@ pub fn plan(
         Statement::ShowCreateSource(stmt) => show::plan_show_create_source(scx, stmt),
         Statement::ShowCreateTable(stmt) => show::plan_show_create_table(scx, stmt),
         Statement::ShowCreateView(stmt) => show::plan_show_create_view(scx, stmt),
+        Statement::ShowCreateRecordedView(stmt) => show::plan_show_create_recorded_view(scx, stmt),
         Statement::ShowDatabases(stmt) => show::show_databases(scx, stmt)?.plan(),
         Statement::ShowIndexes(stmt) => show::show_indexes(scx, stmt)?.plan(),
         Statement::ShowObjects(stmt) => show::show_objects(scx, stmt)?.plan(),

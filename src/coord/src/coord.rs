@@ -1847,6 +1847,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::ShowCreateSource(_)
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
+                    | Statement::ShowCreateRecordedView(_)
                     | Statement::ShowCreateConnection(_)
                     | Statement::ShowDatabases(_)
                     | Statement::ShowSchemas(_)

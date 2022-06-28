@@ -4321,6 +4321,12 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
             }))
+        } else if self.parse_keywords(&[CREATE, RECORDED, VIEW]) {
+            Ok(Statement::ShowCreateRecordedView(
+                ShowCreateRecordedViewStatement {
+                    recorded_view_name: self.parse_raw_name()?,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,
