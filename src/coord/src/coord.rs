@@ -73,7 +73,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Timelike, Utc};
+use chrono::{DateTime, DurationRound, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
@@ -1274,20 +1274,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
             }
             ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
-                // Round off the time based on `REPLICA_STATUS_GRANULARITY`.
-                // We can't just do something like `(timestamp / REPLICA_STATUS_GRANULARITY) * REPLICA_STATUS_GRANULARITY`
-                // with a Unix timestamp, because then everything will be offset due to leap seconds
-                // (e.g. rounding to 60 seconds will produce records at every HH:mm:26 since
-                //  there have been 26 leap seconds since 1970).
-                // This wouldn't be a real problem but would look a bit annoying.
-                let when_coarsened = {
-                    const REPLICA_STATUS_GRANULARITY: u32 = 60; /* seconds, must be less than 1 day */
-                    let seconds = when.time().num_seconds_from_midnight();
-                    let seconds_offset = seconds % REPLICA_STATUS_GRANULARITY;
-                    (when - chrono::Duration::seconds(seconds_offset.into()))
-                        .with_nanosecond(0)
-                        .unwrap()
-                };
+                let replica_status_granularity = chrono::Duration::seconds(60);
+                let when_coarsened = when
+                    .duration_trunc(replica_status_granularity)
+                    .expect("Time coarsening should not fail");
                 let new = ReplicaMetadata {
                     last_heartbeat: when_coarsened,
                 };
