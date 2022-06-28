@@ -515,7 +515,10 @@ pub struct Coordinator<S> {
 
     /// Metadata about replicas that doesn't need to be persisted.
     /// Intended for inclusion in system tables.
-    transient_replica_metadata: HashMap<ReplicaId, ReplicaMetadata>,
+    ///
+    /// `None` is used as a tombstone value for replicas that have been
+    /// dropped and for which no further updates should be recorded.
+    transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 }
 
 /// Metadata about an active connection.
@@ -1301,30 +1304,32 @@ impl<S: Append + 'static> Coordinator<S> {
                 };
                 let old = self
                     .transient_replica_metadata
-                    .insert(replica_id, new.clone());
+                    .insert(replica_id, Some(new.clone()));
 
-                if old.as_ref() != Some(&new) {
-                    let table = self
-                        .catalog
-                        .state()
-                        .resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
-                    let retraction = old.map(|old| BuiltinTableUpdate {
-                        id: table,
-                        row: old.as_row(replica_id),
-                        diff: -1,
-                    });
-                    let insertion = BuiltinTableUpdate {
-                        id: table,
-                        row: new.as_row(replica_id),
-                        diff: 1,
-                    };
+                if let Some(old) = old {
+                    if old.as_ref() != Some(&new) {
+                        let table = self
+                            .catalog
+                            .state()
+                            .resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
+                        let retraction = old.map(|old| BuiltinTableUpdate {
+                            id: table,
+                            row: old.as_row(replica_id),
+                            diff: -1,
+                        });
+                        let insertion = BuiltinTableUpdate {
+                            id: table,
+                            row: new.as_row(replica_id),
+                            diff: 1,
+                        };
 
-                    let updates = if let Some(retraction) = retraction {
-                        vec![retraction, insertion]
-                    } else {
-                        vec![insertion]
-                    };
-                    self.send_builtin_table_updates(updates).await;
+                        let updates = if let Some(retraction) = retraction {
+                            vec![retraction, insertion]
+                        } else {
+                            vec![insertion]
+                        };
+                        self.send_builtin_table_updates(updates).await;
+                    }
                 }
             }
         }
@@ -3354,7 +3359,7 @@ impl<S: Append + 'static> Coordinator<S> {
         replica_id: ReplicaId,
         replica_config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        if let Some(metadata) = self.transient_replica_metadata.remove(&replica_id) {
+        if let Some(Some(metadata)) = self.transient_replica_metadata.remove(&replica_id) {
             let table = self
                 .catalog
                 .state()
