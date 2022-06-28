@@ -135,12 +135,12 @@ use mz_sql::names::{
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew,
-    ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MutationKind,
-    OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
+    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
     ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
     StatementDesc, TailFrom, TailPlan, View,
 };
@@ -1847,6 +1847,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::ShowCreateSource(_)
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
+                    | Statement::ShowCreateRecordedView(_)
                     | Statement::ShowCreateConnection(_)
                     | Statement::ShowDatabases(_)
                     | Statement::ShowSchemas(_)
@@ -1892,6 +1893,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateViews(_)
+                    | Statement::CreateRecordedView(_)
                     | Statement::Delete(_)
                     | Statement::DropDatabase(_)
                     | Statement::DropSchema(_)
@@ -2197,6 +2199,13 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::CreateViews(plan) => {
                 tx.send(
                     self.sequence_create_views(&mut session, plan, depends_on)
+                        .await,
+                    session,
+                );
+            }
+            Plan::CreateRecordedView(plan) => {
+                tx.send(
+                    self.sequence_create_recorded_view(&session, plan, depends_on)
                         .await,
                     session,
                 );
@@ -3182,6 +3191,16 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    async fn sequence_create_recorded_view(
+        &mut self,
+        _session: &Session,
+        _plan: CreateRecordedViewPlan,
+        _depends_on: Vec<GlobalId>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        // TODO(teskje): implement
+        Err(CoordError::Unsupported("recorded views"))
+    }
+
     async fn sequence_create_index(
         &mut self,
         session: &Session,
@@ -3393,6 +3412,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
+            ObjectType::RecordedView => ExecuteResponse::DroppedRecordedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
@@ -4706,7 +4726,7 @@ impl<S: Append + 'static> Coordinator<S> {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
-                    typ @ (Func | View) => {
+                    typ @ (Func | View | RecordedView) => {
                         let valid_id = id.is_user() || matches!(typ, Func);
                         valid_id
                             && (

@@ -342,6 +342,8 @@ pub enum CatalogItemType {
     Sink,
     /// A view.
     View,
+    /// A recorded view.
+    RecordedView,
     /// An index.
     Index,
     /// A type.
@@ -361,6 +363,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Source => f.write_str("source"),
             CatalogItemType::Sink => f.write_str("sink"),
             CatalogItemType::View => f.write_str("view"),
+            CatalogItemType::RecordedView => f.write_str("recorded view"),
             CatalogItemType::Index => f.write_str("index"),
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),

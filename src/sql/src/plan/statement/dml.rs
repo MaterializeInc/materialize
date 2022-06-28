@@ -364,9 +364,10 @@ pub fn plan_tail(
         TailRelation::Name(name) => {
             let entry = scx.get_item_by_resolved_name(&name)?;
             match entry.item_type() {
-                CatalogItemType::Table | CatalogItemType::Source | CatalogItemType::View => {
-                    TailFrom::Id(entry.id())
-                }
+                CatalogItemType::Table
+                | CatalogItemType::Source
+                | CatalogItemType::View
+                | CatalogItemType::RecordedView => TailFrom::Id(entry.id()),
                 CatalogItemType::Func
                 | CatalogItemType::Index
                 | CatalogItemType::Sink

@@ -237,7 +237,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
+contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or RECORDED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
 
 > SHOW FULL OBJECTS
 name            type

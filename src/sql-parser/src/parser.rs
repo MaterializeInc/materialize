@@ -1587,6 +1587,10 @@ impl<'a> Parser<'a> {
             self.parse_create_secret()
         } else if self.peek_keyword(CONNECTION) {
             self.parse_create_connection()
+        } else if self.peek_keywords(&[RECORDED, VIEW])
+            || self.peek_keywords(&[OR, REPLACE, RECORDED, VIEW])
+        {
+            self.parse_create_recorded_view()
         } else {
             let index = self.index;
 
@@ -2374,6 +2378,34 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_recorded_view(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let mut if_exists = if self.parse_keyword(OR) {
+            self.expect_keyword(REPLACE)?;
+            IfExistsBehavior::Replace
+        } else {
+            IfExistsBehavior::Error
+        };
+        self.expect_keywords(&[RECORDED, VIEW])?;
+        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
+            if_exists = IfExistsBehavior::Skip;
+        }
+
+        let name = self.parse_object_name()?;
+        let columns = self.parse_parenthesized_column_list(Optional)?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+
+        self.expect_keyword(AS)?;
+        let query = self.parse_query()?;
+
+        Ok(Statement::CreateRecordedView(CreateRecordedViewStatement {
+            if_exists,
+            name,
+            columns,
+            in_cluster,
+            query,
+        }))
+    }
+
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
         let default_index = self.parse_keyword(DEFAULT);
         self.expect_keyword(INDEX)?;
@@ -2689,8 +2721,8 @@ impl<'a> Parser<'a> {
         let materialized = self.parse_keyword(MATERIALIZED);
 
         let object_type = match self.expect_one_of_keywords(&[
-            CONNECTION, CLUSTER, DATABASE, INDEX, ROLE, SECRET, SCHEMA, SINK, SOURCE, TABLE, TYPE,
-            USER, VIEW,
+            CONNECTION, CLUSTER, DATABASE, INDEX, RECORDED, ROLE, SECRET, SCHEMA, SINK, SOURCE,
+            TABLE, TYPE, USER, VIEW,
         ])? {
             DATABASE => {
                 let if_exists = self.parse_if_exists()?;
@@ -2739,16 +2771,13 @@ impl<'a> Parser<'a> {
             TABLE => ObjectType::Table,
             TYPE => ObjectType::Type,
             VIEW => ObjectType::View,
+            RECORDED => {
+                self.expect_keyword(VIEW)?;
+                ObjectType::RecordedView
+            }
             SECRET => ObjectType::Secret,
             CONNECTION => ObjectType::Connection,
-            _ => {
-                return self.expected(
-                    self.peek_pos(),
-                    "DATABASE, INDEX, ROLE, CLUSTER, SECRET, SCHEMA, SINK, SOURCE, \
-                     TABLE, TYPE, USER, VIEW after DROP",
-                    self.peek_token(),
-                );
-            }
+            _ => unreachable!(),
         };
 
         let if_exists = self.parse_if_exists()?;
@@ -3063,16 +3092,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type =
-            match self.expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET])? {
-                SINK => ObjectType::Sink,
-                SOURCE => ObjectType::Source,
-                VIEW => ObjectType::View,
-                TABLE => ObjectType::Table,
-                INDEX => return self.parse_alter_index(),
-                SECRET => return self.parse_alter_secret(),
-                _ => unreachable!(),
-            };
+        let object_type = match self
+            .expect_one_of_keywords(&[SINK, SOURCE, VIEW, RECORDED, TABLE, INDEX, SECRET])?
+        {
+            SINK => ObjectType::Sink,
+            SOURCE => ObjectType::Source,
+            VIEW => ObjectType::View,
+            RECORDED => {
+                self.expect_keyword(VIEW)?;
+                ObjectType::RecordedView
+            }
+            TABLE => ObjectType::Table,
+            INDEX => return self.parse_alter_index(),
+            SECRET => return self.parse_alter_secret(),
+            _ => unreachable!(),
+        };
 
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;
@@ -4154,11 +4188,12 @@ impl<'a> Parser<'a> {
             if extended {
                 self.expect_one_of_keywords(&[COLUMNS, OBJECTS, SCHEMAS, TABLES, TYPES])?;
             } else {
-                self.expect_one_of_keywords(&[
+                let kw = self.expect_one_of_keywords(&[
                     COLUMNS,
                     CONNECTIONS,
                     MATERIALIZED,
                     OBJECTS,
+                    RECORDED,
                     ROLES,
                     SCHEMAS,
                     SINKS,
@@ -4167,6 +4202,10 @@ impl<'a> Parser<'a> {
                     TYPES,
                     VIEWS,
                 ])?;
+                if kw == RECORDED {
+                    self.expect_keyword(VIEWS)?;
+                    self.prev_token();
+                }
             }
             self.prev_token();
         }
@@ -4202,6 +4241,7 @@ impl<'a> Parser<'a> {
             TYPES,
             USERS,
             VIEWS,
+            RECORDED,
             SECRETS,
             CONNECTIONS,
         ]) {
@@ -4223,6 +4263,10 @@ impl<'a> Parser<'a> {
                 TABLES => ObjectType::Table,
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
+                RECORDED => {
+                    self.expect_keyword(VIEWS)?;
+                    ObjectType::RecordedView
+                }
                 SECRETS => ObjectType::Secret,
                 CONNECTIONS => ObjectType::Connection,
                 _ => unreachable!(),
@@ -4231,7 +4275,7 @@ impl<'a> Parser<'a> {
             let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(kw) => {
                     if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::Sink) {
+                        if matches!(object_type, ObjectType::Sink | ObjectType::RecordedView) {
                             // put `IN` back
                             self.prev_token();
                             (None, self.parse_optional_in_cluster()?)
@@ -4292,6 +4336,12 @@ impl<'a> Parser<'a> {
             Ok(Statement::ShowCreateView(ShowCreateViewStatement {
                 view_name: self.parse_raw_name()?,
             }))
+        } else if self.parse_keywords(&[CREATE, RECORDED, VIEW]) {
+            Ok(Statement::ShowCreateRecordedView(
+                ShowCreateRecordedViewStatement {
+                    recorded_view_name: self.parse_raw_name()?,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(Statement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,

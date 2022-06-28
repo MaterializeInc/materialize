@@ -1136,6 +1136,7 @@ where
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
             ExecuteResponse::DroppedTable => command_complete!("DROP TABLE"),
             ExecuteResponse::DroppedView => command_complete!("DROP VIEW"),
+            ExecuteResponse::DroppedRecordedView => command_complete!("DROP RECORDED VIEW"),
             ExecuteResponse::DroppedType => command_complete!("DROP TYPE"),
             ExecuteResponse::DroppedSecret => command_complete!("DROP SECRET"),
             ExecuteResponse::DroppedConnection => command_complete!("DROP CONNECTION"),

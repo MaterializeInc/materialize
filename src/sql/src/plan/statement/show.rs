@@ -18,7 +18,7 @@ use anyhow::bail;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::ShowCreateConnectionStatement;
+use mz_sql_parser::ast::{ShowCreateConnectionStatement, ShowCreateRecordedViewStatement};
 
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
@@ -70,6 +70,45 @@ pub fn plan_show_create_view(
         }))
     } else {
         bail!("{} is not a view", view_name.full_name_str());
+    }
+}
+
+pub fn describe_show_create_recorded_view(
+    _: &StatementContext,
+    _: ShowCreateRecordedViewStatement<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::empty()
+            .with_column("Recorded View", ScalarType::String.nullable(false))
+            .with_column("Create Recorded View", ScalarType::String.nullable(false)),
+    )))
+}
+
+pub fn plan_show_create_recorded_view(
+    scx: &mut StatementContext,
+    stmt: ShowCreateRecordedViewStatement<Aug>,
+) -> Result<Plan, anyhow::Error> {
+    let name = stmt.recorded_view_name;
+    let rview = scx.get_item_by_resolved_name(&name)?;
+    if let CatalogItemType::RecordedView = rview.item_type() {
+        let full_name = name.full_name_str();
+        let view_sql = rview.create_sql();
+        let parsed = parse::parse(view_sql)?;
+        let parsed = parsed[0].clone();
+        let (mut resolved, _) = names::resolve(scx.catalog, parsed)?;
+        let mut s = NameSimplifier {
+            catalog: scx.catalog,
+        };
+        s.visit_statement_mut(&mut resolved);
+
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&full_name),
+                Datum::String(&resolved.to_ast_string_stable()),
+            ])],
+        }))
+    } else {
+        bail!("{} is not a recorded view", name.full_name_str());
     }
 }
 
@@ -297,6 +336,7 @@ pub fn show_objects<'a>(
         ObjectType::Table => show_tables(scx, extended, full, from, filter),
         ObjectType::Source => show_sources(scx, full, materialized, from, filter),
         ObjectType::View => show_views(scx, full, materialized, from, filter),
+        ObjectType::RecordedView => show_recorded_views(scx, full, from, in_cluster, filter),
         ObjectType::Sink => show_sinks(scx, full, from, in_cluster, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
@@ -460,6 +500,17 @@ fn show_views<'a>(
     ShowSelect::new(scx, query, filter, None, None)
 }
 
+fn show_recorded_views<'a>(
+    _scx: &'a StatementContext<'a>,
+    _full: bool,
+    _from: Option<ResolvedSchemaName>,
+    _in_cluster: Option<ResolvedClusterName>,
+    _filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    // TODO(teskje): implement
+    bail!("not yet implemented");
+}
+
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
@@ -581,6 +632,7 @@ pub fn show_indexes<'a>(
     if let Some(table_name) = table_name {
         let from = scx.get_item_by_resolved_name(&table_name)?;
         if from.item_type() != CatalogItemType::View
+            && from.item_type() != CatalogItemType::RecordedView
             && from.item_type() != CatalogItemType::Source
             && from.item_type() != CatalogItemType::Table
         {
