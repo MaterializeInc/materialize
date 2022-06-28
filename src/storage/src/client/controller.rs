@@ -62,6 +62,7 @@ use crate::client::{
 };
 
 mod hosts;
+mod rehydration;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage.client.controller.rs"));
 
@@ -158,7 +159,7 @@ pub trait StorageController: Debug + Send {
         source_ids: Vec<GlobalId>,
     ) -> Result<(), anyhow::Error>;
 
-    async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error>;
+    async fn recv(&mut self) -> Option<StorageResponse<Self::Timestamp>>;
 }
 
 /// Compaction policies for collections maintained by `Controller`.
@@ -546,10 +547,7 @@ where
                     .provision(id, description.remote_addr.clone())
                     .await?;
 
-                client
-                    .send(StorageCommand::IngestSources(vec![augmented_ingestion]))
-                    .await
-                    .expect("Storage command failed; unrecoverable");
+                client.send(StorageCommand::IngestSources(vec![augmented_ingestion]));
             }
         }
 
@@ -789,12 +787,10 @@ where
 
         for (id, frontier) in compaction_commands {
             if let Some(client) = self.hosts.client(id) {
-                client
-                    .send(StorageCommand::AllowCompaction(vec![(
-                        id,
-                        frontier.clone(),
-                    )]))
-                    .await?;
+                client.send(StorageCommand::AllowCompaction(vec![(
+                    id,
+                    frontier.clone(),
+                )]));
 
                 if frontier.is_empty() {
                     self.hosts.deprovision(id).await?;
@@ -805,11 +801,11 @@ where
         Ok(())
     }
 
-    async fn recv(&mut self) -> Result<Option<StorageResponse<Self::Timestamp>>, anyhow::Error> {
+    async fn recv(&mut self) -> Option<StorageResponse<Self::Timestamp>> {
         let mut clients = self
             .hosts
             .clients()
-            .map(|client| client.as_stream())
+            .map(|client| client.response_stream())
             .enumerate()
             .collect::<StreamMap<_, _>>();
         if clients.is_empty() {
@@ -820,7 +816,7 @@ where
             // of the stream.
             return future::pending().await;
         }
-        clients.next().await.map(|(_id, res)| res).transpose()
+        clients.next().await.map(|(_id, res)| res)
     }
 
     /// "Linearize" the listed sources.

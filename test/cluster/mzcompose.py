@@ -189,7 +189,15 @@ def test_remote_storaged(c: Composition, redpanda: bool) -> None:
         c.start_and_wait_for_tcp(
             services=dependencies,
         )
+
         c.run("testdrive", "storaged/01-create-sources.td")
+
         c.kill("materialized")
         c.up("materialized")
         c.run("testdrive", "storaged/02-after-environmentd-restart.td")
+
+        c.kill("storaged")
+        c.run("testdrive", "storaged/03-while-storaged-down.td")
+
+        c.up("storaged")
+        c.run("testdrive", "storaged/04-after-storaged-restart.td")

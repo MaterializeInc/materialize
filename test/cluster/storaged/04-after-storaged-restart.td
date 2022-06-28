@@ -7,22 +7,30 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Verify that the data ingested before `environmentd` was killed is still
-# present, then try ingesting more data.
-
-> SELECT * from remote1
-one  1
-> SELECT * from remote2
-one  1
-
-$ kafka-ingest format=bytes topic=remote1
-two
-$ kafka-ingest format=bytes topic=remote2
-two
+# Verify that the data ingested while `storaged` was down eventually appears,
+# then try ingesting new data.
 
 > SELECT * from remote1
 one   1
 two   2
+three 3
 > SELECT * from remote2
-one  1
-two  2
+one   1
+two   2
+three 3
+
+$ kafka-ingest format=bytes topic=remote1
+four
+$ kafka-ingest format=bytes topic=remote2
+four
+
+> SELECT * from remote1
+one   1
+two   2
+three 3
+four  4
+> SELECT * from remote2
+one   1
+two   2
+three 3
+four  4
