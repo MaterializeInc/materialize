@@ -147,9 +147,7 @@ use mz_sql::plan::{
 use mz_stash::Append;
 use mz_transform::Optimizer;
 
-use crate::catalog::builtin::{
-    BUILTINS, MZ_CLUSTER_REPLICA_HEARTBEATS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
-};
+use crate::catalog::builtin::{BUILTINS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS};
 use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
     Connection, SinkConnectionState,
@@ -425,20 +423,11 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
     }
 }
 
+/// Soft-state metadata about a compute replica
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ReplicaMetadata {
+pub struct ReplicaMetadata {
+    /// The last time we heard from this replica (possibly rounded)
     pub last_heartbeat: DateTime<Utc>,
-}
-
-impl ReplicaMetadata {
-    pub fn as_row(&self, id: ReplicaId) -> Row {
-        let &ReplicaMetadata { last_heartbeat } = self;
-        Row::pack_slice(&[
-            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
-            Datum::Int64(id.try_into().expect("Replica IDs should not overflow i64")),
-            Datum::TimestampTz(last_heartbeat),
-        ])
-    }
 }
 
 /// Glues the external world to the Timely workers.
@@ -1308,21 +1297,15 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 if let Some(old) = old {
                     if old.as_ref() != Some(&new) {
-                        let table = self
+                        let retraction = old.map(|old| {
+                            self.catalog
+                                .state()
+                                .pack_replica_heartbeat_update(replica_id, old, -1)
+                        });
+                        let insertion = self
                             .catalog
                             .state()
-                            .resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
-                        let retraction = old.map(|old| BuiltinTableUpdate {
-                            id: table,
-                            row: old.as_row(replica_id),
-                            diff: -1,
-                        });
-                        let insertion = BuiltinTableUpdate {
-                            id: table,
-                            row: new.as_row(replica_id),
-                            diff: 1,
-                        };
-
+                            .pack_replica_heartbeat_update(replica_id, new, 1);
                         let updates = if let Some(retraction) = retraction {
                             vec![retraction, insertion]
                         } else {
@@ -3360,15 +3343,10 @@ impl<S: Append + 'static> Coordinator<S> {
         replica_config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
         if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
-            let table = self
+            let retraction = self
                 .catalog
                 .state()
-                .resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
-            let retraction = BuiltinTableUpdate {
-                id: table,
-                row: metadata.as_row(replica_id),
-                diff: -1,
-            };
+                .pack_replica_heartbeat_update(replica_id, metadata, -1);
             self.send_builtin_table_updates(vec![retraction]).await;
         }
         self.dataflow_client

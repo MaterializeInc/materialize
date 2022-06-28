@@ -35,6 +35,9 @@ use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, Sink, SinkConnection,
     SinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::coord::ReplicaMetadata;
+
+use super::builtin::MZ_CLUSTER_REPLICA_HEARTBEATS;
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -662,5 +665,25 @@ impl CatalogState {
             ]),
             diff: 1,
         })
+    }
+
+    pub fn pack_replica_heartbeat_update(
+        &self,
+        id: ReplicaId,
+        md: ReplicaMetadata,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let ReplicaMetadata { last_heartbeat } = md;
+        let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
+        let row = Row::pack_slice(&[
+            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+            Datum::Int64(id.try_into().expect("Replica IDs should not overflow i64")),
+            Datum::TimestampTz(last_heartbeat),
+        ]);
+        BuiltinTableUpdate {
+            id: table,
+            row,
+            diff,
+        }
     }
 }
