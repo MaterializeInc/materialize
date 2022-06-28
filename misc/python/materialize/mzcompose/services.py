@@ -205,6 +205,7 @@ class Zookeeper(Service):
         image: str = "confluentinc/cp-zookeeper",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 2181,
+        volumes: List[str] = [],
         environment: List[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
     ) -> None:
         super().__init__(
@@ -212,6 +213,7 @@ class Zookeeper(Service):
             config={
                 "image": f"{image}:{tag}",
                 "ports": [port],
+                "volumes": volumes,
                 "environment": environment,
             },
         )
