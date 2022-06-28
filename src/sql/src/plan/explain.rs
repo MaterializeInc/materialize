@@ -409,7 +409,7 @@ impl<'a> Explanation<'a> {
                 writeln!(f, " offset={}", offset)?
             }
             Negate { .. } => writeln!(f, "| Negate")?,
-            Threshold { .. } => write!(f, "| Threshold")?,
+            Threshold { .. } => writeln!(f, "| Threshold")?,
             Union { base, inputs } => writeln!(
                 f,
                 "| Union %{} {}",

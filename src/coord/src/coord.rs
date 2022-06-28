@@ -138,10 +138,11 @@ use mz_sql::plan::{
     CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew,
+    ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MutationKind,
+    OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_transform::Optimizer;
@@ -4195,12 +4196,31 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        match plan {
+            ExplainPlan::New(plan) => self.sequence_explain_new(session, plan),
+            ExplainPlan::Old(plan) => self.sequence_explain_old(session, plan),
+        }
+    }
+
+    fn sequence_explain_new(
+        &mut self,
+        _session: &Session,
+        _plan: ExplainPlanNew,
+    ) -> Result<ExecuteResponse, CoordError> {
+        unimplemented!() // TODO #13296
+    }
+
+    fn sequence_explain_old(
+        &mut self,
+        session: &Session,
+        plan: ExplainPlanOld,
+    ) -> Result<ExecuteResponse, CoordError> {
         let compute_instance = self
             .catalog
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
-        let ExplainPlan {
+        let ExplainPlanOld {
             raw_plan,
             row_set_finishing,
             stage,

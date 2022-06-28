@@ -22,7 +22,7 @@ use mz_ore::collections::CollectionExt;
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{RelationDesc, ScalarType};
-use mz_sql_parser::ast::AstInfo;
+use mz_sql_parser::ast::{AstInfo, ExplainStatementNew, ExplainStatementOld};
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
@@ -36,10 +36,9 @@ use crate::names::{self, Aug, ResolvedObjectName};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::with_options::TryFromValue;
-use crate::plan::{query, QueryContext};
 use crate::plan::{
-    CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan, Plan,
-    ReadThenWritePlan, TailFrom, TailPlan,
+    query, CopyFormat, CopyFromPlan, ExplainPlan, ExplainPlanOld, InsertPlan, MutationKind, Params,
+    PeekPlan, Plan, QueryContext, ReadThenWritePlan, TailFrom, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -169,9 +168,26 @@ pub fn plan_select(
 
 pub fn describe_explain(
     scx: &StatementContext,
-    ExplainStatement {
+    explain: ExplainStatement<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    match explain {
+        ExplainStatement::New(explain) => describe_explain_new(scx, explain),
+        ExplainStatement::Old(explain) => describe_explain_old(scx, explain),
+    }
+}
+
+pub fn describe_explain_new(
+    _scx: &StatementContext,
+    _explain: ExplainStatementNew<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    unimplemented!() // TODO: #13295
+}
+
+pub fn describe_explain_old(
+    scx: &StatementContext,
+    ExplainStatementOld {
         stage, explainee, ..
-    }: ExplainStatement<Aug>,
+    }: ExplainStatementOld<Aug>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
         match stage {
@@ -202,11 +218,22 @@ pub fn describe_explain(
 
 pub fn plan_explain(
     scx: &StatementContext,
-    ExplainStatement {
+    explain: ExplainStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    match explain {
+        ExplainStatement::Old(explain) => plan_explain_old(scx, explain, params),
+        ExplainStatement::New(explain) => plan_explain_new(scx, explain, params),
+    }
+}
+
+pub fn plan_explain_old(
+    scx: &StatementContext,
+    ExplainStatementOld {
         stage,
         explainee,
         options,
-    }: ExplainStatement<Aug>,
+    }: ExplainStatementOld<Aug>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
     let is_view = matches!(explainee, Explainee::View(_));
@@ -247,12 +274,20 @@ pub fn plan_explain(
         Some(finishing)
     };
     expr.bind_parameters(&params)?;
-    Ok(Plan::Explain(ExplainPlan {
+    Ok(Plan::Explain(ExplainPlan::Old(ExplainPlanOld {
         raw_plan: expr,
         row_set_finishing: finishing,
         stage,
         options,
-    }))
+    })))
+}
+
+pub fn plan_explain_new(
+    _scx: &StatementContext,
+    _explain: ExplainStatementNew<Aug>,
+    _params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    unimplemented!() // TODO: #13295
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns

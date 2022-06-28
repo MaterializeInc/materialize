@@ -1785,15 +1785,43 @@ impl<T: AstInfo> AstDisplay for TailRelation<T> {
 }
 impl_display_t!(TailRelation);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainStatement<T: AstInfo> {
+    New(ExplainStatementNew<T>),
+    Old(ExplainStatementOld<T>),
+}
+
+impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Old(old) => old.fmt(f),
+            Self::New(new) => new.fmt(f),
+        }
+    }
+}
+impl_display_t!(ExplainStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainStatementNew<T: AstInfo> {
+    pub explainee: Explainee<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExplainStatementNew<T> {
+    fn fmt<W: fmt::Write>(&self, _f: &mut AstFormatter<W>) {
+        // TODO #13294
+    }
+}
+impl_display_t!(ExplainStatementNew);
+
 /// `EXPLAIN ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainStatement<T: AstInfo> {
+pub struct ExplainStatementOld<T: AstInfo> {
     pub stage: ExplainStage,
     pub explainee: Explainee<T>,
     pub options: ExplainOptions,
 }
 
-impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
+impl<T: AstInfo> AstDisplay for ExplainStatementOld<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ");
         if self.options.timing {
@@ -1809,7 +1837,7 @@ impl<T: AstInfo> AstDisplay for ExplainStatement<T> {
         f.write_node(&self.explainee);
     }
 }
-impl_display_t!(ExplainStatement);
+impl_display_t!(ExplainStatementOld);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InsertSource<T: AstInfo> {

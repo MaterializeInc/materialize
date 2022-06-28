@@ -339,7 +339,19 @@ pub struct CopyFromPlan {
 }
 
 #[derive(Debug)]
-pub struct ExplainPlan {
+pub enum ExplainPlan {
+    New(ExplainPlanNew),
+    Old(ExplainPlanOld),
+}
+
+#[derive(Debug)]
+pub struct ExplainPlanNew {
+    pub raw_plan: HirRelationExpr,
+    pub row_set_finishing: Option<RowSetFinishing>,
+}
+
+#[derive(Debug)]
+pub struct ExplainPlanOld {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStage,

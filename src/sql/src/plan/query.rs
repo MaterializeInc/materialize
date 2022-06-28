@@ -1169,25 +1169,25 @@ fn plan_set_expr(
                 }
             }
             let project_key: Vec<_> = (left_type.arity()..left_type.arity() * 2).collect();
-            let left_expr = left_expr.map(left_casts).project(project_key.clone());
-            let right_expr = right_expr.map(right_casts).project(project_key);
+            let lhs = left_expr.map(left_casts).project(project_key.clone());
+            let rhs = right_expr.map(right_casts).project(project_key);
 
             let relation_expr = match op {
                 SetOperator::Union => {
                     if *all {
-                        left_expr.union(right_expr)
+                        lhs.union(rhs)
                     } else {
-                        left_expr.union(right_expr).distinct()
+                        lhs.union(rhs).distinct()
                     }
                 }
                 SetOperator::Except => {
                     if *all {
-                        left_expr.union(right_expr.negate()).threshold()
+                        let rhs = rhs.negate();
+                        HirRelationExpr::union(lhs, rhs).threshold()
                     } else {
-                        left_expr
-                            .distinct()
-                            .union(right_expr.distinct().negate())
-                            .threshold()
+                        let lhs = lhs.distinct();
+                        let rhs = rhs.distinct().negate();
+                        HirRelationExpr::union(lhs, rhs).threshold()
                     }
                 }
                 SetOperator::Intersect => {
@@ -1196,12 +1196,11 @@ fn plan_set_expr(
                     // Also note that we do *not* need another threshold() at the end of the method chain
                     // because the right-hand side of the outer union only produces existing records,
                     // i.e., the record counts for differential data flow definitely remain non-negative.
-                    let left_clone = left_expr.clone();
+                    let left_clone = lhs.clone();
                     if *all {
-                        left_expr.union(left_clone.union(right_expr.negate()).threshold().negate())
+                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
                     } else {
-                        left_expr
-                            .union(left_clone.union(right_expr.negate()).threshold().negate())
+                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
                             .distinct()
                     }
                 }

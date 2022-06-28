@@ -4827,6 +4827,22 @@ impl<'a> Parser<'a> {
     /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
     /// has already been consumed.
     fn parse_explain(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if let Some(parse) = self.maybe_parse(Self::parse_explain_new) {
+            Ok(parse)
+        } else {
+            self.parse_explain_old()
+        }
+    }
+
+    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// has already been consumed.
+    fn parse_explain_new(&mut self) -> Result<Statement<Raw>, ParserError> {
+        Err(ParserError::new(self.index, "unimplemented"))
+    }
+
+    /// Parse an `EXPLAIN` statement, assuming that the `EXPLAIN` token
+    /// has already been consumed (old code path).
+    fn parse_explain_old(&mut self) -> Result<Statement<Raw>, ParserError> {
         // (TYPED)?
         let typed = self.parse_keyword(TYPED);
         let mut timing = false;
@@ -4906,11 +4922,13 @@ impl<'a> Parser<'a> {
         };
 
         let options = ExplainOptions { typed, timing };
-        Ok(Statement::Explain(ExplainStatement {
-            stage,
-            explainee,
-            options,
-        }))
+        Ok(Statement::Explain(ExplainStatement::Old(
+            ExplainStatementOld {
+                stage,
+                explainee,
+                options,
+            },
+        )))
     }
 
     /// Parse a `DECLARE` statement, assuming that the `DECLARE` token
