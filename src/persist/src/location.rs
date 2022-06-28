@@ -226,7 +226,7 @@ impl From<tokio::task::JoinError> for ExternalError {
     }
 }
 
-/// Configuration of whether a [BlobMulti::set] must occur atomically.
+/// Configuration of whether a [Blob::set] must occur atomically.
 #[derive(Debug)]
 pub enum Atomicity {
     /// Require the write be atomic and either succeed or leave the previous
@@ -353,10 +353,8 @@ pub trait Consensus: std::fmt::Debug {
 /// start reasoning about "this set hasn't show up yet" vs "the blob has already
 /// been deleted". Another tricky problem is the same but for a deletion when
 /// the first attempt timed out.
-///
-/// TODO: Rename this to Blob when we delete Blob.
 #[async_trait]
-pub trait BlobMulti: std::fmt::Debug {
+pub trait Blob: std::fmt::Debug {
     /// Returns a reference to the value corresponding to the key.
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError>;
 
@@ -400,8 +398,8 @@ pub mod tests {
         ret
     }
 
-    pub async fn blob_multi_impl_test<
-        B: BlobMulti,
+    pub async fn blob_impl_test<
+        B: Blob,
         F: Future<Output = Result<B, ExternalError>>,
         NewFn: Fn(&'static str) -> F,
     >(

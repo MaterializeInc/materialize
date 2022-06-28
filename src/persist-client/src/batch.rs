@@ -22,7 +22,7 @@ use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti};
+use mz_persist::location::{Atomicity, Blob};
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
 use timely::PartialOrder;
@@ -53,8 +53,8 @@ where
     /// Keys to blobs that make up this batch of updates.
     pub(crate) blob_keys: Vec<String>,
 
-    /// Handle to the [BlobMulti] that the blobs of this batch were uploaded to.
-    _blob: Arc<dyn BlobMulti + Send + Sync>,
+    /// Handle to the [Blob] that the blobs of this batch were uploaded to.
+    _blob: Arc<dyn Blob + Send + Sync>,
 
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
@@ -84,7 +84,7 @@ where
     D: Semigroup + Codec64,
 {
     pub(crate) fn new(
-        blob: Arc<dyn BlobMulti + Send + Sync>,
+        blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
         desc: Description<T>,
         blob_keys: Vec<String>,
@@ -155,7 +155,7 @@ where
 
     shard_id: ShardId,
     records: ColumnarRecordsVecBuilder,
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
 
     parts: BatchParts<T>,
@@ -180,7 +180,7 @@ where
         metrics: Arc<Metrics>,
         size_hint: usize,
         lower: Antichain<T>,
-        blob: Arc<dyn BlobMulti + Send + Sync>,
+        blob: Arc<dyn Blob + Send + Sync>,
         shard_id: ShardId,
     ) -> Self {
         let parts = BatchParts::new(
@@ -310,7 +310,7 @@ struct BatchParts<T> {
     metrics: Arc<Metrics>,
     shard_id: ShardId,
     lower: Antichain<T>,
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
     writing_parts: VecDeque<(String, JoinHandle<()>)>,
     finished_parts: Vec<String>,
 }
@@ -321,7 +321,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         metrics: Arc<Metrics>,
         shard_id: ShardId,
         lower: Antichain<T>,
-        blob: Arc<dyn BlobMulti + Send + Sync>,
+        blob: Arc<dyn Blob + Send + Sync>,
     ) -> Self {
         BatchParts {
             max_outstanding,

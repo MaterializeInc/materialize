@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use mz_persist::location::{BlobMulti, Indeterminate};
+use mz_persist::location::{Blob, Indeterminate};
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::{Antichain, Timestamp};
@@ -54,7 +54,7 @@ where
     pub(crate) cfg: PersistConfig,
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) upper: Antichain<T>,
 }
