@@ -40,6 +40,8 @@ pub(crate) fn persist_sink<G>(
     // TODO(teskje): vary active_worker_index, to distribute work for multiple sinks
     let active_worker_index = 0;
 
+    tracing::info!("Persisting introspection to {:?}", target);
+
     let write: Option<WriteHandle<_, _, _, _>> = if active_worker_index == scope.index() {
         let shard_id = target.persist_shard;
         let location = target.persist_location.clone();
