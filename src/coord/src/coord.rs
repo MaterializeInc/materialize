@@ -3359,7 +3359,7 @@ impl<S: Append + 'static> Coordinator<S> {
         replica_id: ReplicaId,
         replica_config: ConcreteComputeInstanceReplicaConfig,
     ) -> Result<(), anyhow::Error> {
-        if let Some(Some(metadata)) = self.transient_replica_metadata.remove(&replica_id) {
+        if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
             let table = self
                 .catalog
                 .state()
