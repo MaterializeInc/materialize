@@ -3092,16 +3092,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type =
-            match self.expect_one_of_keywords(&[SINK, SOURCE, VIEW, TABLE, INDEX, SECRET])? {
-                SINK => ObjectType::Sink,
-                SOURCE => ObjectType::Source,
-                VIEW => ObjectType::View,
-                TABLE => ObjectType::Table,
-                INDEX => return self.parse_alter_index(),
-                SECRET => return self.parse_alter_secret(),
-                _ => unreachable!(),
-            };
+        let object_type = match self
+            .expect_one_of_keywords(&[SINK, SOURCE, VIEW, RECORDED, TABLE, INDEX, SECRET])?
+        {
+            SINK => ObjectType::Sink,
+            SOURCE => ObjectType::Source,
+            VIEW => ObjectType::View,
+            RECORDED => {
+                self.expect_keyword(VIEW)?;
+                ObjectType::RecordedView
+            }
+            TABLE => ObjectType::Table,
+            INDEX => return self.parse_alter_index(),
+            SECRET => return self.parse_alter_secret(),
+            _ => unreachable!(),
+        };
 
         let if_exists = self.parse_if_exists()?;
         let name = self.parse_object_name()?;

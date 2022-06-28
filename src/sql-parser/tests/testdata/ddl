@@ -1143,6 +1143,13 @@ ALTER VIEW name SET (property = true)
                 ^
 
 parse-statement
+ALTER RECORDED VIEW name SET (property = true)
+----
+error: Expected RENAME, found SET
+ALTER RECORDED VIEW name SET (property = true)
+                         ^
+
+parse-statement
 ALTER SINK name SET (property = true)
 ----
 error: Expected RENAME, found SET
@@ -1169,6 +1176,20 @@ ALTER INDEX i1
 error: Expected one of RESET or SET or RENAME, found EOF
 ALTER INDEX i1
               ^
+
+parse-statement
+ALTER VIEW name RENAME TO name2
+----
+ALTER VIEW name RENAME TO name2
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: View, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
+
+parse-statement
+ALTER RECORDED VIEW name RENAME TO name2
+----
+ALTER RECORDED VIEW name RENAME TO name2
+=>
+AlterObjectRename(AlterObjectRenameStatement { object_type: RecordedView, if_exists: false, name: UnresolvedObjectName([Ident("name")]), to_item_name: Ident("name2") })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS ()
