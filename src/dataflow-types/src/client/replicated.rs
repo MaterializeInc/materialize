@@ -458,7 +458,11 @@ fn specialize_command<T>(
     if let ComputeCommand::CreateInstance(config) = command {
         // Set sink_logs
         if let Some(logging) = &mut config.logging {
-            logging.sink_logs = replica.log_collections.clone();
+            // TODO(LH): Uncomment this to enable writing logging sources to persist.
+            // Blocked on #11491 (persist compaction).
+            if false {
+                logging.sink_logs = replica.log_collections.clone();
+            }
             tracing::debug!(
                 "Sending logging sinks to replica {:?}: {:?}",
                 replica_id,
