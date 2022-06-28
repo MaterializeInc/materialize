@@ -22,6 +22,7 @@ use futures::executor::block_on;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::operators::{Exchange, Map, OkErr};
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::{encoding::*, *};
@@ -72,7 +73,8 @@ enum SourceType<Delimited, ByteStream, RowSource, AppendRowSource> {
 pub fn render_source<G>(
     scope: &mut G,
     dataflow_debug_name: &String,
-    ingestion: IngestionDescription<CollectionMetadata, Timestamp>,
+    ingestion: IngestionDescription<CollectionMetadata>,
+    as_of: Antichain<G::Timestamp>,
     mut linear_operators: Option<LinearOperator>,
     storage_state: &mut crate::storage_state::StorageState,
 ) -> (
@@ -155,7 +157,7 @@ where
                 encoding: encoding.clone(),
                 now: storage_state.now.clone(),
                 base_metrics: &storage_state.source_metrics,
-                as_of: ingestion.since.clone(),
+                as_of: as_of.clone(),
                 storage_metadata: ingestion.storage_metadata,
                 persist_clients: Arc::clone(&storage_state.persist_clients),
             };
@@ -334,9 +336,9 @@ where
                                     let (tx_source_ok_stream, tx_source_err_stream, tx_token) =
                                         persist_source::persist_source(
                                             scope,
-                                            tx_storage_metadata,
                                             persist_clients,
-                                            ingestion.since.clone(),
+                                            tx_storage_metadata,
+                                            as_of.clone(),
                                         );
                                     let (tx_source_ok, tx_source_err) = (
                                         tx_source_ok_stream.as_collection(),
@@ -370,7 +372,7 @@ where
 
                             let (upsert_ok, upsert_err) = super::upsert::upsert(
                                 &transformed_results,
-                                ingestion.since.clone(),
+                                as_of.clone(),
                                 &mut linear_operators,
                                 source_arity,
                                 upsert_envelope.clone(),
@@ -473,16 +475,15 @@ where
             match &envelope {
                 SourceEnvelope::Upsert(_) => {}
                 _ => {
-                    let as_of_frontier1 = ingestion.since.clone();
+                    let as_of_frontier1 = as_of.clone();
                     collection = collection
                         .inner
                         .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
                         .as_collection();
 
-                    let as_of_frontier2 = ingestion.since;
                     err_collection = err_collection
                         .inner
-                        .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
+                        .map_in_place(move |(_, time, _)| time.advance_by(as_of.borrow()))
                         .as_collection();
                 }
             }

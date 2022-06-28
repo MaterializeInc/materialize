@@ -23,6 +23,7 @@ futures = "0.3.21"
 futures-executor = "0.3.21"
 futures-util = "0.3.19"
 globset = { version = "0.4.9", optional = true }
+itertools = { version = "0.10.3", optional = true }
 mz-avro = { path = "../avro", features = ["snappy"], optional = true }
 mz-ccsr = { path = "../ccsr", optional = true }
 mz-dataflow-types = { path = "../dataflow-types" }
@@ -49,7 +50,7 @@ serde = { version = "1.0.137", features = ["derive"] }
 serde_json = { version = "1.0.81", optional = true }
 tempfile = { version = "3.2.0", optional = true }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.19.2", features = ["fs", "rt", "sync"] }
+tokio = { version = "1.19.2", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", optional = true }
 tokio-util = { version = "0.7.3", features = ["io"] }
 tracing = "0.1.35"
@@ -68,6 +69,7 @@ server = [
     "csv-core",
     "globset",
     "once_cell",
+    "itertools",
     "mz-avro",
     "mz-ccsr",
     "mz-interchange",

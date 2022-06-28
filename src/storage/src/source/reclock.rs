@@ -79,7 +79,7 @@ impl ReclockOperator {
         drop(persist_clients);
 
         let (write_handle, read_handle) = persist_client
-            .open(metadata.timestamp_shard_id)
+            .open(metadata.remap_shard)
             .await
             .context("error opening persist shard")?;
 
@@ -493,8 +493,8 @@ mod tests {
                 blob_uri: "mem://".to_owned(),
                 consensus_uri: "mem://".to_owned(),
             },
-            timestamp_shard_id: shard,
-            persist_shard: ShardId::new(),
+            remap_shard: shard,
+            data_shard: ShardId::new(),
         };
 
         ReclockOperator::new(

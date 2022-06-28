@@ -24,7 +24,6 @@ use proptest::prop_oneof;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
 use uuid::Uuid;
 
 use mz_persist_types::Codec;
@@ -47,25 +46,18 @@ include!(concat!(
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = (), T = mz_repr::Timestamp> {
-    /// Source collections made available to this ingestion.
-    pub source_imports: BTreeMap<GlobalId, S>,
+pub struct IngestionDescription<S = ()> {
     /// The source identifier
     pub id: GlobalId,
     /// The source description
     pub desc: SourceDesc,
-    /// The initial `since` frontier
-    pub since: Antichain<T>,
+    /// Source collections made available to this ingestion.
+    pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub storage_metadata: S,
 }
 
-impl Arbitrary
-    for IngestionDescription<
-        crate::client::controller::storage::CollectionMetadata,
-        mz_repr::Timestamp,
-    >
-{
+impl Arbitrary for IngestionDescription<CollectionMetadata> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -74,16 +66,13 @@ impl Arbitrary
             any::<BTreeMap<GlobalId, CollectionMetadata>>(),
             any::<GlobalId>(),
             any::<SourceDesc>(),
-            // TODO(guswynn): make a helper function for generating Antichains
-            proptest::collection::vec(any::<u64>(), 1..4).prop_map(Antichain::from),
             any::<CollectionMetadata>(),
         )
             .prop_map(
-                |(source_imports, id, desc, since, storage_metadata)| IngestionDescription {
+                |(source_imports, id, desc, storage_metadata)| IngestionDescription {
                     source_imports,
                     id,
                     desc,
-                    since,
                     storage_metadata,
                 },
             )
@@ -91,12 +80,7 @@ impl Arbitrary
     }
 }
 
-impl RustType<ProtoIngestionDescription>
-    for IngestionDescription<
-        crate::client::controller::storage::CollectionMetadata,
-        mz_repr::Timestamp,
-    >
-{
+impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
     fn into_proto(&self) -> ProtoIngestionDescription {
         // we have to turn a BTreeMap into a vec here
         let source_imports: Vec<_> = self
@@ -113,7 +97,6 @@ impl RustType<ProtoIngestionDescription>
             source_imports,
             id: Some(self.id.into_proto()),
             desc: Some(self.desc.into_proto()),
-            since: Some((&self.since).into()),
             storage_metadata: Some(self.storage_metadata.into_proto()),
         }
     }
@@ -146,9 +129,6 @@ impl RustType<ProtoIngestionDescription>
             desc: proto
                 .desc
                 .into_rust_if_some("ProtoIngestionDescription::desc")?,
-            since: proto.since.map(Into::into).ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoIngestionDescription::since")
-            })?,
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoIngestionDescription::storage_metadata")?,

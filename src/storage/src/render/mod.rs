@@ -104,6 +104,7 @@ use std::rc::Rc;
 
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
@@ -124,7 +125,8 @@ pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
     debug_name: &str,
-    ingestion: IngestionDescription<CollectionMetadata, mz_repr::Timestamp>,
+    ingestion: IngestionDescription<CollectionMetadata>,
+    as_of: Antichain<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Source dataflow: {debug_name}");
@@ -140,6 +142,7 @@ pub fn build_storage_dataflow<A: Allocate>(
                 region,
                 &debug_name,
                 ingestion.clone(),
+                as_of,
                 // NOTE: For now sources never have LinearOperators but might have in the future
                 None,
                 storage_state,

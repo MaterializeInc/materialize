@@ -246,12 +246,12 @@ where
 {
     fn observe_command(&mut self, command: &StorageCommand<T>) {
         match command {
-            StorageCommand::CreateSources(sources) => {
-                for source in sources {
+            StorageCommand::CreateSources(ingestions) => {
+                for ingestion in ingestions {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                    let previous = self.uppers.insert(source.id, frontier);
-                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", source.id, command);
+                    let previous = self.uppers.insert(ingestion.id, frontier);
+                    assert!(previous.is_none(), "Protocol error: starting frontier tracking for already present identifier {:?} due to command {:?}", ingestion.id, command);
                 }
             }
             _ => {

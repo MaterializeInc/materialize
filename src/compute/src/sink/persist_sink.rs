@@ -59,7 +59,7 @@ where
 
         let persist_clients = Arc::clone(&compute_state.persist_clients);
         let persist_location = self.storage_metadata.persist_location.clone();
-        let shard_id = self.storage_metadata.persist_shard;
+        let shard_id = self.storage_metadata.data_shard;
 
         // Log the shard ID so we know which shard to read for testing.
         // TODO(teskje): Remove once we have a built-in way for reading back sinked data.

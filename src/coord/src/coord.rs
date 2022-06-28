@@ -731,7 +731,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     let mut ingestion = IngestionDescription {
                         id: entry.id(),
                         desc: source_description,
-                        since: Antichain::from_elem(Timestamp::minimum()),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
                     };
@@ -769,7 +768,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     let mut ingestion = IngestionDescription {
                         id: entry.id(),
                         desc: source_description,
-                        since: Antichain::from_elem(since_ts),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
                     };
@@ -788,6 +786,14 @@ impl<S: Append + 'static> Coordinator<S> {
                         }])
                         .await
                         .unwrap();
+
+                    let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
+                    self.dataflow_client
+                        .storage_mut()
+                        .set_read_policy(vec![(entry.id(), policy)])
+                        .await
+                        .unwrap();
+
                     self.initialize_storage_read_policies(
                         vec![entry.id()],
                         self.logical_compaction_window_ms,
@@ -818,7 +824,6 @@ impl<S: Append + 'static> Coordinator<S> {
                         let ingestion = IngestionDescription {
                             id: entry.id(),
                             desc,
-                            since: Antichain::from_elem(Timestamp::minimum()),
                             source_imports: BTreeMap::new(),
                             storage_metadata: (),
                         };
@@ -2769,7 +2774,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 let ingestion = IngestionDescription {
                     id: table_id,
                     desc: source_description,
-                    since: Antichain::from_elem(since_ts),
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
                 };
@@ -2780,6 +2784,13 @@ impl<S: Append + 'static> Coordinator<S> {
                         ingestion,
                         remote_addr: None,
                     }])
+                    .await
+                    .unwrap();
+
+                let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
+                self.dataflow_client
+                    .storage_mut()
+                    .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
 
@@ -2883,7 +2894,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut ingestion = IngestionDescription {
                     id: source_id,
                     desc: source_description,
-                    since: Antichain::from_elem(Timestamp::minimum()),
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
                 };
@@ -3013,7 +3023,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     let ingestion = IngestionDescription {
                         id,
                         desc,
-                        since: Antichain::from_elem(Timestamp::minimum()),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
                     };
