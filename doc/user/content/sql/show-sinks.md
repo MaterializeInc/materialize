@@ -27,9 +27,9 @@ _schema&lowbar;name_ | The schema to show sinks from. Defaults to `public` in th
 `SHOW FULL SINKS`'s output is a table, with this structure:
 
 ```nofmt
-cluster | name  | type | volatile
---------+-------+------+---------
-...     | ...   | ...  | ...
+cluster | name  | type
+--------+-------+-------
+...     | ...   | ...
 ```
 
 Field | Meaning
@@ -37,7 +37,6 @@ Field | Meaning
 **cluster** | The name of the [cluster](/overview/key-concepts/#clusters) containing the sink.
 **name** | The name of the sink.
 **type** | Whether the sink was created by the `user` or the `system`.
-**volatility** | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ## Examples
 

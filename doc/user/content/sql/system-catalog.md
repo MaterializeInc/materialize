@@ -212,7 +212,6 @@ Field        | Type        | Meaning
 `oid`        | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the index.
 `name`       | [`text`]    | The name of the index.
 `on_id`      | [`text`]    | The ID of the relation on which the index is built.
-`volatility` | [`text`]    | Whether the index is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_index_columns`
 
@@ -474,7 +473,6 @@ Field            | Type        | Meaning
 `schema_id`      | [`bigint`]  | The ID of the schema to which the sink belongs.
 `name`           | [`text`]    | The name of the sink.
 `type`           | [`text`]    | The type of the sink: `kafka`.
-`volatility`     | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_sources`
 
@@ -487,7 +485,6 @@ Field            | Type       | Meaning
 `schema_id`      | [`bigint`] | The ID of the schema to which the source belongs.
 `name`           | [`text`]   | The name of the source.
 `type`           | [`text`]   | The type of the source: `kafka`, `postgres`, or `pubnub`.
-`volatility`     | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_tables`
 
@@ -522,7 +519,6 @@ Field          | Type        | Meaning
 `oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the view.
 `schema_id`    | [`bigint`]  | The ID of the schema to which the view belongs.
 `name`         | [`text`]    | The name of the view.
-`volatility`   | [`text`]    | Whether the view is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 `definition`   | [`text`]    | The view definition (a `SELECT` query).
 
 ### `mz_worker_materialization_frontiers`
