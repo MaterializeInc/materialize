@@ -83,7 +83,7 @@ $ kafka-verify format=avro sink=materialize.public.data_snk sort-messages=true
 {"before": null, "after": {"row": {"a": 1}}}
 {"before": null, "after": {"row": {"a": 2}}}
 
-# Check environment variables; defined in mzcompose.yml
+# Check environment variables; defined in mzcompose.py
 
 > CREATE MATERIALIZED SOURCE env_pw_data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'

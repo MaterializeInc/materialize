@@ -90,7 +90,6 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         echo "lint: $(red error:) python formatting discrepancies found"
         echo "hint: run bin/pyfmt" >&2
     fi
-    try bin/mzcompose lint
     try bin/lint-cargo
     try bin/completion check
 fi
