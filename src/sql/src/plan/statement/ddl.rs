@@ -36,7 +36,8 @@ use mz_dataflow_types::sinks::{
 };
 use mz_dataflow_types::sources::encoding::{
     included_column_desc, AvroEncoding, AvroOcfEncoding, ColumnSpec, CsvEncoding, DataEncoding,
-    ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+    DataEncodingInner, ProtobufEncoding, RegexEncoding, SourceDataEncoding,
+    SourceDataEncodingInner,
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
@@ -374,7 +375,7 @@ pub fn plan_create_source(
                 Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
-            let encoding = get_encoding(format, envelope, with_options_original)?;
+            let encoding = get_encoding(format, envelope, with_options_original, &connector)?;
 
             let mut connector = KafkaSourceConnector {
                 addrs: broker.parse()?,
@@ -468,9 +469,9 @@ pub fn plan_create_source(
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
+            let encoding = get_encoding(format, envelope, with_options_original, &connector)?;
             let connector =
                 ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, aws });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
             (connector, encoding)
         }
         CreateSourceConnector::File { path, compression } => {
@@ -480,6 +481,11 @@ pub fn plan_create_source(
                 Some(_) => bail!("tail must be a boolean"),
             };
 
+            let encoding = get_encoding(format, envelope, with_options_original, &connector)?;
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("File sources do not support key decoding");
+            }
+
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
                 compression: match compression {
@@ -488,10 +494,6 @@ pub fn plan_create_source(
                 },
                 tail,
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                bail!("File sources do not support key decoding");
-            }
             (connector, encoding)
         }
         CreateSourceConnector::S3 {
@@ -516,6 +518,12 @@ pub fn plan_create_source(
                 };
                 converted_sources.push(dtks);
             }
+
+            let encoding = get_encoding(format, envelope, with_options_original, &connector)?;
+            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
+                bail!("S3 sources do not support key decoding");
+            }
+
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 key_sources: converted_sources,
                 pattern: pattern
@@ -533,10 +541,6 @@ pub fn plan_create_source(
                     Compression::None => mz_dataflow_types::sources::Compression::None,
                 },
             });
-            let encoding = get_encoding(format, envelope, with_options_original)?;
-            if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
-                bail!("S3 sources do not support key decoding");
-            }
             (connector, encoding)
         }
         CreateSourceConnector::Postgres {
@@ -559,7 +563,8 @@ pub fn plan_create_source(
                 )?))?,
             });
 
-            let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
+            let encoding =
+                SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Postgres));
             (connector, encoding)
         }
         CreateSourceConnector::PubNub {
@@ -574,7 +579,10 @@ pub fn plan_create_source(
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (connector, SourceDataEncoding::Single(DataEncoding::Text))
+            (
+                connector,
+                SourceDataEncoding::Single(DataEncoding::new(DataEncodingInner::Text)),
+            )
         }
         CreateSourceConnector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
@@ -598,9 +606,9 @@ pub fn plan_create_source(
                 Value::String(s) => s,
                 _ => bail!("reader_schema option must be a string"),
             };
-            let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
-                reader_schema,
-            }));
+            let encoding = SourceDataEncoding::Single(DataEncoding::new(
+                DataEncodingInner::AvroOcf(AvroOcfEncoding { reader_schema }),
+            ));
             (connector, encoding)
         }
     };
@@ -733,7 +741,10 @@ pub fn plan_create_source(
             }
             //TODO(petrosagg): remove this check. it will be a breaking change
             let key_envelope = match encoding.key_ref() {
-                Some(DataEncoding::Avro(_)) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
+                Some(DataEncoding {
+                    inner: DataEncodingInner::Avro(_),
+                    ..
+                }) => key_envelope.unwrap_or(KeyEnvelope::Flattened),
                 _ => key_envelope.unwrap_or(KeyEnvelope::LegacyUpsert),
             };
             UnplannedSourceEnvelope::Upsert(UpsertStyle::Default(key_envelope))
@@ -1025,22 +1036,27 @@ fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
     format: &CreateSourceFormat<T>,
     envelope: &Envelope,
     with_options: &Vec<SqlOption<T>>,
+    connection: &CreateSourceConnector,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
         CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options)?,
         CreateSourceFormat::KeyValue { key, value } => {
             let key = match get_encoding_inner(key, with_options)? {
-                SourceDataEncoding::Single(key) => key,
-                SourceDataEncoding::KeyValue { key, .. } => key,
+                SourceDataEncodingInner::Single(key) => key,
+                SourceDataEncodingInner::KeyValue { key, .. } => key,
             };
             let value = match get_encoding_inner(value, with_options)? {
-                SourceDataEncoding::Single(value) => value,
-                SourceDataEncoding::KeyValue { value, .. } => value,
+                SourceDataEncodingInner::Single(value) => value,
+                SourceDataEncodingInner::KeyValue { value, .. } => value,
             };
-            SourceDataEncoding::KeyValue { key, value }
+            SourceDataEncodingInner::KeyValue { key, value }
         }
     };
+
+    let force_nullable_keys = matches!(connection, CreateSourceConnector::Kafka { .. })
+        && matches!(envelope, Envelope::None);
+    let encoding = encoding.into_source_data_encoding(force_nullable_keys);
 
     let requires_keyvalue = matches!(
         envelope,
@@ -1057,10 +1073,10 @@ fn get_encoding<T: mz_sql_parser::ast::AstInfo>(
 fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
     format: &Format<T>,
     with_options: &Vec<SqlOption<T>>,
-) -> Result<SourceDataEncoding, anyhow::Error> {
+) -> Result<SourceDataEncodingInner, anyhow::Error> {
     // Avro/CSR can return a `SourceDataEncoding::KeyValue`
-    Ok(SourceDataEncoding::Single(match format {
-        Format::Bytes => DataEncoding::Bytes,
+    Ok(SourceDataEncodingInner::Single(match format {
+        Format::Bytes => DataEncodingInner::Bytes,
         Format::Avro(schema) => {
             let Schema {
                 key_schema,
@@ -1127,20 +1143,20 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
             };
 
             if let Some(key_schema) = key_schema {
-                return Ok(SourceDataEncoding::KeyValue {
-                    key: DataEncoding::Avro(AvroEncoding {
+                return Ok(SourceDataEncodingInner::KeyValue {
+                    key: DataEncodingInner::Avro(AvroEncoding {
                         schema: key_schema,
                         schema_registry_config: schema_registry_config.clone(),
                         confluent_wire_format,
                     }),
-                    value: DataEncoding::Avro(AvroEncoding {
+                    value: DataEncodingInner::Avro(AvroEncoding {
                         schema: value_schema,
                         schema_registry_config,
                         confluent_wire_format,
                     }),
                 });
             } else {
-                DataEncoding::Avro(AvroEncoding {
+                DataEncodingInner::Avro(AvroEncoding {
                     schema: value_schema,
                     schema_registry_config,
                     confluent_wire_format,
@@ -1172,14 +1188,14 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
                         "CONFLUENT SCHEMA REGISTRY",
                     )?;
 
-                    let value = DataEncoding::Protobuf(ProtobufEncoding {
+                    let value = DataEncodingInner::Protobuf(ProtobufEncoding {
                         descriptors: strconv::parse_bytes(&value.schema)?,
                         message_name: value.message_name.clone(),
                         confluent_wire_format: true,
                     });
                     if let Some(key) = key {
-                        return Ok(SourceDataEncoding::KeyValue {
-                            key: DataEncoding::Protobuf(ProtobufEncoding {
+                        return Ok(SourceDataEncodingInner::KeyValue {
+                            key: DataEncodingInner::Protobuf(ProtobufEncoding {
                                 descriptors: strconv::parse_bytes(&key.schema)?,
                                 message_name: key.message_name.clone(),
                                 confluent_wire_format: true,
@@ -1203,7 +1219,7 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
                     }
                 };
 
-                DataEncoding::Protobuf(ProtobufEncoding {
+                DataEncodingInner::Protobuf(ProtobufEncoding {
                     descriptors,
                     message_name: message_name.to_owned(),
                     confluent_wire_format: false,
@@ -1212,7 +1228,7 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
         },
         Format::Regex(regex) => {
             let regex = Regex::new(&regex)?;
-            DataEncoding::Regex(RegexEncoding {
+            DataEncodingInner::Regex(RegexEncoding {
                 regex: mz_repr::adt::regex::Regex(regex),
             })
         }
@@ -1228,7 +1244,7 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
                 }
                 CsvColumns::Count(n) => ColumnSpec::Count(*n),
             };
-            DataEncoding::Csv(CsvEncoding {
+            DataEncodingInner::Csv(CsvEncoding {
                 columns,
                 delimiter: match *delimiter as u32 {
                     0..=127 => *delimiter as u8,
@@ -1237,7 +1253,7 @@ fn get_encoding_inner<T: mz_sql_parser::ast::AstInfo>(
             })
         }
         Format::Json => bail_unsupported!("JSON sources"),
-        Format::Text => DataEncoding::Text,
+        Format::Text => DataEncodingInner::Text,
     }))
 }
 
@@ -1263,15 +1279,15 @@ fn get_key_envelope(
                 // If the key is requested but comes from an unnamed type then it gets the name "key"
                 //
                 // Otherwise it gets the names of the columns in the type
-                let is_composite = match key {
-                    DataEncoding::AvroOcf { .. } | DataEncoding::Postgres => {
+                let is_composite = match key.inner {
+                    DataEncodingInner::AvroOcf { .. } | DataEncodingInner::Postgres => {
                         bail!("{} sources cannot use INCLUDE KEY", key.op_name())
                     }
-                    DataEncoding::Bytes | DataEncoding::Text => false,
-                    DataEncoding::Avro(_)
-                    | DataEncoding::Csv(_)
-                    | DataEncoding::Protobuf(_)
-                    | DataEncoding::Regex { .. } => true,
+                    DataEncodingInner::Bytes | DataEncodingInner::Text => false,
+                    DataEncodingInner::Avro(_)
+                    | DataEncodingInner::Csv(_)
+                    | DataEncodingInner::Protobuf(_)
+                    | DataEncodingInner::Regex { .. } => true,
                 };
 
                 if is_composite {

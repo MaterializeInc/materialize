@@ -25,9 +25,10 @@ use tracing::{debug, error, trace};
 use mz_avro::Block;
 use mz_avro::BlockIter;
 use mz_avro::{AvroRead, Schema, Skip};
+use mz_dataflow_types::sources::encoding::DataEncodingInner;
 use mz_dataflow_types::sources::{
-    encoding::AvroOcfEncoding, encoding::DataEncoding, encoding::SourceDataEncoding, Compression,
-    ExternalSourceConnector, MzOffset,
+    encoding::AvroOcfEncoding, encoding::SourceDataEncoding, Compression, ExternalSourceConnector,
+    MzOffset,
 };
 use mz_expr::{PartitionId, SourceInstanceId};
 
@@ -124,8 +125,10 @@ impl SourceReader for FileSourceReader {
                         unreachable!("A KeyValue encoding for an OCF source should have been rejected in the planner.")
                     }
                 };
-                let reader_schema = match value_encoding {
-                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => &*reader_schema,
+                let reader_schema = match &value_encoding.inner {
+                    DataEncodingInner::AvroOcf(AvroOcfEncoding { reader_schema }) => {
+                        &*reader_schema
+                    }
                     // We should be checking for this in the planner.
                     _ => unreachable!("Wrong encoding for OCF file"),
                 };

@@ -437,6 +437,42 @@ pub mod sources {
         use mz_interchange::{avro, protobuf};
         use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
+        pub enum SourceDataEncodingInner {
+            Single(DataEncodingInner),
+            KeyValue {
+                key: DataEncodingInner,
+                value: DataEncodingInner,
+            },
+        }
+
+        impl SourceDataEncodingInner {
+            pub fn into_source_data_encoding(
+                self,
+                force_nullable_keys: bool,
+            ) -> SourceDataEncoding {
+                match self {
+                    SourceDataEncodingInner::Single(inner) => {
+                        SourceDataEncoding::Single(DataEncoding {
+                            inner,
+                            force_nullable_columns: false,
+                        })
+                    }
+                    SourceDataEncodingInner::KeyValue { key, value } => {
+                        SourceDataEncoding::KeyValue {
+                            key: DataEncoding {
+                                inner: key,
+                                force_nullable_columns: force_nullable_keys,
+                            },
+                            value: DataEncoding {
+                                inner: value,
+                                force_nullable_columns: false,
+                            },
+                        }
+                    }
+                }
+            }
+        }
+
         /// A description of how to interpret data from various sources
         ///
         /// Almost all sources only present values as part of their records, but Kafka allows a key to be
@@ -453,7 +489,7 @@ pub mod sources {
         /// A description of how each row should be decoded, from a string of bytes to a sequence of
         /// Differential updates.
         #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-        pub enum DataEncoding {
+        pub enum DataEncodingInner {
             Avro(AvroEncoding),
             AvroOcf(AvroOcfEncoding),
             Protobuf(ProtobufEncoding),
@@ -462,6 +498,14 @@ pub mod sources {
             Postgres,
             Bytes,
             Text,
+        }
+
+        /// A description of how each row should be decoded, from a string of bytes to a sequence of
+        /// Differential updates.
+        #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+        pub struct DataEncoding {
+            pub force_nullable_columns: bool,
+            pub inner: DataEncodingInner,
         }
 
         impl SourceDataEncoding {
@@ -506,27 +550,34 @@ pub mod sources {
         }
 
         impl DataEncoding {
+            pub fn new(inner: DataEncodingInner) -> DataEncoding {
+                DataEncoding {
+                    inner,
+                    force_nullable_columns: false,
+                }
+            }
+
             /// Computes the [`RelationDesc`] for the relation specified by this
             /// data encoding and envelope.
             ///
             /// If a key desc is provided it will be prepended to the returned desc
             fn desc(&self) -> Result<RelationDesc, anyhow::Error> {
                 // Add columns for the data, based on the encoding format.
-                Ok(match self {
-                    DataEncoding::Bytes => {
+                let desc = match &self.inner {
+                    DataEncodingInner::Bytes => {
                         RelationDesc::empty().with_column("data", ScalarType::Bytes.nullable(false))
                     }
-                    DataEncoding::AvroOcf(AvroOcfEncoding {
+                    DataEncodingInner::AvroOcf(AvroOcfEncoding {
                         reader_schema: schema,
                         ..
                     })
-                    | DataEncoding::Avro(AvroEncoding { schema, .. }) => {
+                    | DataEncodingInner::Avro(AvroEncoding { schema, .. }) => {
                         let parsed_schema =
                             avro::parse_schema(schema).context("validating avro schema")?;
                         avro::schema_to_relationdesc(parsed_schema)
                             .context("validating avro schema")?
                     }
-                    DataEncoding::Protobuf(ProtobufEncoding {
+                    DataEncodingInner::Protobuf(ProtobufEncoding {
                         descriptors,
                         message_name,
                         confluent_wire_format: _,
@@ -539,7 +590,7 @@ pub mod sources {
                     .fold(RelationDesc::empty(), |desc, (name, ty)| {
                         desc.with_column(name, ty.clone())
                     }),
-                    DataEncoding::Regex(RegexEncoding { regex }) => regex
+                    DataEncodingInner::Regex(RegexEncoding { regex }) => regex
                         .capture_names()
                         .enumerate()
                         // The first capture is the entire matched string. This will
@@ -555,7 +606,7 @@ pub mod sources {
                             let ty = ScalarType::String.nullable(true);
                             desc.with_column(name, ty)
                         }),
-                    DataEncoding::Csv(CsvEncoding { columns, .. }) => match columns {
+                    DataEncodingInner::Csv(CsvEncoding { columns, .. }) => match columns {
                         ColumnSpec::Count(n) => {
                             (1..=*n).into_iter().fold(RelationDesc::empty(), |desc, i| {
                                 desc.with_column(
@@ -571,9 +622,9 @@ pub mod sources {
                                 desc.with_column(name, ScalarType::String.nullable(false))
                             }),
                     },
-                    DataEncoding::Text => RelationDesc::empty()
+                    DataEncodingInner::Text => RelationDesc::empty()
                         .with_column("text", ScalarType::String.nullable(false)),
-                    DataEncoding::Postgres => RelationDesc::empty()
+                    DataEncodingInner::Postgres => RelationDesc::empty()
                         .with_column("oid", ScalarType::Int32.nullable(false))
                         .with_column(
                             "row_data",
@@ -583,19 +634,28 @@ pub mod sources {
                             }
                             .nullable(false),
                         ),
-                })
+                };
+
+                if self.force_nullable_columns {
+                    Ok(RelationDesc::from_names_and_types(
+                        desc.into_iter()
+                            .map(|(name, typ)| (name, typ.nullable(true))),
+                    ))
+                } else {
+                    Ok(desc)
+                }
             }
 
             pub fn op_name(&self) -> &'static str {
-                match self {
-                    DataEncoding::Bytes => "Bytes",
-                    DataEncoding::AvroOcf { .. } => "AvroOcf",
-                    DataEncoding::Avro(_) => "Avro",
-                    DataEncoding::Protobuf(_) => "Protobuf",
-                    DataEncoding::Regex { .. } => "Regex",
-                    DataEncoding::Csv(_) => "Csv",
-                    DataEncoding::Text => "Text",
-                    DataEncoding::Postgres => "Postgres",
+                match &self.inner {
+                    DataEncodingInner::Bytes => "Bytes",
+                    DataEncodingInner::AvroOcf { .. } => "AvroOcf",
+                    DataEncodingInner::Avro(_) => "Avro",
+                    DataEncodingInner::Protobuf(_) => "Protobuf",
+                    DataEncodingInner::Regex { .. } => "Regex",
+                    DataEncodingInner::Csv(_) => "Csv",
+                    DataEncodingInner::Text => "Text",
+                    DataEncodingInner::Postgres => "Postgres",
                 }
             }
         }
@@ -854,7 +914,7 @@ pub mod sources {
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
     pub enum SourceEnvelope {
         /// If present, include the key columns as an output column of the source with the given properties.
-        None(KeyEnvelope),
+        None(NoneEnvelope),
         Debezium(DebeziumEnvelope),
         Upsert(UpsertEnvelope),
         CdcV2,
@@ -888,6 +948,12 @@ pub mod sources {
         Default(KeyEnvelope),
         /// `ENVELOPE DEBEZIUM UPSERT`
         Debezium { after_idx: usize },
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+    pub struct NoneEnvelope {
+        pub key_envelope: KeyEnvelope,
+        pub key_arity: usize,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -1011,7 +1077,11 @@ pub mod sources {
         ///
         /// Panics if the input envelope is `UnplannedSourceEnvelope::Upsert` and
         /// key is not passed as `Some`
-        fn into_source_envelope(self, key: Option<Vec<usize>>) -> SourceEnvelope {
+        fn into_source_envelope(
+            self,
+            key: Option<Vec<usize>>,
+            key_arity: Option<usize>,
+        ) -> SourceEnvelope {
             match self {
                 UnplannedSourceEnvelope::Upsert(upsert_style) => {
                     SourceEnvelope::Upsert(UpsertEnvelope {
@@ -1022,7 +1092,10 @@ pub mod sources {
                 UnplannedSourceEnvelope::Debezium(inner) => {
                     SourceEnvelope::Debezium(inner)
                 }
-                UnplannedSourceEnvelope::None(inner) => SourceEnvelope::None(inner),
+                UnplannedSourceEnvelope::None(inner) => SourceEnvelope::None(NoneEnvelope {
+                    key_envelope: inner,
+                    key_arity: key_arity.unwrap_or(0),
+                }),
                 UnplannedSourceEnvelope::CdcV2 => SourceEnvelope::CdcV2,
             }
         }
@@ -1042,11 +1115,12 @@ pub mod sources {
                         Some(desc) => desc,
                         None => {
                             return Ok((
-                                self.into_source_envelope(None),
+                                self.into_source_envelope(None, None),
                                 value_desc.concat(metadata_desc),
                             ))
                         }
                     };
+                    let key_arity = key_desc.arity();
 
                     let (keyed, key) = match key_envelope {
                         KeyEnvelope::None => (value_desc, None),
@@ -1093,7 +1167,10 @@ pub mod sources {
                             (key_desc.with_key(vec![0]).concat(value_desc), Some(vec![0]))
                         }
                     };
-                    (self.into_source_envelope(key), keyed.concat(metadata_desc))
+                    (
+                        self.into_source_envelope(key, Some(key_arity)),
+                        keyed.concat(metadata_desc),
+                    )
                 }
                 UnplannedSourceEnvelope::Debezium(DebeziumEnvelope { after_idx, .. })
                 | UnplannedSourceEnvelope::Upsert(UpsertStyle::Debezium { after_idx }) => {
@@ -1110,7 +1187,7 @@ pub mod sources {
                                 _ => desc,
                             };
 
-                            (self.into_source_envelope(key), desc)
+                            (self.into_source_envelope(key, None), desc)
                         }
                         ty => bail!(
                             "Incorrect type for Debezium value, expected Record, got {:?}",
@@ -1128,7 +1205,7 @@ pub mod sources {
                                 // TODO maybe check this by name
                                 match &fields[0].1.scalar_type {
                                     ScalarType::Record { fields, .. } => (
-                                        self.into_source_envelope(None),
+                                        self.into_source_envelope(None, None),
                                         RelationDesc::from_names_and_types(fields.clone()),
                                     ),
                                     ty => {
@@ -1174,7 +1251,7 @@ pub mod sources {
         envelope: &UnplannedSourceEnvelope,
         encoding: &encoding::DataEncoding,
     ) -> bool {
-        let is_avro = matches!(encoding, encoding::DataEncoding::Avro(_));
+        let is_avro = matches!(encoding.inner, encoding::DataEncodingInner::Avro(_));
         let is_stateless_dbz = match envelope {
             UnplannedSourceEnvelope::Debezium(_) => true,
             _ => false,

@@ -151,6 +151,8 @@ $ set noconflictschema={
 $ kafka-create-topic topic=avro-data-record
 $ kafka-ingest format=avro key-format=avro topic=avro-data-record key-schema=${multikeyschema} schema=${noconflictschema} timestamp=1
 {"id": 1, "geo": "nyc"} {"a": 99}
+$ kafka-ingest format=avro topic=avro-data-record schema=${noconflictschema} timestamp=2 omit-key=true
+{"a": 88}
 
 > CREATE MATERIALIZED SOURCE avro_key_record_flattened
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-record-${testdrive.seed}'
@@ -159,10 +161,11 @@ $ kafka-ingest format=avro key-format=avro topic=avro-data-record key-schema=${m
   INCLUDE KEY
   ENVELOPE NONE
 
-> SELECT * FROM avro_key_record_flattened
-id geo a
---------
-1 nyc 99
+> SELECT * FROM avro_key_record_flattened ORDER BY a ASC
+id     geo    a
+----------------
+<null> <null> 88
+1      nyc    99
 
 > CREATE MATERIALIZED SOURCE avro_key_record_renamed
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-record-${testdrive.seed}'
@@ -171,10 +174,11 @@ id geo a
   INCLUDE KEY AS named
   ENVELOPE NONE
 
-> SELECT (named).id as named_id, (named).geo as named_geo, a FROM avro_key_record_renamed
+> SELECT (named).id as named_id, (named).geo as named_geo, a FROM avro_key_record_renamed ORDER BY a ASC
 named_id named_geo a
---------------------
-1 nyc 99
+---------------------
+<null>   <null>    88
+1        nyc       99
 
 ! CREATE MATERIALIZED SOURCE avro_debezium
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-dbz-${testdrive.seed}'
@@ -190,6 +194,7 @@ $ kafka-create-topic topic=textsrc partitions=1
 $ kafka-ingest topic=textsrc format=bytes key-format=bytes key-terminator=:
 one,1:horse,apple
 two,2:bee,honey
+:cow,grass
 
 > CREATE MATERIALIZED SOURCE textsrc
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
@@ -197,12 +202,12 @@ two,2:bee,honey
   VALUE FORMAT TEXT
   INCLUDE KEY
 
-> SELECT * FROM textsrc
-key   text        mz_offset
+> SELECT * FROM textsrc ORDER BY mz_offset ASC
+key    text        mz_offset
 ---------------------------
-one,1 horse,apple 1
-two,2 bee,honey   2
-
+one,1  horse,apple 1
+two,2  bee,honey   2
+<null> cow,grass   3
 
 > CREATE MATERIALIZED SOURCE regexvalue
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
@@ -211,10 +216,11 @@ two,2 bee,honey   2
   INCLUDE KEY
 
 > SELECT * FROM regexvalue
-key   animal food  mz_offset
+key   animal  food  mz_offset
 ----------------------------
-one,1 horse  apple 1
-two,2 bee    honey 2
+one,1  horse  apple 1
+two,2  bee    honey 2
+<null> cow    grass 3
 
 > CREATE MATERIALIZED SOURCE regexboth
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
@@ -222,12 +228,12 @@ two,2 bee    honey 2
   VALUE FORMAT REGEX '(?P<animal>[^,]+),(?P<food>\w+)'
   INCLUDE KEY
 
-> SELECT * FROM regexboth
-id_name id animal food  mz_offset
+> SELECT * FROM regexboth ORDER BY mz_offset ASC
+id_name id     animal food  mz_offset
 ---------------------------------
-one     1  horse  apple 1
-two     2  bee    honey 2
-
+one     1      horse  apple 1
+two     2      bee    honey 2
+<null>  <null> cow    grass 3
 
 > CREATE MATERIALIZED SOURCE regexbothnest
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textsrc-${testdrive.seed}'
@@ -236,10 +242,11 @@ two     2  bee    honey 2
   INCLUDE KEY AS nest
 
 > SELECT (nest).id_name, (nest).id, animal FROM regexbothnest
-id_name id animal
------------------
-one     1  horse
-two     2  bee
+id_name id     animal
+--------------------
+<null>  <null> cow
+one     1      horse
+two     2      bee
 
 $ file-append path=test.proto
 syntax = "proto3";
@@ -266,16 +273,20 @@ $ kafka-ingest topic=proto
   format=protobuf descriptor-file=test.proto message=Value
 {"id": "a"} {"measurement": 10}
 
+$ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Value omit-key=true
+{"measurement": 11}
+
 > CREATE MATERIALIZED SOURCE input_proto
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-proto-${testdrive.seed}'
   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA FILE '${testdrive.temp-dir}/test.proto'
   INCLUDE KEY
 
-> SELECT * FROM input_proto
-id  measurement  mz_offset
+> SELECT * FROM input_proto ORDER BY measurement ASC
+id     measurement  mz_offset
 --------------------------
-a   10           1
+a      10           1
+<null> 11           2
 
 $ kafka-create-topic topic=proto-structured partitions=1
 
