@@ -25,11 +25,11 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateSecretStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior, Op, Query, Statement,
-    TableFactor, TableFunction, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOption, WithOptionValue,
+    CreateConnectionStatement, CreateIndexStatement, CreateRecordedViewStatement,
+    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, Op, Query, Statement, TableFactor, TableFunction, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOption, WithOptionValue,
 };
 
 use crate::names::{
@@ -428,6 +428,24 @@ pub fn create_statement(
                 }
             }
             *materialized = false;
+            *if_exists = IfExistsBehavior::Error;
+        }
+
+        Statement::CreateRecordedView(CreateRecordedViewStatement {
+            if_exists,
+            name,
+            columns: _,
+            in_cluster: _,
+            query,
+        }) => {
+            *name = allocate_name(name)?;
+            {
+                let mut normalizer = QueryNormalizer::new(scx);
+                normalizer.visit_query_mut(query);
+                if let Some(err) = normalizer.err {
+                    return Err(err.into());
+                }
+            }
             *if_exists = IfExistsBehavior::Error;
         }
 

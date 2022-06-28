@@ -1892,6 +1892,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateViews(_)
+                    | Statement::CreateRecordedView(_)
                     | Statement::Delete(_)
                     | Statement::DropDatabase(_)
                     | Statement::DropSchema(_)

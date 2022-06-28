@@ -1587,6 +1587,10 @@ impl<'a> Parser<'a> {
             self.parse_create_secret()
         } else if self.peek_keyword(CONNECTION) {
             self.parse_create_connection()
+        } else if self.peek_keywords(&[RECORDED, VIEW])
+            || self.peek_keywords(&[OR, REPLACE, RECORDED, VIEW])
+        {
+            self.parse_create_recorded_view()
         } else {
             let index = self.index;
 
@@ -2371,6 +2375,34 @@ impl<'a> Parser<'a> {
             if_exists,
             source,
             targets,
+        }))
+    }
+
+    fn parse_create_recorded_view(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let mut if_exists = if self.parse_keyword(OR) {
+            self.expect_keyword(REPLACE)?;
+            IfExistsBehavior::Replace
+        } else {
+            IfExistsBehavior::Error
+        };
+        self.expect_keywords(&[RECORDED, VIEW])?;
+        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
+            if_exists = IfExistsBehavior::Skip;
+        }
+
+        let name = self.parse_object_name()?;
+        let columns = self.parse_parenthesized_column_list(Optional)?;
+        let in_cluster = self.parse_optional_in_cluster()?;
+
+        self.expect_keyword(AS)?;
+        let query = self.parse_query()?;
+
+        Ok(Statement::CreateRecordedView(CreateRecordedViewStatement {
+            if_exists,
+            name,
+            columns,
+            in_cluster,
+            query,
         }))
     }
 

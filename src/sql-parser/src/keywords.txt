@@ -232,6 +232,7 @@ Range
 Raw
 Read
 Real
+Recorded
 References
 Regex
 Registry

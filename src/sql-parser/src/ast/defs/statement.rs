@@ -44,6 +44,7 @@ pub enum Statement<T: AstInfo> {
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateViews(CreateViewsStatement<T>),
+    CreateRecordedView(CreateRecordedViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement<T>),
@@ -105,6 +106,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateViews(stmt) => f.write_node(stmt),
+            Statement::CreateRecordedView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
@@ -681,6 +683,49 @@ impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
     }
 }
 impl_display_t!(CreateViewsStatement);
+
+/// `CREATE RECORDED VIEW`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateRecordedViewStatement<T: AstInfo> {
+    pub if_exists: IfExistsBehavior,
+    pub name: UnresolvedObjectName,
+    pub columns: Vec<Ident>,
+    pub in_cluster: Option<T::ClusterName>,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateRecordedViewStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE");
+        if self.if_exists == IfExistsBehavior::Replace {
+            f.write_str(" OR REPLACE");
+        }
+
+        f.write_str(" RECORDED VIEW");
+
+        if self.if_exists == IfExistsBehavior::Skip {
+            f.write_str(" IF NOT EXISTS");
+        }
+
+        f.write_str(" ");
+        f.write_node(&self.name);
+
+        if !self.columns.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+
+        f.write_str(" AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(CreateRecordedViewStatement);
 
 /// `CREATE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
