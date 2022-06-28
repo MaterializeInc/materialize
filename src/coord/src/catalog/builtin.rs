@@ -1267,7 +1267,7 @@ WITH counts AS (
         count(*) AS total,
         sum(CASE WHEN status = 'ready' THEN 1 else 0 END) AS ready,
         sum(CASE WHEN status = 'not_ready' THEN 1 else 0 END) AS not_ready
-    FROM mz_catalog.mz_cluster_replicas_status
+    FROM mz_catalog.mz_cluster_replica_statuses
     GROUP BY replica_id
 )
 SELECT
