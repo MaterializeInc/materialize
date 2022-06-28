@@ -28,27 +28,3 @@
 # See the data change
 > SELECT COUNT(*) > 0 FROM avg_bid;
 true
-
-# Test that the volatility bit is set correctly.
-> SELECT name, volatility FROM mz_sources WHERE name = 'market_orders_raw'
-market_orders_raw   volatile
-> SELECT name, volatility from mz_views WHERE name = 'avg_bid'
-avg_bid   volatile
-> CREATE MATERIALIZED VIEW nonvol AS SELECT 1
-> SELECT name, volatility from mz_views WHERE name = 'nonvol'
-nonvol   nonvolatile
-> CREATE MATERIALIZED VIEW depends_vol_nonvol AS SELECT * FROM nonvol, avg_bid
-> SELECT name, volatility from mz_views WHERE name = 'depends_vol_nonvol'
-depends_vol_nonvol   volatile
-$ file-append path=test
-ignored
-> CREATE MATERIALIZED SOURCE kafka_src
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'ignored' FORMAT BYTES
-> SELECT name, volatility FROM mz_sources WHERE name = 'kafka_src'
-kafka_src  unknown
-> CREATE MATERIALIZED VIEW depends_nonvol_unknown AS SELECT * FROM nonvol, kafka_src
-> SELECT name, volatility from mz_views WHERE name = 'depends_nonvol_unknown'
-depends_nonvol_unknown   unknown
-> CREATE MATERIALIZED VIEW depends_vol_unknown AS SELECT * FROM avg_bid, kafka_src
-> SELECT name, volatility from mz_views WHERE name = 'depends_vol_unknown'
-depends_vol_unknown   volatile

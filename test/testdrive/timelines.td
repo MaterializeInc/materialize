@@ -182,16 +182,16 @@ contains:multiple timelines within one dataflow are not supported
 > CREATE VIEW values_system_view AS SELECT * FROM input_values_view, source_system;
 > CREATE VIEW values_system_user_view AS SELECT * FROM input_values_view, source_system_user;
 > CREATE VIEW values_cdcv2_view AS SELECT * FROM input_values_view, source_cdcv2;
-> CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM input_values_view, mz_catalog_names, mz_views, mz_dataflow_operators;
+> CREATE VIEW values_mz_catalog_view (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM input_values_view, mz_catalog_names, mz_views, mz_dataflow_operators;
 
 # System sources, tables, and logs should be joinable with eachother.
-> CREATE VIEW various_system (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators;
+> CREATE VIEW various_system (a, b, c, d, e, f, g, h, i, j) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators;
 
 # System things should be joinable only with system sources.
-! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l, m) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_cdcv2;
+! CREATE VIEW must_fail (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_cdcv2;
 contains:multiple timelines within one dataflow are not supported
-> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k, l, m) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_system;
-> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, input_table;
+> CREATE VIEW various_system_no_cdcv2 (a, b, c, d, e, f, g, h, i, j, k, l) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, source_system;
+> CREATE VIEW various_system_table (a, b, c, d, e, f, g, h, i, j, k) AS SELECT * FROM mz_catalog_names, mz_views, mz_dataflow_operators, input_table;
 
 # EXPLAIN should complain too.
 ! EXPLAIN SELECT * FROM source_system, source_cdcv2;

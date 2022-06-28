@@ -34,7 +34,7 @@ use mz_dataflow_types::sinks::{
     PersistSinkConnection, PersistSinkConnectionBuilder, SinkConnection, SinkConnectionBuilder,
     SinkEnvelope,
 };
-use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection, Timeline};
+use mz_dataflow_types::sources::{SourceConnection, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -712,46 +712,6 @@ impl CatalogState {
         schema.items[builtin.name()].clone()
     }
 
-    /// Reports whether the item identified by `id` is considered volatile.
-    ///
-    /// `None` indicates that the volatility of `id` is unknown.
-    pub fn is_volatile(&self, id: GlobalId) -> Volatility {
-        use Volatility::*;
-
-        let item = self.get_entry(&id).item();
-        match item {
-            CatalogItem::Source(source) => match &source.connection {
-                SourceConnection::External { connection, .. } => match &connection {
-                    ExternalSourceConnection::PubNub(_) => Volatile,
-                    ExternalSourceConnection::Kinesis(_) => Volatile,
-                    _ => Unknown,
-                },
-                SourceConnection::Local { .. } => Volatile,
-            },
-            CatalogItem::Log(_) => Volatile,
-            CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
-                // Volatility follows trinary logic like SQL. If even one
-                // volatile dependency exists, then this item is volatile.
-                // Otherwise, if a single dependency with unknown volatility
-                // exists, then this item is also of unknown volatility. Only if
-                // all dependencies are nonvolatile (including the trivial case
-                // of no dependencies) is this item nonvolatile.
-                item.uses().iter().fold(Nonvolatile, |memo, id| {
-                    match (memo, self.is_volatile(*id)) {
-                        (Volatile, _) | (_, Volatile) => Volatile,
-                        (Unknown, _) | (_, Unknown) => Unknown,
-                        (Nonvolatile, Nonvolatile) => Nonvolatile,
-                    }
-                })
-            }
-            CatalogItem::Table(_) => Volatile,
-            CatalogItem::Type(_) => Unknown,
-            CatalogItem::Func(_) => Unknown,
-            CatalogItem::Secret(_) => Nonvolatile,
-            CatalogItem::Connection(_) => Unknown,
-        }
-    }
-
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
@@ -1135,23 +1095,6 @@ pub struct Secret {
 pub struct Connection {
     pub create_sql: String,
     pub connection: mz_dataflow_types::connections::Connection,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum Volatility {
-    Volatile,
-    Nonvolatile,
-    Unknown,
-}
-
-impl Volatility {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Volatility::Volatile => "volatile",
-            Volatility::Nonvolatile => "nonvolatile",
-            Volatility::Unknown => "unknown",
-        }
-    }
 }
 
 impl CatalogItem {

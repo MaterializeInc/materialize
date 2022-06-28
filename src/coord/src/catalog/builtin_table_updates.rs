@@ -280,7 +280,6 @@ impl CatalogState {
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
                 Datum::String(source_connection_name),
-                Datum::String(self.is_volatile(id).as_str()),
             ]),
             diff,
         }]
@@ -344,7 +343,6 @@ impl CatalogState {
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
-                Datum::String(self.is_volatile(id).as_str()),
                 Datum::String(&query_string),
             ]),
             diff,
@@ -396,7 +394,6 @@ impl CatalogState {
                     Datum::Int64(u64::from(schema_id) as i64),
                     Datum::String(name),
                     Datum::String(connection.name()),
-                    Datum::String(self.is_volatile(id).as_str()),
                     // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                     Datum::Int64(sink.compute_instance as i64),
                 ]),
@@ -431,7 +428,6 @@ impl CatalogState {
                 Datum::UInt32(oid),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
-                Datum::String(self.is_volatile(id).as_str()),
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(index.compute_instance as i64),
             ]),

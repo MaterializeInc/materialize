@@ -371,25 +371,25 @@ mz_scheduling_parks_internal
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
-name                                          type   materialized  volatility  type
------------------------------------------------------------------------------------
-mz_arrangement_sharing_internal               system true          volatile    log
-mz_arrangement_batches_internal               system true          volatile    log
-mz_arrangement_records_internal               system true          volatile    log
-mz_dataflow_channels                          system true          volatile    log
-mz_dataflow_operator_addresses                system true          volatile    log
-mz_dataflow_operator_reachability_internal    system true          volatile    log
-mz_dataflow_operators                         system true          volatile    log
-mz_materialization_dependencies               system true          volatile    log
-mz_materializations                           system true          volatile    log
-mz_message_counts_received_internal           system true          volatile    log
-mz_message_counts_sent_internal               system true          volatile    log
-mz_peek_active                                system true          volatile    log
-mz_peek_durations                             system true          volatile    log
-mz_scheduling_elapsed_internal                system true          volatile    log
-mz_scheduling_histogram_internal              system true          volatile    log
-mz_scheduling_parks_internal                  system true          volatile    log
-mz_worker_materialization_frontiers           system true          volatile    log
+name                                          type   materialized  type
+-----------------------------------------------------------------------
+mz_arrangement_sharing_internal               system true          log
+mz_arrangement_batches_internal               system true          log
+mz_arrangement_records_internal               system true          log
+mz_dataflow_channels                          system true          log
+mz_dataflow_operator_addresses                system true          log
+mz_dataflow_operator_reachability_internal    system true          log
+mz_dataflow_operators                         system true          log
+mz_materialization_dependencies               system true          log
+mz_materializations                           system true          log
+mz_message_counts_received_internal           system true          log
+mz_message_counts_sent_internal               system true          log
+mz_peek_active                                system true          log
+mz_peek_durations                             system true          log
+mz_scheduling_elapsed_internal                system true          log
+mz_scheduling_histogram_internal              system true          log
+mz_scheduling_parks_internal                  system true          log
+mz_worker_materialization_frontiers           system true          log
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -547,29 +547,29 @@ mz_scheduling_histogram
 mz_scheduling_parks
 
 > SHOW FULL VIEWS FROM mz_catalog
-name                              type   materialized  volatility
------------------------------------------------------------------
-mz_arrangement_sharing            system false         volatile
-mz_arrangement_sizes              system false         volatile
-mz_dataflow_names                 system false         volatile
-mz_dataflow_operator_dataflows    system false         volatile
-mz_dataflow_operator_reachability system false         volatile
-mz_materialization_frontiers      system false         volatile
-mz_message_counts                 system false         volatile
-mz_objects                        system false         volatile
-mz_perf_arrangement_records       system false         volatile
-mz_perf_peek_durations_aggregates system false         volatile
-mz_perf_peek_durations_bucket     system false         volatile
-mz_perf_peek_durations_core       system false         volatile
-mz_records_per_dataflow           system false         volatile
-mz_records_per_dataflow_global    system false         volatile
-mz_records_per_dataflow_operator  system false         volatile
-mz_relations                      system false         volatile
-mz_catalog_names                  system false         volatile
-mz_cluster_replicas               system false         volatile
-mz_scheduling_elapsed             system false         volatile
-mz_scheduling_histogram           system false         volatile
-mz_scheduling_parks               system false         volatile
+name                              type   materialized
+-----------------------------------------------------
+mz_arrangement_sharing            system false
+mz_arrangement_sizes              system false
+mz_dataflow_names                 system false
+mz_dataflow_operator_dataflows    system false
+mz_dataflow_operator_reachability system false
+mz_materialization_frontiers      system false
+mz_message_counts                 system false
+mz_objects                        system false
+mz_perf_arrangement_records       system false
+mz_perf_peek_durations_aggregates system false
+mz_perf_peek_durations_bucket     system false
+mz_perf_peek_durations_core       system false
+mz_records_per_dataflow           system false
+mz_records_per_dataflow_global    system false
+mz_records_per_dataflow_operator  system false
+mz_relations                      system false
+mz_catalog_names                  system false
+mz_cluster_replicas               system false
+mz_scheduling_elapsed             system false
+mz_scheduling_histogram           system false
+mz_scheduling_parks               system false
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active
