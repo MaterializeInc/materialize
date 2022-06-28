@@ -303,6 +303,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
             | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
             | (CatalogItemType::View, ObjectType::View)
+            | (CatalogItemType::RecordedView, ObjectType::RecordedView)
             | (CatalogItemType::Index, ObjectType::Index)
             | (CatalogItemType::Type, ObjectType::Type)
             | (CatalogItemType::Secret, ObjectType::Secret)

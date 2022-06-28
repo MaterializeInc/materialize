@@ -499,6 +499,7 @@ impl SessionClient {
                 | ExecuteResponse::DroppedSink
                 | ExecuteResponse::DroppedTable
                 | ExecuteResponse::DroppedView
+                | ExecuteResponse::DroppedRecordedView
                 | ExecuteResponse::DroppedType
                 | ExecuteResponse::DroppedSecret
                 | ExecuteResponse::DroppedConnection

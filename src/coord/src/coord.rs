@@ -3394,6 +3394,7 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
+            ObjectType::RecordedView => ExecuteResponse::DroppedRecordedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
@@ -4707,7 +4708,7 @@ impl<S: Append + 'static> Coordinator<S> {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
-                    typ @ (Func | View) => {
+                    typ @ (Func | View | RecordedView) => {
                         let valid_id = id.is_user() || matches!(typ, Func);
                         valid_id
                             && (

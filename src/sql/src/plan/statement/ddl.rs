@@ -2320,6 +2320,7 @@ pub fn plan_create_index(
     let on = scx.get_item_by_resolved_name(&on_name)?;
 
     if CatalogItemType::View != on.item_type()
+        && CatalogItemType::RecordedView != on.item_type()
         && CatalogItemType::Source != on.item_type()
         && CatalogItemType::Table != on.item_type()
     {
@@ -2922,6 +2923,7 @@ pub fn plan_drop_objects(
         ObjectType::Source
         | ObjectType::Table
         | ObjectType::View
+        | ObjectType::RecordedView
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type
@@ -3162,6 +3164,7 @@ pub fn plan_drop_item(
                     | CatalogItemType::Table
                     | CatalogItemType::Source
                     | CatalogItemType::View
+                    | CatalogItemType::RecordedView
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
                     | CatalogItemType::Secret

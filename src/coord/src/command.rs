@@ -263,6 +263,8 @@ pub enum ExecuteResponse {
     DroppedTable,
     /// The requested view was dropped.
     DroppedView,
+    /// The requested recorded view was dropped.
+    DroppedRecordedView,
     /// The requested index was dropped.
     DroppedIndex,
     /// The requested sink was dropped.

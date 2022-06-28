@@ -2455,6 +2455,7 @@ impl<S: Append> Catalog<S> {
             && matches!(
                 item.typ(),
                 SqlCatalogItemType::View
+                    | SqlCatalogItemType::RecordedView
                     | SqlCatalogItemType::Source
                     | SqlCatalogItemType::Sink
                     | SqlCatalogItemType::Index
@@ -2583,6 +2584,7 @@ impl<S: Append> Catalog<S> {
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
                 SqlCatalogItemType::View => ObjectType::View,
+                SqlCatalogItemType::RecordedView => ObjectType::RecordedView,
                 SqlCatalogItemType::Source => ObjectType::Source,
                 SqlCatalogItemType::Sink => ObjectType::Sink,
                 SqlCatalogItemType::Index => ObjectType::Index,

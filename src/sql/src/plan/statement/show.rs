@@ -297,6 +297,7 @@ pub fn show_objects<'a>(
         ObjectType::Table => show_tables(scx, extended, full, from, filter),
         ObjectType::Source => show_sources(scx, full, materialized, from, filter),
         ObjectType::View => show_views(scx, full, materialized, from, filter),
+        ObjectType::RecordedView => show_recorded_views(scx, full, from, in_cluster, filter),
         ObjectType::Sink => show_sinks(scx, full, from, in_cluster, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
@@ -460,6 +461,17 @@ fn show_views<'a>(
     ShowSelect::new(scx, query, filter, None, None)
 }
 
+fn show_recorded_views<'a>(
+    _scx: &'a StatementContext<'a>,
+    _full: bool,
+    _from: Option<ResolvedSchemaName>,
+    _in_cluster: Option<ResolvedClusterName>,
+    _filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, anyhow::Error> {
+    // TODO(teskje): implement
+    bail!("not yet implemented");
+}
+
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
@@ -581,6 +593,7 @@ pub fn show_indexes<'a>(
     if let Some(table_name) = table_name {
         let from = scx.get_item_by_resolved_name(&table_name)?;
         if from.item_type() != CatalogItemType::View
+            && from.item_type() != CatalogItemType::RecordedView
             && from.item_type() != CatalogItemType::Source
             && from.item_type() != CatalogItemType::Table
         {

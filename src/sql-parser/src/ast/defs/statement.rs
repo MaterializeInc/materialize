@@ -1519,6 +1519,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         f.write_str(match &self.object_type {
             ObjectType::Table => "TABLES",
             ObjectType::View => "VIEWS",
+            ObjectType::RecordedView => "RECORDED VIEWS",
             ObjectType::Source => "SOURCES",
             ObjectType::Sink => "SINKS",
             ObjectType::Type => "TYPES",
@@ -1904,6 +1905,7 @@ impl_display_t!(InsertSource);
 pub enum ObjectType {
     Table,
     View,
+    RecordedView,
     Source,
     Sink,
     Index,
@@ -1921,6 +1923,7 @@ impl AstDisplay for ObjectType {
         f.write_str(match self {
             ObjectType::Table => "TABLE",
             ObjectType::View => "VIEW",
+            ObjectType::RecordedView => "RECORDED VIEW",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
             ObjectType::Index => "INDEX",
