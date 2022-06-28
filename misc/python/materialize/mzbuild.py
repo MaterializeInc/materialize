@@ -824,7 +824,7 @@ class Repository:
         )
         parser.add_argument(
             "--arch",
-            default=Arch.X86_64,
+            default=Arch.host(),
             help="the CPU architecture to build for",
             type=Arch,
             choices=Arch,
