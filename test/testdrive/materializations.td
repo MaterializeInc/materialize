@@ -35,18 +35,18 @@ $ kafka-create-topic topic=data
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW FULL VIEWS
-name        type     materialized  volatility
----------------------------------------------
-data_view   user     false         unknown
-test1       user     true          unknown
+name        type     materialized
+---------------------------------
+data_view   user     false
+test1       user     true
 
 > SHOW MATERIALIZED VIEWS
 test1
 
 > SHOW FULL MATERIALIZED VIEWS
-name     type  volatility
--------------------------
-test1    user  unknown
+name     type
+-------------
+test1    user
 
 > SELECT * FROM test1
 b  sum
@@ -169,9 +169,9 @@ contains:catalog item 'materialize.public.idx1' is an index and so cannot be dep
 > DROP INDEX test5_primary_idx
 
 > SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized  volatility
----------------------------------------------
-test5       user     true          unknown
+name        type     materialized
+---------------------------------
+test5       user     true
 
 > SELECT * from test5
 b  c
@@ -194,9 +194,9 @@ b  c
 2  1
 
 > SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized  volatility
----------------------------------------------
-test5       user     false         unknown
+name        type     materialized
+---------------------------------
+test5       user     false
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.
@@ -333,15 +333,15 @@ name
 mat_data
 
 > SHOW FULL SOURCES
-name     type materialized  volatility type
---------------------------------------------
-data     user false         unknown    kafka
-mat_data user true          unknown    kafka
+name     type materialized  type
+---------------------------------
+data     user false         kafka
+mat_data user true          kafka
 
 > SHOW FULL MATERIALIZED SOURCES
-name     type  volatility type
--------------------------------
-mat_data user  unknown    kafka
+name     type  type
+--------------------
+mat_data user  kafka
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

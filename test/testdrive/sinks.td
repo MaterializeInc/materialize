@@ -106,13 +106,13 @@ snk4
 snk5
 
 > SHOW FULL SINKS
-cluster name   type  volatility
------------------------
-<CLUSTER_NAME> snk1   user  unknown
-<CLUSTER_NAME> snk2   user  unknown
-<CLUSTER_NAME> snk3   user  unknown
-<CLUSTER_NAME> snk4   user  unknown
-<CLUSTER_NAME> snk5   user  unknown
+cluster        name   type
+--------------------------
+<CLUSTER_NAME> snk1   user
+<CLUSTER_NAME> snk2   user
+<CLUSTER_NAME> snk3   user
+<CLUSTER_NAME> snk4   user
+<CLUSTER_NAME> snk5   user
 
 $ kafka-verify format=avro sink=materialize.public.snk1 sort-messages=true
 {"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_offset": 2}}}
@@ -190,18 +190,18 @@ $ kafka-verify format=avro sink=materialize.public.sink10 sort-messages=true
 {"before": null, "after": {"row":{"column1": 3}}}
 
 > SHOW FULL SINKS
-cluster    name        type  volatility
------------------------------------------
-<CLUSTER_NAME>    snk1        user  unknown
-<CLUSTER_NAME>    snk2        user  unknown
-<CLUSTER_NAME>    snk3        user  unknown
-<CLUSTER_NAME>    snk4        user  unknown
-<CLUSTER_NAME>    snk5        user  unknown
-<CLUSTER_NAME>    snk6        user  unknown
-<CLUSTER_NAME>    snk7        user  unknown
-<CLUSTER_NAME>    snk8        user  unknown
-<CLUSTER_NAME>    sink9       user  nonvolatile
-<CLUSTER_NAME>    sink10      user  nonvolatile
+cluster           name        type
+----------------------------------
+<CLUSTER_NAME>    snk1        user
+<CLUSTER_NAME>    snk2        user
+<CLUSTER_NAME>    snk3        user
+<CLUSTER_NAME>    snk4        user
+<CLUSTER_NAME>    snk5        user
+<CLUSTER_NAME>    snk6        user
+<CLUSTER_NAME>    snk7        user
+<CLUSTER_NAME>    snk8        user
+<CLUSTER_NAME>    sink9       user
+<CLUSTER_NAME>    sink10      user
 
 # test explicit partition count
 > CREATE SINK sink11 FROM foo

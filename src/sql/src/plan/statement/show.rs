@@ -432,7 +432,6 @@ fn show_sources<'a>(
                  name,
                  mz_internal.mz_classify_object_id(id) AS type,
                  mz_internal.mz_is_materialized(id) AS materialized,
-                 volatility,
                  type
              FROM
                  mz_catalog.mz_sources
@@ -444,7 +443,6 @@ fn show_sources<'a>(
             "SELECT
                  name,
                  mz_internal.mz_classify_object_id(id) AS type,
-                 volatility,
                  type
              FROM
                  mz_catalog.mz_sources
@@ -476,8 +474,7 @@ fn show_views<'a>(
             "SELECT
                 name,
                 mz_internal.mz_classify_object_id(id) AS type,
-                mz_internal.mz_is_materialized(id) AS materialized,
-                volatility
+                mz_internal.mz_is_materialized(id) AS materialized
              FROM mz_catalog.mz_views
              WHERE schema_id = {}",
             schema_spec,
@@ -491,7 +488,7 @@ fn show_views<'a>(
         )
     } else {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatility
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
              FROM mz_catalog.mz_views
              WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
             schema_spec,
@@ -537,8 +534,7 @@ fn show_sinks<'a>(
             "SELECT
             clusters.name AS cluster,
             sinks.name,
-            mz_internal.mz_classify_object_id(sinks.id) AS type,
-            sinks.volatility
+            mz_internal.mz_classify_object_id(sinks.id) AS type
         FROM
             mz_catalog.mz_sinks AS sinks
             JOIN mz_catalog.mz_clusters AS clusters ON
