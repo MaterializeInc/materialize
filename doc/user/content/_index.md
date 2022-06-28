@@ -16,29 +16,23 @@ Materialize is a streaming database for real-time applications. It lets you ask 
 
 {{</ callout >}}
 
-## Where to go from here?
-
 {{< multilinkbox >}}
-{{< linkbox title="Learn the basics" >}}
-- [Overview](/overview/what-is-materialize/)
+{{< linkbox icon="bulb" title="Key Concepts" >}}
+- [Materialize overview](/overview/what-is-materialize/)
 - [Key concepts](/overview/key-concepts/)
 {{</ linkbox >}}
-{{< linkbox title="Get started" >}}
-- [Install Materialize](./install)
+{{< linkbox icon="touch" title="Quickstarts" >}}
+- [Real-time analytics dashboard](/quickstarts/live-analytics/)
+- [Streaming SQL on server logs](/quickstarts/log-parsing/)
+- [Microservices](/quickstarts/microservice/)
 {{</ linkbox >}}
-{{< linkbox title="Dive deeper" >}}
+{{< linkbox icon="doc" title="Guides" >}}
 - [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
 - [dbt &amp; Materialize](/integrations/dbt/)
 - [Materialize &amp; Node.js](/integrations/node-js/)
 - [Time-windowed computation](/sql/patterns/temporal-filters/)
 {{</ linkbox >}}
-{{< linkbox title="Build" >}}
-- [Materialize &amp; Postgres CDC](/integrations/cdc-postgres/)
-- [dbt &amp; Materialize](/integrations/dbt/)
-- [Materialize &amp; Node.js](/integrations/node-js/)
-- [Time-windowed computation](/sql/patterns/temporal-filters/)
-
-
+{{< linkbox icon="book" title="Reference" >}}
 - [`CREATE SOURCE`](/sql/create-source/)
 - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/)
 - [`SQL data types`](/sql/types/)
@@ -46,10 +40,9 @@ Materialize is a streaming database for real-time applications. It lets you ask 
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
-- [Time-windowed computation](/sql/patterns/temporal-filters/)
+## Learn more
 
-- [**Install Materialize**](./install) to try it out and sign up for early access to [Materialize Cloud](https://materialize.com/materialize-cloud-access/).
-- [**Check out the Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
-- [**What is Materialize?**](./overview/what-is-materialize) to learn
+- [**Install Materialize**](./install) to see it in action.
+- Check out the [**Materialize blog**](https://www.materialize.com/blog/) for the latest updates and Materialize deep-dives.
+- Check out [**What is Materialize?**](./overview/what-is-materialize) to learn
 more about what Materialize does and how it works.
-- [**Architecture documentation**](./overview/architecture) for a deeper dive into the `materialized` binary's components and deployment.

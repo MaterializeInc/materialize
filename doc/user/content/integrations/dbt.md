@@ -69,7 +69,7 @@ dbt manages all your connection configurations (or, profiles) in a file called [
 
 1. Open `profiles.yml` and adapt it to connect to your Materialize instance using the reference [profile configuration](https://docs.getdbt.com/reference/warehouse-profiles/materialize-profile#connecting-to-materialize-with-dbt-materialize).
 
-    As an example, the following profile would allow you to connect to a Materialize instance running locally (`dev`).
+    As an example, the following profile would allow you to connect to a Materialize instance running locally (`dev`):
 
     ```yaml
     default:
