@@ -84,7 +84,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
@@ -287,6 +287,14 @@ struct PendingWriteTxn {
     session: Session,
     /// The action to take at the end of the transaction.
     action: EndTransactionAction,
+    /// Holds the coordinator's write lock.
+    write_lock_guard: Option<OwnedMutexGuard<()>>,
+}
+
+impl PendingWriteTxn {
+    fn has_write_lock(&self) -> bool {
+        self.write_lock_guard.is_some()
+    }
 }
 
 /// Timestamps used by writes in an Append command.
@@ -1161,11 +1169,28 @@ impl<S: Append + 'static> Coordinator<S> {
                     .send(Message::GroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
+        } else if self
+            .pending_writes
+            .iter()
+            .any(|pending_write| pending_write.has_write_lock())
+            || self.write_lock.try_lock().is_ok()
+        {
+            // If some transaction already holds the write lock, then we can execute a group
+            // commit.
+            self.group_commit().await;
+        } else if let Ok(_guard) = Arc::clone(&self.write_lock).try_lock_owned() {
+            // If no transaction holds the write lock, then we need to acquire it.
+            self.group_commit().await;
         } else {
-            match Arc::clone(&self.write_lock).try_lock_owned() {
-                Ok(_guard) => self.group_commit().await,
-                Err(_) => self.defer_write(Deferred::GroupCommit),
-            };
+            // If some running transaction already holds the write lock, then one of the
+            // following things will happen:
+            //   1. The transaction will submit a write which will transfer the
+            //      ownership of the lock to group commit and trigger another group
+            //      group commit.
+            //   2. The transaction will complete without submitting a write (abort,
+            //      empty writes, etc) which will drop the lock. The deferred group
+            //      commit will then acquire the lock and execute a group commit.
+            self.defer_write(Deferred::GroupCommit);
         }
     }
 
@@ -1174,6 +1199,10 @@ impl<S: Append + 'static> Coordinator<S> {
     /// happen at the same timestamp and all involved tables will be advanced to some timestamp
     /// larger than the timestamp of the write.
     async fn group_commit(&mut self) {
+        if self.pending_writes.is_empty() {
+            return;
+        }
+
         // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
         // any point during this method. We will still commit the write without waiting for `now()`
         // to advance. This is ok because the next batch of writes will trigger the wait loop in
@@ -1192,6 +1221,7 @@ impl<S: Append + 'static> Coordinator<S> {
             response,
             session,
             action,
+            write_lock_guard: _,
         } in self.pending_writes.drain(..)
         {
             for WriteOp { id, rows } in writes {
@@ -1231,11 +1261,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Submit a write to be executed during the next group commit.
     fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        if self.pending_writes.is_empty() {
-            self.internal_cmd_tx
-                .send(Message::GroupCommit)
-                .expect("sending to internal_cmd_tx cannot fail");
-        }
+        self.internal_cmd_tx
+            .send(Message::GroupCommit)
+            .expect("sending to internal_cmd_tx cannot fail");
         self.pending_writes.push(pending_write_txn);
     }
 
@@ -3509,18 +3537,19 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
 
         let (response, action) = match result {
-            Ok(Some(writes)) if writes.is_empty() => (response, action),
-            Ok(Some(writes)) => {
+            Ok((Some(writes), _)) if writes.is_empty() => (response, action),
+            Ok((Some(writes), write_lock_guard)) => {
                 self.submit_write(PendingWriteTxn {
                     writes,
                     client_transmitter: tx,
                     response,
                     session,
                     action,
+                    write_lock_guard,
                 });
                 return;
             }
-            Ok(None) => (response, action),
+            Ok((None, _)) => (response, action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
@@ -3531,11 +3560,11 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<Option<Vec<WriteOp>>, CoordError> {
+    ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), CoordError> {
         let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
-            if let Some(ops) = txn.into_ops() {
+            if let (Some(ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
                 if let TransactionOps::Writes(mut writes) = ops {
                     for WriteOp { id, .. } in &writes {
                         // Re-verify this id exists.
@@ -3546,11 +3575,11 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                     writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                    return Ok(Some(writes));
+                    return Ok((Some(writes), write_lock_guard));
                 }
             }
         }
-        Ok(None)
+        Ok((None, None))
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
