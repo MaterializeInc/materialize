@@ -3348,6 +3348,29 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(ExecuteResponse::DroppedRole)
     }
 
+    async fn drop_replica(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        replica_config: ConcreteComputeInstanceReplicaConfig,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(metadata) = self.transient_replica_metadata.remove(&replica_id) {
+            let table = self
+                .catalog
+                .state()
+                .resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
+            let retraction = BuiltinTableUpdate {
+                id: table,
+                row: metadata.as_row(replica_id),
+                diff: -1,
+            };
+            self.send_builtin_table_updates(vec![retraction]).await;
+        }
+        self.dataflow_client
+            .drop_replica(instance_id, replica_id, replica_config)
+            .await
+    }
+
     async fn sequence_drop_compute_instances(
         &mut self,
         session: &Session,
@@ -3373,8 +3396,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
-                self.dataflow_client
-                    .drop_replica(instance_id, replica_id, replica.config)
+                self.drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3416,8 +3438,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.dataflow_client
-                .drop_replica(compute_id, replica_id, replica.config)
+            self.drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
