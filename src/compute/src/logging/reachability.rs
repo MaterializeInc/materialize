@@ -165,7 +165,7 @@ pub fn construct<A: Allocate>(
                 let updates = construct_reachability(key.clone(), value);
 
                 if let Some(target) = config.sink_logs.get(&variant) {
-                    persist_sink(target, persist_clients.clone(), &updates);
+                    persist_sink(target, Arc::clone(&persist_clients), &updates);
                 }
 
                 let trace = updates

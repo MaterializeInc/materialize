@@ -142,12 +142,8 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
-   
+    print(f"$ {' '.join(command)}")
     os.execvp(command[0], command)
-
-    #args = [command[0], "--args"] + command
-    #print(f"$ /home/lukas/.cargo/bin/rust-gdb {' '.join(args)}")
-    #os.system(f"/home/lukas/.cargo/bin/rust-gdb {' '.join(args)}")
 
 
 def _build(args: argparse.Namespace, extra_programs: list[str] = []) -> int:

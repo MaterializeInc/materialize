@@ -53,7 +53,6 @@ pub fn construct<A: Allocate>(
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     activator: RcActivator,
 ) -> HashMap<LogVariant, (KeysValsHandle, Rc<dyn Any>)> {
-    dbg!("In construct!");
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
     let peers = worker.peers();
 
@@ -499,7 +498,7 @@ pub fn construct<A: Allocate>(
                 });
 
                 if let Some(target) = config.sink_logs.get(&variant) {
-                    persist_sink(target, persist_clients.clone(), &rows);
+                    persist_sink(target, Arc::clone(&persist_clients), &rows);
                 }
 
                 let trace = rows

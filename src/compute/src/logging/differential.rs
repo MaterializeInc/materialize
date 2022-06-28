@@ -190,7 +190,7 @@ pub fn construct<A: Allocate>(
                 });
 
                 if let Some(target) = config.sink_logs.get(&variant) {
-                    persist_sink(target, persist_clients.clone(), &rows);
+                    persist_sink(target, Arc::clone(&persist_clients), &rows);
                 }
 
                 let trace = rows

@@ -456,11 +456,14 @@ fn specialize_command<T>(
 ) {
     // Tell new instances their replica ID.
     if let ComputeCommand::CreateInstance(config) = command {
-        dbg!(replica_id);
         // Set sink_logs
         if let Some(logging) = &mut config.logging {
             logging.sink_logs = replica.log_collections.clone();
-            dbg!(&logging.sink_logs);
+            tracing::debug!(
+                "Sending logging sinks to replica {:?}: {:?}",
+                replica_id,
+                &logging.sink_logs
+            );
         };
 
         // Set replica id
