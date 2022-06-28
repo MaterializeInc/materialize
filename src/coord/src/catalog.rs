@@ -54,9 +54,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, StatementDesc,
+    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
+    CreateRecordedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
@@ -3364,6 +3364,12 @@ impl<S: Append> Catalog<S> {
                     conn_id: None,
                     depends_on,
                 })
+            }
+            Plan::CreateRecordedView(CreateRecordedViewPlan {
+                recorded_view: _, ..
+            }) => {
+                // TODO(teskje): implement
+                bail!("not yet implemented")
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,

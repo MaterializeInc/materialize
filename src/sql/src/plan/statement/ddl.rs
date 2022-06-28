@@ -57,13 +57,13 @@ use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
     AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
-    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateViewsSourceTarget, CreateViewsStatement, CsrConnection, CsrConnectionAvro,
-    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
-    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateRecordedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
+    CsrConnection, CsrConnectionAvro, CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
+    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
@@ -88,11 +88,11 @@ use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
     CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink, Source, Table,
-    Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, ReplicaConfig, Secret, Sink,
+    Source, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -1723,6 +1723,79 @@ pub fn plan_create_views(
             bail!("cannot generate views from local sources")
         }
     }
+}
+
+pub fn describe_create_recorded_view(
+    _: &StatementContext,
+    _: CreateRecordedViewStatement<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_recorded_view(
+    scx: &StatementContext,
+    mut stmt: CreateRecordedViewStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    let compute_instance = match &stmt.in_cluster {
+        None => scx.resolve_compute_instance(None)?.id(),
+        Some(in_cluster) => in_cluster.0,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName(compute_instance));
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateRecordedView(stmt.clone()))?;
+
+    let partial_name = normalize::unresolved_object_name(stmt.name)?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    let query::PlannedQuery {
+        mut expr,
+        desc,
+        finishing,
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+
+    expr.bind_parameters(params)?;
+    expr.finish(finishing);
+    let expr = expr.optimize_and_lower(&scx.into())?;
+
+    let desc =
+        plan_utils::maybe_rename_columns(format!("recorded view {}", name), desc, &stmt.columns)?;
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+
+    if let Some(dup) = column_names.iter().duplicates().next() {
+        bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    let mut replace = None;
+    let mut if_not_exists = false;
+    match stmt.if_exists {
+        IfExistsBehavior::Replace => {
+            if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
+                if expr.depends_on().contains(&item.id()) {
+                    bail!(
+                        "cannot replace recorded view {0}: depended upon by new {0} definition",
+                        scx.catalog.resolve_full_name(item.name())
+                    );
+                }
+                let cascade = false;
+                replace = plan_drop_item(scx, ObjectType::RecordedView, item, cascade)?;
+            }
+        }
+        IfExistsBehavior::Skip => if_not_exists = true,
+        IfExistsBehavior::Error => (),
+    }
+
+    Ok(Plan::CreateRecordedView(CreateRecordedViewPlan {
+        name,
+        recorded_view: RecordedView {
+            create_sql,
+            expr,
+            column_names,
+            compute_instance,
+        },
+        replace,
+        if_not_exists,
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]

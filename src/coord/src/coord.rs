@@ -135,12 +135,12 @@ use mz_sql::names::{
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, ExplainPlanNew,
-    ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan, MutationKind,
-    OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
+    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
     ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
     StatementDesc, TailFrom, TailPlan, View,
 };
@@ -2202,6 +2202,13 @@ impl<S: Append + 'static> Coordinator<S> {
                     session,
                 );
             }
+            Plan::CreateRecordedView(plan) => {
+                tx.send(
+                    self.sequence_create_recorded_view(&session, plan, depends_on)
+                        .await,
+                    session,
+                );
+            }
             Plan::CreateIndex(plan) => {
                 tx.send(
                     self.sequence_create_index(&session, plan, depends_on).await,
@@ -3181,6 +3188,16 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
+    }
+
+    async fn sequence_create_recorded_view(
+        &mut self,
+        _session: &Session,
+        _plan: CreateRecordedViewPlan,
+        _depends_on: Vec<GlobalId>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        // TODO(teskje): implement
+        Err(CoordError::Unsupported("recorded views"))
     }
 
     async fn sequence_create_index(
