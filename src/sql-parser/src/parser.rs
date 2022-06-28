@@ -4183,11 +4183,12 @@ impl<'a> Parser<'a> {
             if extended {
                 self.expect_one_of_keywords(&[COLUMNS, OBJECTS, SCHEMAS, TABLES, TYPES])?;
             } else {
-                self.expect_one_of_keywords(&[
+                let kw = self.expect_one_of_keywords(&[
                     COLUMNS,
                     CONNECTIONS,
                     MATERIALIZED,
                     OBJECTS,
+                    RECORDED,
                     ROLES,
                     SCHEMAS,
                     SINKS,
@@ -4196,6 +4197,10 @@ impl<'a> Parser<'a> {
                     TYPES,
                     VIEWS,
                 ])?;
+                if kw == RECORDED {
+                    self.expect_keyword(VIEWS)?;
+                    self.prev_token();
+                }
             }
             self.prev_token();
         }
@@ -4231,6 +4236,7 @@ impl<'a> Parser<'a> {
             TYPES,
             USERS,
             VIEWS,
+            RECORDED,
             SECRETS,
             CONNECTIONS,
         ]) {
@@ -4252,6 +4258,10 @@ impl<'a> Parser<'a> {
                 TABLES => ObjectType::Table,
                 TYPES => ObjectType::Type,
                 VIEWS => ObjectType::View,
+                RECORDED => {
+                    self.expect_keyword(VIEWS)?;
+                    ObjectType::RecordedView
+                }
                 SECRETS => ObjectType::Secret,
                 CONNECTIONS => ObjectType::Connection,
                 _ => unreachable!(),
@@ -4260,7 +4270,7 @@ impl<'a> Parser<'a> {
             let (from, in_cluster) = match self.parse_one_of_keywords(&[FROM, IN]) {
                 Some(kw) => {
                     if kw == IN && self.peek_keyword(CLUSTER) {
-                        if matches!(object_type, ObjectType::Sink) {
+                        if matches!(object_type, ObjectType::Sink | ObjectType::RecordedView) {
                             // put `IN` back
                             self.prev_token();
                             (None, self.parse_optional_in_cluster()?)
