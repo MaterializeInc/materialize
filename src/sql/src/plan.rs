@@ -188,7 +188,6 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
-    pub remote: Option<String>,
 }
 
 #[derive(Debug)]

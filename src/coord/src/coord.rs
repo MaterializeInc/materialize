@@ -2762,7 +2762,6 @@ impl<S: Append + 'static> Coordinator<S> {
             connection: plan.source.connection,
             desc: plan.source.desc,
             depends_on,
-            remote_addr: plan.remote,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
