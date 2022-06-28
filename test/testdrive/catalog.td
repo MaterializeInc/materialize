@@ -397,7 +397,8 @@ mz_audit_events
 mz_base_types
 mz_clusters
 mz_cluster_replicas_base
-mz_cluster_replicas_status
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
 mz_columns
 mz_connections
 mz_databases
@@ -422,32 +423,33 @@ mz_views
 > SHOW FULL TABLES FROM mz_catalog
 name                        type
 ----------------------------------
-mz_array_types              system
-mz_audit_events             system
-mz_base_types               system
-mz_clusters                 system
-mz_cluster_replicas_base    system
-mz_cluster_replicas_status  system
-mz_columns                  system
-mz_connections               system
-mz_databases                system
-mz_functions                system
-mz_index_columns            system
-mz_indexes                  system
-mz_kafka_sinks              system
-mz_list_types               system
-mz_map_types                system
-mz_pseudo_types             system
-mz_roles                    system
-mz_schemas                  system
-mz_secrets                  system
-mz_sinks                    system
-mz_sources                  system
-mz_tables                   system
-mz_types                    system
-mz_view_foreign_keys        system
-mz_view_keys                system
-mz_views                    system
+mz_array_types                system
+mz_audit_events               system
+mz_base_types                 system
+mz_clusters                   system
+mz_cluster_replicas_base      system
+mz_cluster_replica_statuses   system
+mz_cluster_replica_heartbeats system
+mz_columns                    system
+mz_connections                system
+mz_databases                  system
+mz_functions                  system
+mz_index_columns              system
+mz_indexes                    system
+mz_kafka_sinks                system
+mz_list_types                 system
+mz_map_types                  system
+mz_pseudo_types               system
+mz_roles                      system
+mz_schemas                    system
+mz_secrets                    system
+mz_sinks                      system
+mz_sources                    system
+mz_tables                     system
+mz_types                      system
+mz_view_foreign_keys          system
+mz_view_keys                  system
+mz_views                      system
 
 > CREATE SCHEMA tester
 
@@ -459,7 +461,8 @@ mz_audit_events
 mz_base_types
 mz_clusters
 mz_cluster_replicas_base
-mz_cluster_replicas_status
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
 mz_columns
 mz_connections
 mz_databases
@@ -492,7 +495,8 @@ mz_audit_events
 mz_base_types
 mz_clusters
 mz_cluster_replicas_base
-mz_cluster_replicas_status
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
 mz_columns
 mz_connections
 mz_databases
@@ -517,7 +521,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-26
+27
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

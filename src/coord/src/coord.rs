@@ -72,7 +72,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, DurationRound, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
@@ -435,6 +435,13 @@ impl<T: CoordTimestamp> AdvanceTables<T> {
     }
 }
 
+/// Soft-state metadata about a compute replica
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplicaMetadata {
+    /// The last time we heard from this replica (possibly rounded)
+    pub last_heartbeat: DateTime<Utc>,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
@@ -506,6 +513,13 @@ pub struct Coordinator<S> {
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
+
+    /// Metadata about replicas that doesn't need to be persisted.
+    /// Intended for inclusion in system tables.
+    ///
+    /// `None` is used as a tombstone value for replicas that have been
+    /// dropped and for which no further updates should be recorded.
+    transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 }
 
 /// Metadata about an active connection.
@@ -1323,6 +1337,42 @@ impl<S: Append + 'static> Coordinator<S> {
                 peek_id: _,
             }) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
+            }
+            ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
+                let replica_status_granularity = chrono::Duration::seconds(60);
+                let when_coarsened = when
+                    .duration_trunc(replica_status_granularity)
+                    .expect("Time coarsening should not fail");
+                let new = ReplicaMetadata {
+                    last_heartbeat: when_coarsened,
+                };
+                let old = match self
+                    .transient_replica_metadata
+                    .insert(replica_id, Some(new.clone()))
+                {
+                    None => None,
+                    // `None` is the tombstone for a removed replica
+                    Some(None) => return,
+                    Some(Some(md)) => Some(md),
+                };
+
+                if old.as_ref() != Some(&new) {
+                    let retraction = old.map(|old| {
+                        self.catalog
+                            .state()
+                            .pack_replica_heartbeat_update(replica_id, old, -1)
+                    });
+                    let insertion = self
+                        .catalog
+                        .state()
+                        .pack_replica_heartbeat_update(replica_id, new, 1);
+                    let updates = if let Some(retraction) = retraction {
+                        vec![retraction, insertion]
+                    } else {
+                        vec![insertion]
+                    };
+                    self.send_builtin_table_updates(updates).await;
+                }
             }
         }
     }
@@ -3381,6 +3431,24 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok(ExecuteResponse::DroppedRole)
     }
 
+    async fn drop_replica(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        replica_config: ConcreteComputeInstanceReplicaConfig,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
+            let retraction = self
+                .catalog
+                .state()
+                .pack_replica_heartbeat_update(replica_id, metadata, -1);
+            self.send_builtin_table_updates(vec![retraction]).await;
+        }
+        self.dataflow_client
+            .drop_replica(instance_id, replica_id, replica_config)
+            .await
+    }
+
     async fn sequence_drop_compute_instances(
         &mut self,
         session: &Session,
@@ -3406,8 +3474,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
-                self.dataflow_client
-                    .drop_replica(instance_id, replica_id, replica.config)
+                self.drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3449,8 +3516,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.dataflow_client
-                .drop_replica(compute_id, replica_id, replica.config)
+            self.drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -5585,6 +5651,7 @@ pub async fn serve<S: Append + 'static>(
                 replica_sizes,
                 availability_zones,
                 connection_context,
+                transient_replica_metadata: HashMap::new(),
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

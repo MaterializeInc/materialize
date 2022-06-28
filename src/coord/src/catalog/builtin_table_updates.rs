@@ -27,14 +27,17 @@ use mz_sql_parser::ast::display::AstDisplay;
 
 use crate::catalog::builtin::{
     MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_BASE_TYPES, MZ_CLUSTERS, MZ_CLUSTER_REPLICAS_BASE,
-    MZ_CLUSTER_REPLICAS_STATUS, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_FUNCTIONS, MZ_INDEXES,
-    MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_CLUSTER_REPLICA_STATUSES, MZ_COLUMNS, MZ_CONNECTIONS, MZ_DATABASES, MZ_FUNCTIONS,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_PSEUDO_TYPES,
+    MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
 };
 use crate::catalog::{
     CatalogItem, CatalogState, Connection, Error, ErrorKind, Func, Index, Sink, SinkConnection,
     SinkConnectionState, Type, View, SYSTEM_CONN_ID,
 };
+use crate::coord::ReplicaMetadata;
+
+use super::builtin::MZ_CLUSTER_REPLICA_HEARTBEATS;
 
 /// An update to a built-in table.
 #[derive(Debug)]
@@ -168,7 +171,7 @@ impl CatalogState {
         };
 
         BuiltinTableUpdate {
-            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICAS_STATUS),
+            id: self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_STATUSES),
             row: Row::pack_slice(&[
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(replica_id as i64),
@@ -658,5 +661,25 @@ impl CatalogState {
             ]),
             diff: 1,
         })
+    }
+
+    pub fn pack_replica_heartbeat_update(
+        &self,
+        id: ReplicaId,
+        md: ReplicaMetadata,
+        diff: Diff,
+    ) -> BuiltinTableUpdate {
+        let ReplicaMetadata { last_heartbeat } = md;
+        let table = self.resolve_builtin_table(&MZ_CLUSTER_REPLICA_HEARTBEATS);
+        let row = Row::pack_slice(&[
+            // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
+            Datum::Int64(id.try_into().expect("Replica IDs should not overflow i64")),
+            Datum::TimestampTz(last_heartbeat),
+        ]);
+        BuiltinTableUpdate {
+            id: table,
+            row,
+            diff,
+        }
     }
 }
