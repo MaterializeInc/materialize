@@ -33,7 +33,7 @@ use mz_persist::operators::source::PersistedSource;
 use mz_persist::operators::stream::{AwaitFrontier, Seal};
 use mz_persist::operators::upsert::PersistentUpsertConfig;
 use mz_persist_types::Codec;
-use mz_repr::{Diff, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, Timestamp};
 
 use crate::common::operator::{CollectionExt, StreamExt};
 use crate::storage::decode::decode_cdcv2;
@@ -392,8 +392,8 @@ where
                             schema,
                             schema_registry_config,
                             confluent_wire_format,
-                        } = match value_encoding {
-                            DataEncoding::Avro(enc) => enc,
+                        } = match value_encoding.inner {
+                            DataEncodingInner::Avro(enc) => enc,
                             _ => unreachable!("Attempted to create non-Avro CDCv2 source"),
                         };
                         let ok_source = match ok_source {
@@ -527,11 +527,11 @@ where
 
                                 (upsert_ok.as_collection(), Some(upsert_err.as_collection()))
                             }
-                            SourceEnvelope::None(key_envelope) => {
+                            SourceEnvelope::None(none_envelope) => {
                                 let results = append_metadata_to_value(results);
 
                                 let flattened_stream =
-                                    flatten_results_prepend_keys(key_envelope, results);
+                                    flatten_results_prepend_keys(none_envelope, results);
 
                                 let flattened_stream = flattened_stream.pass_through("decode", 1);
 
@@ -1093,18 +1093,26 @@ where
 
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results_prepend_keys<G>(
-    key_envelope: &KeyEnvelope,
+    none_envelope: &NoneEnvelope,
     results: timely::dataflow::Stream<G, KV>,
 ) -> timely::dataflow::Stream<G, Result<Row, DecodeError>>
 where
     G: Scope,
 {
+    let NoneEnvelope {
+        key_envelope,
+        key_arity,
+    } = none_envelope;
+
+    let null_key_columns = Row::pack_slice(&vec![Datum::Null; *key_arity]);
+
     match key_envelope {
         KeyEnvelope::None => results.flat_map(|KV { val, .. }| val),
         KeyEnvelope::Flattened | KeyEnvelope::LegacyUpsert => results
             .flat_map(raise_key_value_errors)
             .map(move |maybe_kv| {
-                maybe_kv.map(|(mut key, value)| {
+                maybe_kv.map(|(key, value)| {
+                    let mut key = key.unwrap_or_else(|| null_key_columns.clone());
                     RowPacker::for_existing_row(&mut key).extend_by_row(&value);
                     key
                 })
@@ -1113,7 +1121,8 @@ where
             results
                 .flat_map(raise_key_value_errors)
                 .map(move |maybe_kv| {
-                    maybe_kv.map(|(mut key, value)| {
+                    maybe_kv.map(|(key, value)| {
+                        let mut key = key.unwrap_or_else(|| null_key_columns.clone());
                         // Named semantics rename a key that is a single column, and encode a
                         // multi-column field as a struct with that name
                         let row = if key.iter().nth(1).is_none() {
@@ -1134,18 +1143,17 @@ where
 }
 
 /// Handle possibly missing key or value portions of messages
-fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Row, Row), DecodeError>> {
+fn raise_key_value_errors(KV { key, val }: KV) -> Option<Result<(Option<Row>, Row), DecodeError>> {
     match (key, val) {
-        (Some(key), Some(value)) => match (key, value) {
-            (Ok(key), Ok(value)) => Some(Ok((key, value))),
-            // always prioritize the value error if either or both have an error
-            (_, Err(e)) => Some(Err(e)),
-            (Err(e), _) => Some(Err(e)),
-        },
+        (Some(Ok(key)), Some(Ok(value))) => Some(Ok((Some(key), value))),
+        (None, Some(Ok(value))) => Some(Ok((None, value))),
+        // always prioritize the value error if either or both have an error
+        (_, Some(Err(e))) => Some(Err(e)),
+        (Some(Err(e)), _) => Some(Err(e)),
         (None, None) => None,
         // TODO(petrosagg): these errors would be better grouped under an EnvelopeError enum
         _ => Some(Err(DecodeError::Text(
-            "Key or Value are not present for message".to_string(),
+            "Value not present for message".to_string(),
         ))),
     }
 }
