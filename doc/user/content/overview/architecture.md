@@ -7,16 +7,17 @@ menu:
     weight: 2
 ---
 
-Everything in Materialize is currently handled by the `materialized` process
-(pronounced _materialize-dee_; the "`d`" is for daemon), which interacts with
-the outside world by interfacing with:
+Materialize was first built as a single binary that runs on a single node: `materialized`. To support mission-critical deployments at any scale, we are now evolving the binary into a [cloud-native platform](https://materialize.com/materialize-unbundled/) with built-in horizontal scaling, active replication and decoupled storage. To learn more about the future architecture of Materialize, [sign up for early access](https://materialize.com/materialize-cloud-access/).
+
+## The `materialized` binary
+
+The `materialized` process
+(pronounced _materialize-dee_; the "`d`" is for daemon) interfaces with the outside world using:
 
 - **SQL shells** for interacting with clients, including defining sources,
   creating views, and querying data.
 - **Sources** to ingest data, i.e. writes. We'll focus on streaming sources like
   Kafka, though Materialize also supports file sources.
-
-## Diagrams
 
 {{<
     figure src="/images/architecture_deployment.png"

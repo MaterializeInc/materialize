@@ -41,42 +41,6 @@ func main() {
 }
 ```
 
-### Materialize Cloud Instance
-
-Download your instance's certificate files from the Materialize Cloud [Connect](/cloud/connect-to-cloud/) dialog and specify the path to each file in the [`ssl` property](https://node-postgres.com/features/ssl).
-Replace `MY_INSTANCE_ID` in the property with a Materialize Cloud instance ID.
-```go
-package main
-
-import (
-	"context"
-	"github.com/jackc/pgx/v4"
-	"log"
-	"fmt"
-)
-
-func main() {
-
-	ctx := context.Background()
-	connStr := fmt.Sprint(
-		" host=MY_INSTANCE_ID.materialize.cloud",
-		" user=materialize",
-		" port=6875",
-		" dbname=materialize",
-		" sslmode=verify-full",
-		" sslrootcert=ca.crt",
-		" sslkey=materialize.key",
-		" sslcert=materialize.crt",
-	)
-
-	conn, err := pgx.Connect(ctx, connStr)
-	if err != nil {
-		log.Fatal("Trouble Connecting to the database:", err)
-	}
-	defer conn.Close()
-}
-```
-
 To create a concurrency-safe connection pool, import [`github.com/jackc/pgx/v4/pgxpool`](https://pkg.go.dev/github.com/jackc/pgx/v4/pgxpool) and use `pgxpool.Connect()`.
 
 The rest of this guide uses the [`*pgx.Conn`](https://pkg.go.dev/github.com/jackc/pgx#Conn) connection handle from the [connect](#connect) section to interact with Materialize.
