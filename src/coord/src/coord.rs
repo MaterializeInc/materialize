@@ -2547,7 +2547,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     (log, id, collection_meta)
                 })
                 .collect();
-            // TODO: Uncomment once we have persist sources
             source_ids.extend(log_collections.iter().map(|(_, id, _)| *id));
             ops.push(catalog::Op::CreateComputeInstanceReplica {
                 name: replica_name,

@@ -296,10 +296,6 @@ impl CatalogState {
     }
 
     pub fn get_entry(&self, id: &GlobalId) -> &CatalogEntry {
-        if !self.entry_by_id.contains_key(id) {
-            eprintln!("Key {id} not found in entry_by_id!");
-        };
-
         &self.entry_by_id[id]
     }
 
@@ -559,7 +555,6 @@ impl CatalogState {
                 item: format!("{}_{}", log.name, replica_id),
             };
             let desc = log.variant.desc();
-            // TODO(LH): Bring back when persist sources are back
             self.insert_item(
                 source_id,
                 oid,
