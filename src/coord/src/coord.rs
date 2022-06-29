@@ -67,10 +67,7 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-<<<<<<< HEAD
 use std::fmt::Formatter;
-=======
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, thread};
@@ -279,7 +276,6 @@ pub enum PeekResponseUnary {
     Canceled,
 }
 
-<<<<<<< HEAD
 #[derive(Debug)]
 struct GroupCommit {
     pending_writes: Vec<PendingWriteTxn>,
@@ -322,6 +318,15 @@ enum PendingWriteTxn {
     },
 }
 
+impl PendingWriteTxn {
+    fn has_write_lock(&self) -> bool {
+        match self {
+            User {write_txn, ..} => write_txn.has_write_lock(),
+            System => false,
+        }
+    }
+}
+
 /// Different forms of write transactions
 #[derive(Debug)]
 enum WriteTxn {
@@ -333,6 +338,8 @@ enum WriteTxn {
         response: ExecuteResponse,
         /// The action to take at the end of the transaction.
         action: Option<EndTransactionAction>,
+        /// Holds the coordinator's write lock.
+        write_lock_guard: Option<OwnedMutexGuard<()>>,
     },
     /// DDL operations, these cause writes to system tables.
     DDL {
@@ -349,6 +356,15 @@ enum WriteTxn {
         result: Result<SinkConnection, CoordError>,
         compute_instance: ComputeInstanceId,
     },
+}
+
+impl WriteTxn {
+    fn has_write_lock(&self) -> bool {
+        match self {
+            Write{write_lock_guard,.. } => write_lock_guard.is_some(),
+            DDL | SinkConnectionReady {..} => false,
+        }
+    }
 }
 
 impl From<SinkConnectionReady> for PendingWriteTxn {
@@ -372,27 +388,6 @@ impl From<SinkConnectionReady> for PendingWriteTxn {
             client_transmitter: tx,
             session,
         }
-=======
-/// A pending write transaction that will be committing during the next group commit.
-struct PendingWriteTxn {
-    /// List of all write operations within the transaction.
-    writes: Vec<WriteOp>,
-    /// Transmitter used to send a response back to the client.
-    client_transmitter: ClientTransmitter<ExecuteResponse>,
-    /// Client response for transaction.
-    response: Result<ExecuteResponse, CoordError>,
-    /// Session of the client who initiated the transaction.
-    session: Session,
-    /// The action to take at the end of the transaction.
-    action: EndTransactionAction,
-    /// Holds the coordinator's write lock.
-    write_lock_guard: Option<OwnedMutexGuard<()>>,
-}
-
-impl PendingWriteTxn {
-    fn has_write_lock(&self) -> bool {
-        self.write_lock_guard.is_some()
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
     }
 }
 
@@ -1242,7 +1237,9 @@ impl<S: Append + 'static> Coordinator<S> {
     /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline. This
     /// approach prevents an unbounded advancing of the global timeline ahead of `now()`.
     async fn group_commit(&mut self) {
-<<<<<<< HEAD
+        if self.pending_writes.is_empty() {
+            return;
+        }
         let WriteTimestamp {
             timestamp,
             advance_to,
@@ -1383,49 +1380,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     if let Some(tx) = tx {
                         senders.push(tx);
                     }
-=======
-        if self.pending_writes.is_empty() {
-            return;
-        }
-
-        // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
-        // any point during this method. We will still commit the write without waiting for `now()`
-        // to advance. This is ok because the next batch of writes will trigger the wait loop in
-        // `try_group_commit()` if `now()` hasn't advanced past the global timeline, preventing
-        // an unbounded advancin of the global timeline ahead of `now()`.
-        let WriteTimestamp {
-            timestamp,
-            advance_to,
-        } = self.get_and_step_local_write_ts();
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
-            HashMap::with_capacity(self.pending_writes.len());
-        let mut responses = Vec::with_capacity(self.pending_writes.len());
-        for PendingWriteTxn {
-            writes,
-            client_transmitter,
-            response,
-            session,
-            action,
-            write_lock_guard: _,
-        } in self.pending_writes.drain(..)
-        {
-            for WriteOp { id, rows } in writes {
-                // If the table that some write was targeting has been deleted while the write was
-                // waiting, then the write will be ignored and we respond to the client that the
-                // write was successful. This is only possible if the write and the delete were
-                // concurrent. Therefore, we are free to order the write before the delete without
-                // violating any consistency guarantees.
-                if self.catalog.try_get_entry(&id).is_some() {
-                    let updates = rows
-                        .into_iter()
-                        .map(|(row, diff)| Update {
-                            row,
-                            diff,
-                            timestamp,
-                        })
-                        .collect::<Vec<_>>();
-                    appends.entry(id).or_default().extend(updates);
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
                 }
             }
             responses.push((client_transmitter, response, session, action));
@@ -1469,7 +1423,6 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
-<<<<<<< HEAD
         let elapsed = start.elapsed();
         trace!(
             "group commit for {} tables to {} took: {} ms",
@@ -1514,11 +1467,6 @@ impl<S: Append + 'static> Coordinator<S> {
             self.internal_cmd_tx
                 .send(Message::GroupCommit)
                 .expect("sending to internal_cmd_tx cannot fail");
-=======
-        for (client_transmitter, response, mut session, action) in responses {
-            session.vars_mut().end_transaction(action);
-            client_transmitter.send(response, session);
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
         }
         self.pending_group_commit.table_advances.extend(ids);
     }
@@ -2334,7 +2282,6 @@ impl<S: Append + 'static> Coordinator<S> {
 
             // Cancel pending writes. There is at most one pending write per session.
             if let Some(idx) = self
-<<<<<<< HEAD
                 .pending_group_commit
                 .pending_writes
                 .iter()
@@ -2347,18 +2294,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 } = self.pending_group_commit.pending_writes.remove(idx) {
                     let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
                 }
-=======
-                .pending_writes
-                .iter()
-                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
-            {
-                let PendingWriteTxn {
-                    client_transmitter,
-                    session,
-                    ..
-                } = self.pending_writes.remove(idx);
-                let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
             }
 
             // Cancel deferred writes. There is at most one deferred write per session.
@@ -2513,13 +2448,8 @@ impl<S: Append + 'static> Coordinator<S> {
                 Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description)?)
             })
             .await?;
-<<<<<<< HEAD
         self.ship_dataflow(df, compute_instance).await;
         Ok(builtin_updates)
-=======
-
-        Ok(self.ship_dataflow(df, compute_instance).await)
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
     }
 
     async fn sequence_plan(
@@ -2530,7 +2460,6 @@ impl<S: Append + 'static> Coordinator<S> {
         depends_on: Vec<GlobalId>,
     ) {
         match plan {
-<<<<<<< HEAD
             plan @ Plan::CreateConnection(_)
             | plan @ Plan::CreateDatabase(_)
             | plan @ Plan::CreateSchema(_)
@@ -2542,6 +2471,7 @@ impl<S: Append + 'static> Coordinator<S> {
             | plan @ Plan::CreateSink(_)
             | plan @ Plan::CreateView(_)
             | plan @ Plan::CreateViews(_)
+            | plan @ Plan::CreateRecordedView(_)
             | plan @ Plan::CreateIndex(_)
             | plan @ Plan::CreateType(_)
             | plan @ Plan::DropDatabase(_)
@@ -2553,101 +2483,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.submit_write(PendingWriteTxn::User {
                     write_txn: WriteTxn::DDL { plan, depends_on },
                     client_transmitter: tx,
-=======
-            Plan::CreateConnection(plan) => {
-                tx.send(
-                    self.sequence_create_connection(&session, plan).await,
-                    session,
-                );
-            }
-            Plan::CreateDatabase(plan) => {
-                tx.send(self.sequence_create_database(&session, plan).await, session);
-            }
-            Plan::CreateSchema(plan) => {
-                tx.send(self.sequence_create_schema(&session, plan).await, session);
-            }
-            Plan::CreateRole(plan) => {
-                tx.send(self.sequence_create_role(&session, plan).await, session);
-            }
-            Plan::CreateComputeInstance(plan) => {
-                tx.send(
-                    self.sequence_create_compute_instance(&session, plan).await,
-                    session,
-                );
-            }
-            Plan::CreateComputeInstanceReplica(plan) => {
-                tx.send(
-                    self.sequence_create_compute_instance_replica(&session, plan)
-                        .await,
-                    session,
-                );
-            }
-            Plan::CreateTable(plan) => {
-                tx.send(
-                    self.sequence_create_table(&session, plan, depends_on).await,
-                    session,
-                );
-            }
-            Plan::CreateSecret(plan) => {
-                tx.send(self.sequence_create_secret(&session, plan).await, session);
-            }
-            Plan::CreateSource(_) => unreachable!("handled separately"),
-            Plan::CreateSink(plan) => {
-                self.sequence_create_sink(session, plan, depends_on, tx)
-                    .await;
-            }
-            Plan::CreateView(plan) => {
-                tx.send(
-                    self.sequence_create_view(&session, plan, depends_on).await,
-                    session,
-                );
-            }
-            Plan::CreateViews(plan) => {
-                tx.send(
-                    self.sequence_create_views(&mut session, plan, depends_on)
-                        .await,
-                    session,
-                );
-            }
-            Plan::CreateRecordedView(plan) => {
-                tx.send(
-                    self.sequence_create_recorded_view(&session, plan, depends_on)
-                        .await,
-                    session,
-                );
-            }
-            Plan::CreateIndex(plan) => {
-                tx.send(
-                    self.sequence_create_index(&session, plan, depends_on).await,
-                    session,
-                );
-            }
-            Plan::CreateType(plan) => {
-                tx.send(
-                    self.sequence_create_type(&session, plan, depends_on).await,
-                    session,
-                );
-            }
-            Plan::DropDatabase(plan) => {
-                tx.send(self.sequence_drop_database(&session, plan).await, session);
-            }
-            Plan::DropSchema(plan) => {
-                tx.send(self.sequence_drop_schema(&session, plan).await, session);
-            }
-            Plan::DropRoles(plan) => {
-                tx.send(self.sequence_drop_roles(&session, plan).await, session);
-            }
-            Plan::DropComputeInstances(plan) => {
-                tx.send(
-                    self.sequence_drop_compute_instances(&session, plan).await,
-                    session,
-                );
-            }
-            Plan::DropComputeInstanceReplica(plan) => {
-                tx.send(
-                    self.sequence_drop_compute_instance_replica(&session, plan)
-                        .await,
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
                     session,
                 });
             }
@@ -2839,6 +2674,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::CreateSecret(plan) => self.sequence_create_secret(session, plan).await,
             Plan::CreateView(plan) => self.sequence_create_view(session, plan, depends_on).await,
             Plan::CreateViews(plan) => self.sequence_create_views(session, plan, depends_on).await,
+            Plan::CreateRecordedView(plan) => self.sequence_create_recorded_view(session, plan, depends_on).await,
             Plan::CreateIndex(plan) => self.sequence_create_index(session, plan, depends_on).await,
             Plan::CreateType(plan) => self.sequence_create_type(session, plan, depends_on).await,
             Plan::CreateSource(plan) => {
@@ -3454,14 +3290,23 @@ impl<S: Append + 'static> Coordinator<S> {
                     .map(|_ok| ())
             })
             .await;
-<<<<<<< HEAD
 
         let builtin_updates = match transact_result {
             Ok((builtin_updates, ())) => builtin_updates,
-=======
-        match transact_result {
-            Ok(()) => {
-                // Announce the creation of the sink's corresponding source.
+            Err(CoordError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => {
+                tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
+                return None;
+            }
+            Err(error) => {
+                tx.send(Err(error), session);
+                return None;
+            }
+        };
+
+        // Announce the creation of the sink's corresponding source.
                 // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
                 if let Some(desc) = self.catalog.state().source_description_for(id) {
                     let ingestion = IngestionDescription {
@@ -3484,20 +3329,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await;
                 }
-            }
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
-            Err(CoordError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::ItemAlreadyExists(_),
-                ..
-            })) if if_not_exists => {
-                tx.send(Ok(ExecuteResponse::CreatedSink { existed: true }), session);
-                return None;
-            }
-            Err(error) => {
-                tx.send(Err(error), session);
-                return None;
-            }
-        };
 
         // Now we're ready to create the sink connector. Arrange to notify the
         // main coordinator thread when the future completes.
@@ -4051,36 +3882,21 @@ impl<S: Append + 'static> Coordinator<S> {
             .await;
 
         let (response, action) = match result {
-<<<<<<< HEAD
-            Ok(Some(writes)) if writes.is_empty() => (Ok(response), action),
-            Ok(Some(writes)) => {
+            Ok((Some(writes), _)) if writes.is_empty() => (Ok(response), action),
+            Ok((Some(writes), write_lock_guard)) => {
                 self.submit_write(PendingWriteTxn::User {
                     write_txn: WriteTxn::Write {
                         writes,
                         response,
                         action: Some(action),
+                        write_lock_guard,
                     },
                     client_transmitter: tx,
                     session,
                 });
                 return;
             }
-            Ok(None) => (Ok(response), action),
-=======
-            Ok((Some(writes), _)) if writes.is_empty() => (response, action),
-            Ok((Some(writes), write_lock_guard)) => {
-                self.submit_write(PendingWriteTxn {
-                    writes,
-                    client_transmitter: tx,
-                    response,
-                    session,
-                    action,
-                    write_lock_guard,
-                });
-                return;
-            }
-            Ok((None, _)) => (response, action),
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
+            Ok((None, None)) => (Ok(response), action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
@@ -4091,19 +3907,11 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-<<<<<<< HEAD
-    ) -> Result<Option<Vec<WriteOp>>, CoordError> {
-        let txn = self.clear_transaction(session).await;
-
-        if let EndTransactionAction::Commit = action {
-            if let Some(ops) = txn.into_ops() {
-=======
     ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), CoordError> {
         let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
             if let (Some(ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
                 if let TransactionOps::Writes(mut writes) = ops {
                     for WriteOp { id, .. } in &writes {
                         // Re-verify this id exists.
@@ -4114,20 +3922,11 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                     writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-<<<<<<< HEAD
-                    return Ok(Some(writes));
-                }
-            }
-        }
-
-        Ok(None)
-=======
                     return Ok((Some(writes), write_lock_guard));
                 }
             }
         }
         Ok((None, None))
->>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
