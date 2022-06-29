@@ -1228,7 +1228,6 @@ impl<S: Append + 'static> Coordinator<S> {
             .pending_writes
             .iter()
             .any(|pending_write| pending_write.has_write_lock())
-            || self.write_lock.try_lock().is_ok()
         {
             // If some transaction already holds the write lock, then we can execute a group
             // commit.
