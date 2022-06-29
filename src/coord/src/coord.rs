@@ -1520,7 +1520,7 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    /// Remove all pending peeks that were initiated by `conn_id`
+    /// Remove all pending peeks that were initiated by `conn_id`.
     async fn remove_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
         // The peek is present on some specific compute instance.
         // Allow dataflow to cancel any pending peeks.
