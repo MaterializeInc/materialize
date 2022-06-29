@@ -131,13 +131,12 @@ pub fn render<G>(
                     if finalized_timestamps.is_empty() {
                         let expected_upper = current_upper.borrow().clone();
                         write
-                            .compare_and_append(
+                            .append(
                                 Vec::<((SourceData, ()), Timestamp, Diff)>::new(),
                                 expected_upper,
                                 input_upper.clone(),
                             )
                             .await
-                            .expect("cannot append updates")
                             .expect("cannot append updates")
                             .expect("invalid/outdated upper");
 
