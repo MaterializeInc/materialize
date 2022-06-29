@@ -1256,9 +1256,9 @@ impl<S: Append + 'static> Coordinator<S> {
     /// sent to STORAGE as a single batch. All writes will happen at the same timestamp and all
     /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
     ///
-    /// If the [`write_lock_guard`] is [`Some`] then both pending write transaction and table
+    /// If the `write_lock_guard` is [`Some`] then both pending write transaction and table
     /// advancements will be committed, and the global timestamp will be increased.
-    /// If the [`write_lock_guard`] is [`None`] then only table advancements will be committed, and
+    /// If the `write_lock_guard` is [`None`] then only table advancements will be committed, and
     /// the global timestamp will not be increased.
     ///
     /// The timestamps used in this method might be ahead of `now()` if `now()` has gone
