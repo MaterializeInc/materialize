@@ -818,7 +818,38 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
                 CatalogItem::View(_) => (),
-                CatalogItem::RecordedView(_) => todo!(),
+                CatalogItem::RecordedView(rview) => {
+                    // Re-create the storage collection.
+                    self.dataflow_client
+                        .storage_mut()
+                        .create_collections(vec![(
+                            entry.id(),
+                            CollectionDescription {
+                                desc: rview.desc.clone(),
+                                ingestion: None,
+                                remote_addr: None,
+                            },
+                        )])
+                        .await
+                        .unwrap();
+
+                    self.initialize_storage_read_policies(
+                        vec![entry.id()],
+                        self.logical_compaction_window_ms,
+                    )
+                    .await;
+
+                    // Re-create the sink on the compute instance.
+                    let id_bundle = self
+                        .index_oracle(rview.compute_instance)
+                        .sufficient_collections(&rview.depends_on);
+                    let as_of = self.least_valid_read(&id_bundle, rview.compute_instance);
+                    let internal_view_id = self.allocate_transient_id()?;
+                    let df = self
+                        .dataflow_builder(rview.compute_instance)
+                        .build_recorded_view_dataflow(entry.id(), as_of, internal_view_id)?;
+                    self.ship_dataflow(df, rview.compute_instance).await;
+                }
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
