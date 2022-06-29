@@ -16,8 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
-
-use crate::proto::{RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.varchar.rs"));
 
@@ -128,7 +127,7 @@ pub fn format_str(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

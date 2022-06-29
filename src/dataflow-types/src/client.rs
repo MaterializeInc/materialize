@@ -35,8 +35,8 @@ use uuid::Uuid;
 
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::proto::any_uuid;
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::any_uuid;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
 
 use crate::logging::LoggingConfig;
@@ -1150,8 +1150,8 @@ pub mod process_local {
 
 /// A client to a remote dataflow server.
 pub mod grpc {
-    use mz_repr::proto::ProtoType;
-    use mz_repr::proto::RustType;
+    use mz_proto::ProtoType;
+    use mz_proto::RustType;
     use std::cmp;
     use std::fmt;
     use std::net::ToSocketAddrs;
@@ -1741,7 +1741,7 @@ pub mod grpc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

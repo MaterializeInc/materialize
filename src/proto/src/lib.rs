@@ -11,14 +11,12 @@
 
 use proptest::prelude::Strategy;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::str::FromStr;
 use std::{char::CharTryFromError, num::TryFromIntError};
 use uuid::Uuid;
 
 use mz_ore::cast::CastFrom;
-use mz_persist_client::ShardId;
 
-include!(concat!(env!("OUT_DIR"), "/mz_repr.proto.rs"));
+include!(concat!(env!("OUT_DIR"), "/mz_proto.rs"));
 
 /// An error thrown when trying to convert from a `*.proto`-generated type
 /// `Proto$T` to `$T`.
@@ -32,7 +30,7 @@ pub enum TryFromProtoError {
     DateConversionError(String),
     /// A regex compilation failed
     RegexError(regex::Error),
-    /// A [crate::Row] conversion failed
+    /// A mz_repr::Row conversion failed
     RowConversionError(String),
     /// A JSON deserialization failed.
     /// TODO: Remove this when we have complete coverage for source and sink structs.
@@ -69,6 +67,19 @@ impl From<CharTryFromError> for TryFromProtoError {
         TryFromProtoError::CharTryFromError(error)
     }
 }
+
+impl RustType<String> for regex::Regex {
+    fn into_proto(&self) -> String {
+        self.as_str().to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        Ok(regex::Regex::new(&proto)?)
+    }
+}
+
+// These From impls pull a bunch of deps into this crate that are otherwise
+// unnecessary. Are they worth it?
 
 impl From<regex::Error> for TryFromProtoError {
     fn from(error: regex::Error) -> Self {
@@ -395,16 +406,6 @@ impl RustType<ProtoDuration> for std::time::Duration {
     }
 }
 
-impl RustType<String> for ShardId {
-    fn into_proto(&self) -> String {
-        self.to_string()
-    }
-
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        ShardId::from_str(&proto).map_err(|_| TryFromProtoError::InvalidShardId(proto))
-    }
-}
-
 /// The symmetric counterpart of [`RustType`], similar to
 /// what [`Into`] is to [`From`].
 ///
@@ -496,7 +497,6 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
@@ -504,13 +504,6 @@ mod tests {
         #[test]
         fn duration_protobuf_roundtrip(expect in any_duration() ) {
             let actual = protobuf_roundtrip::<_, ProtoDuration>(&expect);
-            assert!(actual.is_ok());
-            assert_eq!(actual.unwrap(), expect);
-        }
-
-        #[test]
-        fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
-            let actual = protobuf_roundtrip::<_, String>(&expect);
             assert!(actual.is_ok());
             assert_eq!(actual.unwrap(), expect);
         }

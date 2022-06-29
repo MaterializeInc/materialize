@@ -49,7 +49,7 @@ use mz_persist_client::{
     read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
 };
 use mz_persist_types::{Codec, Codec64};
-use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_stash::{self, StashError, TypedCollection};
 

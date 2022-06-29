@@ -13,7 +13,7 @@ import "google/protobuf/empty.proto";
 
 import "repr/src/chrono.proto";
 import "repr/src/global_id.proto";
-import "repr/src/proto.proto";
+import "proto/src/proto.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "persist/src/persist.proto";
@@ -165,7 +165,7 @@ message ProtoKafkaSourceConnection {
     string topic = 2;
     map<int32, ProtoMzOffset> start_offsets = 3;
     optional string group_id_prefix = 4;
-    mz_repr.proto.ProtoU128 cluster_id = 5;
+    mz_proto.ProtoU128 cluster_id = 5;
     ProtoIncludedColumnPos include_timestamp = 6;
     ProtoIncludedColumnPos include_partition = 7;
     ProtoIncludedColumnPos include_topic = 8;
@@ -179,7 +179,7 @@ message ProtoSourceDesc {
     mz_dataflow_types.types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
     ProtoSourceEnvelope envelope = 3;
     repeated ProtoIncludedColumnSource metadata_columns = 4;
-    mz_repr.proto.ProtoDuration ts_frequency = 5;
+    mz_proto.ProtoDuration ts_frequency = 5;
 }
 
 message ProtoSourceConnection {

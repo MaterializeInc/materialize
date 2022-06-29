@@ -11,7 +11,7 @@ syntax = "proto3";
 
 import "google/protobuf/empty.proto";
 import "repr/src/global_id.proto";
-import "repr/src/proto.proto";
+import "proto/src/proto.proto";
 
 package mz_dataflow_types.logging;
 
@@ -60,7 +60,7 @@ message ProtoLogVariant {
 }
 
 message ProtoLoggingConfig {
-    mz_repr.proto.ProtoU128 granularity_ns = 1;
+    mz_proto.ProtoU128 granularity_ns = 1;
     repeated ProtoActiveLog active_logs = 2;
     bool log_logging = 3;
 }

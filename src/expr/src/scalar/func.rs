@@ -33,6 +33,7 @@ use mz_ore::cast;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::option::OptionExt;
 use mz_pgrepr::Type;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::datetime::Timezone;
 use mz_repr::adt::interval::Interval;
@@ -40,7 +41,6 @@ use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, DecimalLike, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::any_regex;
 use mz_repr::chrono::any_naive_datetime;
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{strconv, ColumnName, ColumnType, Datum, DatumType, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
@@ -5813,7 +5813,7 @@ mod test {
     use chrono::prelude::*;
     use proptest::prelude::*;
 
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     use super::*;
 

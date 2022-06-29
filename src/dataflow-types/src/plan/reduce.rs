@@ -68,7 +68,7 @@ use mz_expr::AggregateExpr;
 use mz_expr::AggregateFunc;
 use mz_expr::MirScalarExpr;
 use mz_ore::soft_assert_or_log;
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{any, Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
@@ -880,7 +880,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     // This test causes stack overflows if not run with --release,

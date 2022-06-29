@@ -3071,6 +3071,7 @@ dependencies = [
  "mz-pgcopy",
  "mz-pgrepr",
  "mz-postgres-util",
+ "mz-proto",
  "mz-repr",
  "mz-secrets",
  "mz-sql",
@@ -3137,6 +3138,7 @@ dependencies = [
  "mz-persist-client",
  "mz-persist-types",
  "mz-postgres-util",
+ "mz-proto",
  "mz-repr",
  "mz-secrets",
  "mz-sql-parser",
@@ -3274,6 +3276,7 @@ dependencies = [
  "mz-ore",
  "mz-persist-types",
  "mz-pgrepr",
+ "mz-proto",
  "mz-repr",
  "num",
  "num_enum",
@@ -3378,7 +3381,7 @@ dependencies = [
  "mz-avro",
  "mz-ccsr",
  "mz-ore",
- "mz-repr",
+ "mz-proto",
  "num_cpus",
  "proptest",
  "proptest-derive",
@@ -3641,6 +3644,7 @@ dependencies = [
  "mz-ore",
  "mz-persist",
  "mz-persist-types",
+ "mz-proto",
  "num_cpus",
  "num_enum",
  "prometheus",
@@ -3743,11 +3747,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
- "mz-repr",
+ "mz-proto",
  "openssl",
  "postgres-openssl",
  "proptest",
- "proptest-derive",
  "prost",
  "serde",
  "tokio-postgres",
@@ -3780,6 +3783,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-proto"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "globset",
+ "http",
+ "mz-ore",
+ "proptest",
+ "prost",
+ "prost-build",
+ "regex",
+ "serde_json",
+ "url",
+ "uuid 1.1.2",
+]
+
+[[package]]
 name = "mz-repr"
 version = "0.0.0"
 dependencies = [
@@ -3797,8 +3817,8 @@ dependencies = [
  "itertools",
  "mz-lowertest",
  "mz-ore",
- "mz-persist-client",
  "mz-persist-types",
+ "mz-proto",
  "num-traits",
  "num_enum",
  "once_cell",
@@ -3905,6 +3925,7 @@ dependencies = [
  "mz-pgcopy",
  "mz-pgrepr",
  "mz-postgres-util",
+ "mz-proto",
  "mz-repr",
  "mz-secrets",
  "mz-sql-parser",

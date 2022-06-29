@@ -35,6 +35,7 @@ mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-util = { path = "../postgres-util" }
+mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-sql-parser = { path = "../sql-parser" }

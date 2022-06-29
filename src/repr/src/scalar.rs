@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_lowertest::MzReflect;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
 use crate::adt::array::{Array, ArrayDimension};
 use crate::adt::char::{Char, CharLength};
@@ -31,7 +32,6 @@ use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{Numeric, NumericMaxScale};
 use crate::adt::system::{Oid, PgLegacyChar, RegClass, RegProc, RegType};
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
-use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::GlobalId;
 use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 use crate::{Row, RowArena};
@@ -2296,7 +2296,7 @@ fn verify_base_eq_record_nullability() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     proptest! {
        #[test]
