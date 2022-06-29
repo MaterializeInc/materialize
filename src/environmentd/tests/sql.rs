@@ -1260,3 +1260,107 @@ fn test_read_then_write_serializability() {
         );
     }
 }
+
+// Test running a bunch of concurrent DDL. We don't have the facilities to deterministically know
+// what the state of the system is at any point. We just want to make sure that things don't blow
+// up.
+#[test]
+fn test_concurrent_ddl() {
+    mz_ore::test::init_logging();
+    let config = util::Config::default();
+    let server = util::start_server(config).unwrap();
+
+    let table_creator = server.connect(postgres::NoTls).unwrap();
+    let table_alterer = server.connect(postgres::NoTls).unwrap();
+    let table_dropper1 = server.connect(postgres::NoTls).unwrap();
+    let table_dropper2 = server.connect(postgres::NoTls).unwrap();
+    let table_reader1 = server.connect(postgres::NoTls).unwrap();
+    let table_reader2 = server.connect(postgres::NoTls).unwrap();
+    let table_writer1 = server.connect(postgres::NoTls).unwrap();
+    let table_writer2 = server.connect(postgres::NoTls).unwrap();
+
+    let view_creator1 = server.connect(postgres::NoTls).unwrap();
+    let view_creator2 = server.connect(postgres::NoTls).unwrap();
+    let view_alterer = server.connect(postgres::NoTls).unwrap();
+    let view_dropper1 = server.connect(postgres::NoTls).unwrap();
+    let view_dropper2 = server.connect(postgres::NoTls).unwrap();
+    let view_reader1 = server.connect(postgres::NoTls).unwrap();
+    let view_reader2 = server.connect(postgres::NoTls).unwrap();
+
+    let index_table_creator1 = server.connect(postgres::NoTls).unwrap();
+    let index_table_creator2 = server.connect(postgres::NoTls).unwrap();
+    let index_table_alterer = server.connect(postgres::NoTls).unwrap();
+    let index_table_dropper1 = server.connect(postgres::NoTls).unwrap();
+    let index_table_dropper2 = server.connect(postgres::NoTls).unwrap();
+
+    let index_view_creator1 = server.connect(postgres::NoTls).unwrap();
+    let index_view_creator2 = server.connect(postgres::NoTls).unwrap();
+    let index_view_alterer = server.connect(postgres::NoTls).unwrap();
+    let index_view_dropper1 = server.connect(postgres::NoTls).unwrap();
+    let index_view_dropper2 = server.connect(postgres::NoTls).unwrap();
+
+    fn new_thread(
+        mut client: postgres::Client,
+        query: &'static str,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            for _ in 0..5 {
+                let _ = client.batch_execute(query);
+            }
+        })
+    }
+
+    let mut handles = Vec::new();
+    handles.push(new_thread(table_creator, "CREATE TABLE t1(f int)"));
+    handles.push(new_thread(table_alterer, "ALTER TABLE t1 RENAME TO t2"));
+    handles.push(new_thread(table_dropper1, "DROP TABLE t1"));
+    handles.push(new_thread(table_dropper2, "DROP TABLE t2"));
+    handles.push(new_thread(table_reader1, "SELECT * FROM t1"));
+    handles.push(new_thread(table_reader2, "SELECT * FROM t2"));
+    handles.push(new_thread(table_writer1, "INSERT INTO t1 VALUES (42)"));
+    handles.push(new_thread(table_writer2, "INSERT INTO t2 VALUES (42)"));
+    handles.push(new_thread(
+        view_creator1,
+        "CREATE VIEW v1 AS SELECT * FROM t1",
+    ));
+    handles.push(new_thread(
+        view_creator2,
+        "CREATE VIEW v1 AS SELECT * FROM t2",
+    ));
+    handles.push(new_thread(view_alterer, "ALTER VIEW v1 RENAME TO v2"));
+    handles.push(new_thread(view_dropper1, "DROP VIEW v1"));
+    handles.push(new_thread(view_dropper2, "DROP VIEW v2"));
+    handles.push(new_thread(view_reader1, "SELECT * FROM v1"));
+    handles.push(new_thread(view_reader2, "SELECT * FROM v2"));
+    handles.push(new_thread(
+        index_table_creator1,
+        "CREATE INDEX it1 ON t1(f)",
+    ));
+    handles.push(new_thread(
+        index_table_creator2,
+        "CREATE INDEX it1 ON t2(f)",
+    ));
+    handles.push(new_thread(
+        index_table_alterer,
+        "ALTER INDEX it1 RENAME TO it2",
+    ));
+    handles.push(new_thread(index_table_dropper1, "DROP INDEX it1"));
+    handles.push(new_thread(index_table_dropper2, "DROP INDEX it2"));
+    handles.push(new_thread(index_view_creator1, "CREATE INDEX iv1 ON v1(f)"));
+    handles.push(new_thread(index_view_creator2, "CREATE INDEX iv1 ON v2(f)"));
+    handles.push(new_thread(
+        index_view_alterer,
+        "ALTER INDEX iv1 RENAME TO iv2",
+    ));
+    handles.push(new_thread(index_view_dropper1, "DROP INDEX iv1"));
+    handles.push(new_thread(index_view_dropper2, "DROP INDEX iv2"));
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    {
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        let _ = client.query_one("SELECT 1", &[]).unwrap();
+    }
+}
