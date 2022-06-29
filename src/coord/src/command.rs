@@ -23,6 +23,7 @@ use mz_repr::{GlobalId, Row, ScalarType};
 use mz_sql::ast::{FetchDirection, NoticeSeverity, ObjectType, Raw, Statement};
 use mz_sql::plan::ExecuteTimeout;
 
+use crate::client::ConnectionId;
 use crate::coord::PeekResponseUnary;
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -78,7 +79,7 @@ pub enum Command {
     },
 
     CancelRequest {
-        conn_id: u32,
+        conn_id: ConnectionId,
         secret_key: u32,
     },
 

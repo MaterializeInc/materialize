@@ -83,8 +83,9 @@ pub use crate::catalog::config::Config;
 pub use crate::catalog::error::AmbiguousRename;
 pub use crate::catalog::error::Error;
 pub use crate::catalog::error::ErrorKind;
+use crate::client::ConnectionId;
 
-pub const SYSTEM_CONN_ID: u32 = 0;
+pub const SYSTEM_CONN_ID: ConnectionId = 0;
 const SYSTEM_USER: &str = "mz_system";
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -135,7 +136,7 @@ pub struct CatalogState {
     entry_by_id: BTreeMap<GlobalId, CatalogEntry>,
     ambient_schemas_by_name: BTreeMap<String, SchemaId>,
     ambient_schemas_by_id: BTreeMap<SchemaId, Schema>,
-    temporary_schemas: HashMap<u32, Schema>,
+    temporary_schemas: HashMap<ConnectionId, Schema>,
     compute_instances_by_id: HashMap<ComputeInstanceId, ComputeInstance>,
     compute_instances_by_name: HashMap<String, ComputeInstanceId>,
     roles: HashMap<String, Role>,
@@ -266,7 +267,7 @@ impl CatalogState {
     pub fn resolve_full_name(
         &self,
         name: &QualifiedObjectName,
-        conn_id: Option<u32>,
+        conn_id: Option<ConnectionId>,
     ) -> FullObjectName {
         let conn_id = conn_id.unwrap_or(SYSTEM_CONN_ID);
 
@@ -299,7 +300,7 @@ impl CatalogState {
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.get_schema(
             &name.qualifiers.database_spec,
@@ -337,14 +338,14 @@ impl CatalogState {
         res.unwrap_or_else(|| panic!("cannot find {} in system schema", item))
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
+    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: ConnectionId) -> bool {
         self.try_get_entry_in_schema(name, conn_id).is_some()
     }
 
     fn find_available_name(
         &self,
         mut name: QualifiedObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> QualifiedObjectName {
         let mut i = 0;
         let orig_item_name = name.item.clone();
@@ -598,7 +599,7 @@ impl CatalogState {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         let schema = match database_spec {
             ResolvedDatabaseSpecifier::Ambient if schema_name == MZ_TEMP_SCHEMA => {
@@ -621,7 +622,7 @@ impl CatalogState {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> &Schema {
         // Keep in sync with `get_schemas_mut`
         match (database_spec, schema_spec) {
@@ -645,7 +646,7 @@ impl CatalogState {
         &mut self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> &mut Schema {
         // Keep in sync with `get_schemas`
         match (database_spec, schema_spec) {
@@ -728,7 +729,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         database_name: Option<&str>,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         let database_spec = match database_name {
             // If a database is explicitly specified, validate it. Note that we
@@ -785,7 +786,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
         // schema. If no schema was specified, try to find the item in the connection's
@@ -833,7 +834,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
             |schema| &schema.items,
@@ -850,7 +851,7 @@ impl CatalogState {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.resolve(
             |schema| &schema.functions,
@@ -874,7 +875,8 @@ impl CatalogState {
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     state: Cow<'a, CatalogState>,
-    conn_id: u32,
+    //TODO(jkosh44) usages
+    conn_id: ConnectionId,
     compute_instance: String,
     database: Option<DatabaseId>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
@@ -883,7 +885,7 @@ pub struct ConnCatalog<'a> {
 }
 
 impl ConnCatalog<'_> {
-    pub fn conn_id(&self) -> u32 {
+    pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
     }
 
@@ -1010,7 +1012,7 @@ pub struct Table {
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Aug>>,
-    pub conn_id: Option<u32>,
+    pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1059,7 +1061,7 @@ pub struct View {
     pub create_sql: String,
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
-    pub conn_id: Option<u32>,
+    pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1068,7 +1070,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<MirScalarExpr>,
-    pub conn_id: Option<u32>,
+    pub conn_id: Option<ConnectionId>,
     pub depends_on: Vec<GlobalId>,
     pub compute_instance: ComputeInstanceId,
 }
@@ -1192,7 +1194,7 @@ impl CatalogItem {
 
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
-    pub fn conn_id(&self) -> Option<u32> {
+    pub fn conn_id(&self) -> Option<ConnectionId> {
         match self {
             CatalogItem::View(view) => view.conn_id,
             CatalogItem::Index(index) => index.conn_id,
@@ -1381,7 +1383,7 @@ impl CatalogEntry {
 
     /// Returns the connection ID that this item belongs to, if this item is
     /// temporary.
-    pub fn conn_id(&self) -> Option<u32> {
+    pub fn conn_id(&self) -> Option<ConnectionId> {
         self.item.conn_id()
     }
 }
@@ -2105,7 +2107,7 @@ impl<S: Append> Catalog<S> {
         current_database: Option<&DatabaseId>,
         database_name: Option<&str>,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema(current_database, database_name, schema_name, conn_id)
@@ -2115,7 +2117,7 @@ impl<S: Append> Catalog<S> {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&Schema, SqlCatalogError> {
         self.state
             .resolve_schema_in_database(database_spec, schema_name, conn_id)
@@ -2127,7 +2129,7 @@ impl<S: Append> Catalog<S> {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
             .resolve_entry(current_database, search_path, name, conn_id)
@@ -2149,7 +2151,7 @@ impl<S: Append> Catalog<S> {
         current_database: Option<&DatabaseId>,
         search_path: &Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
         name: &PartialObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         self.state
             .resolve_function(current_database, search_path, name, conn_id)
@@ -2169,7 +2171,7 @@ impl<S: Append> Catalog<S> {
     pub fn resolve_full_name(
         &self,
         name: &QualifiedObjectName,
-        conn_id: Option<u32>,
+        conn_id: Option<ConnectionId>,
     ) -> FullObjectName {
         self.state.resolve_full_name(name, conn_id)
     }
@@ -2178,12 +2180,12 @@ impl<S: Append> Catalog<S> {
     pub fn try_get_entry_in_schema(
         &self,
         name: &QualifiedObjectName,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> Option<&CatalogEntry> {
         self.state.try_get_entry_in_schema(name, conn_id)
     }
 
-    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: u32) -> bool {
+    pub fn item_exists(&self, name: &QualifiedObjectName, conn_id: ConnectionId) -> bool {
         self.state.item_exists(name, conn_id)
     }
 
@@ -2199,7 +2201,7 @@ impl<S: Append> Catalog<S> {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-        conn_id: u32,
+        conn_id: ConnectionId,
     ) -> &Schema {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
@@ -2222,7 +2224,7 @@ impl<S: Append> Catalog<S> {
 
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
-    pub async fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
+    pub async fn create_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
         let oid = self.allocate_oid().await?;
         self.state.temporary_schemas.insert(
             conn_id,
@@ -2240,13 +2242,13 @@ impl<S: Append> Catalog<S> {
         Ok(())
     }
 
-    fn item_exists_in_temp_schemas(&self, conn_id: u32, item_name: &str) -> bool {
+    fn item_exists_in_temp_schemas(&self, conn_id: ConnectionId, item_name: &str) -> bool {
         self.state.temporary_schemas[&conn_id]
             .items
             .contains_key(item_name)
     }
 
-    pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
+    pub fn drop_temp_item_ops(&mut self, conn_id: ConnectionId) -> Vec<Op> {
         let ids: Vec<GlobalId> = self.state.temporary_schemas[&conn_id]
             .items
             .values()
@@ -2255,7 +2257,7 @@ impl<S: Append> Catalog<S> {
         self.drop_items_ops(&ids)
     }
 
-    pub fn drop_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
+    pub fn drop_temporary_schema(&mut self, conn_id: ConnectionId) -> Result<(), Error> {
         if !self.state.temporary_schemas[&conn_id].items.is_empty() {
             return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
         }
@@ -2335,7 +2337,7 @@ impl<S: Append> Catalog<S> {
     fn temporary_ids(
         &mut self,
         ops: &[Op],
-        temporary_drops: HashSet<(u32, String)>,
+        temporary_drops: HashSet<(ConnectionId, String)>,
     ) -> Result<Vec<GlobalId>, Error> {
         let mut creating = HashSet::with_capacity(ops.len());
         let mut temporary_ids = Vec::with_capacity(ops.len());
