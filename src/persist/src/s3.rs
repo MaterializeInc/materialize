@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! An S3 implementation of [BlobMulti] storage.
+//! An S3 implementation of [Blob] storage.
 
 use std::cmp;
 use std::ops::Range;
@@ -32,9 +32,9 @@ use uuid::Uuid;
 use mz_ore::cast::CastFrom;
 
 use crate::error::Error;
-use crate::location::{Atomicity, BlobMulti, ExternalError};
+use crate::location::{Atomicity, Blob, ExternalError};
 
-/// Configuration for opening an [S3BlobMulti].
+/// Configuration for opening an [S3Blob].
 #[derive(Clone, Debug)]
 pub struct S3BlobConfig {
     client: S3Client,
@@ -137,9 +137,9 @@ impl S3BlobConfig {
     }
 }
 
-/// Implementation of [BlobMulti] backed by S3.
+/// Implementation of [Blob] backed by S3.
 #[derive(Debug)]
-pub struct S3BlobMulti {
+pub struct S3Blob {
     client: S3Client,
     bucket: String,
     prefix: String,
@@ -150,10 +150,10 @@ pub struct S3BlobMulti {
     multipart_config: MultipartConfig,
 }
 
-impl S3BlobMulti {
+impl S3Blob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: S3BlobConfig) -> Result<Self, ExternalError> {
-        let ret = S3BlobMulti {
+        let ret = S3Blob {
             client: config.client,
             bucket: config.bucket,
             prefix: config.prefix,
@@ -174,7 +174,7 @@ impl S3BlobMulti {
 }
 
 #[async_trait]
-impl BlobMulti for S3BlobMulti {
+impl Blob for S3Blob {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
@@ -469,7 +469,7 @@ impl BlobMulti for S3BlobMulti {
     }
 }
 
-impl S3BlobMulti {
+impl S3Blob {
     async fn set_single_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
@@ -772,13 +772,13 @@ fn openssl_sys_hack() {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::blob_multi_impl_test;
+    use crate::location::tests::blob_impl_test;
     use tracing::info;
 
     use super::*;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn s3_blob_multi() -> Result<(), ExternalError> {
+    async fn s3_blob() -> Result<(), ExternalError> {
         mz_ore::test::init_logging();
         let config = match S3BlobConfig::new_for_test().await? {
             Some(client) => client,
@@ -792,16 +792,16 @@ mod tests {
         };
         let config_multipart = config.clone_with_new_uuid_prefix();
 
-        blob_multi_impl_test(move |path| {
+        blob_impl_test(move |path| {
             let path = path.to_owned();
             let config = config.clone();
             async move {
                 let config = S3BlobConfig {
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
-                    prefix: format!("{}/s3_blob_multi_impl_test/{}", config.prefix, path),
+                    prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),
                 };
-                let mut blob = S3BlobMulti::open(config).await?;
+                let mut blob = S3Blob::open(config).await?;
                 blob.max_keys = 2;
                 Ok(blob)
             }
@@ -812,7 +812,7 @@ mod tests {
         // to be at least 5MB, which we don't want to do from a test, so this
         // uses the multipart code path but only writes a single part.
         {
-            let blob = S3BlobMulti::open(config_multipart).await?;
+            let blob = S3Blob::open(config_multipart).await?;
             blob.set_multi_part("multipart", "foobar".into()).await?;
             let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
             assert_eq!(

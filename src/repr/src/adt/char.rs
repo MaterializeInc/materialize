@@ -174,7 +174,7 @@ pub fn format_str_pad(s: &str, length: Option<CharLength>) -> String {
 }
 
 impl RustType<ProtoCharLength> for CharLength {
-    fn into_proto(self: &Self) -> ProtoCharLength {
+    fn into_proto(&self) -> ProtoCharLength {
         ProtoCharLength { value: self.0 }
     }
 

@@ -57,6 +57,20 @@ impl BuildInfo {
             .parse()
             .expect("build version is not valid semver")
     }
+
+    /// Returns the version as an integer along the lines of Pg's server_version_num
+    #[cfg(feature = "semver")]
+    pub fn version_num(&self) -> i32 {
+        let semver: semver::Version = self
+            .version
+            .parse()
+            .expect("build version is not a valid semver");
+        let ver_string = format!(
+            "{:0>2}{:0>3}{:0>2}",
+            semver.major, semver.minor, semver.patch
+        );
+        return ver_string.parse::<i32>().unwrap();
+    }
 }
 
 /// Generates an appropriate [`BuildInfo`] instance.

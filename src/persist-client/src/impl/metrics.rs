@@ -17,7 +17,7 @@ use bytes::Bytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
-use mz_persist::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::retry::RetryStream;
 use prometheus::{CounterVec, IntCounterVec};
 
@@ -29,7 +29,7 @@ use prometheus::{CounterVec, IntCounterVec};
 pub struct Metrics {
     _vecs: MetricsVecs,
 
-    /// Metrics for [BlobMulti] usage.
+    /// Metrics for [Blob] usage.
     pub blob: BlobMetrics,
     /// Metrics for [Consensus] usage.
     pub consensus: ConsensusMetrics,
@@ -493,19 +493,19 @@ pub struct BlobMetrics {
 }
 
 #[derive(Debug)]
-pub struct MetricsBlobMulti {
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+pub struct MetricsBlob {
+    blob: Arc<dyn Blob + Send + Sync>,
     metrics: Arc<Metrics>,
 }
 
-impl MetricsBlobMulti {
-    pub fn new(blob: Arc<dyn BlobMulti + Send + Sync>, metrics: Arc<Metrics>) -> Self {
-        MetricsBlobMulti { blob, metrics }
+impl MetricsBlob {
+    pub fn new(blob: Arc<dyn Blob + Send + Sync>, metrics: Arc<Metrics>) -> Self {
+        MetricsBlob { blob, metrics }
     }
 }
 
 #[async_trait]
-impl BlobMulti for MetricsBlobMulti {
+impl Blob for MetricsBlob {
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let res = self
             .metrics

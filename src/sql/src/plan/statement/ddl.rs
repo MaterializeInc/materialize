@@ -57,13 +57,13 @@ use crate::ast::{
     AlterIndexAction, AlterIndexStatement, AlterObjectRenameStatement, AlterSecretStatement,
     AvroSchema, AvroSchemaOption, AvroSchemaOptionName, ClusterOption, ColumnOption, Compression,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnection,
-    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceFormat, CreateSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement,
-    CreateViewsSourceTarget, CreateViewsStatement, CsrConnection, CsrConnectionAvro,
-    CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy, CsvColumns, DbzMode,
-    DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
+    CreateConnectionStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateRecordedViewStatement, CreateRoleOption, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkStatement, CreateSourceConnection,
+    CreateSourceFormat, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, CreateViewsSourceTarget, CreateViewsStatement,
+    CsrConnection, CsrConnectionAvro, CsrConnectionProto, CsrSeedCompiled, CsrSeedCompiledOrLegacy,
+    CsvColumns, DbzMode, DbzTxMetadataOption, DropClusterReplicasStatement, DropClustersStatement,
     DropDatabaseStatement, DropObjectsStatement, DropRolesStatement, DropSchemaStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, IndexOption, IndexOptionName, KafkaConsistency,
     KeyConstraint, ObjectType, Op, ProtobufSchema, QualifiedReplica, Query, ReplicaDefinition,
@@ -88,11 +88,11 @@ use crate::plan::{
     plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan,
     AlterNoopPlan, AlterSecretPlan, ComputeInstanceIntrospectionConfig, CreateComputeInstancePlan,
     CreateComputeInstanceReplicaPlan, CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
+    CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan,
     DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, ReplicaConfig, Secret, Sink, Source, Table,
-    Type, View,
+    DropRolesPlan, DropSchemaPlan, Index, Params, Plan, RecordedView, ReplicaConfig, Secret, Sink,
+    Source, Table, Type, View,
 };
 
 pub fn describe_create_database(
@@ -309,6 +309,7 @@ pub fn plan_create_source(
         format,
         key_constraint,
         include_metadata,
+        remote,
     } = &stmt;
 
     let envelope = envelope.clone().unwrap_or(Envelope::None);
@@ -870,6 +871,13 @@ pub fn plan_create_source(
         }
     }
 
+    let remote = if let Some(remote) = &remote {
+        scx.require_unsafe_mode("CREATE SOURCE ... REMOTE ...")?;
+        Some(remote.clone())
+    } else {
+        None
+    };
+
     let if_not_exists = *if_not_exists;
     let materialized = *materialized;
     let name = scx.allocate_qualified_name(normalize::unresolved_object_name(name.clone())?)?;
@@ -892,7 +900,6 @@ pub fn plan_create_source(
             _ => Timeline::EpochMilliseconds,
         }
     };
-
     let source = Source {
         create_sql,
         connection: SourceConnection::External {
@@ -913,6 +920,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         materialized,
+        remote,
     }))
 }
 
@@ -936,6 +944,13 @@ fn typecheck_debezium_dedup(
     value_desc: &RelationDesc,
     tx_metadata: Option<DebeziumTransactionMetadata>,
 ) -> Result<DebeziumDedupProjection, anyhow::Error> {
+    let (op_idx, op_ty) = value_desc
+        .get_by_name(&"op".into())
+        .ok_or_else(|| anyhow!("'op' column missing from debezium input"))?;
+    if op_ty.scalar_type != ScalarType::String {
+        bail!("'op' column must be of type string");
+    };
+
     let (source_idx, source_ty) = value_desc
         .get_by_name(&"source".into())
         .ok_or_else(|| anyhow!("'source' column missing from debezium input"))?;
@@ -1025,39 +1040,22 @@ fn typecheck_debezium_dedup(
             change_lsn,
             event_serial_no,
         }
-    } else if let (sequence, Some(lsn)) = postgres {
+    } else if let (Some(sequence), Some(lsn)) = postgres {
         DebeziumSourceProjection::Postgres { sequence, lsn }
     } else {
         bail!("unknown type of upstream database")
     };
 
-    let (transaction_idx, transaction_ty) = value_desc
+    let (transaction_idx, _transaction_ty) = value_desc
         .get_by_name(&"transaction".into())
         .ok_or_else(|| anyhow!("'transaction' column missing from debezium input"))?;
 
-    let tx_fields = match &transaction_ty.scalar_type {
-        ScalarType::Record { fields, .. } => fields,
-        _ => bail!("'transaction' column must be of type record"),
-    };
-
-    let total_order = tx_fields
-        .iter()
-        .enumerate()
-        .find(|(_, f)| f.0.as_str() == "total_order");
-    let total_order_idx = match total_order {
-        Some((idx, (_, ty))) => match &ty.scalar_type {
-            ScalarType::Int64 => idx,
-            _ => bail!("'total_order' column must be an bigint"),
-        },
-        None => bail!("'total_order' field missing from tx record"),
-    };
-
     Ok(DebeziumDedupProjection {
+        op_idx,
         source_idx,
         snapshot_idx,
         source_projection,
         transaction_idx,
-        total_order_idx,
         tx_metadata,
     })
 }
@@ -1735,6 +1733,79 @@ pub fn plan_create_views(
     }
 }
 
+pub fn describe_create_recorded_view(
+    _: &StatementContext,
+    _: CreateRecordedViewStatement<Aug>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_recorded_view(
+    scx: &StatementContext,
+    mut stmt: CreateRecordedViewStatement<Aug>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    let compute_instance = match &stmt.in_cluster {
+        None => scx.resolve_compute_instance(None)?.id(),
+        Some(in_cluster) => in_cluster.0,
+    };
+    stmt.in_cluster = Some(ResolvedClusterName(compute_instance));
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateRecordedView(stmt.clone()))?;
+
+    let partial_name = normalize::unresolved_object_name(stmt.name)?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    let query::PlannedQuery {
+        mut expr,
+        desc,
+        finishing,
+    } = query::plan_root_query(scx, stmt.query, QueryLifetime::Static)?;
+
+    expr.bind_parameters(params)?;
+    expr.finish(finishing);
+    let expr = expr.optimize_and_lower(&scx.into())?;
+
+    let desc =
+        plan_utils::maybe_rename_columns(format!("recorded view {}", name), desc, &stmt.columns)?;
+    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
+
+    if let Some(dup) = column_names.iter().duplicates().next() {
+        bail!("column {} specified more than once", dup.as_str().quoted());
+    }
+
+    let mut replace = None;
+    let mut if_not_exists = false;
+    match stmt.if_exists {
+        IfExistsBehavior::Replace => {
+            if let Ok(item) = scx.catalog.resolve_item(&partial_name) {
+                if expr.depends_on().contains(&item.id()) {
+                    bail!(
+                        "cannot replace recorded view {0}: depended upon by new {0} definition",
+                        scx.catalog.resolve_full_name(item.name())
+                    );
+                }
+                let cascade = false;
+                replace = plan_drop_item(scx, ObjectType::RecordedView, item, cascade)?;
+            }
+        }
+        IfExistsBehavior::Skip => if_not_exists = true,
+        IfExistsBehavior::Error => (),
+    }
+
+    Ok(Plan::CreateRecordedView(CreateRecordedViewPlan {
+        name,
+        recorded_view: RecordedView {
+            create_sql,
+            expr,
+            column_names,
+            compute_instance,
+        },
+        replace,
+        if_not_exists,
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
     scx: &StatementContext,
@@ -2330,6 +2401,7 @@ pub fn plan_create_index(
     let on = scx.get_item_by_resolved_name(&on_name)?;
 
     if CatalogItemType::View != on.item_type()
+        && CatalogItemType::RecordedView != on.item_type()
         && CatalogItemType::Source != on.item_type()
         && CatalogItemType::Table != on.item_type()
     {
@@ -2932,6 +3004,7 @@ pub fn plan_drop_objects(
         ObjectType::Source
         | ObjectType::Table
         | ObjectType::View
+        | ObjectType::RecordedView
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type
@@ -3172,6 +3245,7 @@ pub fn plan_drop_item(
                     | CatalogItemType::Table
                     | CatalogItemType::Source
                     | CatalogItemType::View
+                    | CatalogItemType::RecordedView
                     | CatalogItemType::Sink
                     | CatalogItemType::Type
                     | CatalogItemType::Secret

@@ -28,7 +28,7 @@ use tracing::{debug_span, info, instrument, trace, trace_span, warn, Instrument}
 use uuid::Uuid;
 
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::BlobMulti;
+use mz_persist::location::Blob;
 use mz_persist::retry::Retry;
 use mz_persist_types::{Codec, Codec64};
 
@@ -85,7 +85,7 @@ pub struct SnapshotIter<K, V, T, D> {
     shard_id: ShardId,
     as_of: Antichain<T>,
     batches: Vec<(String, Description<T>)>,
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
     _phantom: PhantomData<(K, V, T, D)>,
 }
 
@@ -183,7 +183,7 @@ pub struct Listen<K, V, T, D> {
     as_of: Antichain<T>,
     frontier: Antichain<T>,
     machine: Machine<K, V, T, D>,
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+    blob: Arc<dyn Blob + Send + Sync>,
 }
 
 impl<K, V, T, D> Listen<K, V, T, D>
@@ -284,7 +284,7 @@ where
     pub(crate) metrics: Arc<Metrics>,
     pub(crate) reader_id: ReaderId,
     pub(crate) machine: Machine<K, V, T, D>,
-    pub(crate) blob: Arc<dyn BlobMulti + Send + Sync>,
+    pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
     pub(crate) since: Antichain<T>,
     pub(crate) explicitly_expired: bool,
@@ -565,7 +565,7 @@ where
 }
 
 async fn fetch_batch_part<K, V, T, D, TFn>(
-    blob: &(dyn BlobMulti + Send + Sync),
+    blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     key: &str,
     desc: &Description<T>,
@@ -656,7 +656,7 @@ where
 mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist::location::Consensus;
-    use mz_persist::mem::{MemBlobMulti, MemBlobMultiConfig, MemConsensus};
+    use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
     use mz_persist::unreliable::{UnreliableConsensus, UnreliableHandle};
 
     use crate::r#impl::metrics::Metrics;
@@ -677,7 +677,7 @@ mod tests {
             (("2".to_owned(), "two".to_owned()), 2, 1),
         ];
 
-        let blob = Arc::new(MemBlobMulti::open(MemBlobMultiConfig::default()));
+        let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let consensus = Arc::new(MemConsensus::default());
         let unreliable = UnreliableHandle::default();
         unreliable.totally_available();

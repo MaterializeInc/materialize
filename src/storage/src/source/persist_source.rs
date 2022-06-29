@@ -45,8 +45,8 @@ use crate::source::{SourceStatus, YIELD_INTERVAL};
 // upper frontier from all shards.
 pub fn persist_source<G>(
     scope: &G,
-    storage_metadata: CollectionMetadata,
     persist_clients: Arc<Mutex<PersistClientCache>>,
+    metadata: CollectionMetadata,
     as_of: Antichain<Timestamp>,
 ) -> (
     Stream<G, (Row, Timestamp, Diff)>,
@@ -79,12 +79,10 @@ where
         let mut read = persist_clients
             .lock()
             .await
-            .open(storage_metadata.persist_location)
+            .open(metadata.persist_location)
             .await
             .expect("could not open persist client")
-            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(
-                storage_metadata.persist_shard,
-            )
+            .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(metadata.data_shard)
             .await
             .expect("could not open persist shard");
 

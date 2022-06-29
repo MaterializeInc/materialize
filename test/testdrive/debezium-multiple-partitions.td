@@ -30,6 +30,7 @@ $ set schema={
         ]
       },
       { "name": "after", "type": ["row", "null"] },
+      { "name": "op", "type": "string" },
       {
         "name": "source",
         "type": {
@@ -66,17 +67,29 @@ $ set schema={
       },
       {
         "name": "transaction",
-        "type": {
-          "type": "record",
-          "name": "Transaction",
-          "namespace": "whatever",
-          "fields": [
-            {
-              "name": "total_order",
-              "type": ["long", "null"]
-            }
-          ]
-        }
+        "type": [
+          "null",
+          {
+            "type": "record",
+            "name": "ConnectDefault",
+            "namespace": "io.confluent.connect.avro",
+            "fields": [
+              {
+                "name": "id",
+                "type": "string"
+              },
+              {
+                "name": "total_order",
+                "type": "long"
+              },
+              {
+                "name": "data_collection_order",
+                "type": "long"
+              }
+            ]
+          }
+        ],
+        "default": null
       }
     ]
   }
@@ -91,13 +104,13 @@ $ kafka-create-topic topic=data partitions=3
 
 # Ingest the data in the reverse order but in separate partitions
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=2
-{"a":3} {"before":null,"after":{"row":{"a":3,"b":1}},"source":{"file":"binlog","pos":3,"row":0,"snapshot":{"boolean":false}},"transaction":{"total_order":null}}
+{"a":3} {"before":null,"after":{"row":{"a":3,"b":1}},"source":{"file":"binlog","pos":3,"row":0,"snapshot":{"boolean":false}}, "op": "c", "transaction": null}
 
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=1
-{"a":2} {"before":null,"after":{"row":{"a":2,"b":1}},"source":{"file":"binlog","pos":2,"row":0,"snapshot":{"boolean":false}},"transaction":{"total_order":null}}
+{"a":2} {"before":null,"after":{"row":{"a":2,"b":1}},"source":{"file":"binlog","pos":2,"row":0,"snapshot":{"boolean":false}}, "op": "c", "transaction": null}
 
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=0
-{"a":1} {"before":null,"after":{"row":{"a":1,"b":1}},"source":{"file":"binlog","pos":1,"row":0,"snapshot":{"boolean":false}},"transaction":{"total_order":null}}
+{"a":1} {"before":null,"after":{"row":{"a":1,"b":1}},"source":{"file":"binlog","pos":1,"row":0,"snapshot":{"boolean":false}}, "op": "c", "transaction": null}
 
 > SELECT a, b FROM multipartition
 a b

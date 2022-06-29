@@ -10,24 +10,11 @@
 # Test basic create and drop functionality
 
 $ set schema={
+    "name": "row",
     "type": "record",
-    "name": "envelope",
     "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "X", "type": "long"},
-              {"name": "Y", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
+      {"name": "X", "type": "long"},
+      {"name": "Y", "type": "long"}
     ]
   }
 
@@ -36,16 +23,12 @@ $ kafka-create-topic topic=data
 > CREATE SOURCE s
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
-{"before": null, "after": {"row":{"X": 1, "Y": 1}}}
-{"before": null, "after": {"row":{"X": 2, "Y": 1}}}
-{"before": null, "after": {"row":{"X": 3, "Y": 1}}}
-{"before": null, "after": {"row":{"X": 1, "Y": 2}}}
-
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
-{"before": null, "after": null}
+$ kafka-ingest format=avro topic=data schema=${schema}
+{"X": 1, "Y": 1}
+{"X": 2, "Y": 1}
+{"X": 3, "Y": 1}
+{"X": 1, "Y": 2}
 
 > CREATE MATERIALIZED VIEW v AS SELECT 42 AS a
 
@@ -99,13 +82,11 @@ $ set dummy={
 ! CREATE SOURCE v2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dummy}'
-  ENVELOPE DEBEZIUM
 contains:catalog item 'v2' already exists
 
 ! CREATE SOURCE i
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${dummy}'
-  ENVELOPE DEBEZIUM
 contains:catalog item 'i' already exists
 
 ! CREATE INDEX s ON v2(x)
@@ -167,7 +148,6 @@ contains:s is not of type VIEW
 > CREATE SOURCE i
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
 
 > CREATE INDEX v ON s(b)
 

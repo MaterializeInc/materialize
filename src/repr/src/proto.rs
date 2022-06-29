@@ -383,7 +383,7 @@ impl RustType<u64> for std::num::NonZeroUsize {
 }
 
 impl RustType<ProtoDuration> for std::time::Duration {
-    fn into_proto(self: &Self) -> ProtoDuration {
+    fn into_proto(&self) -> ProtoDuration {
         ProtoDuration {
             secs: self.as_secs(),
             nanos: self.subsec_nanos(),
@@ -415,7 +415,7 @@ impl RustType<String> for ShardId {
 /// Clients should only implement [`RustType`].
 pub trait ProtoType<Rust>: Sized {
     /// See [`RustType::from_proto`].
-    fn into_rust(self: Self) -> Result<Rust, TryFromProtoError>;
+    fn into_rust(self) -> Result<Rust, TryFromProtoError>;
 
     /// See [`RustType::into_proto`].
     fn from_rust(rust: &Rust) -> Self;
@@ -428,7 +428,7 @@ where
     R: RustType<P>,
 {
     #[inline]
-    fn into_rust(self: Self) -> Result<R, TryFromProtoError> {
+    fn into_rust(self) -> Result<R, TryFromProtoError> {
         R::from_proto(self)
     }
 

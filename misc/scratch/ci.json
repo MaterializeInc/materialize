@@ -2,7 +2,7 @@
     "name": "c5.2xlarge as used by the CI",
     "launch_script": "true",
     "instance_type": "c5.2xlarge",
-    "ami": "ami-0aeb7c931a5a61206",
+    "ami": "ami-09d56f8956ab235b3",
     "size_gb": 50,
     "tags": {}
 }

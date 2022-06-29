@@ -63,6 +63,8 @@ pub use mz_orchestrator::ServiceStatus as ComputeInstanceStatus;
 pub use crate::client::controller::compute::{ComputeController, ComputeControllerMut};
 pub use crate::client::controller::storage::{StorageController, StorageControllerState};
 
+use super::ActiveReplicationResponse;
+
 mod compute;
 pub mod storage;
 
@@ -192,7 +194,7 @@ pub struct ComputeInstanceEvent {
 
 enum UnderlyingControllerResponse<T> {
     Storage(StorageResponse<T>),
-    Compute(ComputeInstanceId, ComputeResponse<T>),
+    Compute(ComputeInstanceId, ActiveReplicationResponse<T>),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
@@ -508,7 +510,10 @@ where
                     Ok(Some(ControllerResponse::LinearizedTimestamps(res)))
                 }
             },
-            UnderlyingControllerResponse::Compute(instance, response) => {
+            UnderlyingControllerResponse::Compute(
+                instance,
+                ActiveReplicationResponse::ComputeResponse(response),
+            ) => {
                 match response {
                     ComputeResponse::FrontierUppers(updates) => {
                         self.compute_mut(instance)
@@ -551,6 +556,12 @@ where
                     }
                 }
             }
+            UnderlyingControllerResponse::Compute(
+                _instance,
+                ActiveReplicationResponse::ReplicaHeartbeat(replica_id, when),
+            ) => Ok(Some(ControllerResponse::ComputeReplicaHeartbeat(
+                replica_id, when,
+            ))),
         }
     }
 }

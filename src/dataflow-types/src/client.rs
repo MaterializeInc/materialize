@@ -22,6 +22,7 @@ use std::fmt;
 use std::pin::Pin;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::Stream;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -263,7 +264,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
 }
 
 impl RustType<ProtoCompaction> for (GlobalId, Antichain<u64>) {
-    fn into_proto(self: &Self) -> ProtoCompaction {
+    fn into_proto(&self) -> ProtoCompaction {
         ProtoCompaction {
             id: Some(self.0.into_proto()),
             frontier: Some((&self.1).into()),
@@ -358,7 +359,7 @@ impl<T> ComputeCommand<T> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<IngestionDescription<CollectionMetadata, T>>),
+    CreateSources(Vec<IngestionDescription<CollectionMetadata>>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -411,11 +412,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec(
-                any::<IngestionDescription<CollectionMetadata, mz_repr::Timestamp>>(),
-                1..4
-            )
-            .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(any::<IngestionDescription<CollectionMetadata>>(), 1..4)
+                .prop_map(StorageCommand::CreateSources),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),
@@ -652,6 +650,21 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// of a specific "linearized" read request.
     // TODO(benesch,gus): update language to avoid the term "linearizability".
     LinearizedTimestamps(LinearizedTimestampBindingFeedback<T>),
+    /// Notification that we have received a message from the given compute replica
+    /// at the given time.
+    ComputeReplicaHeartbeat(ReplicaId, DateTime<Utc>),
+}
+
+/// A response from the ActiveReplication client:
+/// either a deduplicated compute response, or a notification
+/// that we heard from a given replica and should update its recency status.
+#[derive(Debug, Clone)]
+pub enum ActiveReplicationResponse<T = mz_repr::Timestamp> {
+    /// A response from the compute layer.
+    ComputeResponse(ComputeResponse<T>),
+    /// A notification that we heard a response
+    /// from the given replica at the given time.
+    ReplicaHeartbeat(ReplicaId, DateTime<Utc>),
 }
 
 /// Responses that the compute nature of a worker/dataflow can provide back to the coordinator.

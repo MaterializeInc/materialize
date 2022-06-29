@@ -24,7 +24,6 @@ use proptest::prop_oneof;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use timely::progress::Antichain;
 use uuid::Uuid;
 
 use mz_persist_types::Codec;
@@ -47,25 +46,18 @@ include!(concat!(
 
 /// A description of a source ingestion
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct IngestionDescription<S = (), T = mz_repr::Timestamp> {
-    /// Source collections made available to this ingestion.
-    pub source_imports: BTreeMap<GlobalId, S>,
+pub struct IngestionDescription<S = ()> {
     /// The source identifier
     pub id: GlobalId,
     /// The source description
     pub desc: SourceDesc,
-    /// The initial `since` frontier
-    pub since: Antichain<T>,
+    /// Source collections made available to this ingestion.
+    pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub storage_metadata: S,
 }
 
-impl Arbitrary
-    for IngestionDescription<
-        crate::client::controller::storage::CollectionMetadata,
-        mz_repr::Timestamp,
-    >
-{
+impl Arbitrary for IngestionDescription<CollectionMetadata> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
 
@@ -74,16 +66,13 @@ impl Arbitrary
             any::<BTreeMap<GlobalId, CollectionMetadata>>(),
             any::<GlobalId>(),
             any::<SourceDesc>(),
-            // TODO(guswynn): make a helper function for generating Antichains
-            proptest::collection::vec(any::<u64>(), 1..4).prop_map(Antichain::from),
             any::<CollectionMetadata>(),
         )
             .prop_map(
-                |(source_imports, id, desc, since, storage_metadata)| IngestionDescription {
+                |(source_imports, id, desc, storage_metadata)| IngestionDescription {
                     source_imports,
                     id,
                     desc,
-                    since,
                     storage_metadata,
                 },
             )
@@ -91,13 +80,8 @@ impl Arbitrary
     }
 }
 
-impl RustType<ProtoIngestionDescription>
-    for IngestionDescription<
-        crate::client::controller::storage::CollectionMetadata,
-        mz_repr::Timestamp,
-    >
-{
-    fn into_proto(self: &Self) -> ProtoIngestionDescription {
+impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
+    fn into_proto(&self) -> ProtoIngestionDescription {
         // we have to turn a BTreeMap into a vec here
         let source_imports: Vec<_> = self
             .source_imports
@@ -113,7 +97,6 @@ impl RustType<ProtoIngestionDescription>
             source_imports,
             id: Some(self.id.into_proto()),
             desc: Some(self.desc.into_proto()),
-            since: Some((&self.since).into()),
             storage_metadata: Some(self.storage_metadata.into_proto()),
         }
     }
@@ -146,9 +129,6 @@ impl RustType<ProtoIngestionDescription>
             desc: proto
                 .desc
                 .into_rust_if_some("ProtoIngestionDescription::desc")?,
-            since: proto.since.map(Into::into).ok_or_else(|| {
-                TryFromProtoError::missing_field("ProtoIngestionDescription::since")
-            })?,
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoIngestionDescription::storage_metadata")?,
@@ -308,7 +288,7 @@ pub enum IncludedColumnSource {
 }
 
 impl RustType<ProtoIncludedColumnSource> for IncludedColumnSource {
-    fn into_proto(self: &Self) -> ProtoIncludedColumnSource {
+    fn into_proto(&self) -> ProtoIncludedColumnSource {
         use proto_included_column_source::Kind;
         ProtoIncludedColumnSource {
             kind: Some(match self {
@@ -356,7 +336,7 @@ pub enum KeyEnvelope {
 }
 
 impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
-    fn into_proto(self: &Self) -> ProtoKeyEnvelope {
+    fn into_proto(&self) -> ProtoKeyEnvelope {
         use proto_key_envelope::Kind;
         ProtoKeyEnvelope {
             kind: Some(match self {
@@ -429,7 +409,7 @@ pub enum Timeline {
 }
 
 impl RustType<ProtoTimeline> for Timeline {
-    fn into_proto(self: &Self) -> ProtoTimeline {
+    fn into_proto(&self) -> ProtoTimeline {
         use proto_timeline::Kind;
         ProtoTimeline {
             kind: Some(match self {
@@ -486,7 +466,7 @@ pub enum SourceEnvelope {
 }
 
 impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
-    fn into_proto(self: &Self) -> ProtoSourceEnvelope {
+    fn into_proto(&self) -> ProtoSourceEnvelope {
         use proto_source_envelope::Kind;
         ProtoSourceEnvelope {
             kind: Some(match self {
@@ -563,7 +543,7 @@ pub struct UpsertEnvelope {
 }
 
 impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
-    fn into_proto(self: &Self) -> ProtoUpsertEnvelope {
+    fn into_proto(&self) -> ProtoUpsertEnvelope {
         ProtoUpsertEnvelope {
             style: Some(self.style.into_proto()),
             key_indices: self.key_indices.into_proto(),
@@ -590,7 +570,7 @@ pub enum UpsertStyle {
 }
 
 impl RustType<ProtoUpsertStyle> for UpsertStyle {
-    fn into_proto(self: &Self) -> ProtoUpsertStyle {
+    fn into_proto(&self) -> ProtoUpsertStyle {
         use proto_upsert_style::{Kind, ProtoDebezium};
         ProtoUpsertStyle {
             kind: Some(match self {
@@ -626,7 +606,7 @@ pub struct DebeziumEnvelope {
 }
 
 impl RustType<ProtoDebeziumEnvelope> for DebeziumEnvelope {
-    fn into_proto(self: &Self) -> ProtoDebeziumEnvelope {
+    fn into_proto(&self) -> ProtoDebeziumEnvelope {
         ProtoDebeziumEnvelope {
             before_idx: self.before_idx.into_proto(),
             after_idx: self.after_idx.into_proto(),
@@ -658,7 +638,7 @@ pub struct DebeziumTransactionMetadata {
 }
 
 impl RustType<ProtoDebeziumTransactionMetadata> for DebeziumTransactionMetadata {
-    fn into_proto(self: &Self) -> ProtoDebeziumTransactionMetadata {
+    fn into_proto(&self) -> ProtoDebeziumTransactionMetadata {
         ProtoDebeziumTransactionMetadata {
             tx_metadata_global_id: Some(self.tx_metadata_global_id.into_proto()),
             tx_status_idx: self.tx_status_idx.into_proto(),
@@ -773,7 +753,7 @@ impl Arbitrary for DebeziumMode {
 }
 
 impl RustType<ProtoDebeziumMode> for DebeziumMode {
-    fn into_proto(self: &Self) -> ProtoDebeziumMode {
+    fn into_proto(&self) -> ProtoDebeziumMode {
         use proto_debezium_mode::{Kind, ProtoFullInRange};
         ProtoDebeziumMode {
             kind: Some(match self {
@@ -835,6 +815,8 @@ impl DebeziumMode {
 
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DebeziumDedupProjection {
+    /// The column index for the `op` field.
+    pub op_idx: usize,
     /// The column index containing the debezium source metadata
     pub source_idx: usize,
     /// The record index of the `source.snapshot` field
@@ -843,32 +825,31 @@ pub struct DebeziumDedupProjection {
     pub source_projection: DebeziumSourceProjection,
     /// The column index containing the debezium transaction metadata
     pub transaction_idx: usize,
-    /// The record index of the `transaction.total_order` field
-    pub total_order_idx: usize,
+    /// Details about the transaction metadata.
     pub tx_metadata: Option<DebeziumTransactionMetadata>,
 }
 
 impl RustType<ProtoDebeziumDedupProjection> for DebeziumDedupProjection {
-    fn into_proto(self: &Self) -> ProtoDebeziumDedupProjection {
+    fn into_proto(&self) -> ProtoDebeziumDedupProjection {
         ProtoDebeziumDedupProjection {
+            op_idx: self.op_idx.into_proto(),
             source_idx: self.source_idx.into_proto(),
             snapshot_idx: self.snapshot_idx.into_proto(),
             source_projection: Some(self.source_projection.into_proto()),
             transaction_idx: self.transaction_idx.into_proto(),
-            total_order_idx: self.total_order_idx.into_proto(),
             tx_metadata: self.tx_metadata.into_proto(),
         }
     }
 
     fn from_proto(proto: ProtoDebeziumDedupProjection) -> Result<Self, TryFromProtoError> {
         Ok(DebeziumDedupProjection {
+            op_idx: proto.op_idx.into_rust()?,
             source_idx: proto.source_idx.into_rust()?,
             snapshot_idx: proto.snapshot_idx.into_rust()?,
             source_projection: proto
                 .source_projection
                 .into_rust_if_some("ProtoDebeziumDedupProjection::source_projection")?,
             transaction_idx: proto.transaction_idx.into_rust()?,
-            total_order_idx: proto.total_order_idx.into_rust()?,
             tx_metadata: proto.tx_metadata.into_rust()?,
         })
     }
@@ -886,7 +867,7 @@ pub enum DebeziumSourceProjection {
         row: usize,
     },
     Postgres {
-        sequence: Option<usize>,
+        sequence: usize,
         lsn: usize,
     },
     SqlServer {
@@ -896,7 +877,7 @@ pub enum DebeziumSourceProjection {
 }
 
 impl RustType<ProtoDebeziumSourceProjection> for DebeziumSourceProjection {
-    fn into_proto(self: &Self) -> ProtoDebeziumSourceProjection {
+    fn into_proto(&self) -> ProtoDebeziumSourceProjection {
         use proto_debezium_source_projection::{Kind, ProtoMySql, ProtoPostgres, ProtoSqlServer};
         ProtoDebeziumSourceProjection {
             kind: Some(match self {
@@ -1299,7 +1280,7 @@ pub struct SourceDesc {
 }
 
 impl RustType<ProtoSourceDesc> for SourceDesc {
-    fn into_proto(self: &Self) -> ProtoSourceDesc {
+    fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
             desc: Some(self.desc.into_proto()),
@@ -1368,7 +1349,7 @@ impl Arbitrary for SourceConnection {
 }
 
 impl RustType<ProtoSourceConnection> for SourceConnection {
-    fn into_proto(self: &Self) -> ProtoSourceConnection {
+    fn into_proto(&self) -> ProtoSourceConnection {
         use proto_source_connection::{Kind, ProtoExternal, ProtoLocal};
         ProtoSourceConnection {
             kind: Some(match self {

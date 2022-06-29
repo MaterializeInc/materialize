@@ -159,6 +159,8 @@ As a _superuser_:
 
 Debezium is deployed as a set of Kafka Connect-compatible connectors, so you first need to define a Postgres connector configuration and then start the connector by adding it to Kafka Connect.
 
+{{< debezium-warning >}}
+
 {{< warning >}}
 If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html), you **must** override the default value of `After-state only` to `false`.
 {{</ warning >}}

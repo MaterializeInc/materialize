@@ -8,15 +8,22 @@
 # by the Apache License, Version 2.0.
 
 #
-# ARRAY columns are not supported
+# ARRAY columns are supported
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CREATE TABLE array_type (f1 integer[3][3]);
-INSERT INTO array_type VALUES ('{{1,2,3},{4,5,6},{7,8,9}}');
+CREATE TABLE array_type (f1 text[]);
+INSERT INTO array_type VALUES ('{foo, null}');
 
-! CREATE MATERIALIZED SOURCE array_type
+$ schema-registry-wait-schema schema=postgres.public.array_type-value
+
+> CREATE MATERIALIZED SOURCE array_type
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.array_type'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE DEBEZIUM;
-contains:Unsupported type in schema
+  ENVELOPE DEBEZIUM
+
+# Cast to `text` to work around TD's lack of support for PG arrays
+> SELECT f1::text FROM array_type
+f1
+---
+{foo,NULL}

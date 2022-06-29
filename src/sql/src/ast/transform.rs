@@ -12,14 +12,13 @@
 use std::collections::{HashMap, HashSet};
 
 use mz_ore::str::StrExt;
-use mz_sql_parser::ast::{CreateSecretStatement, RawObjectName};
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Expr, Ident, Query, Raw, Statement,
-    UnresolvedObjectName, ViewDefinition,
+    AstInfo, CreateIndexStatement, CreateRecordedViewStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateViewStatement, Expr,
+    Ident, Query, Raw, RawObjectName, Statement, UnresolvedObjectName, ViewDefinition,
 };
 use crate::names::FullObjectName;
 
@@ -38,6 +37,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
             definition: ViewDefinition { name, .. },
             ..
         })
+        | Statement::CreateRecordedView(CreateRecordedViewStatement { name, .. })
         | Statement::CreateTable(CreateTableStatement { name, .. }) => {
             // The last name in an ObjectName is the item name. The item name
             // does not have a fixed index.
@@ -92,7 +92,8 @@ pub fn create_stmt_rename_refs(
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
             ..
-        }) => {
+        })
+        | Statement::CreateRecordedView(CreateRecordedViewStatement { query, .. }) => {
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_) | Statement::CreateTable(_) | Statement::CreateSecret(_) => {}

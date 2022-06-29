@@ -11,8 +11,6 @@ Materialize can read data from Azure DB for PostgreSQL via the direct [Postgres 
 
 1. The Materialize instance will need access to connect to the upstream database. This is usually controlled by IP address. In your Azure portal, go to the Azure Database for PostgreSQL instance and under the "Connections security" section add your Materialize instance's IP address to the allowed IP addresses list and click on the "Save" button.
 
-    If you are using Materialize Cloud, you can follow [these steps](/cloud/security/#static-ip-addresses) to get the static IP address of your instance.
-
 1. In the Azure portal or using the Azure CLI, [enable logical replication](https://docs.microsoft.com/en-us/azure/postgresql/concepts-logical#set-up-your-server) for the PostgreSQL instance.
 
 1. Create a [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) with the tables you want to replicate:

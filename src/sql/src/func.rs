@@ -2850,6 +2850,9 @@ pub static MZ_CATALOG_BUILTINS: Lazy<HashMap<&'static str, Func>> = Lazy::new(||
         "mz_version" => Scalar {
             params!() => UnmaterializableFunc::MzVersion, oid::FUNC_MZ_VERSION_OID;
         },
+        "mz_version_num" => Scalar {
+            params!() => UnmaterializableFunc::MzVersionNum, oid::FUNC_MZ_VERSION_NUM_OID;
+        },
         "regexp_extract" => Table {
             params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
                 let regex = match regex.into_literal_string() {

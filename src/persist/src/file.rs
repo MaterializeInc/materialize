@@ -22,9 +22,9 @@ use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::Error;
-use crate::location::{Atomicity, BlobMulti, ExternalError};
+use crate::location::{Atomicity, Blob, ExternalError};
 
-/// Configuration for opening a [FileBlobMulti].
+/// Configuration for opening a [FileBlob].
 #[derive(Debug, Clone)]
 pub struct FileBlobConfig {
     base_dir: PathBuf,
@@ -38,18 +38,18 @@ impl<P: AsRef<Path>> From<P> for FileBlobConfig {
     }
 }
 
-/// Implementation of [BlobMulti] backed by files.
+/// Implementation of [Blob] backed by files.
 #[derive(Debug)]
-pub struct FileBlobMulti {
+pub struct FileBlob {
     base_dir: PathBuf,
 }
 
-impl FileBlobMulti {
+impl FileBlob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: FileBlobConfig) -> Result<Self, ExternalError> {
         let base_dir = config.base_dir;
         fs::create_dir_all(&base_dir).await.map_err(Error::from)?;
-        Ok(FileBlobMulti { base_dir })
+        Ok(FileBlob { base_dir })
     }
 
     fn blob_path(&self, key: &str) -> PathBuf {
@@ -58,7 +58,7 @@ impl FileBlobMulti {
 }
 
 #[async_trait]
-impl BlobMulti for FileBlobMulti {
+impl Blob for FileBlob {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let file_path = self.blob_path(key);
         let mut file = match File::open(file_path).await {
@@ -195,16 +195,16 @@ impl BlobMulti for FileBlobMulti {
 
 #[cfg(test)]
 mod tests {
-    use crate::location::tests::blob_multi_impl_test;
+    use crate::location::tests::blob_impl_test;
 
     use super::*;
 
     #[tokio::test]
-    async fn file_blob_multi() -> Result<(), ExternalError> {
+    async fn file_blob() -> Result<(), ExternalError> {
         let temp_dir = tempfile::tempdir().map_err(Error::from)?;
-        blob_multi_impl_test(move |path| {
+        blob_impl_test(move |path| {
             let instance_dir = temp_dir.path().join(path);
-            FileBlobMulti::open(instance_dir.into())
+            FileBlob::open(instance_dir.into())
         })
         .await
     }

@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use mz_ore::task::RuntimeExt;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
-use mz_persist::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
 use mz_persist::workload::{self, DataGenerator};
 use mz_persist_client::ShardId;
 use mz_persist_types::Codec;
@@ -163,7 +163,7 @@ pub fn bench_blob_get(
     });
 }
 
-async fn bench_blob_get_one_iter(blob: &dyn BlobMulti, key: &str) -> Result<(), ExternalError> {
+async fn bench_blob_get_one_iter(blob: &dyn Blob, key: &str) -> Result<(), ExternalError> {
     let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
     let value = blob.get(deadline, &key).await?;
     assert!(value.is_some());
@@ -192,10 +192,7 @@ pub fn bench_blob_set(
     });
 }
 
-async fn bench_blob_set_one_iter(
-    blob: &dyn BlobMulti,
-    payload: &Bytes,
-) -> Result<(), ExternalError> {
+async fn bench_blob_set_one_iter(blob: &dyn Blob, payload: &Bytes) -> Result<(), ExternalError> {
     let deadline = Instant::now() + Duration::from_secs(1_000_000_000);
     let key = ShardId::new().to_string();
     blob.set(

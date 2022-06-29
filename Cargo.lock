@@ -4012,6 +4012,7 @@ dependencies = [
  "futures-executor",
  "futures-util",
  "globset",
+ "itertools",
  "mz-avro",
  "mz-ccsr",
  "mz-dataflow-types",

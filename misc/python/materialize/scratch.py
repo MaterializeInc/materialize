@@ -33,8 +33,7 @@ from pydantic import BaseModel
 from materialize import ROOT, git, spawn, ui, util
 
 # Sane defaults for internal Materialize use in the scratch account
-DEFAULT_SUBNET_ID = "subnet-00bdfbd2d97eddb86"
-DEFAULT_SECURITY_GROUP_ID = "sg-06f780c8e23c0d944"
+DEFAULT_SECURITY_GROUP_NAME = "scratch-security-group"
 DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
 SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
@@ -122,9 +121,8 @@ def launch(
     ami_user: str,
     tags: Dict[str, str],
     display_name: Optional[str] = None,
-    subnet_id: Optional[str] = None,
     size_gb: int,
-    security_group_id: str,
+    security_group_name: str,
     instance_profile: Optional[str],
     nonce: str,
     delete_after: datetime.datetime,
@@ -138,13 +136,43 @@ def launch(
     tags["git_ref"] = git.describe()
     tags["ami-user"] = ami_user
 
+    ec2 = boto3.client("ec2")
+    groups = ec2.describe_security_groups()
+    security_group_id = None
+    for group in groups["SecurityGroups"]:
+        if group["GroupName"] == security_group_name:
+            security_group_id = group["GroupId"]
+            break
+
+    if security_group_id is None:
+        vpcs = ec2.describe_vpcs()
+        vpc_id = None
+        for vpc in vpcs["Vpcs"]:
+            if vpc["IsDefault"] == True:
+                vpc_id = vpc["VpcId"]
+                break
+        if vpc_id is None:
+            default_vpc = ec2.create_default_vpc()
+            vpc_id = default_vpc["Vpc"]["VpcId"]
+        securitygroup = ec2.create_security_group(
+            GroupName=security_group_name,
+            Description="Allows all.",
+            VpcId=vpc_id,
+        )
+        security_group_id = securitygroup["GroupId"]
+        ec2.authorize_security_group_ingress(
+            GroupId=security_group_id,
+            CidrIp="0.0.0.0/0",
+            IpProtocol="tcp",
+            FromPort=1,
+            ToPort=28000,
+        )
+
     network_interface: InstanceNetworkInterfaceSpecificationTypeDef = {
         "AssociatePublicIpAddress": True,
         "DeviceIndex": 0,
         "Groups": [security_group_id],
     }
-    if subnet_id:
-        network_interface["SubnetId"] = subnet_id
 
     say(f"launching instance {display_name or '(unnamed)'}")
     with open(ROOT / "misc" / "scratch" / "provision.bash") as f:
@@ -273,9 +301,8 @@ def launch_cluster(
     descs: List[MachineDesc],
     *,
     nonce: Optional[str] = None,
-    subnet_id: str = DEFAULT_SUBNET_ID,
     key_name: Optional[str] = None,
-    security_group_id: str = DEFAULT_SECURITY_GROUP_ID,
+    security_group_name: str = DEFAULT_SECURITY_GROUP_NAME,
     instance_profile: Optional[str] = DEFAULT_INSTANCE_PROFILE_NAME,
     extra_tags: Dict[str, str] = {},
     delete_after: datetime.datetime,
@@ -296,8 +323,7 @@ def launch_cluster(
             tags={**d.tags, **extra_tags},
             display_name=f"{nonce}-{d.name}",
             size_gb=d.size_gb,
-            subnet_id=subnet_id,
-            security_group_id=security_group_id,
+            security_group_name=security_group_name,
             instance_profile=instance_profile,
             nonce=nonce,
             delete_after=delete_after,

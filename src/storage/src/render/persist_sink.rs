@@ -31,14 +31,14 @@ use crate::storage_state::StorageState;
 pub fn render<G>(
     scope: &mut G,
     src_id: GlobalId,
-    storage_metadata: CollectionMetadata,
+    metadata: CollectionMetadata,
     source_data: Collection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &mut StorageState,
     token: Rc<dyn Any>,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let operator_name = format!("persist_sink({})", storage_metadata.persist_shard);
+    let operator_name = format!("persist_sink({})", metadata.data_shard);
     let mut persist_op = OperatorBuilder::new(operator_name, scope.clone());
 
     // We want exactly one worker (in the cluster) to send all the data to persist. It's fine
@@ -54,7 +54,7 @@ pub fn render<G>(
 
     let mut input = persist_op.new_input(&source_data.inner, Exchange::new(move |_| hashed_id));
 
-    let shared_frontier = Rc::clone(&storage_state.source_uppers[&src_id]);
+    let current_upper = Rc::clone(&storage_state.source_uppers[&src_id]);
 
     let weak_token = Rc::downgrade(&token);
 
@@ -69,19 +69,25 @@ pub fn render<G>(
             let mut write = persist_clients
                 .lock()
                 .await
-                .open(storage_metadata.persist_location)
+                .open(metadata.persist_location)
                 .await
                 .expect("could not open persist client")
-                .open_writer::<SourceData, (), Timestamp, Diff>(storage_metadata.persist_shard)
+                .open_writer::<SourceData, (), Timestamp, Diff>(metadata.data_shard)
                 .await
                 .expect("could not open persist shard");
 
+            // Initialize this sink's `upper` to the `upper` of the persist shard we are writing
+            // to. Data from the source not beyond this time will be dropped, as it has already
+            // been persisted.
+            // In the future, sources will avoid passing through data not beyond this upper
+            *current_upper.borrow_mut() = write.upper().clone();
+
             while scheduler.notified().await {
-                let input_frontier = frontiers.borrow()[0].clone();
+                let input_upper = frontiers.borrow()[0].clone();
 
                 if !active_write_worker
                     || weak_token.upgrade().is_none()
-                    || shared_frontier.borrow().is_empty()
+                    || current_upper.borrow().is_empty()
                 {
                     return;
                 }
@@ -93,17 +99,19 @@ pub fn render<G>(
                     // (100 was chosen arbitrarily), and avoid having to make a batch
                     // per-timestamp.
                     for (row, ts, diff) in buffer.drain(..) {
-                        stashed_batches
-                            .entry(ts)
-                            .or_insert_with(|| {
-                                // TODO: the lower has to be the min because we don't know
-                                // what the minimum ts of data we will see is. In the future,
-                                // this lower should be declared in `finish` instead.
-                                write.builder(100, Antichain::from_elem(Timestamp::minimum()))
-                            })
-                            .add(&SourceData(row), &(), &ts, &diff)
-                            .await
-                            .expect("invalid usage");
+                        if write.upper().less_equal(&ts) {
+                            stashed_batches
+                                .entry(ts)
+                                .or_insert_with(|| {
+                                    // TODO: the lower has to be the min because we don't know
+                                    // what the minimum ts of data we will see is. In the future,
+                                    // this lower should be declared in `finish` instead.
+                                    write.builder(100, Antichain::from_elem(Timestamp::minimum()))
+                                })
+                                .add(&SourceData(row), &(), &ts, &diff)
+                                .await
+                                .expect("invalid usage");
+                        }
                     }
                 }
 
@@ -111,22 +119,22 @@ pub fn render<G>(
                 // TODO(guswynn/petrosagg): remove this additional allocation
                 let mut finalized_timestamps: Vec<_> = stashed_batches
                     .keys()
-                    .filter(|ts| !input_frontier.less_equal(ts))
+                    .filter(|ts| !input_upper.less_equal(ts))
                     .copied()
                     .collect();
                 finalized_timestamps.sort_unstable();
 
                 // If the frontier has advanced, we need to finalize data being written to persist
-                if PartialOrder::less_than(&*shared_frontier.borrow(), &input_frontier) {
+                if PartialOrder::less_than(&*current_upper.borrow(), &input_upper) {
                     // We always append, even in case we don't have any updates, because appending
                     // also advances the frontier.
                     if finalized_timestamps.is_empty() {
-                        let expected_upper = shared_frontier.borrow().clone();
+                        let expected_upper = current_upper.borrow().clone();
                         write
                             .compare_and_append(
                                 Vec::<((SourceData, ()), Timestamp, Diff)>::new(),
                                 expected_upper,
-                                input_frontier.clone(),
+                                input_upper.clone(),
                             )
                             .await
                             .expect("cannot append updates")
@@ -134,13 +142,13 @@ pub fn render<G>(
                             .expect("invalid/outdated upper");
 
                         // advance our stashed frontier
-                        *shared_frontier.borrow_mut() = input_frontier.clone();
+                        *current_upper.borrow_mut() = input_upper.clone();
                         // wait for more data or a new input frontier
                         continue;
                     }
 
-                    // `shared_frontier` tracks the last known upper
-                    let mut expected_upper = shared_frontier.borrow().clone();
+                    // `current_upper` tracks the last known upper
+                    let mut expected_upper = current_upper.borrow().clone();
                     let finalized_batch_count = finalized_timestamps.len();
 
                     for (i, ts) in finalized_timestamps.into_iter().enumerate() {
@@ -149,7 +157,7 @@ pub fn render<G>(
                         // Set the upper to the upper of the batch (which is 1 past the ts it
                         // manages) OR the new frontier if we are appending the final batch
                         let new_upper = if i == finalized_batch_count - 1 {
-                            input_frontier.clone()
+                            input_upper.clone()
                         } else {
                             Antichain::from_elem(ts + 1)
                         };
@@ -172,7 +180,7 @@ pub fn render<G>(
                         expected_upper = new_upper;
                     }
                     // advance our stashed frontier
-                    *shared_frontier.borrow_mut() = input_frontier.clone();
+                    *current_upper.borrow_mut() = input_upper.clone();
                 } else {
                     // We cannot have updates without the frontier advancing
                     assert!(finalized_timestamps.is_empty());

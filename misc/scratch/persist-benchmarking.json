@@ -2,7 +2,7 @@
     "name": "persist benchmarking",
     "launch_script": "true",
     "instance_type": "m6i.8xlarge",
-    "ami": "ami-0aeb7c931a5a61206",
+    "ami": "ami-09d56f8956ab235b3",
     "size_gb": 200,
     "tags": {}
 }

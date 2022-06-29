@@ -7,11 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
-# Make sure that the initial snapshot is complete and that the initial data has
-# arrived at Materialize. This ensures that any further disruptions will happen
-# during the replication and not during the initial snapshot
-#
+$ kafka-create-topic topic=remoted
 
-> SELECT COUNT(*) FROM t1;
-1000000
+$ kafka-ingest format=bytes topic=remoted
+whatever
+
+> CREATE MATERIALIZED SOURCE remoted
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-remoted-${testdrive.seed}'
+  FORMAT TEXT
+  REMOTE 'storaged:2100'
+
+> SELECT * from remoted
+text     mz_offset
+------------------
+whatever 1

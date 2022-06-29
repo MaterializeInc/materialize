@@ -85,6 +85,7 @@ pub enum Plan {
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
     CreateViews(CreateViewsPlan),
+    CreateRecordedView(CreateRecordedViewPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
     DiscardTemp,
@@ -188,6 +189,7 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
+    pub remote: Option<String>,
 }
 
 #[derive(Debug)]
@@ -235,6 +237,15 @@ pub struct CreateViewPlan {
 pub struct CreateViewsPlan {
     pub views: Vec<(QualifiedObjectName, View)>,
     pub materialize: bool,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateRecordedViewPlan {
+    pub name: QualifiedObjectName,
+    pub recorded_view: RecordedView,
+    /// The ID of the object that this view is replacing, if any.
+    pub replace: Option<GlobalId>,
     pub if_not_exists: bool,
 }
 
@@ -339,7 +350,19 @@ pub struct CopyFromPlan {
 }
 
 #[derive(Debug)]
-pub struct ExplainPlan {
+pub enum ExplainPlan {
+    New(ExplainPlanNew),
+    Old(ExplainPlanOld),
+}
+
+#[derive(Debug)]
+pub struct ExplainPlanNew {
+    pub raw_plan: HirRelationExpr,
+    pub row_set_finishing: Option<RowSetFinishing>,
+}
+
+#[derive(Debug)]
+pub struct ExplainPlanOld {
     pub raw_plan: HirRelationExpr,
     pub row_set_finishing: Option<RowSetFinishing>,
     pub stage: ExplainStage,
@@ -483,6 +506,14 @@ pub struct View {
     pub expr: mz_expr::MirRelationExpr,
     pub column_names: Vec<ColumnName>,
     pub temporary: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecordedView {
+    pub create_sql: String,
+    pub expr: mz_expr::MirRelationExpr,
+    pub column_names: Vec<ColumnName>,
+    pub compute_instance: ComputeInstanceId,
 }
 
 #[derive(Clone, Debug)]

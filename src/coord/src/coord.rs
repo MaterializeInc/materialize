@@ -67,13 +67,16 @@
 //!
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+<<<<<<< HEAD
 use std::fmt::Formatter;
+=======
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, thread};
 
 use anyhow::{anyhow, Context};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, DurationRound, Utc};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
@@ -85,11 +88,12 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, OwnedMutexGuard};
 use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
+use mz_dataflow_types::client::controller::storage::CreateSourceRequest;
 use mz_dataflow_types::client::controller::{
     ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent, ReadPolicy,
 };
@@ -136,13 +140,14 @@ use mz_sql::names::{
 use mz_sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, AlterSecretPlan,
     CreateComputeInstancePlan, CreateComputeInstanceReplicaPlan, CreateConnectionPlan,
-    CreateDatabasePlan, CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
-    CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan, DropDatabasePlan,
-    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan, FetchPlan,
-    HirRelationExpr, IndexOption, InsertPlan, MutationKind, OptimizerConfig, Params, PeekPlan,
-    Plan, QueryWhen, RaisePlan, ReadThenWritePlan, ReplicaConfig, ResetVariablePlan, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
+    CreateDatabasePlan, CreateIndexPlan, CreateRecordedViewPlan, CreateRolePlan, CreateSchemaPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, CreateViewsPlan, DropComputeInstanceReplicaPlan, DropComputeInstancesPlan,
+    DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
+    ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
+    MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
+    ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
+    StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_transform::Optimizer;
@@ -274,6 +279,7 @@ pub enum PeekResponseUnary {
     Canceled,
 }
 
+<<<<<<< HEAD
 #[derive(Debug)]
 struct GroupCommit {
     pending_writes: Vec<PendingWriteTxn>,
@@ -366,6 +372,27 @@ impl From<SinkConnectionReady> for PendingWriteTxn {
             client_transmitter: tx,
             session,
         }
+=======
+/// A pending write transaction that will be committing during the next group commit.
+struct PendingWriteTxn {
+    /// List of all write operations within the transaction.
+    writes: Vec<WriteOp>,
+    /// Transmitter used to send a response back to the client.
+    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Client response for transaction.
+    response: Result<ExecuteResponse, CoordError>,
+    /// Session of the client who initiated the transaction.
+    session: Session,
+    /// The action to take at the end of the transaction.
+    action: EndTransactionAction,
+    /// Holds the coordinator's write lock.
+    write_lock_guard: Option<OwnedMutexGuard<()>>,
+}
+
+impl PendingWriteTxn {
+    fn has_write_lock(&self) -> bool {
+        self.write_lock_guard.is_some()
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
     }
 }
 
@@ -508,6 +535,13 @@ impl AdvanceTables {
     }
 }
 
+/// Soft-state metadata about a compute replica
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplicaMetadata {
+    /// The last time we heard from this replica (possibly rounded)
+    pub last_heartbeat: DateTime<Utc>,
+}
+
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<S> {
     /// A client to a running dataflow cluster.
@@ -580,6 +614,13 @@ pub struct Coordinator<S> {
 
     /// Extra context to pass through to connection creation.
     connection_context: ConnectionContext,
+
+    /// Metadata about replicas that doesn't need to be persisted.
+    /// Intended for inclusion in system tables.
+    ///
+    /// `None` is used as a tombstone value for replicas that have been
+    /// dropped and for which no further updates should be recorded.
+    transient_replica_metadata: HashMap<ReplicaId, Option<ReplicaMetadata>>,
 }
 
 /// Metadata about an active connection.
@@ -785,7 +826,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(_) => {
+                CatalogItem::Source(src) => {
                     // Re-announce the source description.
                     let source_description = self
                         .catalog
@@ -796,7 +837,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     let mut ingestion = IngestionDescription {
                         id: entry.id(),
                         desc: source_description,
-                        since: Antichain::from_elem(Timestamp::minimum()),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
                     };
@@ -809,7 +849,10 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![ingestion])
+                        .create_sources(vec![CreateSourceRequest {
+                            ingestion,
+                            remote_addr: src.remote_addr.clone(),
+                        }])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -830,7 +873,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     let mut ingestion = IngestionDescription {
                         id: entry.id(),
                         desc: source_description,
-                        since: Antichain::from_elem(since_ts),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
                     };
@@ -843,9 +885,20 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![ingestion])
+                        .create_sources(vec![CreateSourceRequest {
+                            ingestion,
+                            remote_addr: None,
+                        }])
                         .await
                         .unwrap();
+
+                    let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
+                    self.dataflow_client
+                        .storage_mut()
+                        .set_read_policy(vec![(entry.id(), policy)])
+                        .await
+                        .unwrap();
+
                     self.initialize_storage_read_policies(
                         vec![entry.id()],
                         self.logical_compaction_window_ms,
@@ -876,13 +929,15 @@ impl<S: Append + 'static> Coordinator<S> {
                         let ingestion = IngestionDescription {
                             id: entry.id(),
                             desc,
-                            since: Antichain::from_elem(Timestamp::minimum()),
                             source_imports: BTreeMap::new(),
                             storage_metadata: (),
                         };
                         self.dataflow_client
                             .storage_mut()
-                            .create_sources(vec![ingestion])
+                            .create_sources(vec![CreateSourceRequest {
+                                ingestion,
+                                remote_addr: None,
+                            }])
                             .await
                             .unwrap();
                         self.initialize_storage_read_policies(
@@ -1151,11 +1206,28 @@ impl<S: Append + 'static> Coordinator<S> {
                     .send(Message::GroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
+        } else if self
+            .pending_writes
+            .iter()
+            .any(|pending_write| pending_write.has_write_lock())
+            || self.write_lock.try_lock().is_ok()
+        {
+            // If some transaction already holds the write lock, then we can execute a group
+            // commit.
+            self.group_commit().await;
+        } else if let Ok(_guard) = Arc::clone(&self.write_lock).try_lock_owned() {
+            // If no transaction holds the write lock, then we need to acquire it.
+            self.group_commit().await;
         } else {
-            match Arc::clone(&self.write_lock).try_lock_owned() {
-                Ok(_guard) => self.group_commit().await,
-                Err(_) => self.defer_write(Deferred::GroupCommit),
-            };
+            // If some running transaction already holds the write lock, then one of the
+            // following things will happen:
+            //   1. The transaction will submit a write which will transfer the
+            //      ownership of the lock to group commit and trigger another group
+            //      group commit.
+            //   2. The transaction will complete without submitting a write (abort,
+            //      empty writes, etc) which will drop the lock. The deferred group
+            //      commit will then acquire the lock and execute a group commit.
+            self.defer_write(Deferred::GroupCommit);
         }
     }
 
@@ -1170,6 +1242,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline. This
     /// approach prevents an unbounded advancing of the global timeline ahead of `now()`.
     async fn group_commit(&mut self) {
+<<<<<<< HEAD
         let WriteTimestamp {
             timestamp,
             advance_to,
@@ -1310,8 +1383,52 @@ impl<S: Append + 'static> Coordinator<S> {
                     if let Some(tx) = tx {
                         senders.push(tx);
                     }
+=======
+        if self.pending_writes.is_empty() {
+            return;
+        }
+
+        // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
+        // any point during this method. We will still commit the write without waiting for `now()`
+        // to advance. This is ok because the next batch of writes will trigger the wait loop in
+        // `try_group_commit()` if `now()` hasn't advanced past the global timeline, preventing
+        // an unbounded advancin of the global timeline ahead of `now()`.
+        let WriteTimestamp {
+            timestamp,
+            advance_to,
+        } = self.get_and_step_local_write_ts();
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
+            HashMap::with_capacity(self.pending_writes.len());
+        let mut responses = Vec::with_capacity(self.pending_writes.len());
+        for PendingWriteTxn {
+            writes,
+            client_transmitter,
+            response,
+            session,
+            action,
+            write_lock_guard: _,
+        } in self.pending_writes.drain(..)
+        {
+            for WriteOp { id, rows } in writes {
+                // If the table that some write was targeting has been deleted while the write was
+                // waiting, then the write will be ignored and we respond to the client that the
+                // write was successful. This is only possible if the write and the delete were
+                // concurrent. Therefore, we are free to order the write before the delete without
+                // violating any consistency guarantees.
+                if self.catalog.try_get_entry(&id).is_some() {
+                    let updates = rows
+                        .into_iter()
+                        .map(|(row, diff)| Update {
+                            row,
+                            diff,
+                            timestamp,
+                        })
+                        .collect::<Vec<_>>();
+                    appends.entry(id).or_default().extend(updates);
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
                 }
             }
+            responses.push((client_transmitter, response, session, action));
         }
         for id in self.pending_group_commit.table_advances.drain() {
             appends.entry(id).or_insert(Vec::new());
@@ -1352,6 +1469,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .append(appends)
             .await
             .unwrap();
+<<<<<<< HEAD
         let elapsed = start.elapsed();
         trace!(
             "group commit for {} tables to {} took: {} ms",
@@ -1396,8 +1514,21 @@ impl<S: Append + 'static> Coordinator<S> {
             self.internal_cmd_tx
                 .send(Message::GroupCommit)
                 .expect("sending to internal_cmd_tx cannot fail");
+=======
+        for (client_transmitter, response, mut session, action) in responses {
+            session.vars_mut().end_transaction(action);
+            client_transmitter.send(response, session);
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
         }
         self.pending_group_commit.table_advances.extend(ids);
+    }
+
+    /// Submit a write to be executed during the next group commit.
+    fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
+        self.internal_cmd_tx
+            .send(Message::GroupCommit)
+            .expect("sending to internal_cmd_tx cannot fail");
+        self.pending_writes.push(pending_write_txn);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -1441,6 +1572,42 @@ impl<S: Append + 'static> Coordinator<S> {
                 peek_id: _,
             }) => {
                 // TODO(guswynn): communicate `bindings` to `sequence_peek`
+            }
+            ControllerResponse::ComputeReplicaHeartbeat(replica_id, when) => {
+                let replica_status_granularity = chrono::Duration::seconds(60);
+                let when_coarsened = when
+                    .duration_trunc(replica_status_granularity)
+                    .expect("Time coarsening should not fail");
+                let new = ReplicaMetadata {
+                    last_heartbeat: when_coarsened,
+                };
+                let old = match self
+                    .transient_replica_metadata
+                    .insert(replica_id, Some(new.clone()))
+                {
+                    None => None,
+                    // `None` is the tombstone for a removed replica
+                    Some(None) => return,
+                    Some(Some(md)) => Some(md),
+                };
+
+                if old.as_ref() != Some(&new) {
+                    let retraction = old.map(|old| {
+                        self.catalog
+                            .state()
+                            .pack_replica_heartbeat_update(replica_id, old, -1)
+                    });
+                    let insertion = self
+                        .catalog
+                        .state()
+                        .pack_replica_heartbeat_update(replica_id, new, 1);
+                    let updates = if let Some(retraction) = retraction {
+                        vec![retraction, insertion]
+                    } else {
+                        vec![insertion]
+                    };
+                    self.send_builtin_table_updates(updates).await;
+                }
             }
         }
     }
@@ -2039,6 +2206,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::ShowCreateSource(_)
                     | Statement::ShowCreateTable(_)
                     | Statement::ShowCreateView(_)
+                    | Statement::ShowCreateRecordedView(_)
                     | Statement::ShowCreateConnection(_)
                     | Statement::ShowDatabases(_)
                     | Statement::ShowSchemas(_)
@@ -2084,6 +2252,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateViews(_)
+                    | Statement::CreateRecordedView(_)
                     | Statement::Delete(_)
                     | Statement::DropDatabase(_)
                     | Statement::DropSchema(_)
@@ -2165,6 +2334,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
             // Cancel pending writes. There is at most one pending write per session.
             if let Some(idx) = self
+<<<<<<< HEAD
                 .pending_group_commit
                 .pending_writes
                 .iter()
@@ -2177,6 +2347,18 @@ impl<S: Append + 'static> Coordinator<S> {
                 } = self.pending_group_commit.pending_writes.remove(idx) {
                     let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
                 }
+=======
+                .pending_writes
+                .iter()
+                .position(|PendingWriteTxn { session, .. }| session.conn_id() == conn_id)
+            {
+                let PendingWriteTxn {
+                    client_transmitter,
+                    session,
+                    ..
+                } = self.pending_writes.remove(idx);
+                let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
             }
 
             // Cancel deferred writes. There is at most one deferred write per session.
@@ -2331,8 +2513,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 Ok(builder.build_sink_dataflow(name.to_string(), id, sink_description)?)
             })
             .await?;
+<<<<<<< HEAD
         self.ship_dataflow(df, compute_instance).await;
         Ok(builtin_updates)
+=======
+
+        Ok(self.ship_dataflow(df, compute_instance).await)
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
     }
 
     async fn sequence_plan(
@@ -2343,6 +2530,7 @@ impl<S: Append + 'static> Coordinator<S> {
         depends_on: Vec<GlobalId>,
     ) {
         match plan {
+<<<<<<< HEAD
             plan @ Plan::CreateConnection(_)
             | plan @ Plan::CreateDatabase(_)
             | plan @ Plan::CreateSchema(_)
@@ -2365,6 +2553,101 @@ impl<S: Append + 'static> Coordinator<S> {
                 self.submit_write(PendingWriteTxn::User {
                     write_txn: WriteTxn::DDL { plan, depends_on },
                     client_transmitter: tx,
+=======
+            Plan::CreateConnection(plan) => {
+                tx.send(
+                    self.sequence_create_connection(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::CreateDatabase(plan) => {
+                tx.send(self.sequence_create_database(&session, plan).await, session);
+            }
+            Plan::CreateSchema(plan) => {
+                tx.send(self.sequence_create_schema(&session, plan).await, session);
+            }
+            Plan::CreateRole(plan) => {
+                tx.send(self.sequence_create_role(&session, plan).await, session);
+            }
+            Plan::CreateComputeInstance(plan) => {
+                tx.send(
+                    self.sequence_create_compute_instance(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::CreateComputeInstanceReplica(plan) => {
+                tx.send(
+                    self.sequence_create_compute_instance_replica(&session, plan)
+                        .await,
+                    session,
+                );
+            }
+            Plan::CreateTable(plan) => {
+                tx.send(
+                    self.sequence_create_table(&session, plan, depends_on).await,
+                    session,
+                );
+            }
+            Plan::CreateSecret(plan) => {
+                tx.send(self.sequence_create_secret(&session, plan).await, session);
+            }
+            Plan::CreateSource(_) => unreachable!("handled separately"),
+            Plan::CreateSink(plan) => {
+                self.sequence_create_sink(session, plan, depends_on, tx)
+                    .await;
+            }
+            Plan::CreateView(plan) => {
+                tx.send(
+                    self.sequence_create_view(&session, plan, depends_on).await,
+                    session,
+                );
+            }
+            Plan::CreateViews(plan) => {
+                tx.send(
+                    self.sequence_create_views(&mut session, plan, depends_on)
+                        .await,
+                    session,
+                );
+            }
+            Plan::CreateRecordedView(plan) => {
+                tx.send(
+                    self.sequence_create_recorded_view(&session, plan, depends_on)
+                        .await,
+                    session,
+                );
+            }
+            Plan::CreateIndex(plan) => {
+                tx.send(
+                    self.sequence_create_index(&session, plan, depends_on).await,
+                    session,
+                );
+            }
+            Plan::CreateType(plan) => {
+                tx.send(
+                    self.sequence_create_type(&session, plan, depends_on).await,
+                    session,
+                );
+            }
+            Plan::DropDatabase(plan) => {
+                tx.send(self.sequence_drop_database(&session, plan).await, session);
+            }
+            Plan::DropSchema(plan) => {
+                tx.send(self.sequence_drop_schema(&session, plan).await, session);
+            }
+            Plan::DropRoles(plan) => {
+                tx.send(self.sequence_drop_roles(&session, plan).await, session);
+            }
+            Plan::DropComputeInstances(plan) => {
+                tx.send(
+                    self.sequence_drop_compute_instances(&session, plan).await,
+                    session,
+                );
+            }
+            Plan::DropComputeInstanceReplica(plan) => {
+                tx.send(
+                    self.sequence_drop_compute_instance_replica(&session, plan)
+                        .await,
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
                     session,
                 });
             }
@@ -2926,13 +3209,22 @@ impl<S: Append + 'static> Coordinator<S> {
                 let ingestion = IngestionDescription {
                     id: table_id,
                     desc: source_description,
-                    since: Antichain::from_elem(since_ts),
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
                 };
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![ingestion])
+                    .create_sources(vec![CreateSourceRequest {
+                        ingestion,
+                        remote_addr: None,
+                    }])
+                    .await
+                    .unwrap();
+
+                let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
+                self.dataflow_client
+                    .storage_mut()
+                    .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
                 self.initialize_storage_read_policies(
@@ -2969,6 +3261,7 @@ impl<S: Append + 'static> Coordinator<S> {
             connection: plan.source.connection,
             desc: plan.source.desc,
             depends_on,
+            remote_addr: plan.remote,
         };
         ops.push(catalog::Op::CreateItem {
             id: source_id,
@@ -3038,7 +3331,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 let mut ingestion = IngestionDescription {
                     id: source_id,
                     desc: source_description,
-                    since: Antichain::from_elem(Timestamp::minimum()),
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
                 };
@@ -3049,7 +3341,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![ingestion])
+                    .create_sources(vec![CreateSourceRequest {
+                        ingestion,
+                        remote_addr: source.remote_addr,
+                    }])
                     .await
                     .unwrap();
                 self.initialize_storage_read_policies(
@@ -3159,9 +3454,38 @@ impl<S: Append + 'static> Coordinator<S> {
                     .map(|_ok| ())
             })
             .await;
+<<<<<<< HEAD
 
         let builtin_updates = match transact_result {
             Ok((builtin_updates, ())) => builtin_updates,
+=======
+        match transact_result {
+            Ok(()) => {
+                // Announce the creation of the sink's corresponding source.
+                // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+                if let Some(desc) = self.catalog.state().source_description_for(id) {
+                    let ingestion = IngestionDescription {
+                        id,
+                        desc,
+                        source_imports: BTreeMap::new(),
+                        storage_metadata: (),
+                    };
+                    self.dataflow_client
+                        .storage_mut()
+                        .create_sources(vec![CreateSourceRequest {
+                            ingestion,
+                            remote_addr: None,
+                        }])
+                        .await
+                        .unwrap();
+                    self.initialize_storage_read_policies(
+                        vec![id],
+                        self.logical_compaction_window_ms,
+                    )
+                    .await;
+                }
+            }
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
@@ -3379,6 +3703,16 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
+    async fn sequence_create_recorded_view(
+        &mut self,
+        _session: &Session,
+        _plan: CreateRecordedViewPlan,
+        _depends_on: Vec<GlobalId>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        // TODO(teskje): implement
+        Err(CoordError::Unsupported("recorded views"))
+    }
+
     async fn sequence_create_index(
         &mut self,
         session: &Session,
@@ -3510,6 +3844,24 @@ impl<S: Append + 'static> Coordinator<S> {
         Ok((builtin_updates, ExecuteResponse::DroppedRole))
     }
 
+    async fn drop_replica(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        replica_id: ReplicaId,
+        replica_config: ConcreteComputeInstanceReplicaConfig,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(Some(metadata)) = self.transient_replica_metadata.insert(replica_id, None) {
+            let retraction = self
+                .catalog
+                .state()
+                .pack_replica_heartbeat_update(replica_id, metadata, -1);
+            self.send_builtin_table_updates(vec![retraction]).await;
+        }
+        self.dataflow_client
+            .drop_replica(instance_id, replica_id, replica_config)
+            .await
+    }
+
     async fn sequence_drop_compute_instances(
         &mut self,
         session: &Session,
@@ -3536,8 +3888,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .0;
         for (instance_id, replicas) in instance_replica_drop_sets {
             for (replica_id, replica) in replicas {
-                self.dataflow_client
-                    .drop_replica(instance_id, replica_id, replica.config)
+                self.drop_replica(instance_id, replica_id, replica.config)
                     .await
                     .unwrap();
             }
@@ -3579,8 +3930,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .0;
 
         for (compute_id, replica_id, replica) in replicas_to_drop {
-            self.dataflow_client
-                .drop_replica(compute_id, replica_id, replica.config)
+            self.drop_replica(compute_id, replica_id, replica.config)
                 .await
                 .unwrap();
         }
@@ -3603,6 +3953,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let response = match plan.ty {
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
+            ObjectType::RecordedView => ExecuteResponse::DroppedRecordedView,
             ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
@@ -3690,16 +4041,17 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let response = ExecuteResponse::TransactionExited {
+        let response = Ok(ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
-        };
+        });
 
         let result = self
             .sequence_end_transaction_inner(&mut session, action)
             .await;
 
         let (response, action) = match result {
+<<<<<<< HEAD
             Ok(Some(writes)) if writes.is_empty() => (Ok(response), action),
             Ok(Some(writes)) => {
                 self.submit_write(PendingWriteTxn::User {
@@ -3714,6 +4066,21 @@ impl<S: Append + 'static> Coordinator<S> {
                 return;
             }
             Ok(None) => (Ok(response), action),
+=======
+            Ok((Some(writes), _)) if writes.is_empty() => (response, action),
+            Ok((Some(writes), write_lock_guard)) => {
+                self.submit_write(PendingWriteTxn {
+                    writes,
+                    client_transmitter: tx,
+                    response,
+                    session,
+                    action,
+                    write_lock_guard,
+                });
+                return;
+            }
+            Ok((None, _)) => (response, action),
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
@@ -3724,11 +4091,19 @@ impl<S: Append + 'static> Coordinator<S> {
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
+<<<<<<< HEAD
     ) -> Result<Option<Vec<WriteOp>>, CoordError> {
         let txn = self.clear_transaction(session).await;
 
         if let EndTransactionAction::Commit = action {
             if let Some(ops) = txn.into_ops() {
+=======
+    ) -> Result<(Option<Vec<WriteOp>>, Option<OwnedMutexGuard<()>>), CoordError> {
+        let txn = self.clear_transaction(session).await;
+
+        if let EndTransactionAction::Commit = action {
+            if let (Some(ops), write_lock_guard) = txn.into_ops_and_lock_guard() {
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
                 if let TransactionOps::Writes(mut writes) = ops {
                     for WriteOp { id, .. } in &writes {
                         // Re-verify this id exists.
@@ -3739,12 +4114,20 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                     writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
+<<<<<<< HEAD
                     return Ok(Some(writes));
                 }
             }
         }
 
         Ok(None)
+=======
+                    return Ok((Some(writes), write_lock_guard));
+                }
+            }
+        }
+        Ok((None, None))
+>>>>>>> 56371a3e10dd639c2bea0b983cb77c568415e27b
     }
 
     /// Return the set of ids in a timedomain and verify timeline correctness.
@@ -4410,12 +4793,31 @@ impl<S: Append + 'static> Coordinator<S> {
         session: &Session,
         plan: ExplainPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        match plan {
+            ExplainPlan::New(plan) => self.sequence_explain_new(session, plan),
+            ExplainPlan::Old(plan) => self.sequence_explain_old(session, plan),
+        }
+    }
+
+    fn sequence_explain_new(
+        &mut self,
+        _session: &Session,
+        _plan: ExplainPlanNew,
+    ) -> Result<ExecuteResponse, CoordError> {
+        unimplemented!() // TODO #13296
+    }
+
+    fn sequence_explain_old(
+        &mut self,
+        session: &Session,
+        plan: ExplainPlanOld,
+    ) -> Result<ExecuteResponse, CoordError> {
         let compute_instance = self
             .catalog
             .resolve_compute_instance(session.vars().cluster())?
             .id;
 
-        let ExplainPlan {
+        let ExplainPlanOld {
             raw_plan,
             row_set_finishing,
             stage,
@@ -4901,7 +5303,7 @@ impl<S: Append + 'static> Coordinator<S> {
             use CatalogItemType::*;
             match catalog.try_get_entry(id) {
                 Some(entry) => match entry.item().typ() {
-                    typ @ (Func | View) => {
+                    typ @ (Func | View | RecordedView) => {
                         let valid_id = id.is_user() || matches!(typ, Func);
                         valid_id
                             && (
@@ -5722,6 +6124,7 @@ pub async fn serve<S: Append + 'static>(
                 replica_sizes,
                 availability_zones,
                 connection_context,
+                transient_replica_metadata: HashMap::new(),
             };
             let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
             let ok = bootstrap.is_ok();

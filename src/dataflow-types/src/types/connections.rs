@@ -231,7 +231,7 @@ impl CsrConnection {
 }
 
 impl RustType<ProtoCsrConnection> for CsrConnection {
-    fn into_proto(self: &Self) -> ProtoCsrConnection {
+    fn into_proto(&self) -> ProtoCsrConnection {
         ProtoCsrConnection {
             url: Some(self.url.into_proto()),
             root_certs: self.root_certs.into_proto(),
@@ -282,7 +282,7 @@ pub struct CsrConnectionTlsIdentity {
 }
 
 impl RustType<ProtoCsrConnectionTlsIdentity> for CsrConnectionTlsIdentity {
-    fn into_proto(self: &Self) -> ProtoCsrConnectionTlsIdentity {
+    fn into_proto(&self) -> ProtoCsrConnectionTlsIdentity {
         ProtoCsrConnectionTlsIdentity {
             cert: Some(self.cert.into_proto()),
             key: Some(self.key.into_proto()),
@@ -311,7 +311,7 @@ pub struct CsrConnectionHttpAuth {
 }
 
 impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
-    fn into_proto(self: &Self) -> ProtoCsrConnectionHttpAuth {
+    fn into_proto(&self) -> ProtoCsrConnectionHttpAuth {
         ProtoCsrConnectionHttpAuth {
             username: Some(self.username.into_proto()),
             password: self.password.into_proto(),

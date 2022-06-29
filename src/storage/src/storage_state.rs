@@ -17,6 +17,7 @@ use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
+use timely::progress::Timestamp as _;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, Mutex};
 
@@ -110,9 +111,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying a storage command.
     pub fn handle_storage_command(&mut self, cmd: StorageCommand) {
         match cmd {
-            StorageCommand::CreateSources(sources) => {
-                for source in sources {
-                    match &source.desc.connection {
+            StorageCommand::CreateSources(ingestions) => {
+                for ingestion in ingestions {
+                    let id = ingestion.id;
+
+                    match &ingestion.desc.connection {
                         SourceConnection::Local { .. } => {
                             // TODO(benesch): fix the types here so that we can
                             // enforce this statically.
@@ -121,7 +124,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         SourceConnection::External { .. } => {
                             // Initialize shared frontier tracking.
                             self.storage_state.source_uppers.insert(
-                                source.id,
+                                id,
                                 Rc::new(RefCell::new(Antichain::from_elem(
                                     mz_repr::Timestamp::minimum(),
                                 ))),
@@ -130,17 +133,16 @@ impl<'w, A: Allocate> Worker<'w, A> {
                             crate::render::build_storage_dataflow(
                                 &mut self.timely_worker,
                                 &mut self.storage_state,
-                                &source.id.to_string(),
-                                source.clone(),
+                                &id.to_string(),
+                                ingestion,
+                                Antichain::from_elem(Timestamp::minimum()),
                             );
                         }
                     }
 
-                    use timely::progress::Timestamp;
-                    self.storage_state.reported_frontiers.insert(
-                        source.id,
-                        Antichain::from_elem(mz_repr::Timestamp::minimum()),
-                    );
+                    self.storage_state
+                        .reported_frontiers
+                        .insert(id, Antichain::from_elem(mz_repr::Timestamp::minimum()));
                 }
             }
             StorageCommand::AllowCompaction(list) => {

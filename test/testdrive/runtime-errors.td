@@ -7,39 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set schema={
-    "type": "record",
-    "name": "envelope",
-    "fields": [
-      {
-        "name": "before",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "id", "type": "string"},
-              {"name": "a", "type": "long"},
-              {"name": "b", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      },
-      { "name": "after", "type": ["row", "null"] }
-    ]
-  }
-
-$ kafka-create-topic topic=data
-
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
-{"before": null, "after": {"row":{"id": "valid1", "a": 2, "b": 1}}}
-{"before": null, "after": {"row":{"id": "valid2", "a": 17, "b": 5}}}
-
-> CREATE SOURCE data
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DEBEZIUM
+> CREATE TABLE data (id text, a bigint, b bigint)
+> INSERT INTO data VALUES ('valid1', 2, 1), ('valid2', 17, 5)
 
 > CREATE MATERIALIZED VIEW multiply AS SELECT id, a * b AS product FROM data
 
@@ -52,8 +21,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 valid1  2   2
 valid2  85  3
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
-{"before": null, "after": {"row": {"id": "bad1", "a": 7, "b": 0}}}
+> INSERT INTO data VALUES ('bad1', 7, 0)
 
 > SELECT * FROM multiply
 valid1  2
@@ -66,8 +34,7 @@ contains:division by zero
 ! SELECT * FROM both
 contains:division by zero
 
-$ kafka-ingest format=avro topic=data schema=${schema} timestamp=3
-{"before": {"row": {"id": "bad1", "a": 7, "b": 0}}, "after": null}
+> DELETE FROM data WHERE id = 'bad1'
 
 > SELECT * FROM both
 valid1  2   2

@@ -545,13 +545,17 @@ pub enum TransactionStatus<T> {
 }
 
 impl<T> TransactionStatus<T> {
-    /// Extracts the inner transaction ops if not failed.
-    pub fn into_ops(self) -> Option<TransactionOps<T>> {
+    /// Extracts the inner transaction ops and write lock guard if not failed.
+    pub fn into_ops_and_lock_guard(
+        self,
+    ) -> (Option<TransactionOps<T>>, Option<OwnedMutexGuard<()>>) {
         match self {
-            TransactionStatus::Default | TransactionStatus::Failed(_) => None,
+            TransactionStatus::Default | TransactionStatus::Failed(_) => (None, None),
             TransactionStatus::Started(txn)
             | TransactionStatus::InTransaction(txn)
-            | TransactionStatus::InTransactionImplicit(txn) => Some(txn.ops),
+            | TransactionStatus::InTransactionImplicit(txn) => {
+                (Some(txn.ops), txn.write_lock_guard)
+            }
         }
     }
 

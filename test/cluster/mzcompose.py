@@ -13,13 +13,15 @@ from pathlib import Path
 from pg8000.dbapi import ProgrammingError
 
 from materialize import spawn
-from materialize.mzcompose import Composition
+from materialize.mzcompose import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services import (
     Computed,
     Kafka,
     Localstack,
     Materialized,
+    Redpanda,
     SchemaRegistry,
+    Storaged,
     Testdrive,
     Zookeeper,
 )
@@ -50,6 +52,7 @@ SERVICES = [
         ports=[2100, 2102],
     ),
     Materialized(),
+    Redpanda(),
     Testdrive(
         volumes=[
             "mzdata:/mzdata",
@@ -59,10 +62,22 @@ SERVICES = [
         ],
         materialize_params={"cluster": "cluster1"},
     ),
+    Storaged(),
 ]
 
 
-def workflow_default(c: Composition) -> None:
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--redpanda",
+        action="store_true",
+        help="run against Redpanda instead of the Confluent Platform",
+    )
+    args = parser.parse_args()
+
+    # remote storaged tests
+    test_remote_storaged(c, args.redpanda)
+
+    # remote cluster tests
     test_cluster(c, "smoke/*.td")
     test_github_12251(c)
 
@@ -151,3 +166,16 @@ def test_github_12251(c: Composition) -> None:
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
+
+
+def test_remote_storaged(c: Composition, redpanda: bool) -> None:
+    with c.override(Testdrive()):
+        dependencies = ["materialized", "storaged"]
+        if redpanda:
+            dependencies += ["redpanda"]
+        else:
+            dependencies += ["zookeeper", "kafka", "schema-registry"]
+        c.start_and_wait_for_tcp(
+            services=dependencies,
+        )
+        c.run("testdrive", "storaged/smoketest.td")

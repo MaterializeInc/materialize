@@ -716,7 +716,7 @@ impl RustType<ProtoPlan> for Plan {
 }
 
 impl RustType<proto_plan::ProtoRowDiff> for (Row, u64, i64) {
-    fn into_proto(self: &Self) -> proto_plan::ProtoRowDiff {
+    fn into_proto(&self) -> proto_plan::ProtoRowDiff {
         proto_plan::ProtoRowDiff {
             row: Some(self.0.into_proto()),
             timestamp: self.1.clone(),
@@ -734,7 +734,7 @@ impl RustType<proto_plan::ProtoRowDiff> for (Row, u64, i64) {
 }
 
 impl RustType<proto_plan::ProtoRowDiffVec> for Vec<(Row, u64, i64)> {
-    fn into_proto(self: &Self) -> proto_plan::ProtoRowDiffVec {
+    fn into_proto(&self) -> proto_plan::ProtoRowDiffVec {
         proto_plan::ProtoRowDiffVec {
             rows: self.into_proto(),
         }

@@ -2,7 +2,7 @@
     "name": "one-off load testing",
     "launch_script": "true",
     "instance_type": "r5a.4xlarge",
-    "ami": "ami-0aeb7c931a5a61206",
+    "ami": "ami-09d56f8956ab235b3",
     "size_gb": 200,
     "tags": {}
 }

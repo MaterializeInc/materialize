@@ -34,7 +34,7 @@ use mz_dataflow_types::sinks::{
     PersistSinkConnection, PersistSinkConnectionBuilder, SinkConnection, SinkConnectionBuilder,
     SinkEnvelope,
 };
-use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection, Timeline};
+use mz_dataflow_types::sources::{SourceConnection, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -54,9 +54,9 @@ use mz_sql::names::{
     SchemaSpecifier,
 };
 use mz_sql::plan::{
-    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext, StatementDesc,
+    ComputeInstanceIntrospectionConfig, CreateConnectionPlan, CreateIndexPlan,
+    CreateRecordedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext, StatementDesc,
 };
 use mz_sql::DEFAULT_SCHEMA;
 use mz_stash::{Append, Postgres, Sqlite};
@@ -712,46 +712,6 @@ impl CatalogState {
         schema.items[builtin.name()].clone()
     }
 
-    /// Reports whether the item identified by `id` is considered volatile.
-    ///
-    /// `None` indicates that the volatility of `id` is unknown.
-    pub fn is_volatile(&self, id: GlobalId) -> Volatility {
-        use Volatility::*;
-
-        let item = self.get_entry(&id).item();
-        match item {
-            CatalogItem::Source(source) => match &source.connection {
-                SourceConnection::External { connection, .. } => match &connection {
-                    ExternalSourceConnection::PubNub(_) => Volatile,
-                    ExternalSourceConnection::Kinesis(_) => Volatile,
-                    _ => Unknown,
-                },
-                SourceConnection::Local { .. } => Volatile,
-            },
-            CatalogItem::Log(_) => Volatile,
-            CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
-                // Volatility follows trinary logic like SQL. If even one
-                // volatile dependency exists, then this item is volatile.
-                // Otherwise, if a single dependency with unknown volatility
-                // exists, then this item is also of unknown volatility. Only if
-                // all dependencies are nonvolatile (including the trivial case
-                // of no dependencies) is this item nonvolatile.
-                item.uses().iter().fold(Nonvolatile, |memo, id| {
-                    match (memo, self.is_volatile(*id)) {
-                        (Volatile, _) | (_, Volatile) => Volatile,
-                        (Unknown, _) | (_, Unknown) => Unknown,
-                        (Nonvolatile, Nonvolatile) => Nonvolatile,
-                    }
-                })
-            }
-            CatalogItem::Table(_) => Volatile,
-            CatalogItem::Type(_) => Unknown,
-            CatalogItem::Func(_) => Unknown,
-            CatalogItem::Secret(_) => Nonvolatile,
-            CatalogItem::Connection(_) => Unknown,
-        }
-    }
-
     pub fn config(&self) -> &mz_sql::catalog::CatalogConfig {
         &self.config
     }
@@ -1068,6 +1028,7 @@ pub struct Source {
     pub connection: SourceConnection,
     pub desc: RelationDesc,
     pub depends_on: Vec<GlobalId>,
+    pub remote_addr: Option<String>,
 }
 
 impl Source {
@@ -1135,23 +1096,6 @@ pub struct Secret {
 pub struct Connection {
     pub create_sql: String,
     pub connection: mz_dataflow_types::connections::Connection,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum Volatility {
-    Volatile,
-    Nonvolatile,
-    Unknown,
-}
-
-impl Volatility {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Volatility::Volatile => "volatile",
-            Volatility::Nonvolatile => "nonvolatile",
-            Volatility::Unknown => "unknown",
-        }
-    }
 }
 
 impl CatalogItem {
@@ -2455,6 +2399,7 @@ impl<S: Append> Catalog<S> {
             && matches!(
                 item.typ(),
                 SqlCatalogItemType::View
+                    | SqlCatalogItemType::RecordedView
                     | SqlCatalogItemType::Source
                     | SqlCatalogItemType::Sink
                     | SqlCatalogItemType::Index
@@ -2583,6 +2528,7 @@ impl<S: Append> Catalog<S> {
         fn sql_type_to_object_type(sql_type: SqlCatalogItemType) -> ObjectType {
             match sql_type {
                 SqlCatalogItemType::View => ObjectType::View,
+                SqlCatalogItemType::RecordedView => ObjectType::RecordedView,
                 SqlCatalogItemType::Source => ObjectType::Source,
                 SqlCatalogItemType::Sink => ObjectType::Sink,
                 SqlCatalogItemType::Index => ObjectType::Index,
@@ -3345,12 +3291,15 @@ impl<S: Append> Catalog<S> {
                 conn_id: None,
                 depends_on,
             }),
-            Plan::CreateSource(CreateSourcePlan { source, .. }) => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                connection: source.connection,
-                desc: source.desc,
-                depends_on,
-            }),
+            Plan::CreateSource(CreateSourcePlan { source, remote, .. }) => {
+                CatalogItem::Source(Source {
+                    create_sql: source.create_sql,
+                    connection: source.connection,
+                    desc: source.desc,
+                    depends_on,
+                    remote_addr: remote,
+                })
+            }
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
@@ -3362,6 +3311,12 @@ impl<S: Append> Catalog<S> {
                     conn_id: None,
                     depends_on,
                 })
+            }
+            Plan::CreateRecordedView(CreateRecordedViewPlan {
+                recorded_view: _, ..
+            }) => {
+                // TODO(teskje): implement
+                bail!("not yet implemented")
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,

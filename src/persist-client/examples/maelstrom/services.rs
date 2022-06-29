@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use mz_persist::location::{Atomicity, BlobMulti, Consensus, ExternalError, SeqNo, VersionedData};
+use mz_persist::location::{Atomicity, Blob, Consensus, ExternalError, SeqNo, VersionedData};
 
 use crate::maelstrom::api::{ErrorCode, MaelstromError};
 use crate::maelstrom::node::Handle;
@@ -177,20 +177,20 @@ impl Consensus for MaelstromConsensus {
     }
 }
 
-/// Implementation of [BlobMulti] backed by the Maelstrom lin-kv service.
+/// Implementation of [Blob] backed by the Maelstrom lin-kv service.
 #[derive(Debug)]
-pub struct MaelstromBlobMulti {
+pub struct MaelstromBlob {
     handle: Handle,
 }
 
-impl MaelstromBlobMulti {
-    pub fn new(handle: Handle) -> Arc<dyn BlobMulti + Send + Sync> {
-        Arc::new(MaelstromBlobMulti { handle }) as Arc<dyn BlobMulti + Send + Sync>
+impl MaelstromBlob {
+    pub fn new(handle: Handle) -> Arc<dyn Blob + Send + Sync> {
+        Arc::new(MaelstromBlob { handle }) as Arc<dyn Blob + Send + Sync>
     }
 }
 
 #[async_trait]
-impl BlobMulti for MaelstromBlobMulti {
+impl Blob for MaelstromBlob {
     async fn get(&self, _deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         let value = match self
             .handle
@@ -240,27 +240,27 @@ impl BlobMulti for MaelstromBlobMulti {
     }
 }
 
-/// Implementation of [BlobMulti] that caches get calls.
+/// Implementation of [Blob] that caches get calls.
 ///
 /// NB: It intentionally does not store successful set calls in the cache, so
 /// that a blob gets fetched at least once (exercising those code paths).
 #[derive(Debug)]
-pub struct CachingBlobMulti {
-    blob: Arc<dyn BlobMulti + Send + Sync>,
+pub struct CachingBlob {
+    blob: Arc<dyn Blob + Send + Sync>,
     cache: Mutex<HashMap<String, Vec<u8>>>,
 }
 
-impl CachingBlobMulti {
-    pub fn new(blob: Arc<dyn BlobMulti + Send + Sync>) -> Arc<dyn BlobMulti + Send + Sync> {
-        Arc::new(CachingBlobMulti {
+impl CachingBlob {
+    pub fn new(blob: Arc<dyn Blob + Send + Sync>) -> Arc<dyn Blob + Send + Sync> {
+        Arc::new(CachingBlob {
             blob,
             cache: Mutex::new(HashMap::new()),
-        }) as Arc<dyn BlobMulti + Send + Sync>
+        }) as Arc<dyn Blob + Send + Sync>
     }
 }
 
 #[async_trait]
-impl BlobMulti for CachingBlobMulti {
+impl Blob for CachingBlob {
     async fn get(&self, deadline: Instant, key: &str) -> Result<Option<Vec<u8>>, ExternalError> {
         // Fetch the cached value if there is one.
         let cache = self.cache.lock().await;
@@ -274,7 +274,7 @@ impl BlobMulti for CachingBlobMulti {
         let value = self.blob.get(deadline, key).await?;
         if let Some(value) = &value {
             // Everything in persist is write-once modify-never, so until we add
-            // support for deletions to CachingBlobMulti, we're free to blindly
+            // support for deletions to CachingBlob, we're free to blindly
             // overwrite whatever is in the cache.
             self.cache
                 .lock()

@@ -28,7 +28,7 @@ use crate::indexed::cache::{BlobCache, CacheHint};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsVecBuilder};
 use crate::indexed::encoding::{BlobTraceBatchPart, TraceBatchMeta};
 use crate::indexed::metrics::Metrics;
-use crate::location::BlobMulti;
+use crate::location::Blob;
 
 /// A request to merge two trace batches and write the results to blob storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ pub struct Maintainer<B> {
     key_val_data_max_len: Option<usize>,
 }
 
-impl<B: BlobMulti> Maintainer<B> {
+impl<B: Blob> Maintainer<B> {
     /// Returns a new [Maintainer].
     pub fn new(blob: BlobCache<B>, metrics: Arc<Metrics>) -> Self {
         Maintainer {
@@ -92,7 +92,7 @@ impl<B: BlobMulti> Maintainer<B> {
     }
 }
 
-impl<B: BlobMulti + Send + Sync + 'static> Maintainer<B> {
+impl<B: Blob + Send + Sync + 'static> Maintainer<B> {
     /// Asynchronously runs the requested compaction on the tokio blocking work
     /// pool.
     pub async fn compact_trace(&self, req: CompactTraceReq) -> Result<CompactTraceRes, Error> {
@@ -379,7 +379,7 @@ impl<B: BlobMulti + Send + Sync + 'static> Maintainer<B> {
         }
     }
 
-    /// Write a [BlobTraceBatchPart] containing `updates` into [BlobMulti].
+    /// Write a [BlobTraceBatchPart] containing `updates` into [Blob].
     ///
     /// Returns the key and size in bytes for the trace batch part.
     async fn write_trace_batch_part(
@@ -409,7 +409,7 @@ mod tests {
     use crate::indexed::cache::CacheHint;
     use crate::indexed::columnar::ColumnarRecordsVec;
     use crate::indexed::metrics::Metrics;
-    use crate::mem::{MemBlobMulti, MemBlobMultiConfig};
+    use crate::mem::{MemBlob, MemBlobConfig};
 
     use super::*;
 
@@ -437,7 +437,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let blob = BlobCache::new(
             Arc::new(Metrics::default()),
-            MemBlobMulti::open(MemBlobMultiConfig::default()),
+            MemBlob::open(MemBlobConfig::default()),
             None,
         );
         let maintainer = Maintainer::new(blob, metrics);
@@ -527,7 +527,7 @@ mod tests {
 
     async fn compact_trace_test_case<
         'a,
-        B: BlobMulti + Send + Sync + 'static,
+        B: Blob + Send + Sync + 'static,
         F: FnMut() -> Result<(Maintainer<B>, BlobCache<B>), Error>,
     >(
         test: &CompactionTestCase<'a>,
@@ -639,7 +639,7 @@ mod tests {
             let metrics = Arc::new(Metrics::default());
             let blob = BlobCache::new(
                 Arc::new(Metrics::default()),
-                MemBlobMulti::open(MemBlobMultiConfig::default()),
+                MemBlob::open(MemBlobConfig::default()),
                 None,
             );
             let maintainer = Maintainer::new(blob.clone(), metrics);
@@ -872,7 +872,7 @@ mod tests {
             let metrics = Arc::new(Metrics::default());
             let blob = BlobCache::new(
                 Arc::new(Metrics::default()),
-                MemBlobMulti::open(MemBlobMultiConfig::default()),
+                MemBlob::open(MemBlobConfig::default()),
                 None,
             );
             let maintainer = Maintainer::new_for_testing(blob.clone(), metrics, 10);

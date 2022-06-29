@@ -18,8 +18,6 @@ set -euo pipefail
 apt-get update
 apt-get install -y \
     cmake \
-    docker.io \
-    docker-compose \
     g++ \
     postgresql \
     python3-venv \
@@ -31,6 +29,23 @@ curl -L "https://github.com/aws/aws-ec2-instance-connect-config/archive/refs/tag
 unzip ec2-instance-connect.zip
 cp aws-ec2-instance-connect-config-1.1.17/src/bin/* /usr/share/ec2-instance-connect/
 rm -r ec2-instance-connect.zip aws-ec2-instance-connect-config-1.1.17
+
+# Install docker as per the instructions from https://docs.docker.com/engine/install/ubuntu/
+sudo apt-get install -y \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release
+
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
 # Install Rust.
 sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y"

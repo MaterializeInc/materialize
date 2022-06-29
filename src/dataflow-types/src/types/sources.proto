@@ -129,11 +129,11 @@ message ProtoDebeziumMode {
 }
 
 message ProtoDebeziumDedupProjection {
-    uint64 source_idx = 1;
-    uint64 snapshot_idx = 2;
-    ProtoDebeziumSourceProjection source_projection = 3;
-    uint64 transaction_idx = 4;
-    uint64 total_order_idx = 5;
+    uint64 op_idx = 1;
+    uint64 source_idx = 2;
+    uint64 snapshot_idx = 3;
+    ProtoDebeziumSourceProjection source_projection = 4;
+    uint64 transaction_idx = 5;
     ProtoDebeziumTransactionMetadata tx_metadata = 6;
 }
 
@@ -145,7 +145,7 @@ message ProtoDebeziumSourceProjection {
     }
 
     message ProtoPostgres {
-        optional uint64 sequence = 1;
+        uint64 sequence = 1;
         uint64 lsn = 2;
     }
 
@@ -267,6 +267,5 @@ message ProtoIngestionDescription {
     repeated ProtoSourceMetadataImport source_imports = 1;
     mz_repr.global_id.ProtoGlobalId id = 2;
     ProtoSourceDesc desc = 3;
-    mz_persist.gen.persist.ProtoU64Antichain since = 4;
-    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 5;
+    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 4;
 }

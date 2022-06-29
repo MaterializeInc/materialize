@@ -237,7 +237,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
+contains:Expected one of CONNECTION or CLUSTER or DATABASE or INDEX or RECORDED or ROLE or SECRET or SCHEMA or SINK or SOURCE or TABLE or TYPE or USER or VIEW, found identifier
 
 > SHOW FULL OBJECTS
 name            type
@@ -371,25 +371,25 @@ mz_scheduling_parks_internal
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
-name                                          type   materialized  volatility  type
------------------------------------------------------------------------------------
-mz_arrangement_sharing_internal               system true          volatile    log
-mz_arrangement_batches_internal               system true          volatile    log
-mz_arrangement_records_internal               system true          volatile    log
-mz_dataflow_channels                          system true          volatile    log
-mz_dataflow_operator_addresses                system true          volatile    log
-mz_dataflow_operator_reachability_internal    system true          volatile    log
-mz_dataflow_operators                         system true          volatile    log
-mz_materialization_dependencies               system true          volatile    log
-mz_materializations                           system true          volatile    log
-mz_message_counts_received_internal           system true          volatile    log
-mz_message_counts_sent_internal               system true          volatile    log
-mz_peek_active                                system true          volatile    log
-mz_peek_durations                             system true          volatile    log
-mz_scheduling_elapsed_internal                system true          volatile    log
-mz_scheduling_histogram_internal              system true          volatile    log
-mz_scheduling_parks_internal                  system true          volatile    log
-mz_worker_materialization_frontiers           system true          volatile    log
+name                                          type   materialized  type
+-----------------------------------------------------------------------
+mz_arrangement_sharing_internal               system true          log
+mz_arrangement_batches_internal               system true          log
+mz_arrangement_records_internal               system true          log
+mz_dataflow_channels                          system true          log
+mz_dataflow_operator_addresses                system true          log
+mz_dataflow_operator_reachability_internal    system true          log
+mz_dataflow_operators                         system true          log
+mz_materialization_dependencies               system true          log
+mz_materializations                           system true          log
+mz_message_counts_received_internal           system true          log
+mz_message_counts_sent_internal               system true          log
+mz_peek_active                                system true          log
+mz_peek_durations                             system true          log
+mz_scheduling_elapsed_internal                system true          log
+mz_scheduling_histogram_internal              system true          log
+mz_scheduling_parks_internal                  system true          log
+mz_worker_materialization_frontiers           system true          log
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -397,7 +397,8 @@ mz_audit_events
 mz_base_types
 mz_clusters
 mz_cluster_replicas_base
-mz_cluster_replicas_status
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
 mz_columns
 mz_connections
 mz_databases
@@ -422,32 +423,33 @@ mz_views
 > SHOW FULL TABLES FROM mz_catalog
 name                        type
 ----------------------------------
-mz_array_types              system
-mz_audit_events             system
-mz_base_types               system
-mz_clusters                 system
-mz_cluster_replicas_base    system
-mz_cluster_replicas_status  system
-mz_columns                  system
-mz_connections               system
-mz_databases                system
-mz_functions                system
-mz_index_columns            system
-mz_indexes                  system
-mz_kafka_sinks              system
-mz_list_types               system
-mz_map_types                system
-mz_pseudo_types             system
-mz_roles                    system
-mz_schemas                  system
-mz_secrets                  system
-mz_sinks                    system
-mz_sources                  system
-mz_tables                   system
-mz_types                    system
-mz_view_foreign_keys        system
-mz_view_keys                system
-mz_views                    system
+mz_array_types                system
+mz_audit_events               system
+mz_base_types                 system
+mz_clusters                   system
+mz_cluster_replicas_base      system
+mz_cluster_replica_statuses   system
+mz_cluster_replica_heartbeats system
+mz_columns                    system
+mz_connections                system
+mz_databases                  system
+mz_functions                  system
+mz_index_columns              system
+mz_indexes                    system
+mz_kafka_sinks                system
+mz_list_types                 system
+mz_map_types                  system
+mz_pseudo_types               system
+mz_roles                      system
+mz_schemas                    system
+mz_secrets                    system
+mz_sinks                      system
+mz_sources                    system
+mz_tables                     system
+mz_types                      system
+mz_view_foreign_keys          system
+mz_view_keys                  system
+mz_views                      system
 
 > CREATE SCHEMA tester
 
@@ -459,7 +461,8 @@ mz_audit_events
 mz_base_types
 mz_clusters
 mz_cluster_replicas_base
-mz_cluster_replicas_status
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
 mz_columns
 mz_connections
 mz_databases
@@ -492,7 +495,8 @@ mz_audit_events
 mz_base_types
 mz_clusters
 mz_cluster_replicas_base
-mz_cluster_replicas_status
+mz_cluster_replica_heartbeats
+mz_cluster_replica_statuses
 mz_columns
 mz_connections
 mz_databases
@@ -517,7 +521,7 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-26
+27
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
@@ -547,29 +551,29 @@ mz_scheduling_histogram
 mz_scheduling_parks
 
 > SHOW FULL VIEWS FROM mz_catalog
-name                              type   materialized  volatility
------------------------------------------------------------------
-mz_arrangement_sharing            system false         volatile
-mz_arrangement_sizes              system false         volatile
-mz_dataflow_names                 system false         volatile
-mz_dataflow_operator_dataflows    system false         volatile
-mz_dataflow_operator_reachability system false         volatile
-mz_materialization_frontiers      system false         volatile
-mz_message_counts                 system false         volatile
-mz_objects                        system false         volatile
-mz_perf_arrangement_records       system false         volatile
-mz_perf_peek_durations_aggregates system false         volatile
-mz_perf_peek_durations_bucket     system false         volatile
-mz_perf_peek_durations_core       system false         volatile
-mz_records_per_dataflow           system false         volatile
-mz_records_per_dataflow_global    system false         volatile
-mz_records_per_dataflow_operator  system false         volatile
-mz_relations                      system false         volatile
-mz_catalog_names                  system false         volatile
-mz_cluster_replicas               system false         volatile
-mz_scheduling_elapsed             system false         volatile
-mz_scheduling_histogram           system false         volatile
-mz_scheduling_parks               system false         volatile
+name                              type   materialized
+-----------------------------------------------------
+mz_arrangement_sharing            system false
+mz_arrangement_sizes              system false
+mz_dataflow_names                 system false
+mz_dataflow_operator_dataflows    system false
+mz_dataflow_operator_reachability system false
+mz_materialization_frontiers      system false
+mz_message_counts                 system false
+mz_objects                        system false
+mz_perf_arrangement_records       system false
+mz_perf_peek_durations_aggregates system false
+mz_perf_peek_durations_bucket     system false
+mz_perf_peek_durations_core       system false
+mz_records_per_dataflow           system false
+mz_records_per_dataflow_global    system false
+mz_records_per_dataflow_operator  system false
+mz_relations                      system false
+mz_catalog_names                  system false
+mz_cluster_replicas               system false
+mz_scheduling_elapsed             system false
+mz_scheduling_histogram           system false
+mz_scheduling_parks               system false
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active

@@ -9,6 +9,29 @@
 #
 # Test that large transactions are properly replicated
 
+$ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/config content-type=application/json
+{
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "database.hostname": "postgres",
+  "database.port": "5432",
+  "database.user": "debezium",
+  "database.password": "debezium",
+  "database.dbname" : "postgres",
+  "database.server.name": "postgres",
+  "plugin.name": "pgoutput",
+  "slot.name" : "tester",
+  "database.history.kafka.bootstrap.servers": "kafka:9092",
+  "database.history.kafka.topic": "schema-changes.history",
+  "truncate.handling.mode": "include",
+  "provide.transaction.metadata": "true",
+  "decimal.handling.mode": "precise"
+}
+
+# PUT requests do not take effect immediately, we need to sleep
+
+> SELECT mz_internal.mz_sleep(10)
+<null>
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP TABLE IF EXISTS ten;
 CREATE TABLE ten (f1 INTEGER);
@@ -70,3 +93,27 @@ event_count data_collections
 20000       "{\"(public.large_distinct_rows,10000)\",\"(public.large_same_rows,10000)\"}"
 20000       "{\"(public.large_distinct_rows,20000)\"}"
 10000       "{\"(public.large_same_rows,10000)\"}"
+
+#
+# Restore default
+#
+
+$ http-request method=PUT url=http://debezium:8083/connectors/psql-connector/config content-type=application/json
+{
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "database.hostname": "postgres",
+  "database.port": "5432",
+  "database.user": "debezium",
+  "database.password": "debezium",
+  "database.dbname" : "postgres",
+  "database.server.name": "postgres",
+  "plugin.name": "pgoutput",
+  "slot.name" : "tester",
+  "database.history.kafka.bootstrap.servers": "kafka:9092",
+  "database.history.kafka.topic": "schema-changes.history",
+  "truncate.handling.mode": "include",
+  "decimal.handling.mode": "precise"
+}
+
+> SELECT mz_internal.mz_sleep(10)
+<null>

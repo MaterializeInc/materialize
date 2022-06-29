@@ -23,49 +23,49 @@ EXPLAIN SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN RAW PLAN FOR SELECT 665
 ----
 EXPLAIN RAW PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: RawPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: RawPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN DECORRELATED PLAN FOR SELECT 665
 ----
 EXPLAIN DECORRELATED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: DecorrelatedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: DecorrelatedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN PLAN FOR SELECT 665
 ----
 EXPLAIN OPTIMIZED PLAN FOR SELECT 665
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: true, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: true, timing: false } }))
 
 parse-statement
 EXPLAIN (TIMING false) TYPED OPTIMIZED PLAN FOR VIEW foo
@@ -93,46 +93,46 @@ EXPLAIN (TIMING false) VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN (TIMING false, TIMING true) VIEW foo
 ----
 EXPLAIN (TIMING true) OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: true } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: true } }))
 
 parse-statement
 EXPLAIN (TIMING false, TIMING true) DECORRELATED PLAN FOR VIEW foo
 ----
 EXPLAIN (TIMING true) DECORRELATED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: DecorrelatedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: true } })
+Explain(Old(ExplainStatementOld { stage: DecorrelatedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: false, timing: true } }))
 
 parse-statement
 EXPLAIN TYPED (TIMING false) OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: true, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: View(Name(UnresolvedObjectName([Ident("foo")]))), options: ExplainOptions { typed: true, timing: false } }))
 
 parse-statement
 EXPLAIN ((SELECT 1))
 ----
 EXPLAIN OPTIMIZED PLAN FOR SELECT 1
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN (WITH A AS (SELECT 1) SELECT * from A)
 ----
 EXPLAIN OPTIMIZED PLAN FOR WITH a AS (SELECT 1) SELECT * FROM a
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: Query(Query { ctes: [Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: OptimizedPlan, explainee: Query(Query { ctes: [Cte { alias: TableAlias { name: Ident("a"), columns: [], strict: false }, id: (), query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None } }], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("a")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
 
 parse-statement
 EXPLAIN TIMESTAMP FOR SELECT 1
 ----
 EXPLAIN TIMESTAMP FOR SELECT 1
 =>
-Explain(ExplainStatement { stage: Timestamp, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } })
+Explain(Old(ExplainStatementOld { stage: Timestamp, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: false, timing: false } }))
