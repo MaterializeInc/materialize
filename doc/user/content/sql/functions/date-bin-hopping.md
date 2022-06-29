@@ -1,14 +1,11 @@
 ---
 title: "date_bin_hopping function"
 description: "Builds a set of 'hopping' timestamps from a source timestamp"
-menu:
-  main:
-    parent: 'sql-functions'
+draft: true
+#menu:
+  #main:
+    #parent: 'sql-functions'
 ---
-
-{{< experimental v0.19.0 >}}
-The `date_bin_hopping` function
-{{< /experimental >}}
 
 `date_bin_hopping` returns every "[binned](../date-bin)" value:
 - Greater than or equal to the source timestamp minus `width`
