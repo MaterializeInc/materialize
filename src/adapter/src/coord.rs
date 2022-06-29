@@ -5221,6 +5221,7 @@ impl<S: Append + 'static> Coordinator<S> {
         let mut tables_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
+        let mut recorded_views_to_drop = vec![];
         let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
         let mut secrets_to_drop = vec![];
 
@@ -5257,6 +5258,11 @@ impl<S: Append + 'static> Coordinator<S> {
                         compute_instance, ..
                     }) => {
                         indexes_to_drop.push((*compute_instance, *id));
+                    }
+                    CatalogItem::RecordedView(catalog::RecordedView {
+                        compute_instance, ..
+                    }) => {
+                        recorded_views_to_drop.push((*compute_instance, *id));
                     }
                     CatalogItem::Secret(_) => {
                         secrets_to_drop.push(*id);
@@ -5306,6 +5312,9 @@ impl<S: Append + 'static> Coordinator<S> {
             }
             if !indexes_to_drop.is_empty() {
                 self.drop_indexes(indexes_to_drop).await;
+            }
+            if !recorded_views_to_drop.is_empty() {
+                self.drop_recorded_views(recorded_views_to_drop).await;
             }
             if !secrets_to_drop.is_empty() {
                 self.drop_secrets(secrets_to_drop).await;
@@ -5411,6 +5420,37 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await
                 .unwrap();
         }
+    }
+
+    async fn drop_recorded_views(&mut self, rviews: Vec<(ComputeInstanceId, GlobalId)>) {
+        let mut by_compute_instance = HashMap::new();
+        let mut source_ids = Vec::new();
+        for (compute_instance, id) in rviews {
+            if self.read_capability.remove(&id).is_some() {
+                by_compute_instance
+                    .entry(compute_instance)
+                    .or_insert(vec![])
+                    .push(id);
+                source_ids.push(id);
+            } else {
+                tracing::error!("Instructed to drop a recorded view that isn't one");
+            }
+        }
+
+        // Drop compute sinks.
+        for (compute_instance, ids) in by_compute_instance {
+            // A cluster could have been dropped, so verify it exists.
+            if let Some(mut compute) = self.dataflow_client.compute_mut(compute_instance) {
+                compute.drop_sinks(ids).await.unwrap();
+            }
+        }
+
+        // Drop storage sources.
+        self.dataflow_client
+            .storage_mut()
+            .drop_sources(source_ids)
+            .await
+            .unwrap();
     }
 
     async fn set_index_options(
