@@ -1044,6 +1044,7 @@ write frontier:[{timestamp_str}]\n"
 
     // Upper starts at 0, which the regex doesn't cover. Wait until it moves ahead.
     Retry::default()
+        .max_duration(Duration::from_secs(5))
         .retry(|_| {
             let row = client
                 .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])

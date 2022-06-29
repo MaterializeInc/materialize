@@ -345,7 +345,7 @@ enum WriteTxn {
         /// Client response for transaction.
         response: ExecuteResponse,
         /// The action to take at the end of the transaction.
-        action: Option<EndTransactionAction>,
+        action: EndTransactionAction,
         /// Holds the coordinator's write lock.
         write_lock_guard: Option<OwnedMutexGuard<()>>,
     },
@@ -1026,6 +1026,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .collect(),
             )
             .await;
+
             let mz_foreign_keys = self.catalog.resolve_builtin_table(&MZ_VIEW_FOREIGN_KEYS);
             self.send_builtin_table_updates(
                 log.variant
@@ -1248,7 +1249,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .expect("sending to internal_cmd_tx cannot fail");
             });
             // TODO(jkosh44) explain
-            self.group_commit(None);
+            self.group_commit(None).await;
         } else {
             // Try and get the write lock either from one of the pending write transaction or by
             // acquiring it ourselves.
@@ -1279,10 +1280,11 @@ impl<S: Append + 'static> Coordinator<S> {
         }
     }
 
-    /// Commits all pending write transactions and table advancements at the same timestamp. All
-    /// pending writes and table advancements will be combined into a single Append command and
-    /// sent to STORAGE as a single batch. All writes will happen at the same timestamp and all
-    /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
+    /// Commits all pending write transactions, DDL, and table advancements at the same timestamp.
+    /// DDL is included because it produces writes to system tables as a side effect. All pending
+    /// writes and table advancements will be combined into a single Append command and sent to
+    /// STORAGE as a single batch. All writes will happen at the same timestamp and all involved
+    /// tables will be advanced to some timestamp larger than the timestamp of the write.
     ///
     /// If the `write_lock_guard` is [`Some`] then both pending write transaction and table
     /// advancements will be committed, and the global timestamp will be increased.
@@ -1290,7 +1292,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// the global timestamp will not be increased.
     ///
     /// The timestamps used in this method might be ahead of `now()` if `now()` has gone
-    /// backwards at any point during this method. We will still commit the write without waiting
+    /// backwards at any point during this method. We will still commit the writes without waiting
     /// for `now()` to advance. This is ok because the next batch of writes will trigger the wait
     /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline. This
     /// approach prevents an unbounded advancing of the global timeline ahead of `now()`.
@@ -1298,6 +1300,7 @@ impl<S: Append + 'static> Coordinator<S> {
         if self.pending_group_commit.is_empty() {
             return;
         }
+        // Only advance the timestamp if we have the write lock
         let WriteTimestamp {
             timestamp,
             advance_to,
@@ -1497,7 +1500,7 @@ impl<S: Append + 'static> Coordinator<S> {
         // server being over used or some other cloud/network slowdown inbetween), the
         // AdvanceTables struct will gracefully attempt to close tables in a bounded
         // and fair manner.
-        const MAX_WAIT: Duration = Duration::from_millis(50);
+        const MAX_WAIT: Duration = Duration::from_millis(150);
         // Advancement that occurs within WINDOW from MAX_WAIT is fine, and won't
         // change the batch size.
         const WINDOW: Duration = Duration::from_millis(10);
@@ -1677,9 +1680,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        let plan = Plan::CreateSource(plan);
         self.submit_write(PendingWriteTxn::User {
-            write_txn: WriteTxn::DDL { plan, depends_on },
+            write_txn: WriteTxn::DDL {
+                plan: Plan::CreateSource(plan),
+                depends_on,
+            },
             client_transmitter: tx,
             session,
         });
@@ -2397,18 +2402,20 @@ impl<S: Append + 'static> Coordinator<S> {
     /// This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, mut session: Session) {
         self.clear_transaction(&mut session).await;
-        let conn_id = session.conn_id();
+
         let builtin_table_updates = self.drop_temp_items(&session).await;
         self.submit_write(PendingWriteTxn::System {
             builtin_table_updates,
             tx: None,
         });
         self.catalog
-            .drop_temporary_schema(conn_id)
+            .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
-        self.active_conns.remove(&conn_id);
+        self.active_conns.remove(&session.conn_id());
         self.internal_cmd_tx
-            .send(Message::RemovePendingPeeks { conn_id })
+            .send(Message::RemovePendingPeeks {
+                conn_id: session.conn_id(),
+            })
             .expect("sending to internal_cmd_tx cannot fail");
     }
 
@@ -2831,14 +2838,15 @@ impl<S: Append + 'static> Coordinator<S> {
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok((builtin_updates, _)) => Ok((
                 builtin_updates,
-                ExecuteResponse::CreatedSchema { existed: false },
+                ExecuteResponse::CreatedDatabase { existed: false },
             )),
             Err(CoordError::Catalog(catalog::Error {
-                kind: catalog::ErrorKind::SchemaAlreadyExists(_),
+                kind: catalog::ErrorKind::DatabaseAlreadyExists(_),
                 ..
-            })) if plan.if_not_exists => {
-                Ok((Vec::new(), ExecuteResponse::CreatedSchema { existed: true }))
-            }
+            })) if plan.if_not_exists => Ok((
+                Vec::new(),
+                ExecuteResponse::CreatedDatabase { existed: true },
+            )),
             Err(err) => Err(err),
         }
     }
@@ -2972,10 +2980,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .await?
             .0;
 
-        let instance = self
-            .catalog
-            .resolve_compute_instance(&of_cluster)
-            .expect("compute instance must exist after creation");
+        let instance = self.catalog.resolve_compute_instance(&of_cluster)?;
         let replica_id = instance.replica_id_by_name[&name];
         self.dataflow_client
             .add_replica_to_instance(instance.id, replica_id, config)
@@ -3094,12 +3099,14 @@ impl<S: Append + 'static> Coordinator<S> {
                     .state()
                     .source_description_for(table_id)
                     .unwrap();
+
                 let ingestion = IngestionDescription {
                     id: table_id,
                     desc: source_description,
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
                 };
+
                 self.dataflow_client
                     .storage_mut()
                     .create_sources(vec![CreateSourceRequest {
@@ -3115,6 +3122,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     .set_read_policy(vec![(table_id, policy)])
                     .await
                     .unwrap();
+
                 self.initialize_storage_read_policies(
                     vec![table_id],
                     self.logical_compaction_window_ms,
@@ -3211,22 +3219,26 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Do everything to instantiate the source at the coordinator and
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
+
                 let source_description = self
                     .catalog
                     .state()
                     .source_description_for(source_id)
                     .unwrap();
+
                 let mut ingestion = IngestionDescription {
                     id: source_id,
                     desc: source_description,
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
                 };
+
                 for id in self.catalog.state().get_entry(&source_id).uses() {
                     if self.catalog.state().get_entry(id).source().is_some() {
                         ingestion.source_imports.insert(*id, ());
                     }
                 }
+
                 self.dataflow_client
                     .storage_mut()
                     .create_sources(vec![CreateSourceRequest {
@@ -3235,6 +3247,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }])
                     .await
                     .unwrap();
+
                 self.initialize_storage_read_policies(
                     vec![source_id],
                     self.logical_compaction_window_ms,
@@ -3379,7 +3392,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 .await;
         }
 
-        // Now we're ready to create the sink connector. Arrange to notify the
+        // Now we're ready to create the sink connection. Arrange to notify the
         // main coordinator thread when the future completes.
         let connection_builder = sink.connection_builder;
         let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -3485,6 +3498,7 @@ impl<S: Append + 'static> Coordinator<S> {
         plan: CreateViewPlan,
         depends_on: Vec<GlobalId>,
     ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
+        let if_not_exists = plan.if_not_exists;
         let (ops, index) = self
             .generate_view_ops(
                 &session,
@@ -3521,7 +3535,7 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
-            })) if plan.if_not_exists => {
+            })) if if_not_exists => {
                 Ok((Vec::new(), ExecuteResponse::CreatedView { existed: true }))
             }
             Err(err) => Err(err),
@@ -3937,7 +3951,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     write_txn: WriteTxn::Write {
                         writes,
                         response,
-                        action: Some(action),
+                        action,
                         write_lock_guard,
                     },
                     client_transmitter: tx,
@@ -5401,45 +5415,6 @@ impl<S: Append + 'static> Coordinator<S> {
         return Ok(Vec::from(payload));
     }
 
-    /// Perform a catalog transaction on behalf of the system. The closure is passed
-    /// a [`CatalogTxn`] made from the prospective [`CatalogState`] (i.e., the
-    /// `Catalog` with `ops` applied but before the transaction is committed). The
-    /// closure can return an error to abort the transaction, or otherwise return a
-    /// value that is returned by this function. This allows callers to error while
-    /// building [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called
-    /// after this function successfully returns on any built `DataflowDesc`.
-    ///
-    /// All errors are passed back to the caller.
-    ///
-    /// [`CatalogState`]: crate::catalog::CatalogState
-    #[tracing::instrument(level = "debug", skip_all)]
-    async fn system_catalog_transact<F, R>(
-        &mut self,
-        session: Option<&Session>,
-        ops: Vec<catalog::Op>,
-        f: F,
-    ) -> Result<R, CoordError>
-    where
-        F: FnOnce(CatalogTxn<Timestamp>) -> Result<R, CoordError>,
-    {
-        let result = self.catalog_transact(session, ops, f).await;
-        let (builtin_updates, result) = match result {
-            Ok((builtin_updates, result)) => (Some(builtin_updates), Ok(result)),
-            Err(e) => (None, Err(e)),
-        };
-
-        if let Some(builtin_updates) = builtin_updates {
-            if !builtin_updates.is_empty() {
-                self.submit_write(PendingWriteTxn::System {
-                    builtin_table_updates: builtin_updates,
-                    tx: None,
-                })
-            }
-        };
-
-        result
-    }
-
     async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
@@ -5880,7 +5855,7 @@ impl<S: Append + 'static> Coordinator<S> {
     fn defer_write(&mut self, deferred: Deferred) {
         let id = match &deferred {
             Deferred::Plan(plan) => plan.session.conn_id().to_string(),
-            Deferred::GroupCommit => format!("group_commit"),
+            Deferred::GroupCommit => "group_commit".to_string(),
         };
         self.write_lock_wait_group.push_back(deferred);
 
