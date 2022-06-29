@@ -24,7 +24,7 @@ use tracing::error;
 use mz_dataflow_types::connections::aws::AwsExternalIdPrefix;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{ExternalSourceConnection, KinesisSourceConnection, MzOffset};
+use mz_dataflow_types::sources::{KinesisSourceConnection, MzOffset, SourceConnection};
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
 use mz_ore::metrics::{DeleteOnDropGauge, GaugeVecExt};
@@ -130,14 +130,14 @@ impl SourceReader for KinesisSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         _consumer_activator: SyncActivator,
-        connection: ExternalSourceConnection,
+        connection: SourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connection {
-            ExternalSourceConnection::Kinesis(kc) => kc,
+            SourceConnection::Kinesis(kc) => kc,
             _ => unreachable!(),
         };
 

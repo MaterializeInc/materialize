@@ -246,7 +246,7 @@ where
 {
     fn observe_command(&mut self, command: &StorageCommand<T>) {
         match command {
-            StorageCommand::CreateSources(ingestions) => {
+            StorageCommand::IngestSources(ingestions) => {
                 for ingestion in ingestions {
                     let mut frontier = MutableAntichain::new();
                     frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));

@@ -14,7 +14,6 @@ use std::num::TryFromIntError;
 use dec::TryFromDecimalError;
 use tokio::sync::oneshot;
 
-use mz_dataflow_types::sources::{ExternalSourceConnection, SourceConnection};
 use mz_expr::{EvalError, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -52,12 +51,6 @@ pub enum CoordError {
     /// Attempted to read from log sources on a cluster with disabled introspection.
     IntrospectionDisabled {
         log_names: Vec<String>,
-    },
-    /// Attempted to build a materialization on a source that does not allow multiple materializations
-    InvalidRematerialization {
-        base_source: String,
-        existing_indexes: Vec<String>,
-        source_type: RematerializedSourceType,
     },
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
@@ -182,19 +175,6 @@ impl CoordError {
                  safe mode, which limits the features that are available."
                     .into(),
             ),
-            CoordError::InvalidRematerialization {
-                existing_indexes, source_type, ..
-            } => {
-                let source_name = match source_type {
-                    RematerializedSourceType::Postgres => "Postgres",
-                    RematerializedSourceType::S3 => "S3 with SQS notification ",
-                };
-                Some(format!(
-                    "{} sources can be materialized by only one set of indexes at a time. \
-                     The following indexes have already materialized this source:\n    {}",
-                    source_name,
-                    existing_indexes.join("\n    ")))
-            }
             CoordError::IntrospectionDisabled { log_names }
             | CoordError::UntargetedLogRead { log_names } => Some(format!(
                 "The query references the following log sources:\n    {}",
@@ -222,16 +202,6 @@ impl CoordError {
                 // and include the actual roles that exist in the message,
                 // because that leaks information to unauthenticated clients.)
                 Some("Try connecting as the \"materialize\" user.".into())
-            }
-            CoordError::InvalidRematerialization { source_type, .. } => {
-                let doc_page = match source_type {
-                    RematerializedSourceType::Postgres => "postgres",
-                    RematerializedSourceType::S3 => "text-s3",
-                };
-                Some(format!(
-                    "See the documentation at https://materialize.com/docs/sql/create-source/{}",
-                    doc_page
-                ))
             }
             CoordError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
@@ -288,13 +258,6 @@ impl fmt::Display for CoordError {
                 f,
                 "cannot read log sources on cluster with disabled introspection"
             ),
-            CoordError::InvalidRematerialization {
-                base_source,
-                existing_indexes: _,
-                source_type: _,
-            } => {
-                write!(f, "Cannot re-materialize source {}", base_source)
-            }
             CoordError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",
@@ -476,28 +439,3 @@ impl From<oneshot::error::RecvError> for CoordError {
 }
 
 impl Error for CoordError {}
-
-/// Represent a source that is not allowed to be rematerialized
-#[derive(Debug)]
-pub enum RematerializedSourceType {
-    Postgres,
-    S3,
-}
-
-impl RematerializedSourceType {
-    /// Create a RematerializedSourceType error helper
-    ///
-    /// # Panics
-    ///
-    /// If the source is of a type that is allowed to be rematerialized
-    pub fn for_source(source: &catalog::Source) -> RematerializedSourceType {
-        match &source.connection {
-            SourceConnection::External { connection, .. } => match connection {
-                ExternalSourceConnection::S3(_) => RematerializedSourceType::S3,
-                ExternalSourceConnection::Postgres(_) => RematerializedSourceType::Postgres,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        }
-    }
-}

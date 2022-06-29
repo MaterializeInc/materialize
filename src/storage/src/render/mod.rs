@@ -109,6 +109,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::sources::IngestionDescription;
+use mz_repr::GlobalId;
 
 use crate::storage_state::StorageState;
 
@@ -124,11 +125,12 @@ mod upsert;
 pub fn build_storage_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     storage_state: &mut StorageState,
-    debug_name: &str,
-    ingestion: IngestionDescription<CollectionMetadata>,
+    id: GlobalId,
+    description: IngestionDescription<CollectionMetadata>,
     as_of: Antichain<mz_repr::Timestamp>,
 ) {
     let worker_logging = timely_worker.log_register().get("timely");
+    let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -141,7 +143,8 @@ pub fn build_storage_dataflow<A: Allocate>(
             let ((ok, err), token) = crate::render::sources::render_source(
                 region,
                 &debug_name,
-                ingestion.clone(),
+                id,
+                description.clone(),
                 as_of,
                 // NOTE: For now sources never have LinearOperators but might have in the future
                 None,
@@ -152,14 +155,14 @@ pub fn build_storage_dataflow<A: Allocate>(
 
             crate::render::persist_sink::render(
                 region,
-                ingestion.id,
-                ingestion.storage_metadata,
+                id,
+                description.storage_metadata,
                 source_data,
                 storage_state,
                 Rc::clone(&token),
             );
 
-            storage_state.source_tokens.insert(ingestion.id, token);
+            storage_state.source_tokens.insert(id, token);
         })
     });
 }

@@ -221,13 +221,13 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
     )?;
 
     // Push demand information into the SourceDesc.
-    for (source_id, source) in dataflow.source_imports.iter_mut() {
+    for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
         if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
             // Install no-op demand information if none exists.
             if source.arguments.operators.is_none() {
                 source.arguments.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source.description.desc.arity()).collect(),
+                    projection: (0..source.typ.arity()).collect(),
                 })
             }
             // Restrict required columns by those identified as demanded.
@@ -305,13 +305,13 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     )?;
 
     // Push predicate information into the SourceDesc.
-    for (source_id, source) in dataflow.source_imports.iter_mut() {
+    for (source_id, (source, _monotonic)) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
             // Install no-op predicate information if none exists.
             if source.arguments.operators.is_none() {
                 source.arguments.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source.description.desc.arity()).collect(),
+                    projection: (0..source.typ.arity()).collect(),
                 })
             }
             // Add any predicates that can be pushed to the source.
@@ -351,8 +351,8 @@ where
 /// Propagates information about monotonic inputs through views.
 pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     let mut monotonic = std::collections::HashSet::new();
-    for (source_id, source) in dataflow.source_imports.iter_mut() {
-        if source.description.connection.append_only() {
+    for (source_id, (_source, is_monotonic)) in dataflow.source_imports.iter_mut() {
+        if *is_monotonic {
             monotonic.insert(source_id.clone());
         }
     }

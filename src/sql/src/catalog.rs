@@ -24,7 +24,7 @@ use once_cell::sync::Lazy;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::connections::Connection;
-use mz_dataflow_types::sources::SourceConnection;
+use mz_dataflow_types::sources::SourceDesc;
 use mz_expr::{DummyHumanizer, ExprHumanizer, MirScalarExpr};
 use mz_ore::now::{EpochMillis, NowFn, NOW_ZERO};
 use mz_repr::{ColumnName, GlobalId, RelationDesc, ScalarType};
@@ -295,9 +295,9 @@ pub trait CatalogItem {
 
     /// Returns the resolved source connection.
     ///
-    /// If the catalog item is not of a type that contains a `SourceConnection`
+    /// If the catalog item is not of a type that contains a `SourceDesc`
     /// (i.e., anything other than sources), it returns an error.
-    fn source_connection(&self) -> Result<&SourceConnection, CatalogError>;
+    fn source_desc(&self) -> Result<&SourceDesc, CatalogError>;
 
     /// Returns the resolved connection.
     ///

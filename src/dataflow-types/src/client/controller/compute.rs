@@ -344,18 +344,14 @@ where
         let mut augmented_dataflows = Vec::with_capacity(dataflows.len());
         for d in dataflows {
             let mut source_imports = BTreeMap::new();
-            for (id, si) in d.source_imports {
-                let metadata = self
-                    .storage_controller
-                    .collection(id)?
-                    .collection_metadata
-                    .clone();
+            for (id, (si, monotonic)) in d.source_imports {
+                let collection = self.storage_controller.collection(id)?;
                 let desc = SourceInstanceDesc {
-                    description: si.description,
-                    storage_metadata: metadata,
+                    storage_metadata: collection.collection_metadata.clone(),
                     arguments: si.arguments,
+                    typ: collection.description.desc.typ().clone(),
                 };
-                source_imports.insert(id, desc);
+                source_imports.insert(id, (desc, monotonic));
             }
 
             let mut sink_exports = BTreeMap::new();

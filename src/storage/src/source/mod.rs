@@ -11,7 +11,7 @@
 //!
 //! Raw sources are streams (currently, Timely streams) of data directly produced by the
 //! upstream service. The main export of this module is [`create_raw_source`],
-//! which turns [`RawSourceCreationConfig`]s, [`ExternalSourceConnection`]s,
+//! which turns [`RawSourceCreationConfig`]s, [`SourceConnection`]s,
 //! and [`SourceReader`] implementations into the aforementioned streams.
 //!
 //! The full source, which is the _differential_ stream that represents the actual object
@@ -53,7 +53,7 @@ use mz_avro::types::Value;
 use mz_dataflow_types::client::controller::storage::CollectionMetadata;
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::encoding::SourceDataEncoding;
-use mz_dataflow_types::sources::{ExternalSourceConnection, MzOffset};
+use mz_dataflow_types::sources::{MzOffset, SourceConnection};
 use mz_dataflow_types::{DecodeError, SourceError, SourceErrorDetails};
 use mz_expr::PartitionId;
 use mz_ore::cast::CastFrom;
@@ -170,7 +170,7 @@ where
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: ExternalSourceConnection,
+        connection: SourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
@@ -408,7 +408,7 @@ pub trait SourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: ExternalSourceConnection,
+        connection: SourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         encoding: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
@@ -693,7 +693,7 @@ impl PartitionMetrics {
 }
 
 /// Creates a raw source dataflow operator from a connection that has a corresponding [`SourceReader`]
-/// implentation. The type of ExternalSourceConnection determines the type of
+/// implentation. The type of SourceConnection determines the type of
 /// connection that _should_ be created.
 ///
 /// This is also the place where _reclocking_
@@ -704,7 +704,7 @@ impl PartitionMetrics {
 /// raw sources are used.
 pub fn create_raw_source<G, S: 'static>(
     config: RawSourceCreationConfig<G>,
-    source_connection: &ExternalSourceConnection,
+    source_connection: &SourceConnection,
     connection_context: ConnectionContext,
 ) -> (
     (

@@ -25,8 +25,7 @@ use uuid::Uuid;
 
 use mz_dataflow_types::connections::{ConnectionContext, KafkaConnection, StringOrSecret};
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnection, KafkaOffset, KafkaSourceConnection,
-    MzOffset,
+    encoding::SourceDataEncoding, KafkaOffset, KafkaSourceConnection, MzOffset, SourceConnection,
 };
 use mz_expr::PartitionId;
 use mz_kafka_util::{client::create_new_client_config, client::MzClientContext};
@@ -88,14 +87,14 @@ impl SourceReader for KafkaSourceReader {
         worker_id: usize,
         worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: ExternalSourceConnection,
+        connection: SourceConnection,
         restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _: SourceDataEncoding,
         metrics: crate::source::metrics::SourceBaseMetrics,
         connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         let kc = match connection {
-            ExternalSourceConnection::Kafka(kc) => kc,
+            SourceConnection::Kafka(kc) => kc,
             _ => unreachable!(),
         };
         let KafkaSourceConnection {

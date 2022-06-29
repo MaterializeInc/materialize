@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_dataflow_types::client::ComputeInstanceId;
 use mz_dataflow_types::sinks::{SinkConnectionBuilder, SinkEnvelope};
-use mz_dataflow_types::sources::SourceConnection;
+use mz_dataflow_types::sources::{SourceDesc, Timeline};
 use mz_expr::{MirRelationExpr, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
@@ -189,6 +189,7 @@ pub struct CreateSourcePlan {
     pub source: Source,
     pub if_not_exists: bool,
     pub materialized: bool,
+    pub timeline: Timeline,
     pub remote: Option<String>,
 }
 
@@ -475,7 +476,7 @@ pub struct Table {
 #[derive(Clone, Debug)]
 pub struct Source {
     pub create_sql: String,
-    pub connection: SourceConnection,
+    pub source_desc: SourceDesc,
     pub desc: RelationDesc,
 }
 

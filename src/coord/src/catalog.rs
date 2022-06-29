@@ -30,11 +30,8 @@ use mz_dataflow_types::client::{
     ComputeInstanceId, ConcreteComputeInstanceReplicaConfig, ProcessId, ReplicaId,
 };
 use mz_dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use mz_dataflow_types::sinks::{
-    PersistSinkConnection, PersistSinkConnectionBuilder, SinkConnection, SinkConnectionBuilder,
-    SinkEnvelope,
-};
-use mz_dataflow_types::sources::{SourceConnection, Timeline};
+use mz_dataflow_types::sinks::{SinkConnection, SinkConnectionBuilder, SinkEnvelope};
+use mz_dataflow_types::sources::{SourceDesc, Timeline};
 use mz_expr::{ExprHumanizer, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -152,54 +149,6 @@ impl CatalogState {
         }
         self.oid_counter += 1;
         Ok(oid)
-    }
-
-    /// Encapsulates the logic for creating a source description for a source or table in the catalog.
-    pub fn source_description_for(
-        &self,
-        id: GlobalId,
-    ) -> Option<mz_dataflow_types::sources::SourceDesc> {
-        let entry = self.get_entry(&id);
-
-        match entry.item() {
-            CatalogItem::Table(table) => {
-                let connection = SourceConnection::Local {
-                    timeline: table.timeline(),
-                };
-                Some(mz_dataflow_types::sources::SourceDesc {
-                    connection,
-                    desc: table.desc.clone(),
-                })
-            }
-            CatalogItem::Source(source) => {
-                let connection = source.connection.clone();
-                Some(mz_dataflow_types::sources::SourceDesc {
-                    connection,
-                    desc: source.desc.clone(),
-                })
-            }
-            // TODO(teskje): Replace once `CatalogItem::RecordedView` lands.
-            CatalogItem::Sink(Sink {
-                connection:
-                    SinkConnectionState::Ready(SinkConnection::Persist(PersistSinkConnection {
-                        value_desc,
-                        ..
-                    }))
-                    | SinkConnectionState::Pending(SinkConnectionBuilder::Persist(
-                        PersistSinkConnectionBuilder { value_desc },
-                    )),
-                ..
-            }) => {
-                let connection = SourceConnection::Local {
-                    timeline: Timeline::EpochMilliseconds,
-                };
-                Some(mz_dataflow_types::sources::SourceDesc {
-                    connection,
-                    desc: value_desc.clone(),
-                })
-            }
-            _ => None,
-        }
     }
 
     /// Computes the IDs of any indexes that transitively depend on this catalog
@@ -1027,16 +976,11 @@ impl Table {
 #[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
-    pub connection: SourceConnection,
+    pub source_desc: SourceDesc,
     pub desc: RelationDesc,
+    pub timeline: Timeline,
     pub depends_on: Vec<GlobalId>,
     pub remote_addr: Option<String>,
-}
-
-impl Source {
-    pub fn requires_single_materialization(&self) -> bool {
-        self.connection.requires_single_materialization()
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1145,12 +1089,9 @@ impl CatalogItem {
         }
     }
 
-    pub fn source_connection(
-        &self,
-        name: &QualifiedObjectName,
-    ) -> Result<&SourceConnection, SqlCatalogError> {
+    pub fn source_desc(&self, name: &QualifiedObjectName) -> Result<&SourceDesc, SqlCatalogError> {
         match &self {
-            CatalogItem::Source(source) => Ok(&source.connection),
+            CatalogItem::Source(source) => Ok(&source.source_desc),
             _ => Err(SqlCatalogError::UnknownSource(name.item.clone())),
         }
     }
@@ -1275,18 +1216,6 @@ impl CatalogItem {
             }
         }
     }
-
-    pub fn requires_single_materialization(&self) -> bool {
-        if let CatalogItem::Source(Source {
-            connection: SourceConnection::External { ref connection, .. },
-            ..
-        }) = self
-        {
-            connection.requires_single_materialization()
-        } else {
-            false
-        }
-    }
 }
 
 impl CatalogEntry {
@@ -1339,10 +1268,10 @@ impl CatalogEntry {
         }
     }
 
-    /// Returns the [`mz_dataflow_types::sources::SourceConnection`] associated with
+    /// Returns the [`mz_dataflow_types::sources::SourceDesc`] associated with
     /// this `CatalogEntry`.
-    pub fn source_connection(&self) -> Result<&SourceConnection, SqlCatalogError> {
-        self.item.source_connection(self.name())
+    pub fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+        self.item.source_desc(self.name())
     }
 
     /// Reports whether this catalog entry is a table.
@@ -3293,15 +3222,19 @@ impl<S: Append> Catalog<S> {
                 conn_id: None,
                 depends_on,
             }),
-            Plan::CreateSource(CreateSourcePlan { source, remote, .. }) => {
-                CatalogItem::Source(Source {
-                    create_sql: source.create_sql,
-                    connection: source.connection,
-                    desc: source.desc,
-                    depends_on,
-                    remote_addr: remote,
-                })
-            }
+            Plan::CreateSource(CreateSourcePlan {
+                source,
+                remote,
+                timeline,
+                ..
+            }) => CatalogItem::Source(Source {
+                create_sql: source.create_sql,
+                source_desc: source.source_desc,
+                desc: source.desc,
+                timeline,
+                depends_on,
+                remote_addr: remote,
+            }),
             Plan::CreateView(CreateViewPlan { view, .. }) => {
                 let mut optimizer = Optimizer::logical_optimizer();
                 let optimized_expr = optimizer.optimize(view.expr)?;
@@ -3867,8 +3800,8 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.func()?)
     }
 
-    fn source_connection(&self) -> Result<&SourceConnection, SqlCatalogError> {
-        Ok(self.source_connection()?)
+    fn source_desc(&self) -> Result<&SourceDesc, SqlCatalogError> {
+        Ok(self.source_desc()?)
     }
 
     fn connection(&self) -> Result<&mz_dataflow_types::connections::Connection, SqlCatalogError> {

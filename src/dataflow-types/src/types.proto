@@ -30,6 +30,7 @@ message ProtoDataflowDescription {
     message ProtoSourceImport {
         mz_repr.global_id.ProtoGlobalId id = 1;
         ProtoSourceInstanceDesc source_instance_desc = 2;
+        bool monotonic = 3;
     }
 
     message ProtoIndex{
@@ -64,9 +65,9 @@ message ProtoBuildDesc {
 }
 
 message ProtoSourceInstanceDesc {
-    mz_dataflow_types.types.sources.ProtoSourceDesc description = 1;
-    ProtoSourceInstanceArguments arguments = 2;
-    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 3;
+    ProtoSourceInstanceArguments arguments = 1;
+    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 2;
+    mz_repr.relation_and_scalar.ProtoRelationType typ = 3;
 }
 
 message ProtoSourceInstanceArguments {
