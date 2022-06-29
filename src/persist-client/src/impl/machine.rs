@@ -185,6 +185,7 @@ where
             let desc = Description::<T>::from(&batch.desc);
             for key in batch.keys.iter() {
                 fetch_batch_part(
+                    &self.shard_id(),
                     self.blob.as_ref(),
                     &self.metrics,
                     key,
@@ -790,6 +791,7 @@ mod tests {
                             for (idx, key) in batch.keys.iter().enumerate() {
                                 s.push_str(&format!("<part {}>\n", idx));
                                 fetch_batch_part(
+                                    &shard_id,
                                     client.blob.as_ref(),
                                     client.metrics.as_ref(),
                                     key,

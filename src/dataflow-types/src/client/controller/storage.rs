@@ -412,6 +412,10 @@ where
                         .await?
                 }
             };
+            eprintln!(
+                "WIP source {} data_shard={} remap_shard={} for source {:?}",
+                id, metadata.data_shard, metadata.remap_shard, description
+            );
 
             let (write, read) = self
                 .persist_client

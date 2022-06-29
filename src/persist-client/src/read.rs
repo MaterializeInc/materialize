@@ -131,6 +131,7 @@ where
             let mut ts_diffs = HashMap::<(T, D), usize>::new();
             let mut updates = Vec::new();
             fetch_batch_part(
+                &self.shard_id,
                 self.blob.as_ref(),
                 &self.metrics,
                 &key,
@@ -150,12 +151,21 @@ where
             )
             .await;
             eprintln!(
-                "WIP snapshot iter batch had {} updates: {} {:?}\n{:?}",
+                "WIP snapshot iter batch {} had {} updates at {:?}: {} {:?}\n{:?}",
+                self.shard_id,
                 updates.len(),
+                self.as_of.elements(),
                 key,
                 desc,
                 ts_diffs,
             );
+            if updates.len() > 0 {
+                eprintln!(
+                    "WIP snapshot batch for {}: {:?}",
+                    self.shard_id,
+                    &updates[..std::cmp::min(20, updates.len())]
+                );
+            }
             if updates.is_empty() {
                 // We might have filtered everything.
                 continue;
@@ -200,11 +210,13 @@ pub enum ListenEvent<K, V, T, D> {
 /// An ongoing subscription of updates to a shard.
 #[derive(Debug)]
 pub struct Listen<K, V, T, D> {
+    shard_id: ShardId,
     metrics: Arc<Metrics>,
     as_of: Antichain<T>,
     frontier: Antichain<T>,
     machine: Machine<K, V, T, D>,
     blob: Arc<dyn Blob + Send + Sync>,
+    total_yielded: usize,
 }
 
 impl<K, V, T, D> Listen<K, V, T, D>
@@ -243,15 +255,22 @@ where
         let mut updates = Vec::new();
         for key in batch.keys.iter() {
             fetch_batch_part(
+                &self.shard_id,
                 self.blob.as_ref(),
                 &self.metrics,
                 key,
                 &batch.desc,
-                |k, v, t, d| {
+                |k, v, mut t, d| {
                     // This would get covered by a snapshot started at the same as_of.
                     if !self.as_of.less_than(&t) {
                         return;
                     }
+                    // WIP explain
+                    if !self.frontier.less_than(&t) {
+                        return;
+                    }
+                    // WIP not sure why this would be necessary but shrug
+                    t.advance_by(self.as_of.borrow());
                     let k = self.metrics.codecs.key.decode(|| K::decode(k));
                     let v = self.metrics.codecs.val.decode(|| V::decode(v));
                     let d = D::decode(d);
@@ -260,8 +279,29 @@ where
             )
             .await;
         }
+        self.total_yielded += updates.len();
+        if updates.len() > 0 {
+            eprintln!(
+                "WIP listen batch for {}: {:?}",
+                self.shard_id,
+                &updates[..std::cmp::min(20, updates.len())]
+            );
+            eprintln!(
+                "WIP listen for {} at {:?} (yielded {}/{}) batch: {:?}",
+                self.machine.shard_id(),
+                self.as_of.elements(),
+                updates.len(),
+                self.total_yielded,
+                batch,
+            );
+        }
         let mut ret = Vec::with_capacity(2);
         if !updates.is_empty() {
+            let mut ts_diffs = HashMap::<(T, D), usize>::new();
+            for (_kv, t, d) in updates.iter() {
+                *(ts_diffs.entry((t.clone(), d.clone())).or_default()) += 1;
+            }
+            eprintln!("WIP ts_diffs = {:?}", ts_diffs);
             ret.push(ListenEvent::Updates(updates));
         }
         ret.push(ListenEvent::Progress(batch.desc.upper().clone()));
@@ -370,12 +410,19 @@ where
     pub async fn listen(&self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
         trace!("ReadHandle::listen as_of={:?}", as_of);
         let machine = self.machine.verify_listen(&as_of).await?;
+        eprintln!(
+            "WIP listen for {} at {:?}",
+            self.machine.shard_id(),
+            as_of.elements(),
+        );
         Ok(Listen {
+            shard_id: self.machine.shard_id(),
             metrics: Arc::clone(&self.metrics),
             as_of: as_of.clone(),
             frontier: as_of,
             machine,
             blob: Arc::clone(&self.blob),
+            total_yielded: 0,
         })
     }
 
@@ -451,8 +498,9 @@ where
         // afterward.
         let batches = self.machine.clone().snapshot(&as_of).await?;
         eprintln!(
-            "WIP snapshot for {}: \n  {:?}",
+            "WIP snapshot for {} at {:?}: \n  {:?}",
             self.machine.shard_id(),
+            as_of.elements(),
             batches
         );
         let batches = batches.into_iter().flat_map(|b| {
@@ -616,6 +664,7 @@ where
 }
 
 pub(crate) async fn fetch_batch_part<T, UpdateFn>(
+    shard_id: &ShardId,
     blob: &(dyn Blob + Send + Sync),
     metrics: &Metrics,
     key: &str,
@@ -720,6 +769,8 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
             );
         }
 
+        let mut skipped = 0;
+        let mut yielded = 0;
         for chunk in batch.updates {
             for ((k, v), t, d) in chunk.iter() {
                 let t = T::decode(t);
@@ -727,15 +778,22 @@ pub(crate) async fn fetch_batch_part<T, UpdateFn>(
                 // WIP this is really subtle and possibly wrong, justify!
                 if has_original_timestamps {
                     if !output_desc.lower().less_equal(&t) {
+                        skipped += 1;
                         continue;
                     }
                     if output_desc.upper().less_equal(&t) {
+                        skipped += 1;
                         continue;
                     }
                 }
+                yielded += 1;
                 update_fn(k, v, t, d);
             }
         }
+        eprintln!(
+            "WIP fetch_batch_part {} key {} yielded {} skipped {} updates: {:?}",
+            shard_id, key, yielded, skipped, output_desc
+        );
     })
 }
 

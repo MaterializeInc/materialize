@@ -180,6 +180,7 @@ impl Compactor {
                     //     key, part.desc, req.desc, updates
                     // );
                     handle.block_on(fetch_batch_part(
+                        &req.shard_id,
                         blob.as_ref(),
                         &metrics,
                         &key,

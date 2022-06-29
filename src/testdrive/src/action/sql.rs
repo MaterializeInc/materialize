@@ -273,6 +273,8 @@ impl SqlAction {
             .map(|row| decode_row(state, row))
             .collect::<Result<_, _>>()?;
         actual.sort();
+        print!(" {:?}", actual);
+        io::stdout().flush().unwrap();
 
         match &self.cmd.expected_output {
             SqlOutput::Full {
