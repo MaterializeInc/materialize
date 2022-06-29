@@ -2406,9 +2406,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&conn_id);
         self.internal_cmd_tx
-            .send(Message::RemovePendingPeeks {
-                conn_id,
-            })
+            .send(Message::RemovePendingPeeks { conn_id })
             .expect("sending to internal_cmd_tx cannot fail");
     }
 
