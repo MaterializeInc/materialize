@@ -46,6 +46,7 @@ SERVICES = [
     ),
     Testdrive(
         materialize_url=f"postgres://materialize@materialized:6875",
+        aws_endpoint=None,
         seed=SEED,
     ),
 ]
