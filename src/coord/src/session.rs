@@ -26,6 +26,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row, ScalarType};
 use mz_sql::ast::{Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, StatementDesc};
 
+use crate::client::ConnectionId;
 use crate::coord::{CoordTimestamp, PeekResponseUnary};
 use crate::error::CoordError;
 
@@ -36,12 +37,12 @@ pub use self::vars::{
     SERVER_PATCH_VERSION,
 };
 
-const DUMMY_CONNECTION_ID: u32 = 0;
+const DUMMY_CONNECTION_ID: ConnectionId = 0;
 
 /// A session holds per-connection state.
 #[derive(Debug)]
 pub struct Session<T = mz_repr::Timestamp> {
-    conn_id: u32,
+    conn_id: ConnectionId,
     prepared_statements: HashMap<String, PreparedStatement>,
     portals: HashMap<String, Portal>,
     transaction: TransactionStatus<T>,
@@ -53,7 +54,7 @@ pub struct Session<T = mz_repr::Timestamp> {
 
 impl<T: CoordTimestamp> Session<T> {
     /// Creates a new session for the specified connection ID.
-    pub fn new(conn_id: u32, user: String) -> Session<T> {
+    pub fn new(conn_id: ConnectionId, user: String) -> Session<T> {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(conn_id, user)
     }
@@ -66,7 +67,7 @@ impl<T: CoordTimestamp> Session<T> {
         Self::new_internal(DUMMY_CONNECTION_ID, "mz_system".into())
     }
 
-    fn new_internal(conn_id: u32, user: String) -> Session<T> {
+    fn new_internal(conn_id: ConnectionId, user: String) -> Session<T> {
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
@@ -80,7 +81,7 @@ impl<T: CoordTimestamp> Session<T> {
     }
 
     /// Returns the connection ID associated with the session.
-    pub fn conn_id(&self) -> u32 {
+    pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
     }
 

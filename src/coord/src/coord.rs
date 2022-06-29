@@ -153,7 +153,7 @@ use crate::catalog::{
     self, storage, BuiltinTableUpdate, Catalog, CatalogItem, CatalogState, ComputeInstance,
     Connection, SinkConnectionState,
 };
-use crate::client::{Client, Handle};
+use crate::client::{Client, ConnectionId, Handle};
 use crate::command::{
     Canceled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
@@ -184,7 +184,7 @@ pub enum Message<T = mz_repr::Timestamp> {
     AdvanceLocalInput(AdvanceLocalInput<T>),
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
-    RemovePendingPeeks { conn_id: u32 },
+    RemovePendingPeeks { conn_id: ConnectionId },
 }
 
 #[derive(Debug)]
@@ -263,7 +263,7 @@ pub struct Config<S> {
 
 struct PendingPeek {
     sender: mpsc::UnboundedSender<PeekResponse>,
-    conn_id: u32,
+    conn_id: ConnectionId,
 }
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
@@ -473,7 +473,7 @@ pub struct Coordinator<S> {
     transient_id_counter: u64,
     /// A map from connection ID to metadata about that connection for all
     /// active connections.
-    active_conns: HashMap<u32, ConnMeta>,
+    active_conns: HashMap<ConnectionId, ConnMeta>,
 
     /// For each identifier, its read policy and any transaction holds on time.
     ///
@@ -487,13 +487,13 @@ pub struct Coordinator<S> {
     ///
     /// Upon completing a transaction, this timestamp should be removed from the holds
     /// in `self.read_capability[id]`, using the `release_read_holds` method.
-    txn_reads: HashMap<u32, TxnReads>,
+    txn_reads: HashMap<ConnectionId, TxnReads>,
 
     /// A map from pending peek ids to the queue into which responses are sent, and
     /// the connection id of the client that initiated the peek.
     pending_peeks: HashMap<Uuid, PendingPeek>,
     /// A map from client connection ids to a set of all pending peeks for that client
-    client_pending_peeks: HashMap<u32, BTreeMap<Uuid, ComputeInstanceId>>,
+    client_pending_peeks: HashMap<ConnectionId, BTreeMap<Uuid, ComputeInstanceId>>,
     /// A map from pending tails to the tail description.
     pending_tails: HashMap<GlobalId, PendingTail>,
 
@@ -2056,7 +2056,7 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+    async fn handle_cancel(&mut self, conn_id: ConnectionId, secret_key: u32) {
         if let Some(conn_meta) = self.active_conns.get(&conn_id) {
             // If the secret key specified by the client doesn't match the
             // actual secret key for the target connection, we treat this as a
@@ -3685,7 +3685,7 @@ impl<S: Append + 'static> Coordinator<S> {
         &self,
         uses_ids: I,
         timeline: &Option<Timeline>,
-        conn_id: u32,
+        conn_id: ConnectionId,
         compute_instance: mz_dataflow_types::client::ComputeInstanceId,
     ) -> Result<CollectionIdBundle, CoordError>
     where
@@ -5691,7 +5691,7 @@ fn auto_generate_primary_idx(
     on_name: FullObjectName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
-    conn_id: Option<u32>,
+    conn_id: Option<ConnectionId>,
     depends_on: Vec<GlobalId>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
@@ -5804,6 +5804,7 @@ pub mod fast_path_peek {
     use std::{collections::HashMap, num::NonZeroUsize};
     use uuid::Uuid;
 
+    use crate::client::ConnectionId;
     use crate::coord::{PeekResponseUnary, PendingPeek};
     use crate::CoordError;
     use mz_expr::{EvalError, Id, MirScalarExpr};
@@ -5935,7 +5936,7 @@ pub mod fast_path_peek {
             fast_path: Plan,
             timestamp: mz_repr::Timestamp,
             finishing: mz_expr::RowSetFinishing,
-            conn_id: u32,
+            conn_id: ConnectionId,
             source_arity: usize,
             compute_instance: ComputeInstanceId,
             target_replica: Option<ReplicaId>,

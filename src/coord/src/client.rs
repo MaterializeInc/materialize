@@ -28,6 +28,9 @@ use crate::coord::PeekResponseUnary;
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, PreparedStatement, Session};
 
+/// An abstraction allowing us to name different connections.
+pub type ConnectionId = u32;
+
 /// A handle to a running coordinator.
 ///
 /// The coordinator runs on its own thread. Dropping the handle will wait for
@@ -74,7 +77,7 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     cmd_tx: mpsc::UnboundedSender<Command>,
-    id_alloc: Arc<IdAllocator<u32>>,
+    id_alloc: Arc<IdAllocator<ConnectionId>>,
 }
 
 impl Client {
@@ -122,13 +125,13 @@ impl Client {
 /// See also [`Client`].
 #[derive(Debug)]
 pub struct ConnClient {
-    conn_id: u32,
+    conn_id: ConnectionId,
     inner: Client,
 }
 
 impl ConnClient {
     /// Returns the ID of the connection associated with this client.
-    pub fn conn_id(&self) -> u32 {
+    pub fn conn_id(&self) -> ConnectionId {
         self.conn_id
     }
 
@@ -181,7 +184,7 @@ impl ConnClient {
     }
 
     /// Cancels the query currently running on another connection.
-    pub async fn cancel_request(&mut self, conn_id: u32, secret_key: u32) {
+    pub async fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
         self.inner
             .cmd_tx
             .send(Command::CancelRequest {
@@ -326,7 +329,7 @@ impl SessionClient {
     }
 
     /// Cancels the query currently running on another connection.
-    pub async fn cancel_request(&mut self, conn_id: u32, secret_key: u32) {
+    pub async fn cancel_request(&mut self, conn_id: ConnectionId, secret_key: u32) {
         self.inner.cancel_request(conn_id, secret_key).await
     }
 
