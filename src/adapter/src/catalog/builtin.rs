@@ -1051,6 +1051,17 @@ pub static MZ_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
         .with_column("name", ScalarType::String.nullable(false))
         .with_column("definition", ScalarType::String.nullable(false)),
 });
+pub static MZ_RECORDED_VIEWS: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
+    name: "mz_recorded_views",
+    schema: MZ_CATALOG_SCHEMA,
+    desc: RelationDesc::empty()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("oid", ScalarType::Oid.nullable(false))
+        .with_column("schema_id", ScalarType::Int64.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column("cluster_id", ScalarType::Int64.nullable(false))
+        .with_column("definition", ScalarType::String.nullable(false)),
+});
 pub static MZ_TYPES: Lazy<BuiltinTable> = Lazy::new(|| BuiltinTable {
     name: "mz_types",
     schema: MZ_CATALOG_SCHEMA,
@@ -2089,6 +2100,7 @@ pub static BUILTINS_STATIC: Lazy<Vec<Builtin<NameReference>>> = Lazy::new(|| {
         Builtin::Table(&MZ_SOURCES),
         Builtin::Table(&MZ_SINKS),
         Builtin::Table(&MZ_VIEWS),
+        Builtin::Table(&MZ_RECORDED_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_ARRAY_TYPES),
         Builtin::Table(&MZ_BASE_TYPES),

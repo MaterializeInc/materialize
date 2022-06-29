@@ -3265,12 +3265,52 @@ impl<S: Append + 'static> Coordinator<S> {
 
     async fn sequence_create_recorded_view(
         &mut self,
-        _session: &Session,
-        _plan: CreateRecordedViewPlan,
-        _depends_on: Vec<GlobalId>,
+        session: &Session,
+        plan: CreateRecordedViewPlan,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, AdapterError> {
-        // TODO(teskje): implement
-        Err(AdapterError::Unsupported("recorded views"))
+        let CreateRecordedViewPlan {
+            name,
+            recorded_view,
+            replace,
+            if_not_exists,
+        } = plan;
+
+        self.validate_timeline(recorded_view.expr.depends_on())?;
+
+        // Allocate IDs for the recorded view in the catalog.
+        let id = self.catalog.allocate_user_id().await?;
+        let oid = self.catalog.allocate_oid().await?;
+
+        let optimized_expr = self.view_optimizer.optimize(recorded_view.expr)?;
+        let desc = RelationDesc::new(optimized_expr.typ(), recorded_view.column_names);
+
+        let mut ops = Vec::new();
+        if let Some(drop_id) = replace {
+            ops.extend(self.catalog.drop_items_ops(&[drop_id]));
+        }
+
+        ops.push(catalog::Op::CreateItem {
+            id,
+            oid,
+            name,
+            item: CatalogItem::RecordedView(catalog::RecordedView {
+                create_sql: recorded_view.create_sql,
+                optimized_expr,
+                desc,
+                depends_on,
+                compute_instance: recorded_view.compute_instance,
+            }),
+        });
+
+        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedRecordedView { existed: false }),
+            Err(AdapterError::Catalog(catalog::Error {
+                kind: catalog::ErrorKind::ItemAlreadyExists(_),
+                ..
+            })) if if_not_exists => Ok(ExecuteResponse::CreatedRecordedView { existed: true }),
+            Err(err) => Err(err),
+        }
     }
 
     async fn sequence_create_index(
