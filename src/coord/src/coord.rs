@@ -3036,6 +3036,7 @@ impl<S: Append + 'static> Coordinator<S> {
             name,
             item: CatalogItem::Secret(secret.clone()),
         }];
+
         match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
             Ok((builtin_updates, _)) => Ok((
                 builtin_updates,
@@ -5422,6 +5423,16 @@ impl<S: Append + 'static> Coordinator<S> {
         return Ok(Vec::from(payload));
     }
 
+    /// Perform a catalog transaction. The closure is passed a [`CatalogTxn`]
+    /// made from the prospective [`CatalogState`] (i.e., the `Catalog` with `ops`
+    /// applied but before the transaction is committed). The closure can return
+    /// an error to abort the transaction, or otherwise return a value that is
+    /// returned by this function. This allows callers to error while building
+    /// [`DataflowDesc`]s. [`Coordinator::ship_dataflow`] must be called after this
+    /// function successfully returns on any built `DataflowDesc`.
+    ///
+    /// [`CatalogState`]: crate::catalog::CatalogState
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn catalog_transact<F, R>(
         &mut self,
         session: Option<&Session>,
