@@ -27,8 +27,8 @@ use mz_sql_parser::ast::{AstInfo, ExplainStatementNew, ExplainStatementOld};
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
-    CreateViewStatement, DeleteStatement, ExplainStatement, Explainee, Ident, InsertStatement,
-    ExplainStageOld, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
+    CreateViewStatement, DeleteStatement, ExplainStageOld, ExplainStatement, Explainee, Ident,
+    InsertStatement, Query, SelectStatement, Statement, TailOption, TailOptionName, TailRelation,
     TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
