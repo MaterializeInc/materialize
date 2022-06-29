@@ -593,10 +593,6 @@ pub fn plan_create_source(
         mz_sql_parser::ast::Envelope::None => {
             UnplannedSourceEnvelope::None(key_envelope.unwrap_or(KeyEnvelope::None))
         }
-        mz_sql_parser::ast::Envelope::DifferentialRow => {
-            assert!(key_envelope.is_none());
-            UnplannedSourceEnvelope::DifferentialRow
-        }
         mz_sql_parser::ast::Envelope::Debezium(mode) => {
             //TODO check that key envelope is not set
             let (before_idx, after_idx) = typecheck_debezium(&value_desc)?;
@@ -2163,7 +2159,6 @@ pub fn plan_create_sink(
         None if matches!(connection, CreateSinkConnection::Persist { .. }) => {
             SinkEnvelope::DifferentialRow
         }
-        Some(Envelope::DifferentialRow) => unreachable!("not expressable in SQL"),
         // Other sinks default to ENVELOPE DEBEZIUM. Not sure that's good, though...
         None => SinkEnvelope::Debezium,
         Some(Envelope::Debezium(mz_sql_parser::ast::DbzMode::Plain { tx_metadata })) => {

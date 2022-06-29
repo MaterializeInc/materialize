@@ -65,7 +65,6 @@ message ProtoSourceEnvelope {
         ProtoDebeziumEnvelope debezium = 2;
         ProtoUpsertEnvelope upsert = 3;
         google.protobuf.Empty cdc_v2 = 4;
-        google.protobuf.Empty differential_row = 5;
     }
 }
 
