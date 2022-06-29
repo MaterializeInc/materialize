@@ -325,6 +325,13 @@ impl PendingWriteTxn {
             Self::System { .. } => false,
         }
     }
+
+    fn take_write_lock(&mut self) -> Option<OwnedMutexGuard<()>> {
+        match self {
+            Self::User { write_txn, .. } => write_txn.take_write_lock(),
+            Self::System { .. } => None,
+        }
+    }
 }
 
 /// Different forms of write transactions
@@ -365,6 +372,15 @@ impl WriteTxn {
                 write_lock_guard, ..
             } => write_lock_guard.is_some(),
             Self::DDL { .. } | Self::SinkConnectionReady { .. } => false,
+        }
+    }
+
+    fn take_write_lock(&mut self) -> Option<OwnedMutexGuard<()>> {
+        match self {
+            Self::Write {
+                write_lock_guard, ..
+            } => std::mem::replace(write_lock_guard, None),
+            Self::DDL { .. } | Self::SinkConnectionReady { .. } => None,
         }
     }
 }
@@ -1130,7 +1146,9 @@ impl<S: Append + 'static> Coordinator<S> {
                                 self.sequence_plan(ready.tx, ready.session, ready.plan, depends_on)
                                     .await;
                             }
-                            Deferred::GroupCommit => self.group_commit().await,
+                            Deferred::GroupCommit => {
+                                self.group_commit(Some(write_lock_guard)).await
+                            }
                         }
                     }
                     // N.B. if no deferred plans, write lock is released by drop
@@ -1203,59 +1221,80 @@ impl<S: Append + 'static> Coordinator<S> {
                     .send(Message::GroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
-        } else if self
-            .pending_group_commit
-            .pending_writes
-            .iter()
-            .any(|pending_write| pending_write.has_write_lock())
-        {
-            // If some transaction already holds the write lock, then we can execute a group
-            // commit.
-            self.group_commit().await;
-        } else if let Ok(_guard) = Arc::clone(&self.write_lock).try_lock_owned() {
-            // If no transaction holds the write lock, then we need to acquire it.
-            self.group_commit().await;
         } else {
-            // If some running transaction already holds the write lock, then one of the
-            // following things will happen:
-            //   1. The transaction will submit a write which will transfer the
-            //      ownership of the lock to group commit and trigger another group
-            //      group commit.
-            //   2. The transaction will complete without submitting a write (abort,
-            //      empty writes, etc) which will drop the lock. The deferred group
-            //      commit will then acquire the lock and execute a group commit.
-            self.defer_write(Deferred::GroupCommit);
+            // Try and get the write lock either from one of the pending write transaction or by
+            // acquiring it ourselves.
+            let write_lock_guard = {
+                if let Some(idx) = self
+                    .pending_group_commit
+                    .pending_writes
+                    .iter()
+                    .position(|write| write.has_write_lock())
+                {
+                    self.pending_group_commit.pending_writes[idx].take_write_lock()
+                } else {
+                    Arc::clone(&self.write_lock).try_lock_owned().ok()
+                }
+            };
+            if write_lock_guard.is_none() && !self.pending_group_commit.pending_writes.is_empty() {
+                // If some running transaction already holds the write lock, then one of the
+                // following things will happen:
+                //   1. The transaction will submit a write which will transfer the
+                //      ownership of the lock to group commit and trigger another group
+                //      group commit.
+                //   2. The transaction will complete without submitting a write (abort,
+                //      empty writes, etc) which will drop the lock. The deferred group
+                //      commit will then acquire the lock and execute a group commit.
+                self.defer_write(Deferred::GroupCommit);
+            }
+            self.group_commit(write_lock_guard).await;
         }
     }
 
-    /// Commits all pending write transactions at the same timestamp. All pending writes will be
-    /// combined into a single Append command and sent to STORAGE as a single batch. All writes will
-    /// happen at the same timestamp and all involved tables will be advanced to some timestamp
-    /// larger than the timestamp of the writes.
-    /// A batch of tables may also be advanced at the same timestamp as the tables writes.
+    /// Commits all pending write transactions and table advancements at the same timestamp. All
+    /// pending writes and table advancements will be combined into a single Append command and
+    /// sent to STORAGE as a single batch. All writes will happen at the same timestamp and all
+    /// involved tables will be advanced to some timestamp larger than the timestamp of the write.
+    ///
+    /// If the [`write_lock_guard`] is [`Some`] then both pending write transaction and table
+    /// advancements will be committed, and the global timestamp will be increased.
+    /// If the [`write_lock_guard`] is [`None`] then only table advancements will be committed, and
+    /// the global timestamp will not be increased.
+    ///
     /// The timestamps used in this method might be ahead of `now()` if `now()` has gone
     /// backwards at any point during this method. We will still commit the write without waiting
     /// for `now()` to advance. This is ok because the next batch of writes will trigger the wait
     /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline. This
     /// approach prevents an unbounded advancing of the global timeline ahead of `now()`.
-    async fn group_commit(&mut self) {
+    async fn group_commit(&mut self, write_lock_guard: Option<OwnedMutexGuard<()>>) {
         if self.pending_group_commit.is_empty() {
             return;
         }
         let WriteTimestamp {
             timestamp,
             advance_to,
-        } = self.get_local_write_ts();
+        } = if write_lock_guard.is_some() {
+            self.get_local_write_ts()
+        } else {
+            let timestamp = self.get_local_read_ts();
+            WriteTimestamp {
+                timestamp,
+                advance_to: timestamp.step_forward(),
+            }
+        };
 
         // Separate out DDL from non-DDL
         let mut ddl = Vec::new();
         let mut writes = Vec::new();
-        for pending_write_txn in self.pending_group_commit.pending_writes.drain(..) {
-            if matches!(pending_write_txn, PendingWriteTxn::User{ref write_txn, ..} if matches!(write_txn, WriteTxn::Write{..}))
-            {
-                writes.push(pending_write_txn);
-            } else {
-                ddl.push(pending_write_txn);
+        // Only add non-empty writes if we have the write lock
+        if let Some(_guard) = write_lock_guard {
+            for pending_write_txn in self.pending_group_commit.pending_writes.drain(..) {
+                if matches!(pending_write_txn, PendingWriteTxn::User{ref write_txn, ..} if matches!(write_txn, WriteTxn::Write{..}))
+                {
+                    writes.push(pending_write_txn);
+                } else {
+                    ddl.push(pending_write_txn);
+                }
             }
         }
 
@@ -1386,8 +1425,24 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
         }
-        for id in self.pending_group_commit.table_advances.drain() {
-            appends.entry(id).or_insert(Vec::new());
+
+        // Table advancements are ok to execute without the lock
+        {
+            let storage = self.dataflow_client.storage();
+            for id in self.pending_group_commit.table_advances.drain() {
+                // If the table was deleted while the table advancement was waiting, then the
+                // table advancement will be ignored.
+                // If the table was already advanced then the table advancement will be ignored.
+                if self.catalog.try_get_entry(&id).is_some()
+                    && storage
+                        .collection(id)
+                        .unwrap()
+                        .write_frontier
+                        .less_than(&advance_to)
+                {
+                    appends.entry(id).or_insert(Vec::new());
+                }
+            }
         }
         let appends: Vec<_> = appends
             .into_iter()
