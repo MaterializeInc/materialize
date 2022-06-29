@@ -27,7 +27,7 @@ use tracing::{error, info, warn};
 
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sources::{
-    encoding::SourceDataEncoding, ExternalSourceConnection, MzOffset, PostgresSourceConnection,
+    encoding::SourceDataEncoding, MzOffset, PostgresSourceConnection, SourceConnection,
 };
 use mz_dataflow_types::SourceErrorDetails;
 use mz_expr::PartitionId;
@@ -163,16 +163,16 @@ impl SourceReader for PostgresSourceReader {
         _worker_id: usize,
         _worker_count: usize,
         consumer_activator: SyncActivator,
-        connection: ExternalSourceConnection,
+        connection: SourceConnection,
         _restored_offsets: Vec<(PartitionId, Option<MzOffset>)>,
         _encoding: SourceDataEncoding,
         metrics: SourceBaseMetrics,
         _connection_context: ConnectionContext,
     ) -> Result<Self, anyhow::Error> {
         let connection = match connection {
-            ExternalSourceConnection::Postgres(pg) => pg,
+            SourceConnection::Postgres(pg) => pg,
             _ => {
-                panic!("Postgres is the only legitimate ExternalSourceConnection for PostgresSourceReader")
+                panic!("Postgres is the only legitimate SourceConnection for PostgresSourceReader")
             }
         };
 

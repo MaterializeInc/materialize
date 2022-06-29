@@ -89,7 +89,7 @@ use tracing::{trace, warn, Instrument};
 use uuid::Uuid;
 
 use mz_build_info::BuildInfo;
-use mz_dataflow_types::client::controller::storage::CreateSourceRequest;
+use mz_dataflow_types::client::controller::storage::CollectionDescription;
 use mz_dataflow_types::client::controller::{
     ClusterReplicaSizeConfig, ClusterReplicaSizeMap, ComputeInstanceEvent, ReadPolicy,
 };
@@ -100,8 +100,7 @@ use mz_dataflow_types::client::{
 use mz_dataflow_types::connections::ConnectionContext;
 use mz_dataflow_types::sinks::{SinkAsOf, SinkConnection, SinkDesc, TailSinkConnection};
 use mz_dataflow_types::sources::{
-    ExternalSourceConnection, IngestionDescription, PostgresSourceConnection, SourceConnection,
-    Timeline,
+    IngestionDescription, PostgresSourceConnection, SourceConnection, Timeline,
 };
 use mz_dataflow_types::{
     BuildDesc, DataflowDesc, DataflowDescription, IndexDesc, PeekResponse, Update,
@@ -735,19 +734,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 // about how it was built. If we start building multiple sinks and/or indexes
                 // using a single dataflow, we have to make sure the rebuild process re-runs
                 // the same multiple-build dataflow.
-                CatalogItem::Source(src) => {
+                CatalogItem::Source(source) => {
                     // Re-announce the source description.
-                    let source_description = self
-                        .catalog
-                        .state()
-                        .source_description_for(entry.id())
-                        .unwrap();
-
                     let mut ingestion = IngestionDescription {
-                        id: entry.id(),
-                        desc: source_description,
+                        desc: source.source_desc.clone(),
                         source_imports: BTreeMap::new(),
                         storage_metadata: (),
+                        typ: source.desc.typ().clone(),
                     };
 
                     for id in entry.uses() {
@@ -758,10 +751,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![CreateSourceRequest {
-                            ingestion,
-                            remote_addr: src.remote_addr.clone(),
-                        }])
+                        .create_collections(vec![(
+                            entry.id(),
+                            CollectionDescription {
+                                desc: source.desc.clone(),
+                                ingestion: Some(ingestion),
+                                remote_addr: source.remote_addr.clone(),
+                            },
+                        )])
                         .await
                         .unwrap();
                     self.initialize_storage_read_policies(
@@ -770,38 +767,21 @@ impl<S: Append + 'static> Coordinator<S> {
                     )
                     .await;
                 }
-                CatalogItem::Table(_) => {
-                    let since_ts = self.get_local_write_ts();
-
-                    // Re-announce the source description.
-                    let source_description = self
-                        .catalog
-                        .state()
-                        .source_description_for(entry.id())
-                        .unwrap();
-
-                    let mut ingestion = IngestionDescription {
-                        id: entry.id(),
-                        desc: source_description,
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                    };
-
-                    for id in entry.uses() {
-                        if self.catalog.state().get_entry(id).source().is_some() {
-                            ingestion.source_imports.insert(*id, ());
-                        }
-                    }
-
+                CatalogItem::Table(table) => {
                     self.dataflow_client
                         .storage_mut()
-                        .create_sources(vec![CreateSourceRequest {
-                            ingestion,
-                            remote_addr: None,
-                        }])
+                        .create_collections(vec![(
+                            entry.id(),
+                            CollectionDescription {
+                                desc: table.desc.clone(),
+                                ingestion: None,
+                                remote_addr: None,
+                            },
+                        )])
                         .await
                         .unwrap();
 
+                    let since_ts = self.get_local_write_ts();
                     let policy = ReadPolicy::ValidFrom(Antichain::from_elem(since_ts));
                     self.dataflow_client
                         .storage_mut()
@@ -833,30 +813,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::View(_) => (),
                 CatalogItem::Sink(sink) => {
-                    // Re-announce the source description.
-                    // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
-                    if let Some(desc) = self.catalog.state().source_description_for(entry.id()) {
-                        let ingestion = IngestionDescription {
-                            id: entry.id(),
-                            desc,
-                            source_imports: BTreeMap::new(),
-                            storage_metadata: (),
-                        };
-                        self.dataflow_client
-                            .storage_mut()
-                            .create_sources(vec![CreateSourceRequest {
-                                ingestion,
-                                remote_addr: None,
-                            }])
-                            .await
-                            .unwrap();
-                        self.initialize_storage_read_policies(
-                            vec![entry.id()],
-                            self.logical_compaction_window_ms,
-                        )
-                        .await;
-                    }
-
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
                         SinkConnectionState::Pending(builder) => builder,
@@ -2813,26 +2769,16 @@ impl<S: Append + 'static> Coordinator<S> {
                 // Determine the initial validity for the table.
                 let since_ts = self.get_local_write_ts();
 
-                // Announce the creation of the table source.
-                let source_description = self
-                    .catalog
-                    .state()
-                    .source_description_for(table_id)
-                    .unwrap();
-
-                let ingestion = IngestionDescription {
-                    id: table_id,
-                    desc: source_description,
-                    source_imports: BTreeMap::new(),
-                    storage_metadata: (),
-                };
-
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![CreateSourceRequest {
-                        ingestion,
-                        remote_addr: None,
-                    }])
+                    .create_collections(vec![(
+                        table_id,
+                        CollectionDescription {
+                            desc: table.desc.clone(),
+                            ingestion: None,
+                            remote_addr: None,
+                        },
+                    )])
                     .await
                     .unwrap();
 
@@ -2869,8 +2815,9 @@ impl<S: Append + 'static> Coordinator<S> {
         let source_oid = self.catalog.allocate_oid().await?;
         let source = catalog::Source {
             create_sql: plan.source.create_sql,
-            connection: plan.source.connection,
+            source_desc: plan.source.source_desc,
             desc: plan.source.desc,
+            timeline: plan.timeline,
             depends_on,
             remote_addr: plan.remote,
         };
@@ -2934,17 +2881,11 @@ impl<S: Append + 'static> Coordinator<S> {
                 // inform the timestamper and dataflow workers of its existence before
                 // shipping any dataflows that depend on its existence.
 
-                let source_description = self
-                    .catalog
-                    .state()
-                    .source_description_for(source_id)
-                    .unwrap();
-
                 let mut ingestion = IngestionDescription {
-                    id: source_id,
-                    desc: source_description,
+                    desc: source.source_desc.clone(),
                     source_imports: BTreeMap::new(),
                     storage_metadata: (),
+                    typ: source.desc.typ().clone(),
                 };
 
                 for id in self.catalog.state().get_entry(&source_id).uses() {
@@ -2955,10 +2896,14 @@ impl<S: Append + 'static> Coordinator<S> {
 
                 self.dataflow_client
                     .storage_mut()
-                    .create_sources(vec![CreateSourceRequest {
-                        ingestion,
-                        remote_addr: source.remote_addr,
-                    }])
+                    .create_collections(vec![(
+                        source_id,
+                        CollectionDescription {
+                            desc: source.desc.clone(),
+                            ingestion: Some(ingestion),
+                            remote_addr: source.remote_addr,
+                        },
+                    )])
                     .await
                     .unwrap();
 
@@ -3065,31 +3010,7 @@ impl<S: Append + 'static> Coordinator<S> {
             })
             .await;
         match transact_result {
-            Ok(()) => {
-                // Announce the creation of the sink's corresponding source.
-                // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
-                if let Some(desc) = self.catalog.state().source_description_for(id) {
-                    let ingestion = IngestionDescription {
-                        id,
-                        desc,
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                    };
-                    self.dataflow_client
-                        .storage_mut()
-                        .create_sources(vec![CreateSourceRequest {
-                            ingestion,
-                            remote_addr: None,
-                        }])
-                        .await
-                        .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![id],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
-                }
-            }
+            Ok(()) => {}
             Err(CoordError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
@@ -5130,20 +5051,18 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                     CatalogItem::Source(source) => {
                         sources_to_drop.push(*id);
-                        if let SourceConnection::External {
-                            connection:
-                                ExternalSourceConnection::Postgres(PostgresSourceConnection {
-                                    conn,
-                                    details,
-                                    ..
-                                }),
-                            ..
-                        } = &source.connection
-                        {
-                            replication_slots_to_drop
-                                .entry(conn.clone())
-                                .or_insert_with(Vec::new)
-                                .push(details.slot.clone());
+                        match &source.source_desc.connection {
+                            SourceConnection::Postgres(PostgresSourceConnection {
+                                conn,
+                                details,
+                                ..
+                            }) => {
+                                replication_slots_to_drop
+                                    .entry(conn.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(details.slot.clone());
+                            }
+                            _ => {}
                         }
                     }
                     CatalogItem::Sink(catalog::Sink {
@@ -5498,7 +5417,7 @@ impl<S: Append + 'static> Coordinator<S> {
             let entry = self.catalog.get_entry(&id);
             match entry.item() {
                 CatalogItem::Source(source) => {
-                    timelines.insert(id, source.connection.timeline());
+                    timelines.insert(id, source.timeline.clone());
                 }
                 CatalogItem::Index(index) => {
                     ids.push(index.on);

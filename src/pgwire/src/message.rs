@@ -380,7 +380,6 @@ impl ErrorResponse {
             CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::Internal(_) => SqlState::INTERNAL_ERROR,
             CoordError::IntrospectionDisabled { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            CoordError::InvalidRematerialization { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidParameterValue { .. } => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::InvalidClusterReplicaAz { .. } => SqlState::FEATURE_NOT_SUPPORTED,

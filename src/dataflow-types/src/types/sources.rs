@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use mz_persist_types::Codec;
 use mz_repr::chrono::any_naive_datetime;
-use mz_repr::proto::{any_duration, any_uuid, TryFromProtoError};
+use mz_repr::proto::{any_uuid, TryFromProtoError};
 use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
@@ -45,39 +45,16 @@ include!(concat!(
 ));
 
 /// A description of a source ingestion
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct IngestionDescription<S = ()> {
-    /// The source identifier
-    pub id: GlobalId,
     /// The source description
     pub desc: SourceDesc,
     /// Source collections made available to this ingestion.
     pub source_imports: BTreeMap<GlobalId, S>,
     /// Additional storage controller metadata needed to ingest this source
     pub storage_metadata: S,
-}
-
-impl Arbitrary for IngestionDescription<CollectionMetadata> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<BTreeMap<GlobalId, CollectionMetadata>>(),
-            any::<GlobalId>(),
-            any::<SourceDesc>(),
-            any::<CollectionMetadata>(),
-        )
-            .prop_map(
-                |(source_imports, id, desc, storage_metadata)| IngestionDescription {
-                    source_imports,
-                    id,
-                    desc,
-                    storage_metadata,
-                },
-            )
-            .boxed()
-    }
+    /// The relation type this ingestion should produce
+    pub typ: RelationType,
 }
 
 impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMetadata> {
@@ -95,9 +72,9 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
             .collect();
         ProtoIngestionDescription {
             source_imports,
-            id: Some(self.id.into_proto()),
             desc: Some(self.desc.into_proto()),
             storage_metadata: Some(self.storage_metadata.into_proto()),
+            typ: Some(self.typ.into_proto()),
         }
     }
 
@@ -123,15 +100,15 @@ impl RustType<ProtoIngestionDescription> for IngestionDescription<CollectionMeta
                     },
                 )
                 .collect::<Result<_, TryFromProtoError>>()?,
-            id: proto
-                .id
-                .into_rust_if_some("ProtoIngestionDescription::id")?,
             desc: proto
                 .desc
                 .into_rust_if_some("ProtoIngestionDescription::desc")?,
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoIngestionDescription::storage_metadata")?,
+            typ: proto
+                .typ
+                .into_rust_if_some("ProtoIngestionDescription::typ")?,
         })
     }
 }
@@ -433,7 +410,7 @@ impl RustType<ProtoTimeline> for Timeline {
     }
 }
 
-/// `SourceEnvelope`s describe how to turn a stream of messages from `SourceConnection`s
+/// `SourceEnvelope`s describe how to turn a stream of messages from `SourceDesc`s
 /// into a _differential stream_, that is, a stream of (data, time, diff)
 /// triples.
 ///
@@ -1270,22 +1247,24 @@ impl RustType<ProtoCompression> for Compression {
     }
 }
 
-/// A source of updates for a relational collection.
-///
-/// A source contains enough information to instantiate a stream of changes,
-/// as well as related metadata about the columns, their types, and properties
-/// of the collection.
+/// An external source of updates for a relational collection.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SourceDesc {
     pub connection: SourceConnection,
-    pub desc: RelationDesc,
+    pub encoding: encoding::SourceDataEncoding,
+    pub envelope: SourceEnvelope,
+    pub metadata_columns: Vec<IncludedColumnSource>,
+    pub ts_frequency: Duration,
 }
 
 impl RustType<ProtoSourceDesc> for SourceDesc {
     fn into_proto(&self) -> ProtoSourceDesc {
         ProtoSourceDesc {
             connection: Some(self.connection.into_proto()),
-            desc: Some(self.desc.into_proto()),
+            encoding: Some(self.encoding.into_proto()),
+            envelope: Some(self.envelope.into_proto()),
+            metadata_columns: self.metadata_columns.into_proto(),
+            ts_frequency: Some(self.ts_frequency.into_proto()),
         }
     }
 
@@ -1294,136 +1273,35 @@ impl RustType<ProtoSourceDesc> for SourceDesc {
             connection: proto
                 .connection
                 .into_rust_if_some("ProtoSourceDesc::connection")?,
-            desc: proto.desc.into_rust_if_some("ProtoSourceDesc::desc")?,
+            encoding: proto
+                .encoding
+                .into_rust_if_some("ProtoSourceDesc::encoding")?,
+            envelope: proto
+                .envelope
+                .into_rust_if_some("ProtoSourceDesc::envelope")?,
+            metadata_columns: proto.metadata_columns.into_rust()?,
+            ts_frequency: proto
+                .ts_frequency
+                .into_rust_if_some("ProtoSourceDesc::ts_frequency")?,
         })
     }
 }
 
-/// A `SourceConnection` describes how data is produced for a source, be
-/// it from a local table, or some upstream service. It is the first
-/// step of _rendering_ of a source, and describes only how to produce
-/// a stream of messages associated with MzOffset's.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub enum SourceConnection {
-    External {
-        connection: ExternalSourceConnection,
-        encoding: encoding::SourceDataEncoding,
-        envelope: SourceEnvelope,
-        metadata_columns: Vec<IncludedColumnSource>,
-        ts_frequency: Duration,
-        timeline: Timeline,
-    },
-
-    /// A local "source" is fed by a local input handle.
-    Local { timeline: Timeline },
-}
-
-impl Arbitrary for SourceConnection {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop_oneof![
-            (
-                any::<ExternalSourceConnection>(),
-                any::<encoding::SourceDataEncoding>(),
-                any::<SourceEnvelope>(),
-                any::<Vec<IncludedColumnSource>>(),
-                any_duration(),
-                any::<Timeline>(),
-            )
-                .prop_map(
-                    |(connection, encoding, envelope, metadata_columns, ts_frequency, timeline)| {
-                        SourceConnection::External {
-                            connection,
-                            encoding,
-                            envelope,
-                            metadata_columns,
-                            ts_frequency,
-                            timeline,
-                        }
-                    }
-                ),
-            any::<Timeline>().prop_map(|timeline| SourceConnection::Local { timeline }),
-        ]
-        .boxed()
-    }
-}
-
-impl RustType<ProtoSourceConnection> for SourceConnection {
-    fn into_proto(&self) -> ProtoSourceConnection {
-        use proto_source_connection::{Kind, ProtoExternal, ProtoLocal};
-        ProtoSourceConnection {
-            kind: Some(match self {
-                SourceConnection::External {
-                    connection,
-                    encoding,
-                    envelope,
-                    metadata_columns,
-                    ts_frequency,
-                    timeline,
-                } => Kind::External(ProtoExternal {
-                    connection: Some(connection.into_proto()),
-                    encoding: Some(encoding.into_proto()),
-                    envelope: Some(envelope.into_proto()),
-                    metadata_columns: metadata_columns.into_proto(),
-                    ts_frequency: Some(ts_frequency.into_proto()),
-                    timeline: Some(timeline.into_proto()),
-                }),
-                SourceConnection::Local { timeline } => Kind::Local(ProtoLocal {
-                    timeline: Some(timeline.into_proto()),
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceConnection) -> Result<Self, TryFromProtoError> {
-        use proto_source_connection::{Kind, ProtoExternal, ProtoLocal};
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnection::kind"))?;
-        Ok(match kind {
-            Kind::External(ProtoExternal {
-                connection,
-                encoding,
-                envelope,
-                metadata_columns,
-                ts_frequency,
-                timeline,
-            }) => SourceConnection::External {
-                connection: connection.into_rust_if_some("ProtoExternal::connection")?,
-                encoding: encoding.into_rust_if_some("ProtoExternal::encoding")?,
-                envelope: envelope.into_rust_if_some("ProtoExternal::envelope")?,
-                metadata_columns: metadata_columns.into_rust()?,
-                ts_frequency: ts_frequency.into_rust_if_some("ProtoExternal::ts_frequency")?,
-                timeline: timeline.into_rust_if_some("ProtoExternal::timeline")?,
-            },
-            Kind::Local(ProtoLocal { timeline }) => SourceConnection::Local {
-                timeline: timeline.into_rust_if_some("ProtoLocal::timeline")?,
-            },
-        })
-    }
-}
-
-impl SourceConnection {
+impl SourceDesc {
     /// Returns `true` if this connection yields input data (including
     /// timestamps) that is stable across restarts. This is important for
     /// exactly-once Sinks that need to ensure that the same data is written,
     /// even when failures/restarts happen.
     pub fn yields_stable_input(&self) -> bool {
-        if let SourceConnection::External { connection, .. } = self {
-            // Conservatively, set all Kafka/File sources as having stable inputs because
-            // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
-            match connection {
-                // TODO(guswynn): does postgres count here as well?
-                ExternalSourceConnection::Kafka(_) => true,
-                // Currently, the Kinesis connection assigns "offsets" by counting the message in the order it was received
-                // and this order is not replayable across different reads of the same Kinesis stream.
-                ExternalSourceConnection::Kinesis(_) => false,
-                _ => false,
-            }
-        } else {
-            false
+        // Conservatively, set all Kafka/File sources as having stable inputs because
+        // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
+        match self.connection {
+            // TODO(guswynn): does postgres count here as well?
+            SourceConnection::Kafka(_) => true,
+            // Currently, the Kinesis connection assigns "offsets" by counting the message in the order it was received
+            // and this order is not replayable across different reads of the same Kinesis stream.
+            SourceConnection::Kinesis(_) => false,
+            _ => false,
         }
     }
 
@@ -1436,56 +1314,40 @@ impl SourceConnection {
     pub fn append_only(&self) -> bool {
         match self {
             // Postgres can produce retractions (deletes)
-            SourceConnection::External {
-                connection: ExternalSourceConnection::Postgres(_),
+            SourceDesc {
+                connection: SourceConnection::Postgres(_),
                 ..
             } => false,
             // Other sources the `None` envelope are append-only.
-            SourceConnection::External {
+            SourceDesc {
                 envelope: SourceEnvelope::None(_),
                 ..
             } => true,
             // Other combinations may produce retractions.
-            SourceConnection::External {
+            SourceDesc {
                 envelope:
                     SourceEnvelope::Debezium(_) | SourceEnvelope::Upsert(_) | SourceEnvelope::CdcV2,
                 connection:
-                    ExternalSourceConnection::S3(_)
-                    | ExternalSourceConnection::Kafka(_)
-                    | ExternalSourceConnection::Kinesis(_)
-                    | ExternalSourceConnection::PubNub(_),
+                    SourceConnection::S3(_)
+                    | SourceConnection::Kafka(_)
+                    | SourceConnection::Kinesis(_)
+                    | SourceConnection::PubNub(_),
                 ..
             } => false,
-            // Local sources (i.e., tables) also support retractions (deletes)
-            SourceConnection::Local { .. } => false,
         }
     }
 
     pub fn name(&self) -> &'static str {
-        match self {
-            SourceConnection::External { connection, .. } => connection.name(),
-            SourceConnection::Local { .. } => "local",
-        }
-    }
-
-    pub fn timeline(&self) -> Timeline {
-        match self {
-            SourceConnection::External { timeline, .. } => timeline.clone(),
-            SourceConnection::Local { timeline, .. } => timeline.clone(),
-        }
+        self.connection.name()
     }
 
     pub fn requires_single_materialization(&self) -> bool {
-        if let SourceConnection::External { connection, .. } = self {
-            connection.requires_single_materialization()
-        } else {
-            false
-        }
+        self.connection.requires_single_materialization()
     }
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ExternalSourceConnection {
+pub enum SourceConnection {
     Kafka(KafkaSourceConnection),
     Kinesis(KinesisSourceConnection),
     S3(S3SourceConnection),
@@ -1493,38 +1355,36 @@ pub enum ExternalSourceConnection {
     PubNub(PubNubSourceConnection),
 }
 
-impl RustType<ProtoExternalSourceConnection> for ExternalSourceConnection {
-    fn into_proto(&self) -> ProtoExternalSourceConnection {
-        use proto_external_source_connection::Kind;
-        ProtoExternalSourceConnection {
+impl RustType<ProtoSourceConnection> for SourceConnection {
+    fn into_proto(&self) -> ProtoSourceConnection {
+        use proto_source_connection::Kind;
+        ProtoSourceConnection {
             kind: Some(match self {
-                ExternalSourceConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
-                ExternalSourceConnection::Kinesis(kinesis) => Kind::Kinesis(kinesis.into_proto()),
-                ExternalSourceConnection::S3(s3) => Kind::S3(s3.into_proto()),
-                ExternalSourceConnection::Postgres(postgres) => {
-                    Kind::Postgres(postgres.into_proto())
-                }
-                ExternalSourceConnection::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
+                SourceConnection::Kafka(kafka) => Kind::Kafka(kafka.into_proto()),
+                SourceConnection::Kinesis(kinesis) => Kind::Kinesis(kinesis.into_proto()),
+                SourceConnection::S3(s3) => Kind::S3(s3.into_proto()),
+                SourceConnection::Postgres(postgres) => Kind::Postgres(postgres.into_proto()),
+                SourceConnection::PubNub(pubnub) => Kind::Pubnub(pubnub.into_proto()),
             }),
         }
     }
 
-    fn from_proto(proto: ProtoExternalSourceConnection) -> Result<Self, TryFromProtoError> {
-        use proto_external_source_connection::Kind;
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoExternalSourceConnection::kind")
-        })?;
+    fn from_proto(proto: ProtoSourceConnection) -> Result<Self, TryFromProtoError> {
+        use proto_source_connection::Kind;
+        let kind = proto
+            .kind
+            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceConnection::kind"))?;
         Ok(match kind {
-            Kind::Kafka(kafka) => ExternalSourceConnection::Kafka(kafka.into_rust()?),
-            Kind::Kinesis(kinesis) => ExternalSourceConnection::Kinesis(kinesis.into_rust()?),
-            Kind::S3(s3) => ExternalSourceConnection::S3(s3.into_rust()?),
-            Kind::Postgres(postgres) => ExternalSourceConnection::Postgres(postgres.into_rust()?),
-            Kind::Pubnub(pubnub) => ExternalSourceConnection::PubNub(pubnub.into_rust()?),
+            Kind::Kafka(kafka) => SourceConnection::Kafka(kafka.into_rust()?),
+            Kind::Kinesis(kinesis) => SourceConnection::Kinesis(kinesis.into_rust()?),
+            Kind::S3(s3) => SourceConnection::S3(s3.into_rust()?),
+            Kind::Postgres(postgres) => SourceConnection::Postgres(postgres.into_rust()?),
+            Kind::Pubnub(pubnub) => SourceConnection::PubNub(pubnub.into_rust()?),
         })
     }
 }
 
-impl ExternalSourceConnection {
+impl SourceConnection {
     /// Returns the name and type of each additional metadata column that
     /// Materialize will automatically append to the source's inherent columns.
     ///
@@ -1611,17 +1471,17 @@ impl ExternalSourceConnection {
     // TODO(bwm): get rid of this when we no longer have the notion of default metadata
     pub fn default_metadata_column_name(&self) -> Option<&str> {
         match self {
-            ExternalSourceConnection::Kafka(_) => Some("mz_offset"),
-            ExternalSourceConnection::Kinesis(_) => Some("mz_offset"),
-            ExternalSourceConnection::S3(_) => Some("mz_record"),
-            ExternalSourceConnection::Postgres(_) => None,
-            ExternalSourceConnection::PubNub(_) => None,
+            SourceConnection::Kafka(_) => Some("mz_offset"),
+            SourceConnection::Kinesis(_) => Some("mz_offset"),
+            SourceConnection::S3(_) => Some("mz_record"),
+            SourceConnection::Postgres(_) => None,
+            SourceConnection::PubNub(_) => None,
         }
     }
 
     pub fn metadata_column_types(&self, include_defaults: bool) -> Vec<IncludedColumnSource> {
         match self {
-            ExternalSourceConnection::Kafka(KafkaSourceConnection {
+            SourceConnection::Kafka(KafkaSourceConnection {
                 include_partition: part,
                 include_timestamp: time,
                 include_topic: topic,
@@ -1651,27 +1511,25 @@ impl ExternalSourceConnection {
                 items.into_values().collect()
             }
 
-            ExternalSourceConnection::Kinesis(_) | ExternalSourceConnection::S3(_) => {
+            SourceConnection::Kinesis(_) | SourceConnection::S3(_) => {
                 if include_defaults {
                     vec![IncludedColumnSource::DefaultPosition]
                 } else {
                     Vec::new()
                 }
             }
-            ExternalSourceConnection::Postgres(_) | ExternalSourceConnection::PubNub(_) => {
-                Vec::new()
-            }
+            SourceConnection::Postgres(_) | SourceConnection::PubNub(_) => Vec::new(),
         }
     }
 
     /// Returns the name of the external source connection.
     pub fn name(&self) -> &'static str {
         match self {
-            ExternalSourceConnection::Kafka(_) => "kafka",
-            ExternalSourceConnection::Kinesis(_) => "kinesis",
-            ExternalSourceConnection::S3(_) => "s3",
-            ExternalSourceConnection::Postgres(_) => "postgres",
-            ExternalSourceConnection::PubNub(_) => "pubnub",
+            SourceConnection::Kafka(_) => "kafka",
+            SourceConnection::Kinesis(_) => "kinesis",
+            SourceConnection::S3(_) => "s3",
+            SourceConnection::Postgres(_) => "postgres",
+            SourceConnection::PubNub(_) => "pubnub",
         }
     }
 
@@ -1680,26 +1538,24 @@ impl ExternalSourceConnection {
     ///  TODO: decide whether we want file paths and other upstream names to show up in metrics too.
     pub fn upstream_name(&self) -> Option<&str> {
         match self {
-            ExternalSourceConnection::Kafka(KafkaSourceConnection { topic, .. }) => {
-                Some(topic.as_str())
-            }
-            ExternalSourceConnection::Kinesis(KinesisSourceConnection { stream_name, .. }) => {
+            SourceConnection::Kafka(KafkaSourceConnection { topic, .. }) => Some(topic.as_str()),
+            SourceConnection::Kinesis(KinesisSourceConnection { stream_name, .. }) => {
                 Some(stream_name.as_str())
             }
-            ExternalSourceConnection::S3(_) => None,
-            ExternalSourceConnection::Postgres(_) => None,
-            ExternalSourceConnection::PubNub(_) => None,
+            SourceConnection::S3(_) => None,
+            SourceConnection::Postgres(_) => None,
+            SourceConnection::PubNub(_) => None,
         }
     }
 
     pub fn requires_single_materialization(&self) -> bool {
         match self {
-            ExternalSourceConnection::S3(c) => c.requires_single_materialization(),
+            SourceConnection::S3(c) => c.requires_single_materialization(),
 
-            ExternalSourceConnection::Kafka(_)
-            | ExternalSourceConnection::Kinesis(_)
-            | ExternalSourceConnection::Postgres(_)
-            | ExternalSourceConnection::PubNub(_) => false,
+            SourceConnection::Kafka(_)
+            | SourceConnection::Kinesis(_)
+            | SourceConnection::Postgres(_)
+            | SourceConnection::PubNub(_) => false,
         }
     }
 }

@@ -91,7 +91,7 @@ where
         let sources = dataflow
             .source_imports
             .iter()
-            .filter_map(|(id, source)| {
+            .filter_map(|(id, (source, _monotonic))| {
                 if let Some(operator) = &source.arguments.operators {
                     Some((*id, operator))
                 } else {

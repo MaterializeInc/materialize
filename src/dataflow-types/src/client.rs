@@ -359,7 +359,7 @@ impl<T> ComputeCommand<T> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Create the enumerated sources, each associated with its identifier.
-    CreateSources(Vec<IngestionDescription<CollectionMetadata>>),
+    IngestSources(Vec<IngestSourceCommand>),
     /// Enable compaction in storage-managed collections.
     ///
     /// Each entry in the vector names a collection and provides a frontier after which
@@ -367,17 +367,41 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     AllowCompaction(Vec<(GlobalId, Antichain<T>)>),
 }
 
+/// A command that starts ingesting the given ingestion description
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct IngestSourceCommand {
+    /// The id of the storage collection being ingested.
+    pub id: GlobalId,
+    /// The description of what source type should be ingested and what post-processing steps must
+    /// be applied to the data before writing them down into the storage collection
+    pub description: IngestionDescription<CollectionMetadata>,
+}
+impl RustType<ProtoIngestSourceCommand> for IngestSourceCommand {
+    fn into_proto(&self) -> ProtoIngestSourceCommand {
+        ProtoIngestSourceCommand {
+            id: Some(self.id.into_proto()),
+            description: Some(self.description.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoIngestSourceCommand) -> Result<Self, TryFromProtoError> {
+        Ok(IngestSourceCommand {
+            id: proto.id.into_rust_if_some("ProtoIngestSourceCommand::id")?,
+            description: proto
+                .description
+                .into_rust_if_some("ProtoIngestSourceCommand::description")?,
+        })
+    }
+}
+
 impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
     fn into_proto(&self) -> ProtoStorageCommand {
         use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
         ProtoStorageCommand {
             kind: Some(match self {
-                StorageCommand::CreateSources(ingestion_descriptions) => {
-                    CreateSources(ProtoCreateSources {
-                        ingestion_descriptions: ingestion_descriptions.into_proto(),
-                    })
-                }
+                StorageCommand::IngestSources(ingestions) => IngestSources(ProtoIngestSources {
+                    ingestions: ingestions.into_proto(),
+                }),
                 StorageCommand::AllowCompaction(collections) => {
                     AllowCompaction(ProtoAllowCompaction {
                         collections: collections.into_proto(),
@@ -389,13 +413,10 @@ impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
 
     fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
         use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
         match proto.kind {
-            Some(CreateSources(ProtoCreateSources {
-                ingestion_descriptions,
-            })) => Ok(StorageCommand::CreateSources(
-                ingestion_descriptions.into_rust()?,
-            )),
+            Some(IngestSources(ProtoIngestSources { ingestions })) => {
+                Ok(StorageCommand::IngestSources(ingestions.into_rust()?))
+            }
             Some(AllowCompaction(ProtoAllowCompaction { collections })) => {
                 Ok(StorageCommand::AllowCompaction(collections.into_rust()?))
             }
@@ -412,8 +433,8 @@ impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         prop_oneof![
-            proptest::collection::vec(any::<IngestionDescription<CollectionMetadata>>(), 1..4)
-                .prop_map(StorageCommand::CreateSources),
+            proptest::collection::vec(any::<IngestSourceCommand>(), 1..4)
+                .prop_map(StorageCommand::IngestSources),
             proptest::collection::vec(
                 (
                     any::<GlobalId>(),

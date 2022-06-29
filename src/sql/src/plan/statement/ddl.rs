@@ -40,11 +40,11 @@ use mz_dataflow_types::sources::encoding::{
 };
 use mz_dataflow_types::sources::{
     provide_default_metadata, DebeziumDedupProjection, DebeziumEnvelope, DebeziumMode,
-    DebeziumSourceProjection, DebeziumTransactionMetadata, ExternalSourceConnection,
-    IncludedColumnPos, KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
+    DebeziumSourceProjection, DebeziumTransactionMetadata, IncludedColumnPos,
+    KafkaSourceConnection, KeyEnvelope, KinesisSourceConnection, MzOffset,
     PostgresSourceConnection, PostgresSourceDetails, ProtoPostgresSourceDetails,
-    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceEnvelope, Timeline,
-    UnplannedSourceEnvelope, UpsertStyle,
+    PubNubSourceConnection, S3SourceConnection, SourceConnection, SourceDesc, SourceEnvelope,
+    Timeline, UnplannedSourceEnvelope, UpsertStyle,
 };
 use mz_expr::CollectionPlan;
 use mz_interchange::avro::{self, AvroSchemaGenerator};
@@ -490,7 +490,7 @@ pub fn plan_create_source(
                 }
             }
 
-            let connection = ExternalSourceConnection::Kafka(connection);
+            let connection = SourceConnection::Kafka(connection);
 
             (connection, encoding)
         }
@@ -514,7 +514,7 @@ pub fn plan_create_source(
             let aws = normalize::aws_config(&mut with_options, Some(region.into()))?;
             let encoding = get_encoding(scx, format, &envelope, &connection)?;
             let connection =
-                ExternalSourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
+                SourceConnection::Kinesis(KinesisSourceConnection { stream_name, aws });
             (connection, encoding)
         }
         CreateSourceConnection::S3 {
@@ -544,7 +544,7 @@ pub fn plan_create_source(
             if matches!(encoding, SourceDataEncoding::KeyValue { .. }) {
                 bail!("S3 sources do not support key decoding");
             }
-            let connection = ExternalSourceConnection::S3(S3SourceConnection {
+            let connection = SourceConnection::S3(S3SourceConnection {
                 key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
@@ -572,7 +572,7 @@ pub fn plan_create_source(
                 .as_ref()
                 .ok_or_else(|| anyhow!("internal error: Postgres source missing details"))?;
             let details = ProtoPostgresSourceDetails::decode(&*hex::decode(details)?)?;
-            let connection = ExternalSourceConnection::Postgres(PostgresSourceConnection {
+            let connection = SourceConnection::Postgres(PostgresSourceConnection {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 details: PostgresSourceDetails::from_proto(details)?,
@@ -590,7 +590,7 @@ pub fn plan_create_source(
                 CreateSourceFormat::None | CreateSourceFormat::Bare(Format::Text) => (),
                 _ => bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
             }
-            let connection = ExternalSourceConnection::PubNub(PubNubSourceConnection {
+            let connection = SourceConnection::PubNub(PubNubSourceConnection {
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
@@ -922,13 +922,12 @@ pub fn plan_create_source(
     };
     let source = Source {
         create_sql,
-        connection: SourceConnection::External {
+        source_desc: SourceDesc {
             connection: external_connection,
             encoding,
             envelope,
             metadata_columns: metadata_column_types,
             ts_frequency,
-            timeline,
         },
         desc,
     };
@@ -940,6 +939,7 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         materialized,
+        timeline,
         remote,
     }))
 }
@@ -1600,14 +1600,9 @@ pub fn plan_create_views(
         targets,
     }: CreateViewsStatement<Aug>,
 ) -> Result<Plan, anyhow::Error> {
-    let source_connection = scx
-        .get_item_by_resolved_name(&source_name)?
-        .source_connection()?;
-    match source_connection {
-        SourceConnection::External {
-            connection: ExternalSourceConnection::Postgres(PostgresSourceConnection { details, .. }),
-            ..
-        } => {
+    let source_desc = scx.get_item_by_resolved_name(&source_name)?.source_desc()?;
+    match &source_desc.connection {
+        SourceConnection::Postgres(PostgresSourceConnection { details, .. }) => {
             let targets = targets.unwrap_or_else(|| {
                 details
                     .tables
@@ -1745,12 +1740,7 @@ pub fn plan_create_views(
                 materialize: materialized,
             }))
         }
-        SourceConnection::External { connection, .. } => {
-            bail!("cannot generate views from {} sources", connection.name())
-        }
-        SourceConnection::Local { .. } => {
-            bail!("cannot generate views from local sources")
-        }
+        connection @ _ => bail!("cannot generate views from {} sources", connection.name()),
     }
 }
 
@@ -1942,7 +1932,7 @@ fn kafka_sink_builder(
     let transitive_source_dependencies: Vec<_> = if reuse_topic {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source {
-                if !item.source_connection()?.yields_stable_input() {
+                if !item.source_desc()?.yields_stable_input() {
                     bail!(
                     "reuse_topic requires that sink input dependencies are replayable, {} is not",
                     scx.catalog.resolve_full_name(item.name())

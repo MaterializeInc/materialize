@@ -201,7 +201,7 @@ impl CatalogState {
             CatalogItem::Index(index) => self.pack_index_update(id, oid, name, index, diff),
             CatalogItem::Table(_) => self.pack_table_update(id, oid, schema_id, name, diff),
             CatalogItem::Source(source) => {
-                self.pack_source_update(id, oid, schema_id, name, source.connection.name(), diff)
+                self.pack_source_update(id, oid, schema_id, name, source.source_desc.name(), diff)
             }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
@@ -271,7 +271,7 @@ impl CatalogState {
         oid: u32,
         schema_id: &SchemaSpecifier,
         name: &str,
-        source_connection_name: &str,
+        source_desc_name: &str,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate> {
         vec![BuiltinTableUpdate {
@@ -282,7 +282,7 @@ impl CatalogState {
                 // TODO(jkosh44) when Uint64 is supported change below to Datum::Uint64
                 Datum::Int64(u64::from(schema_id) as i64),
                 Datum::String(name),
-                Datum::String(source_connection_name),
+                Datum::String(source_desc_name),
             ]),
             diff,
         }]

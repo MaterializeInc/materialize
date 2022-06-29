@@ -50,17 +50,15 @@ use mz_persist_client::{
 };
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::{Diff, GlobalId};
+use mz_repr::{Diff, GlobalId, RelationDesc};
 use mz_stash::{self, StashError, TypedCollection};
 
 use crate::client::controller::ReadPolicy;
 use crate::client::{
-    GenericClient, ProtoStorageCommand, ProtoStorageResponse, StorageClient, StorageCommand,
-    StorageResponse, StoragedRemoteClient,
+    GenericClient, IngestSourceCommand, ProtoStorageCommand, ProtoStorageResponse, StorageClient,
+    StorageCommand, StorageResponse, StoragedRemoteClient,
 };
-use crate::sources::{
-    ExternalSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
-};
+use crate::sources::{IngestionDescription, SourceConnection, SourceData, SourceDesc};
 use crate::Update;
 
 include!(concat!(
@@ -73,9 +71,11 @@ static METADATA_COLLECTION: TypedCollection<GlobalId, CollectionMetadata> =
 
 /// Describes a request to create a source.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreateSourceRequest {
-    /// The description of the source to ingest.
-    pub ingestion: IngestionDescription<()>,
+pub struct CollectionDescription {
+    /// The schema of this collection
+    pub desc: RelationDesc,
+    /// The description of the source to ingest into this collection, if any.
+    pub ingestion: Option<IngestionDescription<()>>,
     /// The address of a `storaged` process on which to install the source.
     ///
     /// If `None`, the controller manages the lifetime of the `storaged`
@@ -105,9 +105,9 @@ pub trait StorageController: Debug + Send {
     /// now valid to use in queries at times beyond the initial `since` frontiers. Each
     /// collection also acquires a read capability at this frontier, which will need to
     /// be repeatedly downgraded with `allow_compaction()` to permit compaction.
-    async fn create_sources(
+    async fn create_collections(
         &mut self,
-        sources: Vec<CreateSourceRequest>,
+        collections: Vec<(GlobalId, CollectionDescription)>,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -357,48 +357,53 @@ where
             .ok_or(StorageError::IdentifierMissing(id))
     }
 
-    async fn create_sources(
+    async fn create_collections(
         &mut self,
-        mut sources: Vec<CreateSourceRequest>,
+        mut collections: Vec<(GlobalId, CollectionDescription)>,
     ) -> Result<(), StorageError> {
         // Validate first, to avoid corrupting state.
-        // 1. create a dropped source identifier, or
-        // 2. create an existing source identifier with a new description.
+        // 1. create a dropped identifier, or
+        // 2. create an existing identifier with a new description.
         // Make sure to check for errors within `ingestions` as well.
-        sources.sort_by_key(|s| s.ingestion.id);
-        sources.dedup();
-        for pos in 1..sources.len() {
-            if sources[pos - 1].ingestion.id == sources[pos].ingestion.id {
-                return Err(StorageError::SourceIdReused(sources[pos].ingestion.id));
+        collections.sort_by_key(|(id, _)| *id);
+        collections.dedup();
+        for pos in 1..collections.len() {
+            if collections[pos - 1].0 == collections[pos].0 {
+                return Err(StorageError::SourceIdReused(collections[pos].0));
             }
         }
-        for source in sources.iter() {
-            if let Ok(collection) = self.collection(source.ingestion.id) {
-                if collection.description != source.ingestion.desc {
-                    return Err(StorageError::SourceIdReused(source.ingestion.id));
+        for (id, description) in collections.iter() {
+            if let Ok(collection) = self.collection(*id) {
+                if &collection.description != description {
+                    return Err(StorageError::SourceIdReused(*id));
                 }
             }
         }
 
-        let mut external_sources = vec![];
-
-        // Install collection state for each bound source.
-        for source in sources {
-            let id = source.ingestion.id;
-
+        // Install collection state for each bound description.
+        for (id, description) in collections {
             let metadata = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
                 data_shard: ShardId::new(),
                 remap_shard: ShardId::new(),
             };
-            // We can't persist the shards for tables until we figure out what ADAPTERs wants to do
-            // with system tables that are assumed to be empty on creation
-            // We also can't persist the shards for postgres sources until we wire up correct start
-            // offsets to the SourceReaders
-            let metadata = match source.ingestion.desc.connection {
-                SourceConnection::Local { .. }
-                | SourceConnection::External {
-                    connection: ExternalSourceConnection::Postgres(_),
+            let metadata = match description {
+                // We can't persist the shards for tables until we figure out what ADAPTERs wants
+                // to do with system tables that are assumed to be empty on creation
+                CollectionDescription {
+                    ingestion: None,
+                    ..
+                }
+                // We also can't persist the shards for postgres collections until we wire up
+                // correct start offsets to the SourceReaders
+                | CollectionDescription {
+                    ingestion: Some(IngestionDescription {
+                        desc: SourceDesc {
+                            connection: SourceConnection::Postgres(_),
+                            ..
+                        },
+                        ..
+                    }),
                     ..
                 } => metadata,
                 _ => {
@@ -414,120 +419,103 @@ where
                 .await
                 .expect("invalid persist usage");
 
-            let collection_state = CollectionState::new(
-                source.ingestion.desc.clone(),
-                read.since().clone(),
-                metadata,
-            );
+            let collection_state =
+                CollectionState::new(description.clone(), read.since().clone(), metadata);
 
             self.state
                 .persist_handles
-                .insert(source.ingestion.id, PersistHandles { read, write });
+                .insert(id, PersistHandles { read, write });
 
-            self.state
-                .collections
-                .insert(source.ingestion.id, collection_state);
+            self.state.collections.insert(id, collection_state);
 
-            // TODO(petrosagg): it's weird that tables go through this path and we filter them
-            // manually. Think how to make better types to reflect their differences
-            if matches!(
-                source.ingestion.desc.connection,
-                SourceConnection::External { .. }
-            ) {
-                external_sources.push(source);
-            }
-        }
+            if let Some(ingestion) = description.ingestion {
+                // Here we create a new storaged process to handle each new description. Each
+                // ingestion is augmented with the collection metadata.
+                let mut source_imports = BTreeMap::new();
+                for (id, _) in ingestion.source_imports {
+                    let metadata = self.collection(id)?.collection_metadata.clone();
+                    source_imports.insert(id, metadata);
+                }
 
-        // Here we create a new storaged process to handle each new source. Each
-        // ingestion is augmented with the collection metadata.
-        for source in external_sources {
-            let mut source_imports = BTreeMap::new();
-            for (id, _) in source.ingestion.source_imports {
-                let metadata = self.collection(id)?.collection_metadata.clone();
-                source_imports.insert(id, metadata);
-            }
+                let remote_addr = description.remote_addr.clone();
 
-            let remote_addr = source.remote_addr.clone();
+                let augmented_ingestion = IngestSourceCommand {
+                    id,
+                    description: IngestionDescription {
+                        source_imports,
+                        storage_metadata: self.collection(id)?.collection_metadata.clone(),
+                        // The rest of the fields are identical
+                        desc: ingestion.desc,
+                        typ: description.desc.typ().clone(),
+                    },
+                };
 
-            let augmented_ingestion = IngestionDescription {
-                source_imports,
-                storage_metadata: self
-                    .collection(source.ingestion.id)?
-                    .collection_metadata
-                    .clone(),
-                // The rest of the fields are identical
-                id: source.ingestion.id,
-                desc: source.ingestion.desc,
-            };
-
-            let addr = if let Some(remote_addr) = remote_addr {
-                tracing::info!(
-                    "{}: connecting to pre-existing storaged instance at address: {}",
-                    source.ingestion.id,
+                let addr = if let Some(remote_addr) = remote_addr {
+                    tracing::info!(
+                        "{}: connecting to pre-existing storaged instance at address: {}",
+                        id,
+                        remote_addr
+                    );
                     remote_addr
-                );
-                remote_addr
-            } else {
-                let storage_service = self
-                    .orchestrator
-                    .ensure_service(
-                        &source.ingestion.id.to_string(),
-                        ServiceConfig {
-                            image: self.storaged_image.clone(),
-                            args: &|assigned| {
-                                vec![
-                                    format!("--workers=1"),
-                                    format!(
-                                        "--listen-addr={}:{}",
-                                        assigned.listen_host, assigned.ports["controller"]
-                                    ),
-                                    format!(
-                                        "--internal-http-listen-addr={}:{}",
-                                        assigned.listen_host, assigned.ports["internal-http"]
-                                    ),
-                                    format!(
-                                        "--opentelemetry-resource=storage_id={}",
-                                        source.ingestion.id
-                                    ),
-                                ]
+                } else {
+                    let storage_service = self
+                        .orchestrator
+                        .ensure_service(
+                            &id.to_string(),
+                            ServiceConfig {
+                                image: self.storaged_image.clone(),
+                                args: &|assigned| {
+                                    vec![
+                                        format!("--workers=1"),
+                                        format!(
+                                            "--listen-addr={}:{}",
+                                            assigned.listen_host, assigned.ports["controller"]
+                                        ),
+                                        format!(
+                                            "--internal-http-listen-addr={}:{}",
+                                            assigned.listen_host, assigned.ports["internal-http"]
+                                        ),
+                                        format!("--opentelemetry-resource=storage_id={}", id),
+                                    ]
+                                },
+                                ports: vec![
+                                    ServicePort {
+                                        name: "controller".into(),
+                                        port_hint: 2100,
+                                    },
+                                    ServicePort {
+                                        name: "internal-http".into(),
+                                        port_hint: 6877,
+                                    },
+                                ],
+                                // TODO: limits?
+                                cpu_limit: None,
+                                memory_limit: None,
+                                scale: NonZeroUsize::new(1).unwrap(),
+                                labels: HashMap::new(),
+                                availability_zone: None,
                             },
-                            ports: vec![
-                                ServicePort {
-                                    name: "controller".into(),
-                                    port_hint: 2100,
-                                },
-                                ServicePort {
-                                    name: "internal-http".into(),
-                                    port_hint: 6877,
-                                },
-                            ],
-                            // TODO: limits?
-                            cpu_limit: None,
-                            memory_limit: None,
-                            scale: NonZeroUsize::new(1).unwrap(),
-                            labels: HashMap::new(),
-                            availability_zone: None,
-                        },
-                    )
-                    .await?;
+                        )
+                        .await?;
 
-                storage_service.addresses("controller").into_element()
-            };
+                    storage_service.addresses("controller").into_element()
+                };
 
-            // TODO: don't block waiting for a connection. Put a queue in the
-            // middle instead.
-            let mut client = Box::new({
-                let mut client = StoragedRemoteClient::new(&[addr]);
-                client.connect().await;
+                // TODO: don't block waiting for a connection. Put a queue in the
+                // middle instead.
+                let mut client = Box::new({
+                    let mut client = StoragedRemoteClient::new(&[addr]);
+                    client.connect().await;
+                    client
+                });
+
                 client
-            });
+                    .send(StorageCommand::IngestSources(vec![augmented_ingestion]))
+                    .await
+                    .expect("Storage command failed; unrecoverable");
 
-            client
-                .send(StorageCommand::CreateSources(vec![augmented_ingestion]))
-                .await
-                .expect("Storage command failed; unrecoverable");
-
-            self.state.clients.insert(source.ingestion.id, client);
+                self.state.clients.insert(id, client);
+            }
         }
 
         Ok(())
@@ -548,6 +536,7 @@ where
         &mut self,
         commands: Vec<(GlobalId, Vec<Update<Self::Timestamp>>, Self::Timestamp)>,
     ) -> Result<(), StorageError> {
+        // TODO(petrosagg): validate appends against the expected RelationDesc of the collection
         let mut updates_by_id = HashMap::new();
 
         for (id, updates, batch_upper) in commands {
@@ -762,7 +751,7 @@ where
         if self.state.clients.is_empty() {
             // If there are no clients, block forever. This signals that there
             // may be more work to do (e.g., if this future is dropped and
-            // `create_sources` is called). Awaiting the stream map would
+            // `create_collections` is called). Awaiting the stream map would
             // return `None`, which would incorrectly indicate the completion
             // of the stream.
             return future::pending().await;
@@ -840,8 +829,8 @@ where
 /// State maintained about individual collections.
 #[derive(Debug)]
 pub struct CollectionState<T> {
-    /// Description with which the source was created
-    pub(super) description: SourceDesc,
+    /// Description with which the collection was created
+    pub(super) description: CollectionDescription,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -873,7 +862,11 @@ pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
 
 impl<T: Timestamp> CollectionState<T> {
     /// Creates a new collection state, with an initial read policy valid from `since`.
-    pub fn new(description: SourceDesc, since: Antichain<T>, metadata: CollectionMetadata) -> Self {
+    pub fn new(
+        description: CollectionDescription,
+        since: Antichain<T>,
+        metadata: CollectionMetadata,
+    ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {

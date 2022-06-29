@@ -174,27 +174,15 @@ message ProtoKafkaSourceConnection {
     map<string, mz_dataflow_types.types.connections.ProtoStringOrSecret> options = 11;
 }
 
-message ProtoSourceConnection {
-    message ProtoExternal {
-        ProtoExternalSourceConnection connection = 1;
-        mz_dataflow_types.types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
-        ProtoSourceEnvelope envelope = 3;
-        repeated ProtoIncludedColumnSource metadata_columns = 4;
-        mz_repr.proto.ProtoDuration ts_frequency = 5;
-        ProtoTimeline timeline = 6;
-    }
-
-    message ProtoLocal {
-        ProtoTimeline timeline = 1;
-    }
-
-    oneof kind {
-        ProtoExternal external = 1;
-        ProtoLocal local = 2;
-    }
+message ProtoSourceDesc {
+    ProtoSourceConnection connection = 1;
+    mz_dataflow_types.types.sources.encoding.ProtoSourceDataEncoding encoding = 2;
+    ProtoSourceEnvelope envelope = 3;
+    repeated ProtoIncludedColumnSource metadata_columns = 4;
+    mz_repr.proto.ProtoDuration ts_frequency = 5;
 }
 
-message ProtoExternalSourceConnection {
+message ProtoSourceConnection {
     oneof kind {
         ProtoKafkaSourceConnection kafka = 1;
         ProtoKinesisSourceConnection kinesis = 2;
@@ -253,11 +241,6 @@ message ProtoCompression {
     }
 }
 
-message ProtoSourceDesc {
-    ProtoSourceConnection connection = 1;
-    mz_repr.relation_and_scalar.ProtoRelationDesc desc = 2;
-}
-
 message ProtoIngestionDescription {
     // ProtoSourceImport is taken by ProtoDataflowDescription
     message ProtoSourceMetadataImport {
@@ -265,7 +248,7 @@ message ProtoIngestionDescription {
         mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 2;
     }
     repeated ProtoSourceMetadataImport source_imports = 1;
-    mz_repr.global_id.ProtoGlobalId id = 2;
-    ProtoSourceDesc desc = 3;
-    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 4;
+    ProtoSourceDesc desc = 2;
+    mz_dataflow_types.client.controller.storage.ProtoCollectionMetadata storage_metadata = 3;
+    mz_repr.relation_and_scalar.ProtoRelationType typ = 4;
 }

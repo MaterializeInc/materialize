@@ -31,7 +31,6 @@ use mz_stash::Append;
 
 use crate::catalog::{CatalogItem, CatalogState};
 use crate::coord::{CatalogTxn, Coordinator};
-use crate::error::RematerializedSourceType;
 use crate::session::{Session, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
 use crate::CoordError;
 
@@ -136,38 +135,15 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                 drop(valid_indexes);
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
-                    CatalogItem::Table(_) => {
-                        let source_description = self.catalog.source_description_for(*id).unwrap();
-                        dataflow.import_source(*id, source_description);
+                    CatalogItem::Table(table) => {
+                        dataflow.import_source(*id, table.desc.typ().clone(), false);
                     }
                     CatalogItem::Source(source) => {
-                        if source.requires_single_materialization() {
-                            let source_type = RematerializedSourceType::for_source(source);
-                            let dependent_indexes = self.catalog.dependent_indexes(*id);
-                            // If this source relies on any pre-existing indexes (i.e., indexes
-                            // that we're not building as part of this `DataflowBuilder`), we're
-                            // attempting to reinstantiate a single-use source.
-                            let intersection = dependent_indexes
-                                .into_iter()
-                                .filter(|id| self.compute.collection(*id).is_ok())
-                                .collect::<Vec<_>>();
-
-                            if !intersection.is_empty() {
-                                let existing_indexes = intersection
-                                    .iter()
-                                    .map(|id| self.catalog.get_entry(id).name().item.clone())
-                                    .collect();
-                                return Err(CoordError::InvalidRematerialization {
-                                    base_source: entry.name().item.clone(),
-                                    existing_indexes,
-                                    source_type,
-                                });
-                            }
-                        }
-
-                        let source_description = self.catalog.source_description_for(*id).unwrap();
-
-                        dataflow.import_source(*id, source_description);
+                        dataflow.import_source(
+                            *id,
+                            source.desc.typ().clone(),
+                            source.source_desc.append_only(),
+                        );
                     }
                     CatalogItem::View(view) => {
                         let expr = view.optimized_expr.clone();

@@ -32,7 +32,6 @@ use mz_repr::{Diff, GlobalId, RelationType, Row};
 
 use crate::client::controller::storage::CollectionMetadata;
 use crate::types::sinks::SinkDesc;
-use crate::types::sources::SourceDesc;
 use crate::Plan;
 
 use proto_dataflow_description::*;
@@ -289,60 +288,36 @@ impl RustType<ProtoBuildDesc> for BuildDesc<crate::plan::Plan> {
 /// This includes a description of the source, but additionally any
 /// context-dependent options like the ability to apply filtering and
 /// projection to the records as they emerge.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Arbitrary, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceDesc<M> {
-    /// A description of the source to construct.
-    //TODO(petrosagg): COMPUTE doesn't need the full description of the source, only the metadata to
-    // read a storage collection. Remove this field
-    pub description: crate::types::sources::SourceDesc,
     /// Arguments for this instantiation of the source.
     pub arguments: SourceInstanceArguments,
-    /// Additional metadata used by storage instances to render this source instance and by the
-    /// storage client of a compute instance to read it.
+    /// Additional metadata used by the storage client of a compute instance to read it.
     pub storage_metadata: M,
-}
-
-impl Arbitrary for SourceInstanceDesc<CollectionMetadata> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<SourceDesc>(),
-            any::<SourceInstanceArguments>(),
-            any::<CollectionMetadata>(),
-        )
-            .prop_map(
-                |(description, arguments, storage_metadata)| SourceInstanceDesc {
-                    description,
-                    arguments,
-                    storage_metadata,
-                },
-            )
-            .boxed()
-    }
+    /// The relation type of this source
+    pub typ: RelationType,
 }
 
 impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {
     fn into_proto(&self) -> ProtoSourceInstanceDesc {
         ProtoSourceInstanceDesc {
-            description: Some(self.description.into_proto()),
             arguments: Some(self.arguments.into_proto()),
             storage_metadata: Some(self.storage_metadata.into_proto()),
+            typ: Some(self.typ.into_proto()),
         }
     }
 
     fn from_proto(proto: ProtoSourceInstanceDesc) -> Result<Self, TryFromProtoError> {
         Ok(SourceInstanceDesc {
-            description: proto
-                .description
-                .into_rust_if_some("ProtoSourceInstanceDesc::description")?,
             arguments: proto
                 .arguments
                 .into_rust_if_some("ProtoSourceInstanceDesc::arguments")?,
             storage_metadata: proto
                 .storage_metadata
                 .into_rust_if_some("ProtoSourceInstanceDesc::storage_metadata")?,
+            typ: proto
+                .typ
+                .into_rust_if_some("ProtoSourceInstanceDesc::typ")?,
         })
     }
 }
@@ -374,8 +349,8 @@ pub type SourceInstanceId = (uuid::Uuid, mz_repr::GlobalId);
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
-    /// Sources instantiations made available to the dataflow.
-    pub source_imports: BTreeMap<GlobalId, SourceInstanceDesc<S>>,
+    /// Sources instantiations made available to the dataflow pair with monotonicity information.
+    pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool)>,
     /// Indexes made available to the dataflow.
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
@@ -400,11 +375,11 @@ pub struct DataflowDescription<P, S = (), T = mz_repr::Timestamp> {
     pub id: uuid::Uuid,
 }
 
-fn any_source_import() -> impl Strategy<Value = (GlobalId, SourceInstanceDesc<CollectionMetadata>)>
-{
+fn any_source_import(
+) -> impl Strategy<Value = (GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool))> {
     (
         any::<GlobalId>(),
-        any::<SourceInstanceDesc<CollectionMetadata>>(),
+        any::<(SourceInstanceDesc<CollectionMetadata>, bool)>(),
     )
 }
 
@@ -486,16 +461,19 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(&mut self, id: GlobalId, description: SourceDesc) {
+    pub fn import_source(&mut self, id: GlobalId, typ: RelationType, monotonic: bool) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         self.source_imports.insert(
             id,
-            SourceInstanceDesc {
-                description,
-                storage_metadata: (),
-                arguments: SourceInstanceArguments { operators: None },
-            },
+            (
+                SourceInstanceDesc {
+                    storage_metadata: (),
+                    arguments: SourceInstanceArguments { operators: None },
+                    typ,
+                },
+                monotonic,
+            ),
         );
     }
 
@@ -564,9 +542,9 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, source) in self.source_imports.iter() {
+        for (source_id, (source, _monotonic)) in self.source_imports.iter() {
             if source_id == id {
-                return source.description.desc.arity();
+                return source.typ.arity();
             }
         }
         for (desc, typ) in self.index_imports.values() {
@@ -718,21 +696,30 @@ impl RustType<ProtoDataflowDescription>
     }
 }
 
-impl ProtoMapEntry<GlobalId, SourceInstanceDesc<CollectionMetadata>> for ProtoSourceImport {
-    fn from_rust<'a>(entry: (&'a GlobalId, &'a SourceInstanceDesc<CollectionMetadata>)) -> Self {
+impl ProtoMapEntry<GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)> for ProtoSourceImport {
+    fn from_rust<'a>(
+        entry: (
+            &'a GlobalId,
+            &'a (SourceInstanceDesc<CollectionMetadata>, bool),
+        ),
+    ) -> Self {
         ProtoSourceImport {
             id: Some(entry.0.into_proto()),
-            source_instance_desc: Some(entry.1.into_proto()),
+            source_instance_desc: Some(entry.1 .0.into_proto()),
+            monotonic: entry.1 .1.into_proto(),
         }
     }
 
     fn into_rust(
         self,
-    ) -> Result<(GlobalId, SourceInstanceDesc<CollectionMetadata>), TryFromProtoError> {
+    ) -> Result<(GlobalId, (SourceInstanceDesc<CollectionMetadata>, bool)), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoSourceImport::id")?,
-            self.source_instance_desc
-                .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
+            (
+                self.source_instance_desc
+                    .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
+                self.monotonic.into_rust()?,
+            ),
         ))
     }
 }
