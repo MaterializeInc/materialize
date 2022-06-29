@@ -321,8 +321,8 @@ enum PendingWriteTxn {
 impl PendingWriteTxn {
     fn has_write_lock(&self) -> bool {
         match self {
-            User {write_txn, ..} => write_txn.has_write_lock(),
-            System => false,
+            Self::User { write_txn, .. } => write_txn.has_write_lock(),
+            Self::System { .. } => false,
         }
     }
 }
@@ -361,8 +361,10 @@ enum WriteTxn {
 impl WriteTxn {
     fn has_write_lock(&self) -> bool {
         match self {
-            Write{write_lock_guard,.. } => write_lock_guard.is_some(),
-            DDL | SinkConnectionReady {..} => false,
+            Self::Write {
+                write_lock_guard, ..
+            } => write_lock_guard.is_some(),
+            Self::DDL { .. } | Self::SinkConnectionReady { .. } => false,
         }
     }
 }
@@ -1202,10 +1204,10 @@ impl<S: Append + 'static> Coordinator<S> {
                     .expect("sending to internal_cmd_tx cannot fail");
             });
         } else if self
+            .pending_group_commit
             .pending_writes
             .iter()
             .any(|pending_write| pending_write.has_write_lock())
-            || self.write_lock.try_lock().is_ok()
         {
             // If some transaction already holds the write lock, then we can execute a group
             // commit.
@@ -1237,7 +1239,7 @@ impl<S: Append + 'static> Coordinator<S> {
     /// loop in `try_group_commit()` if `now()` hasn't advanced past the global timeline. This
     /// approach prevents an unbounded advancing of the global timeline ahead of `now()`.
     async fn group_commit(&mut self) {
-        if self.pending_writes.is_empty() {
+        if self.pending_group_commit.is_empty() {
             return;
         }
         let WriteTimestamp {
@@ -1319,6 +1321,7 @@ impl<S: Append + 'static> Coordinator<S> {
                             writes,
                             response,
                             action,
+                            write_lock_guard: _,
                         } => {
                             for WriteOp { id, rows } in writes {
                                 // If the object that some write was targeting has been deleted by a DDL,
@@ -1382,7 +1385,6 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
             }
-            responses.push((client_transmitter, response, session, action));
         }
         for id in self.pending_group_commit.table_advances.drain() {
             appends.entry(id).or_insert(Vec::new());
@@ -1451,11 +1453,9 @@ impl<S: Append + 'static> Coordinator<S> {
 
     /// Submit a write to be executed during the next group commit.
     fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        if self.pending_group_commit.is_empty() {
-            self.internal_cmd_tx
-                .send(Message::GroupCommit)
-                .expect("sending to internal_cmd_tx cannot fail");
-        }
+        self.internal_cmd_tx
+            .send(Message::GroupCommit)
+            .expect("sending to internal_cmd_tx cannot fail");
         self.pending_group_commit
             .pending_writes
             .push(pending_write_txn);
@@ -1469,14 +1469,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 .expect("sending to internal_cmd_tx cannot fail");
         }
         self.pending_group_commit.table_advances.extend(ids);
-    }
-
-    /// Submit a write to be executed during the next group commit.
-    fn submit_write(&mut self, pending_write_txn: PendingWriteTxn) {
-        self.internal_cmd_tx
-            .send(Message::GroupCommit)
-            .expect("sending to internal_cmd_tx cannot fail");
-        self.pending_writes.push(pending_write_txn);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -2674,7 +2666,10 @@ impl<S: Append + 'static> Coordinator<S> {
             Plan::CreateSecret(plan) => self.sequence_create_secret(session, plan).await,
             Plan::CreateView(plan) => self.sequence_create_view(session, plan, depends_on).await,
             Plan::CreateViews(plan) => self.sequence_create_views(session, plan, depends_on).await,
-            Plan::CreateRecordedView(plan) => self.sequence_create_recorded_view(session, plan, depends_on).await,
+            Plan::CreateRecordedView(plan) => {
+                self.sequence_create_recorded_view(session, plan, depends_on)
+                    .await
+            }
             Plan::CreateIndex(plan) => self.sequence_create_index(session, plan, depends_on).await,
             Plan::CreateType(plan) => self.sequence_create_type(session, plan, depends_on).await,
             Plan::CreateSource(plan) => {
@@ -3307,28 +3302,25 @@ impl<S: Append + 'static> Coordinator<S> {
         };
 
         // Announce the creation of the sink's corresponding source.
-                // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
-                if let Some(desc) = self.catalog.state().source_description_for(id) {
-                    let ingestion = IngestionDescription {
-                        id,
-                        desc,
-                        source_imports: BTreeMap::new(),
-                        storage_metadata: (),
-                    };
-                    self.dataflow_client
-                        .storage_mut()
-                        .create_sources(vec![CreateSourceRequest {
-                            ingestion,
-                            remote_addr: None,
-                        }])
-                        .await
-                        .unwrap();
-                    self.initialize_storage_read_policies(
-                        vec![id],
-                        self.logical_compaction_window_ms,
-                    )
-                    .await;
-                }
+        // TODO(teskje): Remove this once persist sinks are replaced by recorded views.
+        if let Some(desc) = self.catalog.state().source_description_for(id) {
+            let ingestion = IngestionDescription {
+                id,
+                desc,
+                source_imports: BTreeMap::new(),
+                storage_metadata: (),
+            };
+            self.dataflow_client
+                .storage_mut()
+                .create_sources(vec![CreateSourceRequest {
+                    ingestion,
+                    remote_addr: None,
+                }])
+                .await
+                .unwrap();
+            self.initialize_storage_read_policies(vec![id], self.logical_compaction_window_ms)
+                .await;
+        }
 
         // Now we're ready to create the sink connector. Arrange to notify the
         // main coordinator thread when the future completes.
@@ -3539,7 +3531,7 @@ impl<S: Append + 'static> Coordinator<S> {
         _session: &Session,
         _plan: CreateRecordedViewPlan,
         _depends_on: Vec<GlobalId>,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<(Vec<BuiltinTableUpdate>, ExecuteResponse), CoordError> {
         // TODO(teskje): implement
         Err(CoordError::Unsupported("recorded views"))
     }
@@ -3872,10 +3864,10 @@ impl<S: Append + 'static> Coordinator<S> {
         {
             action = EndTransactionAction::Rollback;
         }
-        let response = Ok(ExecuteResponse::TransactionExited {
+        let response = ExecuteResponse::TransactionExited {
             tag: action.tag(),
             was_implicit: session.transaction().is_implicit(),
-        });
+        };
 
         let result = self
             .sequence_end_transaction_inner(&mut session, action)
@@ -3896,7 +3888,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 });
                 return;
             }
-            Ok((None, None)) => (Ok(response), action),
+            Ok((None, _)) => (Ok(response), action),
             Err(err) => (Err(err), EndTransactionAction::Rollback),
         };
         session.vars_mut().end_transaction(action);
