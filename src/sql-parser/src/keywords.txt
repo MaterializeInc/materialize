@@ -208,6 +208,7 @@ On
 Only
 Operator
 Optimized
+Optimizer
 Option
 Or
 Order
@@ -302,6 +303,7 @@ Timestamp
 Timing
 To
 Topic
+Trace
 Trailing
 Transaction
 Trim
