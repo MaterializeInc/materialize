@@ -280,6 +280,7 @@ pub enum PeekResponseUnary {
 #[derive(Debug)]
 struct GroupCommit {
     pending_writes: Vec<PendingWriteTxn>,
+    pending_ddl: Vec<PendingDDLTxn>,
     table_advances: HashSet<GlobalId>,
 }
 
@@ -287,14 +288,38 @@ impl GroupCommit {
     fn new() -> Self {
         GroupCommit {
             pending_writes: Vec::new(),
+            pending_ddl: Vec::new(),
             table_advances: HashSet::new(),
         }
     }
     fn is_empty(&self) -> bool {
-        self.pending_writes.is_empty() && self.table_advances.is_empty()
+        self.pending_writes.is_empty()
+            && self.pending_ddl.is_empty()
+            && self.table_advances.is_empty()
     }
     fn len(&self) -> usize {
-        self.pending_writes.len() + self.table_advances.len()
+        self.pending_writes.len() + self.pending_ddl.len() + self.table_advances.len()
+    }
+}
+
+//TODO(jkosh44)
+#[derive(Debug)]
+struct ClientContext {
+    /// Transmitter used to send a response back to the client.
+    client_transmitter: ClientTransmitter<ExecuteResponse>,
+    /// Session of the client who initiated the transaction.
+    session: Session,
+}
+
+impl ClientContext {
+    fn new(client_transmitter: ClientTransmitter<ExecuteResponse>, session: Session) -> Self {
+        Self {
+            client_transmitter,
+            session,
+        }
+    }
+    fn send(self, result: Result<ExecuteResponse, CoordError>) {
+        self.client_transmitter.send(result, self.session);
     }
 }
 
@@ -303,12 +328,15 @@ impl GroupCommit {
 enum PendingWriteTxn {
     // TODO(jkosh44)
     User {
-        /// Write transaction contents.
-        write_txn: WriteTxn,
-        /// Transmitter used to send a response back to the client.
-        client_transmitter: ClientTransmitter<ExecuteResponse>,
-        /// Session of the client who initiated the transaction.
-        session: Session,
+        client_context: ClientContext,
+        /// List of all write operations within the transaction.
+        writes: Vec<WriteOp>,
+        /// Client response for transaction.
+        response: ExecuteResponse,
+        /// The action to take at the end of the transaction.
+        action: EndTransactionAction,
+        /// Holds the coordinator's write lock.
+        write_lock_guard: Option<OwnedMutexGuard<()>>,
     },
     // TODO(jkosh44)
     System {
@@ -322,35 +350,29 @@ enum PendingWriteTxn {
 impl PendingWriteTxn {
     fn has_write_lock(&self) -> bool {
         match self {
-            Self::User { write_txn, .. } => write_txn.has_write_lock(),
+            Self::User {
+                write_lock_guard, ..
+            } => write_lock_guard.is_some(),
             Self::System { .. } => false,
         }
     }
 
     fn take_write_lock(&mut self) -> Option<OwnedMutexGuard<()>> {
         match self {
-            Self::User { write_txn, .. } => write_txn.take_write_lock(),
+            Self::User {
+                write_lock_guard, ..
+            } => std::mem::replace(write_lock_guard, None),
             Self::System { .. } => None,
         }
     }
 }
 
-/// Different forms of write transactions
+//TODO(jkosh44)
 #[derive(Debug)]
-enum WriteTxn {
-    /// Writes to user tables.
-    Write {
-        /// List of all write operations within the transaction.
-        writes: Vec<WriteOp>,
-        /// Client response for transaction.
-        response: ExecuteResponse,
-        /// The action to take at the end of the transaction.
-        action: EndTransactionAction,
-        /// Holds the coordinator's write lock.
-        write_lock_guard: Option<OwnedMutexGuard<()>>,
-    },
-    /// DDL operations, these cause writes to system tables.
-    DDL {
+enum PendingDDLTxn {
+    /// DDL plans, these cause writes to system tables.
+    Plan {
+        client_context: ClientContext,
         /// DDL plan.
         plan: Plan,
         /// `GlobalId`s that this DDL depends on.
@@ -358,6 +380,7 @@ enum WriteTxn {
     },
     /// Sink creation completed, this causes writes to system tables.
     SinkConnectionReady {
+        client_context: ClientContext,
         // TODO(jkosh44)
         id: GlobalId,
         oid: u32,
@@ -366,27 +389,7 @@ enum WriteTxn {
     },
 }
 
-impl WriteTxn {
-    fn has_write_lock(&self) -> bool {
-        match self {
-            Self::Write {
-                write_lock_guard, ..
-            } => write_lock_guard.is_some(),
-            Self::DDL { .. } | Self::SinkConnectionReady { .. } => false,
-        }
-    }
-
-    fn take_write_lock(&mut self) -> Option<OwnedMutexGuard<()>> {
-        match self {
-            Self::Write {
-                write_lock_guard, ..
-            } => std::mem::replace(write_lock_guard, None),
-            Self::DDL { .. } | Self::SinkConnectionReady { .. } => None,
-        }
-    }
-}
-
-impl From<SinkConnectionReady> for PendingWriteTxn {
+impl From<SinkConnectionReady> for PendingDDLTxn {
     fn from(
         SinkConnectionReady {
             session,
@@ -397,15 +400,15 @@ impl From<SinkConnectionReady> for PendingWriteTxn {
             compute_instance,
         }: SinkConnectionReady,
     ) -> Self {
-        PendingWriteTxn::User {
-            write_txn: WriteTxn::SinkConnectionReady {
-                id,
-                oid,
-                result,
-                compute_instance,
+        PendingDDLTxn::SinkConnectionReady {
+            client_context: ClientContext {
+                client_transmitter: tx,
+                session,
             },
-            client_transmitter: tx,
-            session,
+            id,
+            oid,
+            result,
+            compute_instance,
         }
     }
 }
@@ -1134,7 +1137,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::CreateSourceStatementReady(ready) => {
                     self.message_create_source_statement_ready(ready).await
                 }
-                Message::SinkConnectionReady(ready) => self.submit_write(ready.into()),
+                Message::SinkConnectionReady(ready) => self.submit_ddl(ready.into()),
                 Message::WriteLockGrant(write_lock_guard) => {
                     // It's possible to have more incoming write lock grants
                     // than pending writes because of cancellations.
@@ -1314,144 +1317,145 @@ impl<S: Append + 'static> Coordinator<S> {
             }
         };
 
-        // Separate out DDL from non-DDL
-        let mut ddl = Vec::new();
-        let mut writes = Vec::new();
-        // Only add non-empty writes if we have the write lock
-        if let Some(_guard) = write_lock_guard {
-            for pending_write_txn in self.pending_group_commit.pending_writes.drain(..) {
-                if matches!(pending_write_txn, PendingWriteTxn::User{ref write_txn, ..} if matches!(write_txn, WriteTxn::Write{..}))
-                {
-                    writes.push(pending_write_txn);
-                } else {
-                    ddl.push(pending_write_txn);
-                }
+        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
+            HashMap::with_capacity(self.pending_group_commit.len());
+        let mut responses = Vec::with_capacity(
+            self.pending_group_commit.pending_writes.len()
+                + self.pending_group_commit.pending_ddl.len(),
+        );
+        let mut senders = Vec::with_capacity(self.pending_group_commit.pending_writes.len());
+
+        fn add_builtin_updates_to_appends(
+            builtin_table_updates: Vec<BuiltinTableUpdate>,
+            timestamp: Timestamp,
+            appends: &mut HashMap<GlobalId, Vec<Update>>,
+        ) {
+            for builtin_table_update in builtin_table_updates {
+                appends
+                    .entry(builtin_table_update.id)
+                    .or_default()
+                    .push(Update {
+                        row: builtin_table_update.row,
+                        diff: builtin_table_update.diff,
+                        timestamp,
+                    });
             }
         }
 
-        let mut appends: HashMap<GlobalId, Vec<Update<Timestamp>>> =
-            HashMap::with_capacity(self.pending_group_commit.len());
-        let mut responses = Vec::with_capacity(self.pending_group_commit.pending_writes.len());
-        let mut senders = Vec::with_capacity(self.pending_group_commit.pending_writes.len());
-
-        // It's important to process DDLs first, because some write may depend on an object that's
-        // deleted in a DDL.
-        for pending_write_txn in ddl.into_iter().chain(writes.into_iter()) {
-            match pending_write_txn {
-                PendingWriteTxn::User {
-                    write_txn,
-                    client_transmitter,
-                    mut session,
-                } => {
-                    match write_txn {
-                        WriteTxn::DDL { plan, depends_on } => {
-                            let builtin_table_updates = if let Plan::CreateSink(plan) = plan {
-                                match self
-                                    .sequence_create_sink(
-                                        session,
-                                        plan,
-                                        depends_on,
-                                        client_transmitter,
-                                    )
-                                    .await
-                                {
-                                    Some(builtin_table_updates) => builtin_table_updates,
-                                    None => Vec::new(),
-                                }
-                            } else {
-                                match self.sequence_ddl_plan(&mut session, plan, depends_on).await {
-                                    Ok((builtin_table_updates, response)) => {
-                                        responses.push((
-                                            client_transmitter,
-                                            Ok(response),
-                                            session,
-                                            None,
-                                        ));
-                                        builtin_table_updates
-                                    }
-                                    Err(e) => {
-                                        client_transmitter.send(Err(e), session);
-                                        Vec::new()
-                                    }
-                                }
-                            };
-
-                            for builtin_table_update in builtin_table_updates {
-                                appends
-                                    .entry(builtin_table_update.id)
-                                    .or_default()
-                                    .push(Update {
-                                        row: builtin_table_update.row,
-                                        diff: builtin_table_update.diff,
-                                        timestamp,
-                                    });
+        // Only process non-empty writes if we have the lock acquired
+        if write_lock_guard.is_some() {
+            // It's important to process DDLs first, because some write may depend on an object that's
+            // deleted in a DDL.
+            let pending_ddl_txns: Vec<_> =
+                self.pending_group_commit.pending_ddl.drain(..).collect();
+            for pending_ddl_txn in pending_ddl_txns {
+                match pending_ddl_txn {
+                    PendingDDLTxn::Plan {
+                        mut client_context,
+                        plan,
+                        depends_on,
+                    } => {
+                        let builtin_table_updates = if let Plan::CreateSink(plan) = plan {
+                            match self
+                                .sequence_create_sink(
+                                    client_context.session,
+                                    plan,
+                                    depends_on,
+                                    client_context.client_transmitter,
+                                )
+                                .await
+                            {
+                                Some(builtin_table_updates) => builtin_table_updates,
+                                None => Vec::new(),
                             }
-                        }
-                        WriteTxn::Write {
-                            writes,
-                            response,
-                            action,
-                            write_lock_guard: _,
-                        } => {
-                            for WriteOp { id, rows } in writes {
-                                // If the object that some write was targeting has been deleted by a DDL,
-                                // then the write will be ignored and we respond to the client that the
-                                // write was successful. This is only possible if the write and the delete
-                                // were concurrent. Therefore, we are free to order the write before the
-                                // delete without violating any consistency guarantees.
-                                if self.catalog.try_get_entry(&id).is_some() {
-                                    let updates = rows
-                                        .into_iter()
-                                        .map(|(row, diff)| Update {
-                                            row,
-                                            diff,
-                                            timestamp,
-                                        })
-                                        .collect::<Vec<_>>();
-                                    appends.entry(id).or_default().extend(updates);
+                        } else {
+                            match self
+                                .sequence_ddl_plan(&mut client_context.session, plan, depends_on)
+                                .await
+                            {
+                                Ok((builtin_table_updates, response)) => {
+                                    responses.push((client_context, Ok(response), None));
+                                    builtin_table_updates
+                                }
+                                Err(e) => {
+                                    client_context.send(Err(e));
+                                    Vec::new()
                                 }
                             }
-                            responses.push((client_transmitter, Ok(response), session, action));
-                        }
-                        WriteTxn::SinkConnectionReady {
-                            id,
-                            oid,
-                            result,
-                            compute_instance,
-                        } => {
-                            let (builtin_table_updates, response) = self
-                                .sink_connection_ready(id, oid, result, compute_instance, &session)
-                                .await;
-                            for builtin_table_update in builtin_table_updates {
-                                appends
-                                    .entry(builtin_table_update.id)
-                                    .or_default()
-                                    .push(Update {
-                                        row: builtin_table_update.row,
-                                        diff: builtin_table_update.diff,
-                                        timestamp,
-                                    });
-                            }
-                            responses.push((client_transmitter, response, session, None));
-                        }
+                        };
+                        add_builtin_updates_to_appends(
+                            builtin_table_updates,
+                            timestamp,
+                            &mut appends,
+                        );
+                    }
+                    PendingDDLTxn::SinkConnectionReady {
+                        client_context,
+                        id,
+                        oid,
+                        result,
+                        compute_instance,
+                    } => {
+                        let (builtin_table_updates, response) = self
+                            .sink_connection_ready(
+                                id,
+                                oid,
+                                result,
+                                compute_instance,
+                                &client_context.session,
+                            )
+                            .await;
+                        add_builtin_updates_to_appends(
+                            builtin_table_updates,
+                            timestamp,
+                            &mut appends,
+                        );
+                        responses.push((client_context, response, None));
                     }
                 }
-                PendingWriteTxn::System {
-                    builtin_table_updates,
-                    tx,
-                } => {
-                    for builtin_table_update in builtin_table_updates {
-                        appends
-                            .entry(builtin_table_update.id)
-                            .or_default()
-                            .push(Update {
-                                row: builtin_table_update.row,
-                                diff: builtin_table_update.diff,
-                                timestamp,
-                            });
+            }
+
+            for pending_write_txn in self.pending_group_commit.pending_writes.drain(..) {
+                match pending_write_txn {
+                    PendingWriteTxn::User {
+                        client_context,
+                        writes,
+                        response,
+                        action,
+                        write_lock_guard: _,
+                    } => {
+                        for WriteOp { id, rows } in writes {
+                            // If the object that some write was targeting has been deleted by a DDL,
+                            // then the write will be ignored and we respond to the client that the
+                            // write was successful. This is only possible if the write and the delete
+                            // were concurrent. Therefore, we are free to order the write before the
+                            // delete without violating any consistency guarantees.
+                            if self.catalog.try_get_entry(&id).is_some() {
+                                let updates = rows
+                                    .into_iter()
+                                    .map(|(row, diff)| Update {
+                                        row,
+                                        diff,
+                                        timestamp,
+                                    })
+                                    .collect::<Vec<_>>();
+                                appends.entry(id).or_default().extend(updates);
+                            }
+                        }
+                        responses.push((client_context, Ok(response), Some(action)));
                     }
-                    if let Some(tx) = tx {
-                        senders.push(tx);
+                    PendingWriteTxn::System {
+                        builtin_table_updates,
+                        tx,
+                    } => {
+                        add_builtin_updates_to_appends(
+                            builtin_table_updates,
+                            timestamp,
+                            &mut appends,
+                        );
+                        if let Some(tx) = tx {
+                            senders.push(tx);
+                        }
                     }
                 }
             }
@@ -1475,6 +1479,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
             }
         }
+
         let appends: Vec<_> = appends
             .into_iter()
             .map(|(id, updates)| (id, updates, advance_to))
@@ -1526,11 +1531,12 @@ impl<S: Append + 'static> Coordinator<S> {
             self.advance_tables.increase_batch();
         }
 
-        for (client_transmitter, response, mut session, action) in responses {
+        for (mut client_context, response, action) in responses {
             if let Some(action) = action {
-                session.vars_mut().end_transaction(action);
+                client_context.session.vars_mut().end_transaction(action);
             }
-            client_transmitter.send(response, session);
+
+            client_context.send(response);
         }
         for tx in senders {
             let _ = tx.send(());
@@ -1545,6 +1551,14 @@ impl<S: Append + 'static> Coordinator<S> {
         self.pending_group_commit
             .pending_writes
             .push(pending_write_txn);
+    }
+
+    /// Submit a write to be executed during the next group commit.
+    fn submit_ddl(&mut self, pending_ddl_txn: PendingDDLTxn) {
+        self.internal_cmd_tx
+            .send(Message::GroupCommit)
+            .expect("sending to internal_cmd_tx cannot fail");
+        self.pending_group_commit.pending_ddl.push(pending_ddl_txn);
     }
 
     /// Submit a table to be advanced during the next group commit.
@@ -1680,13 +1694,10 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => return tx.send(Err(e), session),
         };
 
-        self.submit_write(PendingWriteTxn::User {
-            write_txn: WriteTxn::DDL {
-                plan: Plan::CreateSource(plan),
-                depends_on,
-            },
-            client_transmitter: tx,
-            session,
+        self.submit_ddl(PendingDDLTxn::Plan {
+            client_context: ClientContext::new(tx, session),
+            plan: Plan::CreateSource(plan),
+            depends_on,
         });
     }
 
@@ -2339,14 +2350,13 @@ impl<S: Append + 'static> Coordinator<S> {
                 .pending_group_commit
                 .pending_writes
                 .iter()
-                .position(|pending_write_txn| matches!(pending_write_txn, PendingWriteTxn::User {session, ..} if session.conn_id() == conn_id))
+                .position(|pending_write_txn| matches!(pending_write_txn, PendingWriteTxn::User {client_context, ..} if client_context.session.conn_id() == conn_id))
             {
                 if let PendingWriteTxn::User {
-                    client_transmitter,
-                    session,
+                    client_context,
                     ..
                 } = self.pending_group_commit.pending_writes.remove(idx) {
-                    let _ = client_transmitter.send(Ok(ExecuteResponse::Canceled), session);
+                    let _ = client_context.send(Ok(ExecuteResponse::Canceled));
                 }
             }
 
@@ -2536,10 +2546,10 @@ impl<S: Append + 'static> Coordinator<S> {
             | plan @ Plan::DropComputeInstances(_)
             | plan @ Plan::DropComputeInstanceReplica(_)
             | plan @ Plan::DropItems(_) => {
-                self.submit_write(PendingWriteTxn::User {
-                    write_txn: WriteTxn::DDL { plan, depends_on },
-                    client_transmitter: tx,
-                    session,
+                self.submit_ddl(PendingDDLTxn::Plan {
+                    client_context: ClientContext::new(tx, session),
+                    plan,
+                    depends_on,
                 });
             }
             Plan::CreateSource(_) => unreachable!("handled separately"),
@@ -2606,10 +2616,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 );
             }
             plan @ Plan::AlterItemRename(_) => {
-                self.submit_write(PendingWriteTxn::User {
-                    write_txn: WriteTxn::DDL { plan, depends_on },
-                    client_transmitter: tx,
-                    session,
+                self.submit_ddl(PendingDDLTxn::Plan {
+                    client_context: ClientContext::new(tx, session),
+                    plan,
+                    depends_on,
                 });
             }
             Plan::AlterIndexSetOptions(plan) => {
@@ -2622,10 +2632,10 @@ impl<S: Append + 'static> Coordinator<S> {
                 tx.send(self.sequence_alter_secret(&session, plan).await, session);
             }
             plan @ Plan::DiscardTemp | plan @ Plan::DiscardAll => {
-                self.submit_write(PendingWriteTxn::User {
-                    write_txn: WriteTxn::DDL { plan, depends_on },
-                    client_transmitter: tx,
-                    session,
+                self.submit_ddl(PendingDDLTxn::Plan {
+                    client_context: ClientContext::new(tx, session),
+                    plan,
+                    depends_on,
                 });
             }
             Plan::Declare(plan) => {
@@ -3948,14 +3958,11 @@ impl<S: Append + 'static> Coordinator<S> {
             Ok((Some(writes), _)) if writes.is_empty() => (Ok(response), action),
             Ok((Some(writes), write_lock_guard)) => {
                 self.submit_write(PendingWriteTxn::User {
-                    write_txn: WriteTxn::Write {
-                        writes,
-                        response,
-                        action,
-                        write_lock_guard,
-                    },
-                    client_transmitter: tx,
-                    session,
+                    client_context: ClientContext::new(tx, session),
+                    writes,
+                    response,
+                    action,
+                    write_lock_guard,
                 });
                 return;
             }
