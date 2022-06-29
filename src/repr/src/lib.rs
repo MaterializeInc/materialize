@@ -30,6 +30,7 @@ mod scalar;
 
 pub mod adt;
 pub mod chrono;
+pub mod explain_new;
 pub mod global_id;
 pub mod strconv;
 pub mod url;
