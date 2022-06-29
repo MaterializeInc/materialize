@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::EvalError;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proto_matcher_impl::ProtoSubpatternVec;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.like_pattern.rs"));

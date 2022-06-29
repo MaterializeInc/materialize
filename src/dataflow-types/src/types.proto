@@ -18,7 +18,7 @@ import "dataflow-types/src/types/sources.proto";
 import "expr/src/scalar.proto";
 import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
-import "repr/src/proto.proto";
+import "proto/src/proto.proto";
 import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 
@@ -51,7 +51,7 @@ message ProtoDataflowDescription {
     repeated ProtoSinkExport sink_exports = 5;
     optional mz_persist.gen.persist.ProtoU64Antichain as_of = 6;
     string debug_name = 7;
-    mz_repr.proto.ProtoU128 id = 8;
+    mz_proto.ProtoU128 id = 8;
 }
 
 message ProtoIndexDesc {

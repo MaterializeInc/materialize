@@ -13,7 +13,7 @@ use proptest::prelude::{any, Arbitrary};
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 

@@ -17,7 +17,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
-use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::GlobalId;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.id.rs"));
@@ -215,7 +215,7 @@ impl mz_persist_types::Codec for PartitionId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

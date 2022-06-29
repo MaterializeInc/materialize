@@ -27,9 +27,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use mz_persist_types::Codec;
+use mz_proto::{any_uuid, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType};
 use mz_repr::chrono::any_naive_datetime;
-use mz_repr::proto::{any_uuid, TryFromProtoError};
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType};
 use mz_repr::{ColumnType, GlobalId, RelationDesc, RelationType, Row, ScalarType};
 
 pub mod encoding;

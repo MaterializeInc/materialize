@@ -47,13 +47,13 @@ use uuid::Uuid;
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::str::StrExt;
+use mz_proto::{RustType, TryFromProtoError};
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
 use crate::adt::numeric::{self, Numeric, NUMERIC_DATUM_MAX_PRECISION};
-use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.strconv.rs"));
 
@@ -1588,7 +1588,7 @@ impl RustType<ProtoParseHexError> for ParseHexError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {

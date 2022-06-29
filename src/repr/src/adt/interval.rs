@@ -13,13 +13,13 @@ use std::fmt::{self, Write};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
+use mz_proto::{RustType, TryFromProtoError};
 use num_traits::CheckedMul;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::datetime::DateTimeField;
 use crate::adt::numeric::{DecimalLike, Numeric};
-use crate::proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 

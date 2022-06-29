@@ -51,8 +51,8 @@ use mz_interchange::avro::{self, AvroSchemaGenerator};
 use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
-use mz_repr::proto::RustType;
 use mz_repr::strconv;
 use mz_repr::{ColumnName, GlobalId, RelationDesc, RelationType, ScalarType};
 

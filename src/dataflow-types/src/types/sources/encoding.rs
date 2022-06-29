@@ -15,8 +15,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_interchange::{avro, protobuf};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::regex::any_regex;
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, RelationDesc, ScalarType};
 
 use crate::connections::CsrConnection;

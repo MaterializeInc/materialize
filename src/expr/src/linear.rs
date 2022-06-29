@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row};
 
 use self::proto_map_filter_project::ProtoPredicate;
@@ -1311,8 +1311,8 @@ pub mod plan {
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
+    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::adt::numeric::Numeric;
-    use mz_repr::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::{Datum, Diff, Row, RowArena, ScalarType};
 
     use crate::{
@@ -1777,7 +1777,7 @@ pub mod plan {
 mod tests {
     use super::plan::*;
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]

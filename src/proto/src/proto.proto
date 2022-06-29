@@ -9,7 +9,7 @@
 
 syntax = "proto3";
 
-package mz_repr.proto;
+package mz_proto;
 
 message ProtoU128 {
     uint64 hi = 1;

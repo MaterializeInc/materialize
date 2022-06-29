@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 use mz_ore::str::StrExt;
+use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
-use crate::proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use crate::{Datum, ScalarType};
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;

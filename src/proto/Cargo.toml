@@ -1,0 +1,23 @@
+[package]
+name = "mz-proto"
+description = "Protocol buffer libraries for Materialize."
+version = "0.0.0"
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.61.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0.58"
+globset = "0.4.9"
+http = "0.2.8"
+mz-ore = { path = "../ore", default-features = false }
+proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
+prost = "0.10.3"
+regex = "1.5.6"
+serde_json = { version = "1.0.81", features = ["arbitrary_precision"] }
+url = { version = "2.2.2", features = ["serde"] }
+uuid = "1.1.2"
+
+[build-dependencies]
+prost-build = { version = "0.10.3", features = ["vendored"] }

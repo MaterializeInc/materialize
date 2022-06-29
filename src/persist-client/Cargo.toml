@@ -40,6 +40,7 @@ futures-util = "0.3"
 mz-ore = { path = "../ore" }
 mz-persist = { path = "../persist" }
 mz-persist-types = { path = "../persist-types" }
+mz-proto = { path = "../proto" }
 prometheus = { version = "0.13.1", default-features = false }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }

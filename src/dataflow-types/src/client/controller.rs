@@ -47,7 +47,7 @@ use mz_orchestrator::{
 };
 use mz_persist_client::PersistLocation;
 use mz_persist_types::Codec64;
-use mz_repr::proto::RustType;
+use mz_proto::RustType;
 
 use crate::client::{
     ComputeClient, ComputeCommand, ComputeInstanceId, ComputeResponse,

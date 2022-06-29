@@ -18,6 +18,7 @@
 )]
 
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::BufMut;
@@ -26,6 +27,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::{Codec, Codec64};
+use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp;
@@ -158,6 +160,16 @@ impl ShardId {
     /// generated before.
     pub fn new() -> Self {
         ShardId(Uuid::new_v4().as_bytes().to_owned())
+    }
+}
+
+impl RustType<String> for ShardId {
+    fn into_proto(&self) -> String {
+        self.to_string()
+    }
+
+    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
+        ShardId::from_str(&proto).map_err(|_| TryFromProtoError::InvalidShardId(proto))
     }
 }
 
@@ -394,6 +406,7 @@ mod tests {
 
     use futures_task::noop_waker;
     use mz_persist::workload::DataGenerator;
+    use mz_proto::protobuf_roundtrip;
     use timely::progress::Antichain;
     use timely::PartialOrder;
     use tokio::task::JoinHandle;
@@ -401,6 +414,8 @@ mod tests {
     use crate::cache::PersistClientCache;
     use crate::r#impl::state::Upper;
     use crate::read::ListenEvent;
+
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -1365,5 +1380,16 @@ mod tests {
         // Read the snapshot and check that it got all the appropriate data.
         let mut snap = snap.await;
         assert_eq!(snap.read_all().await, all_ok(&data[..], 3));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        #[test]
+        fn shard_id_protobuf_roundtrip(expect in any::<ShardId>() ) {
+            let actual = protobuf_roundtrip::<_, String>(&expect);
+            assert!(actual.is_ok());
+            assert_eq!(actual.unwrap(), expect);
+        }
     }
 }

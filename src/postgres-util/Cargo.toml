@@ -9,11 +9,10 @@ publish = false
 [dependencies]
 anyhow = "1.0.58"
 mz-ore = { path = "../ore", features = ["task"] }
-mz-repr = { path = "../repr" }
+mz-proto = { path = "../proto" }
 openssl = { version = "0.10.40", features = ["vendored"] }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"]}
-proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git"}
 prost = "0.10.3"
 serde = { version = "1.0.137", features = ["derive"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

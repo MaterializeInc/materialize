@@ -17,7 +17,7 @@ import "expr/src/relation.proto";
 import "persist/src/persist.proto";
 import "repr/src/global_id.proto";
 import "repr/src/row.proto";
-import "repr/src/proto.proto";
+import "proto/src/proto.proto";
 
 import "google/protobuf/empty.proto";
 
@@ -71,7 +71,7 @@ message ProtoInstanceConfig {
 message ProtoPeek {
     mz_repr.global_id.ProtoGlobalId id = 1;
     mz_repr.row.ProtoRow key = 2;
-    mz_repr.proto.ProtoU128 uuid = 3;
+    mz_proto.ProtoU128 uuid = 3;
     uint64 timestamp = 4;
     mz_expr.relation.ProtoRowSetFinishing finishing = 5;
     mz_expr.linear.ProtoSafeMfpPlan map_filter_project = 6;
@@ -85,7 +85,7 @@ message ProtoComputeCommand {
     }
 
     message ProtoCancelPeeks {
-        repeated mz_repr.proto.ProtoU128 uuids = 1;
+        repeated mz_proto.ProtoU128 uuids = 1;
     }
 
     oneof kind {
@@ -100,7 +100,7 @@ message ProtoComputeCommand {
 
 message ProtoComputeResponse {
     message ProtoPeekResponseKind {
-        mz_repr.proto.ProtoU128 id = 1;
+        mz_proto.ProtoU128 id = 1;
         mz_dataflow_types.types.ProtoPeekResponse resp = 2;
     map<string, string> otel_ctx = 3;
     }
@@ -127,7 +127,7 @@ message ProtoStorageCommand {
 message ProtoStorageResponse {
     message ProtoLinearizedTimestampBindingFeedback {
         uint64 timestamp = 1;
-        mz_repr.proto.ProtoU128 peek_id = 3;
+        mz_proto.ProtoU128 peek_id = 3;
     }
     oneof kind {
         ProtoFrontierUppersKind frontier_uppers = 1;

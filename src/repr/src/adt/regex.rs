@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use mz_lowertest::MzReflect;
 
-use crate::proto::{RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.regex.rs"));
 
@@ -87,16 +87,6 @@ impl Deref for Regex {
     }
 }
 
-impl RustType<String> for regex::Regex {
-    fn into_proto(&self) -> String {
-        self.as_str().to_string()
-    }
-
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        Ok(regex::Regex::new(&proto)?)
-    }
-}
-
 impl RustType<ProtoRegex> for Regex {
     fn into_proto(&self) -> ProtoRegex {
         ProtoRegex {
@@ -133,7 +123,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
 
     proptest! {
         #[test]

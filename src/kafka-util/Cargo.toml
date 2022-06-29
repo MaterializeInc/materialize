@@ -13,8 +13,8 @@ clap = { version = "3.2.6", features = ["derive"] }
 crossbeam = "0.8.1"
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
-mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore", features = ["network"] }
+mz-proto = { path = "../proto" }
 num_cpus = "1.13.1"
 proptest = { git = "https://github.com/MaterializeInc/proptest.git", default-features = false, features = ["std"] }
 proptest-derive = { git = "https://github.com/MaterializeInc/proptest.git" }

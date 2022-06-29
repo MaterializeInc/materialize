@@ -23,7 +23,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_expr::ColumnOrder;
-use mz_repr::proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_dataflow_types.plan.top_k.rs"));
 
@@ -231,7 +231,7 @@ impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::proto::protobuf_roundtrip;
+    use mz_proto::protobuf_roundtrip;
     use proptest::prelude::*;
 
     proptest! {
