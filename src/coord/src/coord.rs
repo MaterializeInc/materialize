@@ -1035,26 +1035,7 @@ impl<S: Append + 'static> Coordinator<S> {
                 // in any situation where you use it, you must also have a code
                 // path that responds to the client (e.g. reporting an error).
                 Message::RemovePendingPeeks { conn_id } => {
-                    // The peek is present on some specific compute instance.
-                    // Allow dataflow to cancel any pending peeks.
-                    if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
-                        let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> =
-                            Default::default();
-                        for (uuid, compute_instance) in &uuids {
-                            inverse.entry(*compute_instance).or_default().insert(*uuid);
-                        }
-                        for (compute_instance, uuids) in inverse {
-                            self.dataflow_client
-                                .compute_mut(compute_instance)
-                                .unwrap()
-                                .cancel_peeks(&uuids)
-                                .await
-                                .unwrap();
-                        }
-                        for (uuid, _) in uuids {
-                            self.pending_peeks.remove(&uuid);
-                        }
-                    }
+                    self.remove_pending_peeks(conn_id).await;
                 }
             }
 
@@ -1491,6 +1472,33 @@ impl<S: Append + 'static> Coordinator<S> {
             Err(e) => {
                 tx.send(Err(e), session);
             }
+        }
+    }
+
+    /// Remove all pending peeks that were initiated by `conn_id`.
+    async fn remove_pending_peeks(&mut self, conn_id: u32) -> Vec<PendingPeek> {
+        // The peek is present on some specific compute instance.
+        // Allow dataflow to cancel any pending peeks.
+        if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
+            let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
+            for (uuid, compute_instance) in &uuids {
+                inverse.entry(*compute_instance).or_default().insert(*uuid);
+            }
+            for (compute_instance, uuids) in inverse {
+                self.dataflow_client
+                    .compute_mut(compute_instance)
+                    .unwrap()
+                    .cancel_peeks(&uuids)
+                    .await
+                    .unwrap();
+            }
+
+            uuids
+                .iter()
+                .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
+                .collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -2050,34 +2058,14 @@ impl<S: Append + 'static> Coordinator<S> {
             // Inform the target session (if it asks) about the cancellation.
             let _ = conn_meta.cancel_tx.send(Canceled::Canceled);
 
-            // The peek is present on some specific compute instance.
-            // Allow dataflow to cancel any pending peeks.
-            if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
-                let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
-                for (uuid, compute_instance) in &uuids {
-                    inverse.entry(*compute_instance).or_default().insert(*uuid);
-                }
-                for (compute_instance, uuids) in inverse {
-                    self.dataflow_client
-                        .compute_mut(compute_instance)
-                        .unwrap()
-                        .cancel_peeks(&uuids)
-                        .await
-                        .unwrap();
-                }
-                for (uuid, _) in uuids {
-                    if let Some(PendingPeek {
-                        sender: rows_tx,
-                        conn_id: _,
-                    }) = self.pending_peeks.remove(&uuid)
-                    {
-                        rows_tx
-                            .send(PeekResponse::Canceled)
-                            .expect("Peek endpoint terminated prematurely");
-                    } else {
-                        warn!("Received a cancel request without a pending peek: {uuid}");
-                    }
-                }
+            for PendingPeek {
+                sender: rows_tx,
+                conn_id: _,
+            } in self.remove_pending_peeks(conn_id).await
+            {
+                rows_tx
+                    .send(PeekResponse::Canceled)
+                    .expect("Peek endpoint terminated prematurely");
             }
         }
     }
@@ -2093,11 +2081,7 @@ impl<S: Append + 'static> Coordinator<S> {
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&session.conn_id());
-        self.internal_cmd_tx
-            .send(Message::RemovePendingPeeks {
-                conn_id: session.conn_id(),
-            })
-            .expect("sending to internal_cmd_tx cannot fail");
+        self.remove_pending_peeks(session.conn_id()).await;
     }
 
     /// Handle removing in-progress transaction state regardless of the end action
