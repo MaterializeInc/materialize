@@ -148,6 +148,11 @@ impl<'a> DataflowBuilder<'a, mz_repr::Timestamp> {
                         let expr = view.optimized_expr.clone();
                         self.import_view_into_dataflow(id, &expr, dataflow)?;
                     }
+                    CatalogItem::RecordedView(_) => {
+                        // TODO(teskje): Figure out whether we need to handle
+                        // this case.
+                        unreachable!()
+                    }
                     _ => unreachable!(),
                 }
             }

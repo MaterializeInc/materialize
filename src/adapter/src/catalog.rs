@@ -181,8 +181,8 @@ impl CatalogState {
     fn log_dependencies_inner(&self, id: GlobalId, out: &mut Vec<GlobalId>) {
         match self.get_entry(&id).item() {
             CatalogItem::Log(_) => out.push(id),
-            CatalogItem::View(view) => {
-                for id in view.depends_on.iter() {
+            item @ (CatalogItem::View(_) | CatalogItem::RecordedView(_)) => {
+                for id in item.uses() {
                     self.log_dependencies_inner(*id, out);
                 }
             }
@@ -200,7 +200,9 @@ impl CatalogState {
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         match self.get_entry(&id).item() {
             CatalogItem::Table(_) => true,
-            item @ CatalogItem::View(_) => item.uses().iter().any(|id| self.uses_tables(*id)),
+            item @ (CatalogItem::View(_) | CatalogItem::RecordedView(_)) => {
+                item.uses().iter().any(|id| self.uses_tables(*id))
+            }
             CatalogItem::Index(idx) => self.uses_tables(idx.on),
             CatalogItem::Source(_)
             | CatalogItem::Log(_)
@@ -946,6 +948,7 @@ pub enum CatalogItem {
     Source(Source),
     Log(&'static BuiltinLog),
     View(View),
+    RecordedView(RecordedView),
     Sink(Sink),
     Index(Index),
     Type(Type),
@@ -1009,6 +1012,15 @@ pub struct View {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RecordedView {
+    pub create_sql: String,
+    pub optimized_expr: OptimizedMirRelationExpr,
+    pub desc: RelationDesc,
+    pub depends_on: Vec<GlobalId>,
+    pub compute_instance: ComputeInstanceId,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
@@ -1052,6 +1064,7 @@ impl CatalogItem {
             CatalogItem::Log(_) => mz_sql::catalog::CatalogItemType::Source,
             CatalogItem::Sink(_) => mz_sql::catalog::CatalogItemType::Sink,
             CatalogItem::View(_) => mz_sql::catalog::CatalogItemType::View,
+            CatalogItem::RecordedView(_) => mz_sql::catalog::CatalogItemType::RecordedView,
             CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
             CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
@@ -1066,6 +1079,7 @@ impl CatalogItem {
             CatalogItem::Log(log) => Ok(Cow::Owned(log.variant.desc())),
             CatalogItem::Table(tbl) => Ok(Cow::Borrowed(&tbl.desc)),
             CatalogItem::View(view) => Ok(Cow::Borrowed(&view.desc)),
+            CatalogItem::RecordedView(rview) => Ok(Cow::Borrowed(&rview.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1107,6 +1121,7 @@ impl CatalogItem {
             CatalogItem::Table(table) => &table.depends_on,
             CatalogItem::Type(typ) => &typ.depends_on,
             CatalogItem::View(view) => &view.depends_on,
+            CatalogItem::RecordedView(rview) => &rview.depends_on,
             CatalogItem::Secret(_) => &[],
             CatalogItem::Connection(_) => &[],
         }
@@ -1123,6 +1138,7 @@ impl CatalogItem {
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
             | CatalogItem::View(_)
+            | CatalogItem::RecordedView(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => false,
             CatalogItem::Sink(s) => match s.connection {
@@ -1139,13 +1155,14 @@ impl CatalogItem {
             CatalogItem::View(view) => view.conn_id,
             CatalogItem::Index(index) => index.conn_id,
             CatalogItem::Table(table) => table.conn_id,
-            CatalogItem::Log(_) => None,
-            CatalogItem::Source(_) => None,
-            CatalogItem::Sink(_) => None,
-            CatalogItem::Secret(_) => None,
-            CatalogItem::Type(_) => None,
-            CatalogItem::Func(_) => None,
-            CatalogItem::Connection(_) => None,
+            CatalogItem::Log(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::RecordedView(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -1194,6 +1211,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::View(i))
+            }
+            CatalogItem::RecordedView(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::RecordedView(i))
             }
             CatalogItem::Index(i) => {
                 let mut i = i.clone();
@@ -3169,6 +3191,10 @@ impl<S: Append> Catalog<S> {
                 create_sql: view.create_sql.clone(),
                 eval_env: None,
             },
+            CatalogItem::RecordedView(rview) => SerializedCatalogItem::V1 {
+                create_sql: rview.create_sql.clone(),
+                eval_env: None,
+            },
             CatalogItem::Index(index) => SerializedCatalogItem::V1 {
                 create_sql: index.create_sql.clone(),
                 eval_env: None,
@@ -3246,11 +3272,17 @@ impl<S: Append> Catalog<S> {
                     depends_on,
                 })
             }
-            Plan::CreateRecordedView(CreateRecordedViewPlan {
-                recorded_view: _, ..
-            }) => {
-                // TODO(teskje): implement
-                bail!("not yet implemented")
+            Plan::CreateRecordedView(CreateRecordedViewPlan { recorded_view, .. }) => {
+                let mut optimizer = Optimizer::logical_optimizer();
+                let optimized_expr = optimizer.optimize(recorded_view.expr)?;
+                let desc = RelationDesc::new(optimized_expr.typ(), recorded_view.column_names);
+                CatalogItem::RecordedView(RecordedView {
+                    create_sql: recorded_view.create_sql,
+                    optimized_expr,
+                    desc,
+                    depends_on,
+                    compute_instance: recorded_view.compute_instance,
+                })
             }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
@@ -3817,6 +3849,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Source(Source { create_sql, .. }) => create_sql,
             CatalogItem::Sink(Sink { create_sql, .. }) => create_sql,
             CatalogItem::View(View { create_sql, .. }) => create_sql,
+            CatalogItem::RecordedView(RecordedView { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Secret(Secret { create_sql, .. }) => create_sql,

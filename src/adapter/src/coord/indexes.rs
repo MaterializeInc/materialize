@@ -75,9 +75,9 @@ impl<T: CoordTimestamp> ComputeInstanceIndexOracle<'_, T> {
                     view @ CatalogItem::View(_) => {
                         todo.extend(view.uses());
                     }
-                    CatalogItem::Source(_) | CatalogItem::Table(_) => {
-                        // Unmaterialized source or table. Record that we are
-                        // missing at least one index.
+                    CatalogItem::Source(_) | CatalogItem::Table(_) | CatalogItem::RecordedView(_) => {
+                        // Unmaterialized source, table, or recorded view.
+                        // Record that we are missing at least one index.
                         id_bundle.storage_ids.insert(id);
                     }
                     _ => {

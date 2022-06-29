@@ -203,6 +203,7 @@ impl CatalogState {
                 self.pack_source_update(id, oid, schema_id, name, source.source_desc.name(), diff)
             }
             CatalogItem::View(view) => self.pack_view_update(id, oid, schema_id, name, view, diff),
+            CatalogItem::RecordedView(_) => todo!(),
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
             CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),

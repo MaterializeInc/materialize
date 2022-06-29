@@ -818,6 +818,7 @@ impl<S: Append + 'static> Coordinator<S> {
                     }
                 }
                 CatalogItem::View(_) => (),
+                CatalogItem::RecordedView(_) => todo!(),
                 CatalogItem::Sink(sink) => {
                     // Re-create the sink on the compute instance.
                     let builder = match &sink.connection {
@@ -5509,6 +5510,9 @@ impl<S: Append + 'static> Coordinator<S> {
                 }
                 CatalogItem::View(view) => {
                     ids.extend(view.optimized_expr.depends_on());
+                }
+                CatalogItem::RecordedView(rview) => {
+                    ids.extend(rview.optimized_expr.depends_on());
                 }
                 CatalogItem::Table(table) => {
                     timelines.insert(id, table.timeline());
