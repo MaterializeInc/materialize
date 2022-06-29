@@ -12,13 +12,12 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use tokio_postgres::NoTls;
 
 use mz_ore::retry::Retry;
-use mz_ore::task;
 
 use crate::action::{Action, ControlFlow, State};
 use crate::parser::BuiltinCommand;
+use crate::util::postgres::postgres_client;
 
 pub struct VerifySlotAction {
     connection: String,
@@ -45,14 +44,7 @@ impl Action for VerifySlotAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
-        let (client, conn) = tokio_postgres::connect(&self.connection, NoTls)
-            .await
-            .context("connecting to postgres")?;
-        println!(
-            "Executing queries against PostgreSQL server at {}...",
-            self.connection
-        );
-        let conn_handle = task::spawn(|| "verify_slot_action_pgconn", conn);
+        let (client, conn_handle) = postgres_client(&self.connection).await?;
 
         Retry::default()
             .initial_backoff(Duration::from_millis(50))

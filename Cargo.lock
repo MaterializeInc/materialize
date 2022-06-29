@@ -4126,6 +4126,7 @@ dependencies = [
  "mz-kinesis-util",
  "mz-ore",
  "mz-pgrepr",
+ "mz-postgres-util",
  "mz-repr",
  "mz-sql",
  "mz-sql-parser",

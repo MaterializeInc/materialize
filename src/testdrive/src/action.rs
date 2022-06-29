@@ -33,16 +33,17 @@ use once_cell::sync::Lazy;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
-use tokio_postgres::NoTls;
 use url::Url;
 
 use mz_ore::display::DisplayExt;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_postgres_util::make_tls;
 
 use crate::error::PosError;
 use crate::parser::{validate_ident, Command, PosCommand, SqlExpectedError, SqlOutput};
 use crate::util;
+use crate::util::postgres::postgres_client;
 
 mod file;
 mod http;
@@ -195,12 +196,7 @@ impl State {
         if let Some(url) = &self.materialize_catalog_postgres_stash {
             let schema = format!("mz_stash_copy_{}", self.seed);
 
-            let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
-            mz_ore::task::spawn(|| "tokio-postgres testdrive connection", async move {
-                if let Err(e) = connection.await {
-                    panic!("postgres stash connection error: {}", e);
-                }
-            });
+            let (client, _) = postgres_client(url).await?;
 
             let current_schema: String =
                 client.query_one("SELECT current_schema", &[]).await?.get(0);
@@ -729,13 +725,10 @@ pub async fn create_state(
         let (pgclient, pgconn) = Retry::default()
             .max_duration(config.default_timeout)
             .retry_async_canceling(|_| async move {
-                config
-                    .materialize_pgconfig
-                    .clone()
-                    .connect_timeout(config.default_timeout)
-                    .connect(tokio_postgres::NoTls)
-                    .await
-                    .map_err(|e| anyhow!(e))
+                let mut pgconfig = config.materialize_pgconfig.clone();
+                pgconfig.connect_timeout(config.default_timeout);
+                let tls = make_tls(&pgconfig)?;
+                pgconfig.connect(tls).await.map_err(|e| anyhow!(e))
             })
             .await?;
         let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {

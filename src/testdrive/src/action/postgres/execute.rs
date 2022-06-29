@@ -37,7 +37,8 @@ impl Action for ExecuteAction {
     async fn redo(&self, state: &mut State) -> Result<ControlFlow, anyhow::Error> {
         let client;
         let client = if self.connection.starts_with("postgres://") {
-            client = postgres_client(&self.connection).await?;
+            let (client_inner, _) = postgres_client(&self.connection).await?;
+            client = client_inner;
             &client
         } else {
             state
