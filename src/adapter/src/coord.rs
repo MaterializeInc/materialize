@@ -139,8 +139,8 @@ use mz_sql::plan::{
     DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExecutePlan, ExplainPlan,
     ExplainPlanNew, ExplainPlanOld, FetchPlan, HirRelationExpr, IndexOption, InsertPlan,
     MutationKind, OptimizerConfig, Params, PeekPlan, Plan, QueryWhen, RaisePlan, ReadThenWritePlan,
-    ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan,
-    StatementDesc, TailFrom, TailPlan, View,
+    RecordedView, ReplicaConfig, ResetVariablePlan, SendDiffsPlan, SetVariablePlan,
+    ShowVariablePlan, StatementDesc, TailFrom, TailPlan, View,
 };
 use mz_stash::Append;
 use mz_storage::client::connections::ConnectionContext;
@@ -3271,40 +3271,87 @@ impl<S: Append + 'static> Coordinator<S> {
     ) -> Result<ExecuteResponse, AdapterError> {
         let CreateRecordedViewPlan {
             name,
-            recorded_view,
+            recorded_view:
+                RecordedView {
+                    create_sql,
+                    expr: view_expr,
+                    column_names,
+                    compute_instance,
+                },
             replace,
             if_not_exists,
         } = plan;
 
-        self.validate_timeline(recorded_view.expr.depends_on())?;
+        self.validate_timeline(depends_on.clone())?;
 
         // Allocate IDs for the recorded view in the catalog.
         let id = self.catalog.allocate_user_id().await?;
         let oid = self.catalog.allocate_oid().await?;
+        // Allocate a unique ID that can be used by the dataflow builder to
+        // connect the view dataflow to the storage sink.
+        let internal_view_id = self.allocate_transient_id()?;
 
-        let optimized_expr = self.view_optimizer.optimize(recorded_view.expr)?;
-        let desc = RelationDesc::new(optimized_expr.typ(), recorded_view.column_names);
+        let optimized_expr = self.view_optimizer.optimize(view_expr)?;
+        let desc = RelationDesc::new(optimized_expr.typ(), column_names);
+
+        // Pick the least valid read timestamp as the as-of for the view
+        // dataflow. This makes the recorded view include the maximum possible
+        // amount of historical detail.
+        let id_bundle = self
+            .index_oracle(compute_instance)
+            .sufficient_collections(&depends_on);
+        let as_of = self.least_valid_read(&id_bundle, compute_instance);
 
         let mut ops = Vec::new();
         if let Some(drop_id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[drop_id]));
         }
-
         ops.push(catalog::Op::CreateItem {
             id,
             oid,
             name,
             item: CatalogItem::RecordedView(catalog::RecordedView {
-                create_sql: recorded_view.create_sql,
+                create_sql,
                 optimized_expr,
-                desc,
+                desc: desc.clone(),
                 depends_on,
-                compute_instance: recorded_view.compute_instance,
+                compute_instance,
             }),
         });
 
-        match self.catalog_transact(Some(session), ops, |_| Ok(())).await {
-            Ok(()) => Ok(ExecuteResponse::CreatedRecordedView { existed: false }),
+        match self
+            .catalog_transact(Some(session), ops, |txn| {
+                // Create a dataflow that materializes the view query and sinks
+                // it to storage.
+                let df = txn
+                    .dataflow_builder(compute_instance)
+                    .build_recorded_view_dataflow(id, as_of, internal_view_id)?;
+                Ok(df)
+            })
+            .await
+        {
+            Ok(df) => {
+                // Announce the creation of the recorded view source.
+                self.dataflow_client
+                    .storage_mut()
+                    .create_collections(vec![(
+                        id,
+                        CollectionDescription {
+                            desc,
+                            ingestion: None,
+                            remote_addr: None,
+                        },
+                    )])
+                    .await
+                    .unwrap();
+
+                self.initialize_storage_read_policies(vec![id], self.logical_compaction_window_ms)
+                    .await;
+
+                self.ship_dataflow(df, compute_instance).await;
+
+                Ok(ExecuteResponse::CreatedRecordedView { existed: false })
+            }
             Err(AdapterError::Catalog(catalog::Error {
                 kind: catalog::ErrorKind::ItemAlreadyExists(_),
                 ..
