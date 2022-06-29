@@ -26,7 +26,7 @@ use tracing::{debug, info, trace};
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHandle};
-use mz_persist_client::read::{Listen, ListenEvent, ReadHandle};
+use mz_persist_client::read::{Listen, ListenEvent, ReadHandle, SinceHandle};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Metrics, PersistClient, PersistConfig, ShardId};
 
@@ -99,6 +99,7 @@ pub struct MaelstromVal(Vec<u64>);
 pub struct Transactor {
     read: ReadHandle<MaelstromKey, MaelstromVal, u64, i64>,
     write: WriteHandle<MaelstromKey, MaelstromVal, u64, i64>,
+    since_handle: SinceHandle<MaelstromKey, MaelstromVal, u64, i64>,
 
     since_ts: u64,
     read_ts: u64,
@@ -107,11 +108,13 @@ pub struct Transactor {
 impl Transactor {
     pub async fn new(client: &PersistClient, shard_id: ShardId) -> Result<Self, MaelstromError> {
         let (mut write, read) = client.open(shard_id).await?;
-        let since_ts = Self::extract_ts(read.since())?;
+        let since_handle = client.open_since_handle(shard_id).await?;
+        let since_ts = Self::extract_ts(since_handle.since())?;
         let read_ts = Self::maybe_init_shard(&mut write).await?;
         Ok(Transactor {
             read,
             write,
+            since_handle,
             since_ts,
             read_ts,
         })
@@ -374,9 +377,10 @@ impl Transactor {
         const SINCE_LAG: u64 = 10;
         let new_since = self.read_ts.saturating_sub(SINCE_LAG);
         debug!("downgrading since to {}", new_since);
-        self.read
+        self.since_handle
             .downgrade_since(Antichain::from_elem(new_since))
-            .await;
+            .await
+            .expect("fenced since handle");
         self.since_ts = new_since;
     }
 

@@ -84,12 +84,18 @@ impl ReclockOperator {
             .await
             .context("error opening persist shard")?;
 
-        let (since, upper) = (read_handle.since(), write_handle.upper().clone());
+        // WIP: We don't assert on the since here anymore. But I don't think we
+        // can. We need to rely on the fact that the storage controller will not
+        // allow the since to advance beyond what we need.
 
-        assert!(
-            PartialOrder::less_equal(since, &as_of),
-            "invalid as_of: as_of({as_of:?}) < since({since:?})"
-        );
+        // let (since, upper) = (read_handle.since(), write_handle.upper().clone());
+
+        // assert!(
+        //     PartialOrder::less_equal(since, &as_of),
+        //     "invalid as_of: as_of({as_of:?}) < since({since:?})"
+        // );
+
+        let upper = write_handle.upper().clone();
 
         assert!(
             as_of.elements() == [Timestamp::minimum()] || PartialOrder::less_than(&as_of, &upper),
@@ -212,7 +218,9 @@ impl ReclockOperator {
             consolidation::consolidate(bindings);
         }
         self.since = new_since;
-        self.read_handle.downgrade_since(self.since.clone()).await;
+        // WIP: Does the controller need to know about all the involved shards,
+        // and allow compaction on them? Who should hold on to the `SinceHandle`
+        // of the reclocking shard. Probably the controller.
     }
 
     /// Advances the upper of the reclock operator if appropriate

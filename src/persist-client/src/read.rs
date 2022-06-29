@@ -314,9 +314,9 @@ where
 /// ```rust,no_run
 /// # let mut read: mz_persist_client::read::ReadHandle<String, String, u64, i64> = unimplemented!();
 /// # let timeout: std::time::Duration = unimplemented!();
-/// # let new_since: timely::progress::Antichain<u64> = unimplemented!();
+/// # let as_of: timely::progress::Antichain<u64> = unimplemented!();
 /// # async {
-/// tokio::time::timeout(timeout, read.downgrade_since(new_since)).await
+/// tokio::time::timeout(timeout, read.snapshot(as_of)).await
 /// # };
 /// ```
 #[derive(Debug)]
@@ -333,7 +333,6 @@ where
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob + Send + Sync>,
 
-    pub(crate) since: Antichain<T>,
     pub(crate) explicitly_expired: bool,
 }
 
@@ -344,32 +343,6 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Semigroup + Codec64,
 {
-    /// This handle's `since` frontier.
-    ///
-    /// This will always be greater or equal to the shard-global `since`.
-    pub fn since(&self) -> &Antichain<T> {
-        &self.since
-    }
-
-    /// Forwards the since frontier of this handle, giving up the ability to
-    /// read at times not greater or equal to `new_since`.
-    ///
-    /// This may trigger (asynchronous) compaction and consolidation in the
-    /// system. A `new_since` of the empty antichain "finishes" this shard,
-    /// promising that no more data will ever be read by this handle.
-    ///
-    /// It is possible to heartbeat a reader lease by calling this with
-    /// `new_since` equal to `self.since()` (making the call a no-op).
-    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
-    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) {
-        trace!("ReadHandle::downgrade_since new_since={:?}", new_since);
-        let (_seqno, current_reader_since) = self
-            .machine
-            .downgrade_since(&self.reader_id, &new_since)
-            .await;
-        self.since = current_reader_since.0;
-    }
-
     /// Returns an ongoing subscription of updates to a shard.
     ///
     /// The stream includes all data at times greater than `as_of`. Combined
@@ -532,13 +505,13 @@ where
         trace!("ReadHandle::clone");
         let new_reader_id = ReaderId::new();
         let mut machine = self.machine.clone();
-        let read_cap = machine.clone_reader(&self.reader_id).await;
+        // WIP: This is not used for anything right now.
+        let _read_cap = machine.clone_reader(&self.reader_id).await;
         let new_reader = ReadHandle {
             metrics: Arc::clone(&self.metrics),
             reader_id: new_reader_id,
             machine,
             blob: Arc::clone(&self.blob),
-            since: read_cap.since,
             explicitly_expired: false,
         };
         new_reader
@@ -759,6 +732,90 @@ fn decode_inline_desc<T: Timestamp + Codec64>(desc: &Description<u64>) -> Descri
         decode_antichain(desc.upper()),
         decode_antichain(desc.since()),
     )
+}
+
+/// A "capability" granting the ability to hold back the `since` of a persist
+/// shard and downgrade it when necessary.
+///
+/// There can only be one active `SinceHandle` for a given persist shard. When
+/// creating a new `SinceHandle` for a shard, previous handles are fenced off,
+/// meaning handles might learn that they can no longer downgrade the since when
+/// that happens.
+///
+/// All async methods on ReadHandle retry for as long as they are able, but the
+/// returned [std::future::Future]s implement "cancel on drop" semantics. This
+/// means that callers can add a timeout using [tokio::time::timeout] or
+/// [tokio::time::timeout_at].
+///
+/// ```rust,no_run
+/// # let mut since_handle: mz_persist_client::read::SinceHandle<String, String, u64, i64> = unimplemented!();
+/// # let timeout: std::time::Duration = unimplemented!();
+/// # let new_since: timely::progress::Antichain<u64> = unimplemented!();
+/// # async {
+/// tokio::time::timeout(timeout, since_handle.downgrade_since(new_since)).await
+/// # };
+/// ```
+///
+// WIP: Move to its own since_handle.rs?
+#[derive(Debug)]
+pub struct SinceHandle<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+    // These are only here so we can use them in the auto-expiring `Drop` impl.
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Semigroup + Codec64,
+{
+    #[allow(unused)]
+    pub(crate) metrics: Arc<Metrics>,
+    // WIP: Introduce a `SinceHandleId`?
+    pub(crate) since_handle_id: ReaderId,
+    pub(crate) machine: Machine<K, V, T, D>,
+
+    pub(crate) since: Antichain<T>,
+}
+
+impl<K, V, T, D> SinceHandle<K, V, T, D>
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Semigroup + Codec64,
+{
+    /// This handle's `since` frontier.
+    ///
+    /// This will always be greater or equal to the shard-global `since`.
+    pub fn since(&self) -> &Antichain<T> {
+        &self.since
+    }
+
+    /// Forwards the since frontier of this handle, giving up the ability to
+    /// read at times not greater or equal to `new_since`.
+    ///
+    /// This may trigger (asynchronous) compaction and consolidation in the
+    /// system. A `new_since` of the empty antichain "finishes" this shard,
+    /// promising that no more data will ever be read by this handle.
+    #[instrument(level = "debug", skip_all, fields(shard = %self.machine.shard_id()))]
+    pub async fn downgrade_since(&mut self, new_since: Antichain<T>) -> Result<(), ReaderId> {
+        trace!("SinceHandle::downgrade_since new_since={:?}", new_since);
+        let (_seqno, res) = self
+            .machine
+            .downgrade_since(&self.since_handle_id, &new_since)
+            .await;
+
+        match res {
+            Ok(since) => {
+                self.since = since.0;
+                Ok(())
+            }
+            Err(active_since_handle) => {
+                let active_since_handle = active_since_handle.expect(
+                    "at least one handle was created, there must be an active since handle",
+                );
+                Err(active_since_handle)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

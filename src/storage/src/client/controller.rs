@@ -32,6 +32,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future;
 use futures::stream::TryStreamExt as _;
 use futures::stream::{FuturesUnordered, StreamExt};
+use mz_persist_client::read::SinceHandle;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -45,9 +46,7 @@ use uuid::Uuid;
 use mz_expr::PartitionId;
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::{
-    read::ReadHandle, write::WriteHandle, PersistClient, PersistLocation, ShardId,
-};
+use mz_persist_client::{write::WriteHandle, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::{Codec, Codec64};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
@@ -474,18 +473,33 @@ where
                 .insert_without_overwrite(&mut self.state.stash, &id, metadata)
                 .await?;
 
-            let (write, read) = self
+            let write = self
                 .persist_client
-                .open(metadata.data_shard)
+                .open_writer(metadata.data_shard)
+                .await
+                .expect("invalid persist usage");
+
+            // This will fence off any other controller instances that might
+            // think they're still the boss. We could think about using an
+            // explicit fencing token here. Right now, we just mint a new ID
+            // whenever someone opens a `SinceHandle`, and that fences off older
+            // handles.
+            let since_handle = self
+                .persist_client
+                .open_since_handle(metadata.data_shard)
                 .await
                 .expect("invalid persist usage");
 
             let collection_state =
-                CollectionState::new(description.clone(), read.since().clone(), metadata);
+                CollectionState::new(description.clone(), since_handle.since().clone(), metadata);
 
-            self.state
-                .persist_handles
-                .insert(id, PersistHandles { read, write });
+            self.state.persist_handles.insert(
+                id,
+                PersistHandles {
+                    since_handle,
+                    write,
+                },
+            );
 
             self.state.collections.insert(id, collection_state);
 
@@ -776,7 +790,11 @@ where
             }
 
             let fut = async move {
-                persist_handle.read.downgrade_since(frontier.clone()).await;
+                persist_handle
+                    .since_handle
+                    .downgrade_since(frontier.clone())
+                    .await
+                    .expect("we have been fenced");
                 (*id, frontier)
             };
 
@@ -910,9 +928,9 @@ pub struct CollectionState<T> {
 
 #[derive(Debug)]
 pub(super) struct PersistHandles<T: Timestamp + Lattice + Codec64> {
-    /// A `ReadHandle` for the backing persist shard/collection. This internally holds back the
+    /// A `SinceHandle` for the backing persist shard/collection. This internally holds back the
     /// since frontier and we need to downgrade that when the read capabilities change.
-    read: ReadHandle<SourceData, (), T, Diff>,
+    since_handle: SinceHandle<SourceData, (), T, Diff>,
     write: WriteHandle<SourceData, (), T, Diff>,
 }
 

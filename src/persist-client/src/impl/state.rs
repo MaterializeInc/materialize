@@ -27,8 +27,22 @@ use crate::ShardId;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReadCapability<T> {
+    // WIP: This is not used anywhere. We should think hard about when/if we
+    // will need this once we have compaction. This might not be necessary
+    // anymore, now that we rely on the Storage Controller to hold back a global
+    // since, but ... :shrug:.
     pub seqno: SeqNo,
-    pub since: Antichain<T>,
+
+    // WIP: Remove T parameter?
+
+    // According to the docs, PhantomData is to "mark things that act like they
+    // own a T". State doesn't actually own K, V, or D, just the ability to
+    // produce them. Using the `fn() -> T` pattern gets us the same variance as
+    // T [1], but also allows State to correctly derive Send+Sync.
+    //
+    // [1]:
+    //     https://doc.rust-lang.org/nomicon/phantom-data.html#table-of-phantomdata-patterns
+    _phantom: PhantomData<fn() -> T>,
 }
 
 /// A [Batch] but with the updates themselves stored externally.
@@ -47,6 +61,9 @@ pub struct HollowBatch<T> {
 // TODO: Document invariants.
 #[derive(Debug, Clone)]
 pub struct StateCollections<T> {
+    // WIP: Introduce `SinceHandleId`?
+    active_since_handle: Option<ReaderId>,
+
     readers: HashMap<ReaderId, ReadCapability<T>>,
 
     trace: Trace<T>,
@@ -56,7 +73,7 @@ impl<T> StateCollections<T>
 where
     T: Timestamp + Lattice + Codec64,
 {
-    pub fn register(
+    pub fn register_reader(
         &mut self,
         seqno: SeqNo,
         reader_id: &ReaderId,
@@ -65,10 +82,22 @@ where
         // retry).
         let read_cap = ReadCapability {
             seqno,
-            since: self.trace.since().clone(),
+            _phantom: PhantomData,
         };
         self.readers.insert(reader_id.clone(), read_cap.clone());
         Continue((Upper(self.trace.upper().clone()), read_cap))
+    }
+
+    /// Establishes the given ID as the currently active since handle. This will
+    /// prevent `SinceHandles` with a different id from calling
+    /// `downgrade_since`, that is, we are fencing them off.
+    pub fn fence_since_handle(
+        &mut self,
+        _seqno: SeqNo,
+        new_since_handle_id: &ReaderId,
+    ) -> ControlFlow<Infallible, Since<T>> {
+        self.active_since_handle = Some(new_since_handle_id.clone());
+        Continue(Since(self.since.clone()))
     }
 
     pub fn clone_reader(
@@ -79,7 +108,7 @@ where
         // TODO: Handle if the reader already exists (probably with a retry).
         let read_cap = ReadCapability {
             seqno,
-            since: self.trace.since().clone(),
+            _phantom: PhantomData,
         };
         self.readers.insert(new_reader_id.clone(), read_cap.clone());
         Continue(read_cap)
@@ -124,32 +153,68 @@ where
         Continue(applied)
     }
 
+    /// Downgrade the shard since if the presented `since_handle_id` is the
+    /// currently established `active_since_handle` of this shard. This will
+    /// fail and return the current `active_since_handle` if the presented
+    /// `since_handle_id` has been fenced off.
+    // WIP: Am I using Infallible and the Result correctly here? I think not.
     pub fn downgrade_since(
         &mut self,
-        reader_id: &ReaderId,
+        since_handle_id: &ReaderId,
         new_since: &Antichain<T>,
-    ) -> ControlFlow<Infallible, Since<T>> {
-        let read_cap = self.reader(reader_id);
-        let reader_current_since = if PartialOrder::less_than(&read_cap.since, new_since) {
-            read_cap.since.clone_from(new_since);
-            self.update_since();
-            new_since.clone()
+    ) -> ControlFlow<Infallible, Result<Since<T>, Option<ReaderId>>> {
+        if Some(since_handle_id) != self.active_since_handle.as_ref() {
+            Continue(Err(self.active_since_handle.clone()))
         } else {
-            // No-op, but still commit the state change so that this gets
-            // linearized.
-            read_cap.since.clone()
-        };
-        Continue(Since(reader_current_since))
+            if PartialOrder::less_than(&self.since, new_since) {
+                self.since.clone_from(new_since);
+            }
+
+            Continue(Ok(Since(self.since.clone())))
+        }
     }
 
+    // WIP: Do we still need this? When will we have use for the `SeqNo` that we
+    // hold in read capabilities?
     pub fn expire_reader(&mut self, reader_id: &ReaderId) -> ControlFlow<Infallible, bool> {
         let existed = self.readers.remove(reader_id).is_some();
-        if existed {
-            self.update_since();
-        }
+
         // No-op if existed is false, but still commit the state change so that
         // this gets linearized.
         Continue(existed)
+    }
+
+<<<<<<< HEAD
+    fn reader(&mut self, id: &ReaderId) -> &mut ReadCapability<T> {
+        self.readers
+            .get_mut(id)
+            // The only (tm) ways to hit this are (1) inventing a ReaderId
+            // instead of getting it from Register or (2) if a lease expired.
+            // (1) is a gross mis-use and (2) isn't implemented yet, so it feels
+            // okay to leave this for followup work.
+            .expect("TODO: Implement automatic lease renewals")
+    }
+
+    fn update_since(&mut self) {
+        let mut readers = self.readers.values();
+        let mut since = match readers.next() {
+            Some(reader) => reader.since.clone(),
+            None => {
+                // If there are no current readers, leave `since` unchanged so
+                // it doesn't regress.
+                return;
+            }
+        };
+        while let Some(reader) = readers.next() {
+            since.meet_assign(&reader.since);
+        }
+        self.trace.downgrade_since(since);
+||||||| parent of 1536029ec (persist: remove per-reader sinces, add SinceHandle)
+    fn upper(&self) -> Antichain<T> {
+        self.trace.last().map_or_else(
+            || Antichain::from_elem(T::minimum()),
+            |(_, desc)| desc.upper().clone(),
+        )
     }
 
     fn reader(&mut self, id: &ReaderId) -> &mut ReadCapability<T> {
@@ -175,7 +240,62 @@ where
         while let Some(reader) = readers.next() {
             since.meet_assign(&reader.since);
         }
-        self.trace.downgrade_since(since);
+        self.since = since;
+    }
+
+    fn push_batch(&mut self, keys: &[String], desc: &Description<T>) {
+        // Sneaky optimization! If there are no keys in this batch, we can
+        // simply extend the description of the last one (assuming there is
+        // one). This will be an absurdly common case in actual usage because
+        // empty batches are used to communicate progress and most things will
+        // be low-traffic.
+        //
+        // To make things easier to reason about, we avoid mutating any batch
+        // that actually has data, and only apply the optimization if the most
+        // recent batch _also_ has no keys. We call these batches with no keys
+        // "padding batches".
+        if let Some((last_batch_keys, last_desc)) = self.trace.last_mut() {
+            if keys.is_empty() && last_batch_keys.is_empty() {
+                *last_desc = Description::new(
+                    last_desc.lower().clone(),
+                    desc.upper().clone(),
+                    last_desc.since().clone(),
+                );
+                return;
+            }
+        }
+        self.trace.push((keys.to_owned(), desc.clone()));
+=======
+    fn upper(&self) -> Antichain<T> {
+        self.trace.last().map_or_else(
+            || Antichain::from_elem(T::minimum()),
+            |(_, desc)| desc.upper().clone(),
+        )
+    }
+
+    fn push_batch(&mut self, keys: &[String], desc: &Description<T>) {
+        // Sneaky optimization! If there are no keys in this batch, we can
+        // simply extend the description of the last one (assuming there is
+        // one). This will be an absurdly common case in actual usage because
+        // empty batches are used to communicate progress and most things will
+        // be low-traffic.
+        //
+        // To make things easier to reason about, we avoid mutating any batch
+        // that actually has data, and only apply the optimization if the most
+        // recent batch _also_ has no keys. We call these batches with no keys
+        // "padding batches".
+        if let Some((last_batch_keys, last_desc)) = self.trace.last_mut() {
+            if keys.is_empty() && last_batch_keys.is_empty() {
+                *last_desc = Description::new(
+                    last_desc.lower().clone(),
+                    desc.upper().clone(),
+                    last_desc.since().clone(),
+                );
+                return;
+            }
+        }
+        self.trace.push((keys.to_owned(), desc.clone()));
+>>>>>>> 1536029ec (persist: remove per-reader sinces, add SinceHandle)
     }
 }
 
@@ -221,6 +341,7 @@ where
             shard_id,
             seqno: SeqNo::minimum(),
             collections: StateCollections {
+                active_since_handle: None,
                 readers: HashMap::new(),
                 trace: Trace::default(),
             },
@@ -371,8 +492,19 @@ struct StateRollupMeta {
     diff_codec: String,
 
     seqno: SeqNo,
+<<<<<<< HEAD
     readers: Vec<(ReaderId, AntichainMeta, SeqNo)>,
     trace: TraceMeta,
+||||||| parent of 1536029ec (persist: remove per-reader sinces, add SinceHandle)
+    readers: Vec<(ReaderId, AntichainMeta, SeqNo)>,
+    since: AntichainMeta,
+    trace: Vec<(Vec<String>, DescriptionMeta)>,
+=======
+    active_since_handle: Option<ReaderId>,
+    readers: Vec<(ReaderId, SeqNo)>,
+    since: AntichainMeta,
+    trace: Vec<(Vec<String>, DescriptionMeta)>,
+>>>>>>> 1536029ec (persist: remove per-reader sinces, add SinceHandle)
 }
 
 mod codec_impls {
@@ -434,11 +566,12 @@ mod codec_impls {
                 val_codec: V::codec_name(),
                 ts_codec: T::codec_name(),
                 diff_codec: D::codec_name(),
+                active_since_handle: x.collections.active_since_handle.clone(),
                 readers: x
                     .collections
                     .readers
                     .iter()
-                    .map(|(id, cap)| (id.clone(), (&cap.since).into(), cap.seqno))
+                    .map(|(id, cap)| (id.clone(), cap.seqno))
                     .collect(),
                 trace: (&x.collections.trace).into(),
             }
@@ -479,15 +612,16 @@ mod codec_impls {
             let readers = x
                 .readers
                 .iter()
-                .map(|(id, since, seqno)| {
+                .map(|(id, seqno)| {
                     let cap = ReadCapability {
-                        since: since.into(),
                         seqno: *seqno,
+                        _phantom: PhantomData,
                     };
                     (id.clone(), cap)
                 })
                 .collect();
             let collections = StateCollections {
+                active_since_handle: x.active_since_handle.clone(),
                 readers,
                 trace: (&x.trace).into(),
             };
@@ -618,8 +752,10 @@ mod tests {
     #[test]
     fn downgrade_since() {
         let mut state = State::<(), (), u64, i64>::new(ShardId::new());
-        let reader = ReaderId::new();
-        let _ = state.collections.register(SeqNo::minimum(), &reader);
+        let since_handle_id = ReaderId::new();
+        let _ = state
+            .collections
+            .fence_since_handle(SeqNo::minimum(), &since_handle_id);
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
@@ -628,38 +764,72 @@ mod tests {
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
-            Continue(Since(Antichain::from_elem(2)))
+                .downgrade_since(&since_handle_id, &Antichain::from_elem(2)),
+            Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Equal (no-op)
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
-            Continue(Since(Antichain::from_elem(2)))
+                .downgrade_since(&since_handle_id, &Antichain::from_elem(2)),
+            Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Less (no-op)
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(1)),
-            Continue(Since(Antichain::from_elem(2)))
+                .downgrade_since(&since_handle_id, &Antichain::from_elem(1)),
+            Continue(Ok(Since(Antichain::from_elem(2))))
         );
+<<<<<<< HEAD
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
+||||||| parent of 1536029ec (persist: remove per-reader sinces, add SinceHandle)
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+=======
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+    }
+>>>>>>> 1536029ec (persist: remove per-reader sinces, add SinceHandle)
 
-        // Create a second reader.
-        let reader2 = ReaderId::new();
-        let _ = state.collections.register(SeqNo::minimum(), &reader2);
+    #[test]
+    fn since_handle_fencing() {
+        let mut state = State::<(), (), u64, i64>::new(ShardId::new());
+        let since_handle_id = ReaderId::new();
 
-        // Shard since doesn't change until the meet (min) of all reader sinces changes.
+        // Initially, there is no active since handle.
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader2, &Antichain::from_elem(3)),
-            Continue(Since(Antichain::from_elem(3)))
+                .downgrade_since(&since_handle_id, &Antichain::from_elem(2)),
+            Continue(Err(None))
         );
+
+        let _ = state
+            .collections
+            .fence_since_handle(SeqNo::minimum(), &since_handle_id);
+
+        let since_handle_id_2 = ReaderId::new();
+        let _ = state
+            .collections
+            .fence_since_handle(SeqNo::minimum(), &since_handle_id_2);
+
+        // Our first since handle was fenced off!
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&since_handle_id, &Antichain::from_elem(2)),
+            Continue(Err(Some(since_handle_id_2.clone())))
+        );
+
+        // Second handle can downgrade.
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&since_handle_id_2, &Antichain::from_elem(2)),
+            Continue(Ok(Since(Antichain::from_elem(2))))
+        );
+<<<<<<< HEAD
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Shard since == 3 when all readers have since >= 3.
         assert_eq!(
@@ -694,6 +864,144 @@ mod tests {
         // Shard since unaffected when all readers are expired.
         assert_eq!(state.collections.expire_reader(&reader3), Continue(true));
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(10));
+||||||| parent of 1536029ec (persist: remove per-reader sinces, add SinceHandle)
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+        // Shard since == 3 when all readers have since >= 3.
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader, &Antichain::from_elem(5)),
+            Continue(Since(Antichain::from_elem(5)))
+        );
+        assert_eq!(state.collections.since, Antichain::from_elem(3));
+
+        // Shard since unaffected readers with since > shard since expiring.
+        assert_eq!(state.collections.expire_reader(&reader), Continue(true));
+        assert_eq!(state.collections.since, Antichain::from_elem(3));
+
+        // Create a third reader.
+        let reader3 = ReaderId::new();
+        let _ = state.collections.register(SeqNo::minimum(), &reader3);
+
+        // Shard since doesn't change until the meet (min) of all reader sinces changes.
+        assert_eq!(
+            state
+                .collections
+                .downgrade_since(&reader3, &Antichain::from_elem(10)),
+            Continue(Since(Antichain::from_elem(10)))
+        );
+        assert_eq!(state.collections.since, Antichain::from_elem(3));
+
+        // Shard since advances when reader with the minimal since expires.
+        assert_eq!(state.collections.expire_reader(&reader2), Continue(true));
+        assert_eq!(state.collections.since, Antichain::from_elem(10));
+
+        // Shard since unaffected when all readers are expired.
+        assert_eq!(state.collections.expire_reader(&reader3), Continue(true));
+        assert_eq!(state.collections.since, Antichain::from_elem(10));
+    }
+
+    #[test]
+    fn empty_batch_optimization() {
+        mz_ore::test::init_logging();
+
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
+
+        // Initial empty batch should result in a padding batch.
+        assert_eq!(state.compare_and_append(&[], &desc(0, 1)), Continue(()));
+        assert_eq!(state.trace.len(), 1);
+
+        // Writing data should create a new batch, so now there's two.
+        assert_eq!(
+            state.compare_and_append(&["key1".to_owned()], &desc(1, 2)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 2);
+
+        // The first empty batch after one with data doesn't get squished in,
+        // instead becoming a padding batch.
+        assert_eq!(state.compare_and_append(&[], &desc(2, 3)), Continue(()));
+        assert_eq!(state.trace.len(), 3);
+
+        // More empty batches should all get squished into the existing padding
+        // batch.
+        assert_eq!(state.compare_and_append(&[], &desc(3, 4)), Continue(()));
+        assert_eq!(state.compare_and_append(&[], &desc(4, 5)), Continue(()));
+        assert_eq!(state.trace.len(), 3);
+
+        // Try it all again with a second non-empty batch, this one with 2 keys,
+        // and then some more empty batches.
+        assert_eq!(
+            state.compare_and_append(&["key2".to_owned(), "key3".to_owned()], &desc(5, 6)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 4);
+        assert_eq!(state.compare_and_append(&[], &desc(6, 7)), Continue(()));
+        assert_eq!(state.trace.len(), 5);
+        assert_eq!(state.compare_and_append(&[], &desc(7, 8)), Continue(()));
+        assert_eq!(state.compare_and_append(&[], &desc(8, 9)), Continue(()));
+        assert_eq!(state.trace.len(), 5);
+
+        // Confirm that we still have all the keys.
+        let actual = state
+            .trace
+            .iter()
+            .flat_map(|(keys, _)| keys.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, vec!["key1", "key2", "key3"]);
+=======
+        assert_eq!(state.collections.since, Antichain::from_elem(2));
+    }
+
+    #[test]
+    fn empty_batch_optimization() {
+        mz_ore::test::init_logging();
+
+        let mut state = State::<String, String, u64, i64>::new(ShardId::new()).collections;
+
+        // Initial empty batch should result in a padding batch.
+        assert_eq!(state.compare_and_append(&[], &desc(0, 1)), Continue(()));
+        assert_eq!(state.trace.len(), 1);
+
+        // Writing data should create a new batch, so now there's two.
+        assert_eq!(
+            state.compare_and_append(&["key1".to_owned()], &desc(1, 2)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 2);
+
+        // The first empty batch after one with data doesn't get squished in,
+        // instead becoming a padding batch.
+        assert_eq!(state.compare_and_append(&[], &desc(2, 3)), Continue(()));
+        assert_eq!(state.trace.len(), 3);
+
+        // More empty batches should all get squished into the existing padding
+        // batch.
+        assert_eq!(state.compare_and_append(&[], &desc(3, 4)), Continue(()));
+        assert_eq!(state.compare_and_append(&[], &desc(4, 5)), Continue(()));
+        assert_eq!(state.trace.len(), 3);
+
+        // Try it all again with a second non-empty batch, this one with 2 keys,
+        // and then some more empty batches.
+        assert_eq!(
+            state.compare_and_append(&["key2".to_owned(), "key3".to_owned()], &desc(5, 6)),
+            Continue(())
+        );
+        assert_eq!(state.trace.len(), 4);
+        assert_eq!(state.compare_and_append(&[], &desc(6, 7)), Continue(()));
+        assert_eq!(state.trace.len(), 5);
+        assert_eq!(state.compare_and_append(&[], &desc(7, 8)), Continue(()));
+        assert_eq!(state.compare_and_append(&[], &desc(8, 9)), Continue(()));
+        assert_eq!(state.trace.len(), 5);
+
+        // Confirm that we still have all the keys.
+        let actual = state
+            .trace
+            .iter()
+            .flat_map(|(keys, _)| keys.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, vec!["key1", "key2", "key3"]);
+>>>>>>> 1536029ec (persist: remove per-reader sinces, add SinceHandle)
     }
 
     #[test]
@@ -787,14 +1095,16 @@ mod tests {
             Ok(Err(Upper(Antichain::from_elem(5))))
         );
 
-        let reader = ReaderId::new();
+        let since_handle_id = ReaderId::new();
         // Advance the since to 2.
-        let _ = state.collections.register(SeqNo::minimum(), &reader);
+        let _ = state
+            .collections
+            .fence_since_handle(SeqNo::minimum(), &since_handle_id);
         assert_eq!(
             state
                 .collections
-                .downgrade_since(&reader, &Antichain::from_elem(2)),
-            Continue(Since(Antichain::from_elem(2)))
+                .downgrade_since(&since_handle_id, &Antichain::from_elem(2)),
+            Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         // Cannot take a snapshot with as_of < shard_since.

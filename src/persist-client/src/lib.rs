@@ -61,6 +61,8 @@ pub(crate) mod r#impl {
 // created by the PersistCache.
 pub use crate::r#impl::metrics::Metrics;
 
+use self::read::SinceHandle;
+
 /// A location in s3, other cloud storage, or otherwise "durable storage" used
 /// by persist.
 ///
@@ -345,7 +347,9 @@ impl PersistClient {
             )
         });
         let reader_id = ReaderId::new();
-        let (shard_upper, read_cap) = machine.register(&reader_id).await;
+        // WIP: We don't use the SeqNo that's now the only thing remaining in a
+        // ReadCapability.
+        let (shard_upper, _read_cap) = machine.register(&reader_id).await;
         let writer = WriteHandle {
             cfg: self.cfg.clone(),
             metrics: Arc::clone(&self.metrics),
@@ -359,11 +363,52 @@ impl PersistClient {
             reader_id,
             machine,
             blob: Arc::clone(&self.blob),
-            since: read_cap.since,
             explicitly_expired: false,
         };
 
         Ok((writer, reader))
+    }
+
+    /// Establishes and returns a new `SinceHandle` as the currently active
+    /// since handle for this shard. This will prevent `SinceHandles` with a
+    /// different id from calling [`SinceHandle::downgrade_since`], that is, we
+    /// are fencing them off.
+    // WIP: When would we return InvalidUsage here?
+    // TODO: This currently mints a fresh random ID as the fencing token. We can
+    // change this to be an explicit fencing token if/when storage controller is
+    // ready for that and wants it.
+    #[instrument(level = "debug", skip_all, fields(shard = %shard_id))]
+    pub async fn open_since_handle<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+    ) -> Result<SinceHandle<K, V, T, D>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64,
+        D: Semigroup + Codec64,
+    {
+        trace!("Client::open_since_handle shard_id={:?}", shard_id);
+
+        let since_handle_id = ReaderId::new();
+
+        let mut machine = Machine::new(
+            shard_id,
+            Arc::clone(&self.consensus),
+            Arc::clone(&self.metrics),
+        )
+        .await?;
+
+        let since = machine.open_since_handle(&since_handle_id).await;
+
+        let since_handle = SinceHandle {
+            metrics: Arc::clone(&self.metrics),
+            machine,
+            since: since.0,
+            since_handle_id,
+        };
+
+        Ok(since_handle)
     }
 
     /// [Self::open], but returning only a [ReadHandle].
@@ -562,12 +607,19 @@ mod tests {
             (("3".to_owned(), "three".to_owned()), 3, 1),
         ];
 
-        let (mut write, mut read) = new_test_client()
-            .await
-            .expect_open::<String, String, u64, i64>(ShardId::new())
+        let shard_id = ShardId::new();
+        let client = new_test_client().await;
+        let (mut write, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
             .await;
+
+        let mut since_handle = client
+            .open_since_handle::<String, String, u64, i64>(shard_id)
+            .await
+            .expect("invalid usage");
+
         assert_eq!(write.upper(), &Antichain::from_elem(u64::minimum()));
-        assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
+        assert_eq!(since_handle.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
         write
@@ -595,8 +647,11 @@ mod tests {
         );
 
         // Downgrading the since is tracked locally (but otherwise is a no-op).
-        read.downgrade_since(Antichain::from_elem(2)).await;
-        assert_eq!(read.since(), &Antichain::from_elem(2));
+        since_handle
+            .downgrade_since(Antichain::from_elem(2))
+            .await
+            .expect("invalid usage");
+        assert_eq!(since_handle.since(), &Antichain::from_elem(2));
     }
 
     // Sanity check that the open_reader and open_writer calls work.
@@ -999,12 +1054,15 @@ mod tests {
         let id = ShardId::new();
         let client = new_test_client().await;
         let (mut write1, read) = client.expect_open::<String, String, u64, i64>(id).await;
-
         let (mut write2, _read) = client.expect_open::<String, String, u64, i64>(id).await;
+        let since_handle = client
+            .open_since_handle::<String, String, u64, i64>(id)
+            .await
+            .expect("invalid usage");
 
         assert_eq!(write1.upper(), &Antichain::from_elem(u64::minimum()));
         assert_eq!(write2.upper(), &Antichain::from_elem(u64::minimum()));
-        assert_eq!(read.since(), &Antichain::from_elem(u64::minimum()));
+        assert_eq!(since_handle.since(), &Antichain::from_elem(u64::minimum()));
 
         // Write a [0,3) batch.
         write1

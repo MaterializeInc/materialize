@@ -76,7 +76,7 @@ where
             return;
         }
 
-        let mut read = persist_clients
+        let read = persist_clients
             .lock()
             .await
             .open(metadata.persist_location)
@@ -85,9 +85,6 @@ where
             .open_reader::<SourceData, (), mz_repr::Timestamp, mz_repr::Diff>(metadata.data_shard)
             .await
             .expect("could not open persist shard");
-
-        /// Aggressively downgrade `since`, to not hold back compaction.
-        read.downgrade_since(as_of.clone()).await;
 
         let mut snapshot_iter = read
             .snapshot(as_of.clone())

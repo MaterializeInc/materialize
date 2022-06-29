@@ -99,11 +99,23 @@ where
         let metrics = Arc::clone(&self.metrics);
         let (seqno, (shard_upper, read_cap)) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
-                state.register(seqno, reader_id)
+                state.register_reader(seqno, reader_id)
             })
             .await;
         debug_assert_eq!(seqno, read_cap.seqno);
         (shard_upper, read_cap)
+    }
+
+    /// Opens a new `SinceHandle` for this shard and fences off any previously
+    /// open handles, if any.
+    pub async fn open_since_handle(&mut self, since_handle_id: &ReaderId) -> Since<T> {
+        let metrics = Arc::clone(&self.metrics);
+        let (_seqno, since) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.register, |seqno, state| {
+                state.fence_since_handle(seqno, since_handle_id)
+            })
+            .await;
+        since
     }
 
     pub async fn clone_reader(&mut self, new_reader_id: &ReaderId) -> ReadCapability<T> {
@@ -176,12 +188,15 @@ where
         &mut self,
         reader_id: &ReaderId,
         new_since: &Antichain<T>,
-    ) -> (SeqNo, Since<T>) {
+    ) -> (SeqNo, Result<Since<T>, Option<ReaderId>>) {
         let metrics = Arc::clone(&self.metrics);
-        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |_, state| {
-            state.downgrade_since(reader_id, new_since)
-        })
-        .await
+        let res = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |_, state| {
+                state.downgrade_since(reader_id, new_since)
+            })
+            .await;
+
+        res
     }
 
     pub async fn expire_reader(&mut self, reader_id: &ReaderId) -> SeqNo {

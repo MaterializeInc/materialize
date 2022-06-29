@@ -129,9 +129,14 @@ pub async fn run(args: Args) -> Result<(), anyhow::Error> {
         let reader_name = format!("reader-{}", i);
         let reader_name_clone = reader_name.clone();
         let (_write, data_read) = persist.open::<String, (), Timestamp, _>(data_id).await?;
+        let since_handle = persist
+            .open_since_handle::<String, (), Timestamp, i64>(data_id)
+            .await?;
         let pipeline = mz_ore::task::spawn(|| &reader_name_clone, async move {
-            let as_of = data_read.since().clone();
-            if let Err(e) = reader::spawn_reader_pipeline(reader_name, data_read, as_of).await {
+            let as_of = since_handle.since().clone();
+            if let Err(e) =
+                reader::spawn_reader_pipeline(reader_name, data_read, since_handle, as_of).await
+            {
                 error!("error in reader: {:?}", e);
             }
         });
@@ -1354,13 +1359,14 @@ mod reader {
     use timely::progress::Antichain;
     use timely::PartialOrder;
 
-    use mz_persist_client::read::{ListenEvent, ReadHandle};
+    use mz_persist_client::read::{ListenEvent, ReadHandle, SinceHandle};
     use mz_persist_types::{Codec, Codec64};
 
     /// Spawns a persist consumer that reads from the given `ReadHandle`.
     pub async fn spawn_reader_pipeline<K, V, T>(
         name: String,
-        mut read: ReadHandle<K, V, T, i64>,
+        read: ReadHandle<K, V, T, i64>,
+        mut since_handle: SinceHandle<K, V, T, i64>,
         as_of: Antichain<T>,
     ) -> Result<(), Box<dyn Error>>
     where
@@ -1392,7 +1398,10 @@ mod reader {
                                 break 'outer;
                             }
 
-                            read.downgrade_since(p).await;
+                            since_handle
+                                .downgrade_since(p)
+                                .await
+                                .expect("fenced since handle");
                         }
                         ListenEvent::Updates(updates) => {
                             println!("instance {}: got updates from listen: {:?}", name, updates);
