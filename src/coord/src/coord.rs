@@ -1247,6 +1247,8 @@ impl<S: Append + 'static> Coordinator<S> {
                     .send(Message::GroupCommit)
                     .expect("sending to internal_cmd_tx cannot fail");
             });
+            // TODO(jkosh44) explain
+            self.group_commit(None);
         } else {
             // Try and get the write lock either from one of the pending write transaction or by
             // acquiring it ourselves.
