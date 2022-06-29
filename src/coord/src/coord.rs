@@ -185,6 +185,7 @@ pub enum Message {
     AdvanceLocalInput(AdvanceLocalInput),
     GroupCommit,
     ComputeInstanceStatus(ComputeInstanceEvent),
+    RemovePendingPeeks { conn_id: u32 },
 }
 
 #[derive(Debug)]
@@ -1169,6 +1170,31 @@ impl<S: Append + 'static> Coordinator<S> {
                 Message::ComputeInstanceStatus(status) => {
                     self.message_compute_instance_status(status).await
                 }
+                // Processing this message DOES NOT send a response to the client;
+                // in any situation where you use it, you must also have a code
+                // path that responds to the client (e.g. reporting an error).
+                Message::RemovePendingPeeks { conn_id } => {
+                    // The peek is present on some specific compute instance.
+                    // Allow dataflow to cancel any pending peeks.
+                    if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
+                        let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> =
+                            Default::default();
+                        for (uuid, compute_instance) in &uuids {
+                            inverse.entry(*compute_instance).or_default().insert(*uuid);
+                        }
+                        for (compute_instance, uuids) in inverse {
+                            self.dataflow_client
+                                .compute_mut(compute_instance)
+                                .unwrap()
+                                .cancel_peeks(&uuids)
+                                .await
+                                .unwrap();
+                        }
+                        for (uuid, _) in uuids {
+                            self.pending_peeks.remove(&uuid);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1941,32 +1967,6 @@ impl<S: Append + 'static> Coordinator<S> {
                 let result = self.verify_prepared_statement(&mut session, &name);
                 let _ = tx.send(Response { result, session });
             }
-
-            // Processing this command DOES NOT send a response to the client;
-            // in any situation where you use it, you must also have a code
-            // path that responds to the client (e.g. reporting an error).
-            Command::RemovePendingPeeks { conn_id } => {
-                // The peek is present on some specific compute instance.
-                // Allow dataflow to cancel any pending peeks.
-                if let Some(uuids) = self.client_pending_peeks.remove(&conn_id) {
-                    let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> =
-                        Default::default();
-                    for (uuid, compute_instance) in &uuids {
-                        inverse.entry(*compute_instance).or_default().insert(*uuid);
-                    }
-                    for (compute_instance, uuids) in inverse {
-                        self.dataflow_client
-                            .compute_mut(compute_instance)
-                            .unwrap()
-                            .cancel_peeks(&uuids)
-                            .await
-                            .unwrap();
-                    }
-                    for (uuid, _) in uuids {
-                        self.pending_peeks.remove(&uuid);
-                    }
-                }
-            }
         }
     }
 
@@ -2406,7 +2406,9 @@ impl<S: Append + 'static> Coordinator<S> {
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&conn_id);
         self.internal_cmd_tx
-            .send(Message::Command(Command::RemovePendingPeeks { conn_id }))
+            .send(Message::RemovePendingPeeks {
+                conn_id,
+            })
             .expect("sending to internal_cmd_tx cannot fail");
     }
 
@@ -5277,9 +5279,9 @@ impl<S: Append + 'static> Coordinator<S> {
                             // best-effort and doesn't guarantee we won't
                             // receive a response.
                             internal_cmd_tx
-                                .send(Message::Command(Command::RemovePendingPeeks {
+                                .send(Message::RemovePendingPeeks {
                                     conn_id: session.conn_id(),
-                                }))
+                                })
                                 .expect("sending to internal_cmd_tx cannot fail");
                             Err(CoordError::StatementTimeout)
                         }

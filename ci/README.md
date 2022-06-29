@@ -221,9 +221,9 @@ copy of the repository to it. You can SSH in to the agent using the instance ID
 printed by the previous command and run the CI job that is failing.
 
 Every CI job is a combination of an mzcompose "composition" and a "workflow". A
-composition is the name of a directory containing an mzcompose.yml or
-mzcompose.py file. A workflow is the name of a service or Python function to run
-within the composition. You can see the definition of each CI job in
+composition is the name of a directory containing a mzcompose.py file. A
+workflow is the name of a service or Python function to run within the
+composition. You can see the definition of each CI job in
 [ci/test/pipeline.template.yml](./test/pipeline.template.yml). To invoke a
 workflow manually, you run `bin/mzcompose --find COMPOSITION run WORKFLOW`.
 

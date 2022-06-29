@@ -2,23 +2,24 @@
 
 mzbuild is an build and orchestration system for [Docker] containers.
 
-As a user or developer, you'll interact with mzbuild through three commands:
+As a user or developer, you'll interact with mzbuild through two commands:
 
-  * [**`mzcompose`**](#mzcompose) is a thin layer on top of [Docker Compose]
-    that automatically downloads cached images from Docker Hub if available, or
+  * [**`mzcompose`**](#mzcompose) is a layer on top of [Docker Compose]
+    that permits orchestrating and interacting with services via Python
+    scripts.
+
+    It  automatically downloads cached images from Docker Hub if available, or
     otherwise builds them locally if you've made changes to the inputs of the
-    image.
-
-    This approach keeps things snappy when running a demo or test on the latest
-    tip of main, while ensuring that you don't need to modify the Docker
-    Compose configuration as you make changes to the source code.
+    image. This approach keeps things snappy when running a test on the latest
+    tip of main, while ensuring that you don't need to modify the composition
+    as you make changes to the source code.
 
   * [**`mzimage`**](#mzimage) is a lower-level command that allows inspection
     and finer-grained control over the build process for the images in the
     repository.
 
 From the root of the repository, invoke the commands as `bin/mzcompose` and
-`bin/mzimage`, respectively. Any directory with an `mzcompose.yml` file will
+`bin/mzimage`, respectively. Any directory with an `mzcompose.py` file will
 also have a convenience script alongside it, which you can invoke as
 `./mzcompose` from within that directory.
 
@@ -31,7 +32,7 @@ also have a convenience script alongside it, which you can invoke as
   * [Development](#development)
   * [Reference](#reference)
     * [`mzbuild.yml`](#mzbuildyml)
-    * [`mzcompose.yml`](#mzcomposeyml)
+    * [`mzcompose.py`](#mzcomposepy)
     * [mzbuild `Dockerfile`](#mzbuild-Dockerfile)
   * [Motivation](#motivation)
     * [Why a new build system?](#why-a-new-build-system)
@@ -175,19 +176,21 @@ Docker Hub! Seamless.
 ### `mzcompose`
 
 To create an mzcompose configuration that uses the `fancy-loadgen` image we
-built in the previous tutorial, just drop an `mzcompose.yml` file into a
+built in the previous tutorial, just drop an `mzcompose.py` file into a
 directory:
 
-```yml
-version: "3.7"
+```py
+from materialize.mzcompose import Service
 
-services:
-  fancy:
-    mzbuild: fancy-loadgen
+SERVICES = [
+    Service(
+        "fancy-loadgen",
+        {
+            "mzbuild": "fancy-loadgen",
+        },
+    ),
+]
 ```
-
-If you're unfamiliar with Compose, you may want to take a look at the
-[Compose file reference][compose-ref] for details.
 
 Now bring the configuration up with `bin/mzcompose`:
 
@@ -204,7 +207,7 @@ fancy_fancy_1 exited with code 0
 ```
 
 The argument you pass to `--find` is the name of the directory containing the
-`mzcompose.yml`. Don't worry: if this directory name is not unique across the
+`mzcompose.py`. Don't worry: if this directory name is not unique across the
 entire repository, `mzcompose` will complain.
 
 Notice how `mzcompose` automatically acquired images for not just
@@ -232,22 +235,31 @@ materialize/fancy-loadgen:Z2GPU4TQMCV2PGFTNUPYLQO2PQAYD6OY
 fancy_fancy_1   python3 fancy-loadgen.py   Exit 0
 ```
 
-Let's add another mzbuild dependency, this time on `environmentd`:
+Let's add another mzbuild dependency, this time on `materialized`:
 
-```yml
-version: "3.7"
+```py
+from materialize.mzcompose import Service
+from materialize.mzcompose.services import Materialized
 
-services:
-  fancy:
-    mzbuild: fancy-loadgen
-  environmentd:
-    mzbuild: environmentd
+SERVICES = [
+    Materialized(),
+    Service(
+        "fancy-loadgen",
+        {
+            "mzbuild": "fancy-loadgen",
+        },
+    ),
+]
 ```
+
+Notice how we reused the service definition in the `services` module. If
+`fancy-loadgen` were used in multiple compositions, we'd similarly want to
+create a reusable service definition called `FancyLoadgen`.
 
 `mzcompose` will automatically acquire the new dependency on the next
 invocation. Note that if you have local changes to any Rust code, you'll likely
 want to stash them away now, or `mzcompose` will be spending a lot of time
-recompiling a fresh version of the `environmentd` image.
+recompiling a fresh version of the `materialized` image.
 
 ```shell
 $ ./mzcompose up
@@ -263,33 +275,41 @@ Status: Downloaded newer image for materialize/environmentd:EYBAS3HTGQS2SAVO3RBR
 docker.io/materialize/environmentd:EYBAS3HTGQS2SAVO3RBR5JS6AVGVRPJM
 ==> Delegating to Docker Compose
 Starting fancy_fancy_1        ... done
-Creating fancy_environmentd_1 ... done
-Attaching to fancy_fancy_1, fancy_environmentd_1
+Creating fancy_materialized_1 ... done
+Attaching to fancy_fancy_1, fancy_materialized_1
 fancy_1         | 🎩 load
-environmentd_1  | environmentd: '--workers' must be specified and greater than 0
-environmentd_1  | hint: As a starting point, set the number of threads to half of the number of
-environmentd_1  | cores on your system. Then, further adjust based on your performance needs.
-environmentd_1  | hint: You may also set the environment variable MZ_WORKERS to the desired number
-environmentd_1  | of threads.
+materialized_1  | booting...
 fancy_fancy_1 exited with code 0
-fancy_environmentd_1 exited with code 1
+fancy_materialized_1 exited with code 1
 ```
 
 And that's it. Pretty simple. Note that you can add normal `image` services to
-your `mzcompose.yml`, too. That works just as it would in vanilla Docker
+your `mzcompose.py`, too. That works just as it would in vanilla Docker
 Compose.
 
-```yml
-version: "3.7"
+```py
+from materialize.mzcompose import Service
+from materialize.mzcompose.services import Materialized
 
-services:
-  fancy:
-    mzbuild: fancy-loadgen
-  environmentd:
-    mzbuild: environmentd
-  zookeeper:
-    image: zookeeper:3.4.13
+SERVICES = [
+    Materialized(),
+    Service(
+        "fancy-loadgen",
+        {
+            "mzbuild": "fancy-loadgen",
+        },
+    ),
+    Service(
+        "zookeeper",
+        {
+            "image": "zookeeper:3.4.13",
+        },
+    ),
+]
 ```
+
+(Although, in a real composition, you'd use the built in `Zookeeper` service
+rather than inlining the service definition.)
 
 #### Release vs development builds
 
@@ -436,35 +456,9 @@ ignore these files! Ignored files will be excluded from the mzbuild fingerprint,
 and will be automatically deleted at the beginning of the pre-image phase to
 ensure idempotent builds.
 
-### mzcompose.yml
+### mzcompose.py
 
-An mzcompose configuration file is a small extension to the [Docker Compose
-configuration file][compose-ref]. All extensions apply to the `services`
-top-level map.
-
-#### Example
-
-```yaml
-version: "3.7"
-
-services:
-  environmentd:
-    mzbuild: environmentd
-    propagate_uid_gid: true
-```
-
-#### Fields
-
-* `mzbuild` (string) indicates that the service's image should be dynamically
-  acquired by mzcompose prior to invoking Docker Compose. The value must match
-  the name of an image in the repository.
-
-  If `mzbuild` is specified, neither of the standard properties `build` nor
-  `image` should be specified.
-
-* `propagate_uid_gid` (bool) requests that the Docker image be run with the user
-  ID and group ID of the host user. It is equivalent to passing `--user $(id
-  -u):$(id -g)` to `docker run`. The default is `false`.
+See [mzcompose.md](mzcompose.md) for details.
 
 ### mzbuild Dockerfile
 
