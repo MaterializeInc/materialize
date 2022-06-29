@@ -5316,7 +5316,7 @@ impl<S: Append + 'static> Coordinator<S> {
             self.dataflow_client
                 .compute_mut(compute_instance)
                 .unwrap()
-                .drop_sinks(ids)
+                .drop_indexes(ids)
                 .await
                 .unwrap();
         }
